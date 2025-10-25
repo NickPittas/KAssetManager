@@ -101,6 +101,24 @@ void AssetsModel::setTypeFilter(int f) {
     emit typeFilterChanged();
 }
 
+void AssetsModel::setSelectedTagNames(const QStringList& tags) {
+    if (m_selectedTagNames == tags) return;
+    m_selectedTagNames = tags;
+    beginResetModel();
+    rebuildFilter();
+    endResetModel();
+    emit selectedTagNamesChanged();
+}
+
+void AssetsModel::setTagFilterMode(int mode) {
+    if (m_tagFilterMode == mode) return;
+    m_tagFilterMode = mode;
+    beginResetModel();
+    rebuildFilter();
+    endResetModel();
+    emit tagFilterModeChanged();
+}
+
 void AssetsModel::reload(){
     qDebug() << "AssetsModel::reload() for folderId" << m_folderId << "on thread" << QThread::currentThread();
     QElapsedTimer t; t.start();
@@ -187,6 +205,28 @@ bool AssetsModel::matchesFilter(const AssetRow& row) const {
         if (!ThumbnailGenerator::instance().isImageFile(row.filePath)) return false;
     } else if (m_typeFilter == Videos) {
         if (!ThumbnailGenerator::instance().isVideoFile(row.filePath)) return false;
+    }
+
+    // Apply tag filter
+    if (!m_selectedTagNames.isEmpty()) {
+        QStringList assetTags = DB::instance().tagsForAsset(row.id);
+        bool hasAnyTag = false;
+        bool hasAllTags = true;
+
+        for (const QString& selectedTag : m_selectedTagNames) {
+            bool assetHasTag = assetTags.contains(selectedTag);
+            if (assetHasTag) {
+                hasAnyTag = true;
+            } else {
+                hasAllTags = false;
+            }
+        }
+
+        if (m_tagFilterMode == And) {
+            if (!hasAllTags) return false;
+        } else { // Or mode
+            if (!hasAnyTag) return false;
+        }
     }
 
     const QString needle = m_searchQuery.trimmed();

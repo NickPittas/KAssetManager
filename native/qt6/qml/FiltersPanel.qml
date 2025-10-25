@@ -34,6 +34,16 @@ Item {
                 ShButton { text: "+"; onClicked: newTagDialog.open() }
             }
             Rectangle { width: parent.width; height: 1; color: Theme.border }
+            // Tag filter mode toggle
+            Row {
+                spacing: 8
+                Text { text: "Filter Mode:"; color: Theme.text }
+                ShButton {
+                    text: assetsModel.tagFilterMode === 0 ? "AND" : "OR"
+                    onClicked: assetsModel.tagFilterMode = assetsModel.tagFilterMode === 0 ? 1 : 0
+                }
+            }
+            Rectangle { width: parent.width; height: 1; color: Theme.border }
             ListView {
                 id: tagsList
                 height: 160
@@ -42,7 +52,7 @@ Item {
                 delegate: Rectangle {
                     width: tagsList.width
                     height: 28
-                    color: "transparent"
+                    color: assetsModel.selectedTagNames.indexOf(name) !== -1 ? Theme.surfaceAlt : "transparent"
                     Row {
                         anchors.fill: parent
                         anchors.margins: 4
@@ -50,6 +60,19 @@ Item {
                         Text { text: name; color: Theme.text }
                         ShButton { text: "Rename"; onClicked: tagsModel.renameTag(id, name + "*") }
                         ShButton { text: "Delete"; onClicked: tagsModel.deleteTag(id) }
+                    }
+                    MouseArea {
+                        anchors.fill: parent
+                        onClicked: {
+                            var currentTags = assetsModel.selectedTagNames
+                            var index = currentTags.indexOf(name)
+                            if (index === -1) {
+                                currentTags.push(name)
+                            } else {
+                                currentTags.splice(index, 1)
+                            }
+                            assetsModel.selectedTagNames = currentTags
+                        }
                     }
                     DropArea {
                         anchors.fill: parent

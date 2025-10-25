@@ -25,6 +25,8 @@ class AssetsModel : public QAbstractListModel {
     Q_PROPERTY(int folderId READ folderId WRITE setFolderId NOTIFY folderIdChanged)
     Q_PROPERTY(QString searchQuery READ searchQuery WRITE setSearchQuery NOTIFY searchQueryChanged)
     Q_PROPERTY(int typeFilter READ typeFilter WRITE setTypeFilter NOTIFY typeFilterChanged)
+    Q_PROPERTY(QStringList selectedTagNames READ selectedTagNames WRITE setSelectedTagNames NOTIFY selectedTagNamesChanged)
+    Q_PROPERTY(int tagFilterMode READ tagFilterMode WRITE setTagFilterMode NOTIFY tagFilterModeChanged)
 public:
     enum Roles {
         IdRole = Qt::UserRole + 1,
@@ -52,6 +54,13 @@ public:
     int typeFilter() const { return m_typeFilter; }
     void setTypeFilter(int f);
 
+    QStringList selectedTagNames() const { return m_selectedTagNames; }
+    void setSelectedTagNames(const QStringList& tags);
+
+    enum TagFilterMode { And = 0, Or = 1 };
+    int tagFilterMode() const { return m_tagFilterMode; }
+    void setTagFilterMode(int mode);
+
     Q_INVOKABLE bool moveAssetToFolder(int assetId, int folderId);
     Q_INVOKABLE bool moveAssetsToFolder(const QVariantList& assetIds, int folderId);
     Q_INVOKABLE bool removeAssets(const QVariantList& assetIds);
@@ -67,6 +76,8 @@ signals:
     void folderIdChanged();
     void searchQueryChanged();
     void typeFilterChanged();
+    void selectedTagNamesChanged();
+    void tagFilterModeChanged();
 
 private slots:
     void onThumbnailGenerated(const QString& filePath, const QString& thumbnailPath);
@@ -83,6 +94,8 @@ private:
     QVector<AssetRow> m_rows;
     QString m_searchQuery;
     int m_typeFilter = All;
+    QStringList m_selectedTagNames;
+    int m_tagFilterMode = And;
     QVector<int> m_filteredRowIndexes;
 
     QTimer m_reloadTimer;
