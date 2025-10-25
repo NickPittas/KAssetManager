@@ -86,9 +86,8 @@ void AssetsModel::setSearchQuery(const QString& query) {
     if (normalized == m_searchQuery)
         return;
     m_searchQuery = normalized;
-    beginResetModel();
-    rebuildFilter();
-    endResetModel();
+    // If search is active, broaden query across all assets so tag name search works globally
+    reload();
     emit searchQueryChanged();
 }
 
@@ -104,9 +103,8 @@ void AssetsModel::setTypeFilter(int f) {
 void AssetsModel::setSelectedTagNames(const QStringList& tags) {
     if (m_selectedTagNames == tags) return;
     m_selectedTagNames = tags;
-    beginResetModel();
-    rebuildFilter();
-    endResetModel();
+    // Changing tag selection may require loading assets across folders
+    reload();
     emit selectedTagNamesChanged();
 }
 
@@ -132,15 +130,23 @@ void AssetsModel::reload(){
 
 void AssetsModel::query(){
     m_rows.clear();
-    if (m_folderId<=0) {
-        qDebug() << "AssetsModel::query() skipped - invalid folderId" << m_folderId;
-        m_filteredRowIndexes.clear();
-        return;
-    }
+
+    const bool globalScope = !m_selectedTagNames.isEmpty() || !m_searchQuery.trimmed().isEmpty();
+
     QSqlQuery q(DB::instance().database());
-    q.prepare("SELECT id,file_name,file_path,file_size,COALESCE(rating,-1) FROM assets WHERE virtual_folder_id=? ORDER BY file_name");
-    LogManager::instance().addLog(QString("DB query (assets by folder %1) started").arg(m_folderId), "DEBUG");
-    q.addBindValue(m_folderId);
+    if (globalScope) {
+        LogManager::instance().addLog("DB query (all assets) started", "DEBUG");
+        q.prepare("SELECT id,file_name,file_path,file_size,COALESCE(rating,-1),virtual_folder_id FROM assets ORDER BY file_name");
+    } else {
+        if (m_folderId<=0) {
+            qDebug() << "AssetsModel::query() skipped - invalid folderId" << m_folderId;
+            m_filteredRowIndexes.clear();
+            return;
+        }
+        q.prepare("SELECT id,file_name,file_path,file_size,COALESCE(rating,-1),virtual_folder_id FROM assets WHERE virtual_folder_id=? ORDER BY file_name");
+        LogManager::instance().addLog(QString("DB query (assets by folder %1) started").arg(m_folderId), "DEBUG");
+        q.addBindValue(m_folderId);
+    }
     if (!q.exec()) {
         qWarning() << "AssetsModel::query() SQL error:" << q.lastError();
         return;
@@ -152,7 +158,7 @@ void AssetsModel::query(){
         r.fileName = q.value(1).toString();
         r.filePath = q.value(2).toString();
         r.fileSize = q.value(3).toLongLong();
-        r.folderId = m_folderId;
+        r.folderId = q.value(5).toInt();
         r.rating = q.value(4).toInt();
         QFileInfo fi(r.filePath);
         r.fileType = fi.exists() ? fi.suffix().toLower() : QString();
@@ -185,8 +191,18 @@ bool AssetsModel::moveAssetsToFolder(const QVariantList& assetIds, int folderId)
 
 bool AssetsModel::removeAssets(const QVariantList& assetIds){ QList<int> ids; for (const auto &v: assetIds) ids << v.toInt(); bool ok = DB::instance().removeAssets(ids); scheduleReload(); return ok; }
 bool AssetsModel::setAssetsRating(const QVariantList& assetIds, int rating){ QList<int> ids; for (const auto &v: assetIds) ids << v.toInt(); bool ok = DB::instance().setAssetsRating(ids, rating); scheduleReload(); return ok; }
-bool AssetsModel::assignTags(const QVariantList& assetIds, const QVariantList& tagIds){ QList<int> aids; for (const auto &v: assetIds) aids << v.toInt(); QList<int> tids; for (const auto &t: tagIds) tids << t.toInt(); bool ok = DB::instance().assignTagsToAssets(aids, tids); // no need to reload entire list
-    return ok; }
+bool AssetsModel::assignTags(const QVariantList& assetIds, const QVariantList& tagIds){
+    QList<int> aids; for (const auto &v: assetIds) aids << v.toInt();
+    QList<int> tids; for (const auto &t: tagIds) tids << t.toInt();
+    bool ok = DB::instance().assignTagsToAssets(aids, tids);
+    if (ok) {
+        // Notify QML delegates to refresh tag text for affected assets
+        for (int aid : aids) {
+            emit tagsChangedForAsset(aid);
+        }
+    }
+    return ok;
+}
 
 void AssetsModel::rebuildFilter() {
     m_filteredRowIndexes.clear();

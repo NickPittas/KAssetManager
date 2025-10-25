@@ -78,6 +78,7 @@ signals:
     void typeFilterChanged();
     void selectedTagNamesChanged();
     void tagFilterModeChanged();
+    void tagsChangedForAsset(int assetId);
 
 private slots:
     void onThumbnailGenerated(const QString& filePath, const QString& thumbnailPath);

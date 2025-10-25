@@ -981,12 +981,25 @@ DropArea {
                                         width: parent.width
                                     }
                                     Text {
+                                        id: tagsLine
+                                        // Recompute when version increments
+                                        property int version: 0
                                         text: (function(){ var t = assetsModel.tagsForAsset(tile.assetId); return t && t.length>0 ? ("Tags: " + t.join(", ")) : "Tags: none"; })()
                                         textFormat: Text.PlainText
                                         color: "#666666"
                                         font.pixelSize: 10
                                         elide: Text.ElideRight
                                         width: parent.width
+                                    }
+                                    Connections {
+                                        target: assetsModel
+                                        function onTagsChangedForAsset(assetId) {
+                                            if (assetId === tile.assetId) {
+                                                tagsLine.version += 1
+                                                // Trigger text re-evaluation
+                                                tagsLine.text = (function(){ var t = assetsModel.tagsForAsset(tile.assetId); return t && t.length>0 ? ("Tags: " + t.join(", ")) : "Tags: none"; })()
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -1039,16 +1052,43 @@ DropArea {
                                 }
                                 onDoubleClicked: function(mouse) { openPreview(index) }
                             }
+                            // Per-asset context menu (adds Assign Tag submenu)
                             Menu {
                                 id: assetMenu
                                 background: Rectangle { color: Theme.surface; radius: Theme.radius; border.color: Theme.border }
-                                MenuItem { text: "Show in Explorer"; onTriggered: { DragUtils.showInExplorer(tile.filePath)
-                                LogManager.addLog("Show in Explorer: " + tile.filePath) } }
+                                MenuItem { text: "Show in Explorer"; onTriggered: { DragUtils.showInExplorer(tile.filePath); LogManager.addLog("Show in Explorer: " + tile.filePath) } }
                                 MenuItem { text: "Move to selected folder"; enabled: AppState.selectedFolderId>0; onTriggered: {
-                                LogManager.addLog("Move assets request to folder " + AppState.selectedFolderId)
-                                var ok = assetsModel.moveAssetsToFolder(AppState.selectedAssetIds.length>0?AppState.selectedAssetIds:[tile.assetId], AppState.selectedFolderId)
-                                LogManager.addLog(ok ? "Move succeeded" : "Move failed")
-                            } }
+                                    LogManager.addLog("Move assets request to folder " + AppState.selectedFolderId)
+                                    var ok = assetsModel.moveAssetsToFolder(AppState.selectedAssetIds.length>0?AppState.selectedAssetIds:[tile.assetId], AppState.selectedFolderId)
+                                    LogManager.addLog(ok ? "Move succeeded" : "Move failed")
+                                } }
+                                MenuSeparator{}
+                                Menu {
+                                    title: "Assign Tag"
+                                    // Local tags model for menu construction
+                                    contentItem: Column {
+                                        Repeater {
+                                            model: TagsModel { }
+                                            delegate: MenuItem {
+                                                required property int id
+                                                required property string name
+                                                text: name
+                                                onTriggered: {
+                                                    var ids = AppState.selectedAssetIds.length>0?AppState.selectedAssetIds:[tile.assetId]
+                                                    var ok = assetsModel.assignTags(ids, [id])
+                                                    LogManager.addLog(ok ? ("Assigned tag '" + name + "' to " + ids.length + " asset(s)") : "Tag assign failed")
+                                                }
+                                            }
+                                        }
+                                        MenuItem {
+                                            text: "New Tag…"
+                                            onTriggered: {
+                                                // Open the panel's add tag dialog if visible, else log
+                                                LogManager.addLog("Use the Tags panel '+' to create a new tag")
+                                            }
+                                        }
+                                    }
+                                }
                                 MenuSeparator{}
                                 MenuItem { text: "Set Rating → 0"; onTriggered: assetsModel.setAssetsRating(AppState.selectedAssetIds.length>0?AppState.selectedAssetIds:[tile.assetId], 0) }
                                 MenuItem { text: "Set Rating → 1"; onTriggered: assetsModel.setAssetsRating(AppState.selectedAssetIds.length>0?AppState.selectedAssetIds:[tile.assetId], 1) }
