@@ -75,6 +75,7 @@ public:
 signals:
     void thumbnailGenerated(const QString& filePath, const QString& thumbnailPath);
     void thumbnailFailed(const QString& filePath);
+    void progressChanged(int current, int total);
 
 private:
     explicit ThumbnailGenerator(QObject* parent = nullptr);
@@ -85,6 +86,7 @@ private:
     QString getFileHash(const QString& filePath);
     void ensureThumbnailDir();
     bool isThumbnailCached(const QString& filePath);
+    QString createUnsupportedThumbnail(const QString& filePath);
 
     QDir m_thumbnailDir;
     QThreadPool* m_threadPool;

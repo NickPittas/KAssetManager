@@ -31,6 +31,7 @@ public:
     bool removeAssets(const QList<int>& assetIds);
     bool setAssetsRating(const QList<int>& assetIds, int rating); // 0-5, -1 to clear
     QList<int> getAssetIdsInFolder(int folderId, bool recursive = true) const;
+    QString getAssetFilePath(int assetId) const;
 
     // Tags ops
     int createTag(const QString& name);

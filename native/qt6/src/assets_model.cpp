@@ -10,6 +10,8 @@
 #include <QThread>
 #include <QElapsedTimer>
 #include <QMimeData>
+#include <QFile>
+#include <QTextStream>
 
 AssetsModel::AssetsModel(QObject* parent): QAbstractListModel(parent){
     // Debounce DB-driven reloads to avoid re-entrancy and view churn during batch imports
@@ -172,13 +174,24 @@ void AssetsModel::setTagFilterMode(int mode) {
 }
 
 void AssetsModel::reload(){
-    qDebug() << "AssetsModel::reload() for folderId" << m_folderId << "on thread" << QThread::currentThread();
+    qDebug() << "===== AssetsModel::reload() START for folderId" << m_folderId << "on thread" << QThread::currentThread();
     QElapsedTimer t; t.start();
+
+    qDebug() << "AssetsModel::reload() - Calling beginResetModel()...";
     beginResetModel();
+
+    qDebug() << "AssetsModel::reload() - Calling query()...";
     query();
+    qDebug() << "AssetsModel::reload() - query() returned" << m_rows.size() << "rows";
+
+    qDebug() << "AssetsModel::reload() - Calling rebuildFilter()...";
     rebuildFilter();
+    qDebug() << "AssetsModel::reload() - rebuildFilter() returned" << m_filteredRowIndexes.size() << "filtered rows";
+
+    qDebug() << "AssetsModel::reload() - Calling endResetModel()...";
     endResetModel();
-    qDebug() << "AssetsModel::reload() loaded" << m_rows.size() << "assets in" << t.elapsed() << "ms";
+
+    qDebug() << "===== AssetsModel::reload() SUCCESS - loaded" << m_rows.size() << "assets in" << t.elapsed() << "ms";
     LogManager::instance().addLog(QString("AssetsModel reload: %1 assets in %2 ms").arg(m_rows.size()).arg(t.elapsed()), "DEBUG");
 }
 
@@ -225,17 +238,62 @@ void AssetsModel::query(){
 }
 
 void AssetsModel::onThumbnailGenerated(const QString& filePath, const QString& thumbnailPath) {
-    // Find the row with this file path and update it
-    for (int i = 0; i < m_rows.size(); ++i) {
-        if (m_rows[i].filePath == filePath) {
-            int filteredRow = m_filteredRowIndexes.indexOf(i);
-            if (filteredRow >= 0) {
-                qDebug() << "AssetsModel::onThumbnailGenerated updating row" << filteredRow << "for" << filePath;
-                QModelIndex idx = index(filteredRow, 0);
-                emit dataChanged(idx, idx, {ThumbnailPathRole});
+    // Open crash log
+    QFile logFile("assets_model_crash.log");
+    logFile.open(QIODevice::Append | QIODevice::Text);
+    QTextStream log(&logFile);
+
+    try {
+        log << "[ASSETS MODEL START] filePath: " << filePath << ", thumbnailPath: " << thumbnailPath << "\n";
+        log.flush();
+
+        // Find the row with this file path and update it
+        log << "[ASSETS MODEL] m_rows.size(): " << m_rows.size() << "\n";
+        log.flush();
+
+        for (int i = 0; i < m_rows.size(); ++i) {
+            log << "[ASSETS MODEL] Checking row " << i << ", filePath: " << m_rows[i].filePath << "\n";
+            log.flush();
+
+            if (m_rows[i].filePath == filePath) {
+                log << "[ASSETS MODEL] Found matching row " << i << "\n";
+                log.flush();
+
+                // CRITICAL: Update the thumbnail path in the row data
+                log << "[ASSETS MODEL] Updating thumbnailPath\n";
+                log.flush();
+                m_rows[i].thumbnailPath = thumbnailPath;
+                log << "[ASSETS MODEL] thumbnailPath updated\n";
+                log.flush();
+
+                log << "[ASSETS MODEL] Getting filtered row index\n";
+                log.flush();
+                int filteredRow = m_filteredRowIndexes.indexOf(i);
+                log << "[ASSETS MODEL] filteredRow: " << filteredRow << "\n";
+                log.flush();
+
+                if (filteredRow >= 0) {
+                    qDebug() << "AssetsModel::onThumbnailGenerated updating row" << filteredRow << "for" << filePath << "-> thumbnail:" << thumbnailPath;
+                    log << "[ASSETS MODEL] Creating QModelIndex\n";
+                    log.flush();
+                    QModelIndex idx = index(filteredRow, 0);
+                    log << "[ASSETS MODEL] Emitting dataChanged\n";
+                    log.flush();
+                    emit dataChanged(idx, idx, {ThumbnailPathRole});
+                    log << "[ASSETS MODEL] dataChanged emitted\n";
+                    log.flush();
+                }
+                break;
             }
-            break;
         }
+        log << "[ASSETS MODEL END] Success\n\n";
+        log.flush();
+    } catch (const std::exception& e) {
+        log << "[ASSETS MODEL CRASH] Exception: " << e.what() << "\n\n";
+        log.flush();
+    } catch (...) {
+        log << "[ASSETS MODEL CRASH] Unknown exception\n\n";
+        log.flush();
     }
 }
 

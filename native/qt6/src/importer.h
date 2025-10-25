@@ -21,6 +21,8 @@ public:
 signals:
     void importCompleted(int filesImported);
     void progressChanged(int current, int total);
+    void currentFileChanged(const QString& fileName);
+    void currentFolderChanged(const QString& folderName);
     void importFinished();
 
 private:

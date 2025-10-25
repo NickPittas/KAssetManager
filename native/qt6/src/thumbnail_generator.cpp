@@ -43,17 +43,22 @@ void ThumbnailTask::run() {
         qWarning() << "[ThumbnailTask] Exception during image thumbnail generation:" << m_filePath;
     }
 
-    QMetaObject::invokeMethod(m_generator, [this, thumbnailPath, success]() {
-        QMutexLocker locker(&m_generator->m_mutex);
-        m_generator->m_pendingThumbnails.remove(m_filePath);
+    // CRITICAL: Don't capture 'this' because ThumbnailTask will be deleted after run() completes
+    // Capture only the values we need by value
+    QString filePath = m_filePath;
+    ThumbnailGenerator* generator = m_generator;
+
+    QMetaObject::invokeMethod(generator, [generator, filePath, thumbnailPath, success]() {
+        QMutexLocker locker(&generator->m_mutex);
+        generator->m_pendingThumbnails.remove(filePath);
 
         // Update progress
-        m_generator->updateProgress();
+        generator->updateProgress();
 
         if (success) {
-            emit m_generator->thumbnailGenerated(m_filePath, thumbnailPath);
+            emit generator->thumbnailGenerated(filePath, thumbnailPath);
         } else {
-            emit m_generator->thumbnailFailed(m_filePath);
+            emit generator->thumbnailFailed(filePath);
         }
     }, Qt::QueuedConnection);
 }
@@ -174,7 +179,7 @@ ThumbnailGenerator::ThumbnailGenerator(QObject* parent)
 
     // Create thread pool for thumbnail generation
     m_threadPool = new QThreadPool(this);
-    m_threadPool->setMaxThreadCount(2); // Max 2 concurrent thumbnail generations (videos block main thread)
+    m_threadPool->setMaxThreadCount(1); // CRITICAL: Only 1 thread to avoid race conditions with large images
 
     qDebug() << "[ThumbnailGenerator] Initialized with" << m_threadPool->maxThreadCount() << "threads";
 }
@@ -213,14 +218,41 @@ QString ThumbnailGenerator::getThumbnailCachePath(const QString& filePath) {
 bool ThumbnailGenerator::isImageFile(const QString& filePath) {
     QFileInfo fi(filePath);
     QString ext = fi.suffix().toLower();
-    QStringList imageExts = {"jpg", "jpeg", "png", "gif", "bmp", "webp", "tiff", "tif", "ico", "svg"};
+
+    // Comprehensive list of image formats
+    QStringList imageExts = {
+        // Common formats
+        "jpg", "jpeg", "png", "gif", "bmp", "webp", "svg",
+        // TIFF variants
+        "tiff", "tif",
+        // RAW formats
+        "raw", "cr2", "cr3", "nef", "arw", "dng", "orf", "rw2", "pef", "srw", "raf",
+        // Other formats
+        "ico", "icns", "heic", "heif", "avif", "jxl",
+        // Adobe formats
+        "psd", "psb",
+        // Vector formats
+        "ai", "eps",
+        // Other raster formats
+        "tga", "pcx", "ppm", "pgm", "pbm", "pnm", "exr", "hdr"
+    };
     return imageExts.contains(ext);
 }
 
 bool ThumbnailGenerator::isVideoFile(const QString& filePath) {
     QFileInfo fi(filePath);
     QString ext = fi.suffix().toLower();
-    QStringList videoExts = {"mp4", "mov", "avi", "mkv", "webm", "flv", "wmv", "m4v", "mpg", "mpeg"};
+
+    // Comprehensive list of video formats
+    QStringList videoExts = {
+        // Common formats
+        "mp4", "mov", "avi", "mkv", "webm", "flv", "wmv", "m4v",
+        // MPEG variants
+        "mpg", "mpeg", "m2v", "m4p", "m2ts", "mts", "ts",
+        // Other formats
+        "3gp", "3g2", "ogv", "ogg", "vob", "divx", "xvid",
+        "asf", "rm", "rmvb", "f4v", "swf", "mxf", "roq", "nsv"
+    };
     return videoExts.contains(ext);
 }
 
@@ -293,10 +325,16 @@ void ThumbnailGenerator::requestThumbnail(const QString& filePath) {
     bool isImage = isImageFile(filePath);
 
     if (!isVideo && !isImage) {
-        qWarning() << "[ThumbnailGenerator] Unsupported file type:" << filePath;
+        qWarning() << "[ThumbnailGenerator] Unsupported file type, creating placeholder:" << filePath;
+        QString unsupportedThumb = createUnsupportedThumbnail(filePath);
         QMutexLocker locker(&m_mutex);
         m_pendingThumbnails.remove(filePath);
-        emit thumbnailFailed(filePath);
+        if (!unsupportedThumb.isEmpty()) {
+            emit thumbnailGenerated(filePath, unsupportedThumb);
+        } else {
+            emit thumbnailFailed(filePath);
+        }
+        updateProgress();
         return;
     }
 
@@ -314,46 +352,95 @@ void ThumbnailGenerator::requestThumbnail(const QString& filePath) {
 }
 
 QString ThumbnailGenerator::generateImageThumbnail(const QString& filePath) {
-    qDebug() << "[ThumbnailGenerator] Generating image thumbnail for:" << filePath;
+    qDebug() << "[ThumbnailGenerator] ===== START Generating image thumbnail for:" << filePath;
 
-    QImageReader reader(filePath);
-    reader.setAutoTransform(true);
+    try {
+        // Validate file exists and is readable
+        QFileInfo fileInfo(filePath);
+        qDebug() << "[ThumbnailGenerator] File size:" << fileInfo.size() << "bytes";
 
-    QSize originalSize = reader.size();
-    if (!originalSize.isValid()) {
-        qWarning() << "[ThumbnailGenerator] Failed to read image size:" << filePath << reader.errorString();
-        if (!qEnvironmentVariableIsEmpty("KASSET_VERBOSE")) {
-            LogManager::instance().addLog(QString("Thumbnail read failure: %1").arg(QFileInfo(filePath).fileName()), "WARN");
+        if (!fileInfo.exists() || !fileInfo.isReadable()) {
+            qWarning() << "[ThumbnailGenerator] File not accessible:" << filePath;
+            return QString();
         }
+
+        qDebug() << "[ThumbnailGenerator] Creating QImageReader...";
+        QImageReader reader(filePath);
+        reader.setAutoTransform(true);
+
+        // Set a decision handler to avoid crashes on corrupted images
+        reader.setDecideFormatFromContent(true);
+
+        // CRITICAL: Set quality to speed for large images
+        reader.setQuality(50);
+
+        qDebug() << "[ThumbnailGenerator] Reading image size...";
+        QSize originalSize = reader.size();
+        if (!originalSize.isValid()) {
+            qWarning() << "[ThumbnailGenerator] Failed to read image size:" << filePath << reader.errorString();
+            if (!qEnvironmentVariableIsEmpty("KASSET_VERBOSE")) {
+                LogManager::instance().addLog(QString("Thumbnail read failure: %1").arg(QFileInfo(filePath).fileName()), "WARN");
+            }
+            return QString();
+        }
+
+        qDebug() << "[ThumbnailGenerator] Original image size:" << originalSize.width() << "x" << originalSize.height();
+
+        // Validate size is reasonable
+        if (originalSize.width() <= 0 || originalSize.height() <= 0 ||
+            originalSize.width() > 50000 || originalSize.height() > 50000) {
+            qWarning() << "[ThumbnailGenerator] Invalid image dimensions:" << originalSize << "for" << filePath;
+            return QString();
+        }
+
+        // CRITICAL: For very large images (4K+), use scaled reading to avoid memory issues
+        QSize scaledSize = originalSize.scaled(THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT, Qt::KeepAspectRatio);
+        qDebug() << "[ThumbnailGenerator] Scaled size will be:" << scaledSize.width() << "x" << scaledSize.height();
+
+        // Always set scaled size BEFORE reading to avoid loading full resolution
+        reader.setScaledSize(scaledSize);
+
+        // For very large images, also set a clip rect to limit memory usage
+        if (originalSize.width() > 4000 || originalSize.height() > 4000) {
+            qDebug() << "[ThumbnailGenerator] Large image detected, using optimized loading";
+            reader.setScaledClipRect(QRect(0, 0, scaledSize.width(), scaledSize.height()));
+        }
+
+        qDebug() << "[ThumbnailGenerator] Reading image data...";
+        QImage image = reader.read();
+        if (image.isNull()) {
+            qWarning() << "[ThumbnailGenerator] Failed to read image:" << filePath << reader.errorString();
+            if (!qEnvironmentVariableIsEmpty("KASSET_VERBOSE")) {
+                LogManager::instance().addLog(QString("Thumbnail decode failure: %1").arg(QFileInfo(filePath).fileName()), "WARN");
+            }
+            return QString();
+        }
+
+        qDebug() << "[ThumbnailGenerator] Image read successfully, actual size:" << image.size();
+
+        QString cachePath = getThumbnailCachePath(filePath);
+        qDebug() << "[ThumbnailGenerator] Saving thumbnail to:" << cachePath;
+
+        if (!image.save(cachePath, "JPEG", 85)) {
+            qWarning() << "[ThumbnailGenerator] Failed to save thumbnail:" << cachePath;
+            if (!qEnvironmentVariableIsEmpty("KASSET_VERBOSE")) {
+                LogManager::instance().addLog(QString("Thumbnail save failure: %1").arg(QFileInfo(cachePath).fileName()), "WARN");
+            }
+            return QString();
+        }
+
+        qDebug() << "[ThumbnailGenerator] ===== SUCCESS Generated image thumbnail:" << cachePath;
+        if (!qEnvironmentVariableIsEmpty("KASSET_VERBOSE")) {
+            LogManager::instance().addLog(QString("Thumbnail generated: %1").arg(QFileInfo(cachePath).fileName()), "DEBUG");
+        }
+        return cachePath;
+    } catch (const std::exception& e) {
+        qCritical() << "[ThumbnailGenerator] ===== EXCEPTION generating thumbnail for" << filePath << ":" << e.what();
+        return QString();
+    } catch (...) {
+        qCritical() << "[ThumbnailGenerator] ===== UNKNOWN EXCEPTION generating thumbnail for" << filePath;
         return QString();
     }
-
-    QSize scaledSize = originalSize.scaled(THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT, Qt::KeepAspectRatio);
-    reader.setScaledSize(scaledSize);
-
-    QImage image = reader.read();
-    if (image.isNull()) {
-        qWarning() << "[ThumbnailGenerator] Failed to read image:" << filePath << reader.errorString();
-        if (!qEnvironmentVariableIsEmpty("KASSET_VERBOSE")) {
-            LogManager::instance().addLog(QString("Thumbnail decode failure: %1").arg(QFileInfo(filePath).fileName()), "WARN");
-        }
-        return QString();
-    }
-
-    QString cachePath = getThumbnailCachePath(filePath);
-    if (!image.save(cachePath, "JPEG", 85)) {
-        qWarning() << "[ThumbnailGenerator] Failed to save thumbnail:" << cachePath;
-        if (!qEnvironmentVariableIsEmpty("KASSET_VERBOSE")) {
-            LogManager::instance().addLog(QString("Thumbnail save failure: %1").arg(QFileInfo(cachePath).fileName()), "WARN");
-        }
-        return QString();
-    }
-
-    qDebug() << "[ThumbnailGenerator] Generated image thumbnail:" << cachePath;
-    if (!qEnvironmentVariableIsEmpty("KASSET_VERBOSE")) {
-        LogManager::instance().addLog(QString("Thumbnail generated: %1").arg(QFileInfo(cachePath).fileName()), "DEBUG");
-    }
-    return cachePath;
 }
 
 QString ThumbnailGenerator::createSampleImage(const QString& directory) {
@@ -434,6 +521,7 @@ void ThumbnailGenerator::updateProgress() {
 
     if (m_totalThumbnails > 0) {
         ProgressManager::instance().update(m_completedThumbnails);
+        emit progressChanged(m_completedThumbnails, m_totalThumbnails);
         if (!qEnvironmentVariableIsEmpty("KASSET_DIAGNOSTICS")) {
             qDebug() << "[ThumbnailGenerator] Progress:" << m_completedThumbnails << "/" << m_totalThumbnails;
         }
@@ -448,6 +536,61 @@ void ThumbnailGenerator::finishProgress() {
     qDebug() << "[ThumbnailGenerator] Finished progress tracking";
     m_totalThumbnails = 0;
     m_completedThumbnails = 0;
+}
+
+QString ThumbnailGenerator::createUnsupportedThumbnail(const QString& filePath) {
+    qDebug() << "[ThumbnailGenerator] Creating unsupported format thumbnail for:" << filePath;
+
+    try {
+        // Create a simple image with "Format Not Supported" text
+        QImage image(THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT, QImage::Format_RGB32);
+        image.fill(QColor(40, 40, 40));
+
+        QPainter painter(&image);
+        painter.setRenderHint(QPainter::Antialiasing);
+
+        // Draw icon/symbol
+        painter.setPen(QPen(QColor(120, 120, 120), 3));
+        painter.setBrush(Qt::NoBrush);
+        QRect iconRect(THUMBNAIL_WIDTH/2 - 40, 40, 80, 80);
+        painter.drawRect(iconRect);
+        painter.drawLine(iconRect.topLeft(), iconRect.bottomRight());
+        painter.drawLine(iconRect.topRight(), iconRect.bottomLeft());
+
+        // Draw text
+        painter.setPen(QColor(180, 180, 180));
+        painter.setFont(QFont("Segoe UI", 12, QFont::Bold));
+        QRect textRect(20, 140, THUMBNAIL_WIDTH - 40, 60);
+        painter.drawText(textRect, Qt::AlignCenter | Qt::TextWordWrap, "Format Not\nSupported");
+
+        // Draw file extension
+        QFileInfo fi(filePath);
+        QString ext = fi.suffix().toUpper();
+        if (!ext.isEmpty()) {
+            painter.setFont(QFont("Segoe UI", 10));
+            painter.setPen(QColor(140, 140, 140));
+            QRect extRect(20, 200, THUMBNAIL_WIDTH - 40, 30);
+            painter.drawText(extRect, Qt::AlignCenter, QString(".%1").arg(ext));
+        }
+
+        painter.end();
+
+        // Save to cache
+        QString cachePath = getThumbnailCachePath(filePath);
+        if (image.save(cachePath, "JPEG", 85)) {
+            qDebug() << "[ThumbnailGenerator] Created unsupported thumbnail:" << cachePath;
+            return cachePath;
+        } else {
+            qWarning() << "[ThumbnailGenerator] Failed to save unsupported thumbnail:" << cachePath;
+            return QString();
+        }
+    } catch (const std::exception& e) {
+        qCritical() << "[ThumbnailGenerator] Exception creating unsupported thumbnail:" << e.what();
+        return QString();
+    } catch (...) {
+        qCritical() << "[ThumbnailGenerator] Unknown exception creating unsupported thumbnail";
+        return QString();
+    }
 }
 
 

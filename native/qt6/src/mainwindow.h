@@ -21,6 +21,7 @@ class VirtualFolderTreeModel;
 class AssetsModel;
 class TagsModel;
 class PreviewOverlay;
+class ImportProgressDialog;
 
 class MainWindow : public QMainWindow
 {
@@ -43,11 +44,11 @@ private slots:
     void onAssetContextMenu(const QPoint &pos);
     void onFolderContextMenu(const QPoint &pos);
     void onEmptySpaceContextMenu(const QPoint &pos);
-    
+
     void showPreview(int index);
     void closePreview();
     void changePreview(int delta);
-    
+
     void applyFilters();
     void clearFilters();
     void onSearchTextChanged(const QString &text);
@@ -59,14 +60,17 @@ private slots:
 
     void importFiles(const QStringList &filePaths);
     void onImportProgress(int current, int total);
+    void onImportFileChanged(const QString& fileName);
+    void onImportFolderChanged(const QString& folderName);
     void onImportComplete();
+    void onThumbnailProgress(int current, int total);
 
 private:
     void setupUi();
     void setupConnections();
     void updateInfoPanel();
     void updateSelectionInfo();
-    
+
     QSet<int> getSelectedAssetIds() const;
     int getAnchorIndex() const;
     void selectAsset(int assetId, int index, Qt::KeyboardModifiers modifiers);
@@ -74,6 +78,11 @@ private:
     void toggleSelection(int assetId, int index);
     void selectRange(int fromIndex, int toIndex);
     void clearSelection();
+
+    // Folder tree expansion state management
+    void saveFolderExpansionState();
+    void restoreFolderExpansionState();
+    QSet<int> expandedFolderIds;
     
     // UI Components
     QSplitter *mainSplitter;
@@ -120,6 +129,13 @@ private:
     
     // Preview overlay
     PreviewOverlay *previewOverlay;
+
+    // Thumbnail generation progress
+    QLabel *thumbnailProgressLabel;
+    class QProgressBar *thumbnailProgressBar;
+
+    // Import progress dialog
+    ImportProgressDialog *importProgressDialog;
 };
 
 #endif // MAINWINDOW_H

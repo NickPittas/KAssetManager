@@ -5,8 +5,8 @@ project(KAssetManagerQt VERSION 0.1.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-find_package(QT NAMES Qt6 REQUIRED COMPONENTS Widgets Multimedia MultimediaWidgets Sql)
-find_package(Qt6 REQUIRED COMPONENTS Widgets Multimedia MultimediaWidgets Sql)
+find_package(QT NAMES Qt6 REQUIRED COMPONENTS Widgets Multimedia MultimediaWidgets Sql Concurrent)
+find_package(Qt6 REQUIRED COMPONENTS Widgets Multimedia MultimediaWidgets Sql Concurrent)
 
 # Standard Qt project setup (Qt6)
 if (COMMAND qt_standard_project_setup)
@@ -38,13 +38,15 @@ qt_add_executable(kassetmanagerqt
     src/tags_model.h
     src/preview_overlay.h
     src/preview_overlay.cpp
+    src/import_progress_dialog.h
+    src/import_progress_dialog.cpp
 )
 
 target_include_directories(kassetmanagerqt PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
-target_link_libraries(kassetmanagerqt PRIVATE Qt6::Widgets Qt6::Multimedia Qt6::MultimediaWidgets Qt6::Sql)
+target_link_libraries(kassetmanagerqt PRIVATE Qt6::Widgets Qt6::Multimedia Qt6::MultimediaWidgets Qt6::Sql Qt6::Concurrent)
 
 # Windows-specific: hide console in release
 if (WIN32)

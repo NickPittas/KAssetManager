@@ -17,6 +17,7 @@ struct AssetRow {
     QString fileType;
     QDateTime lastModified;
     int rating = -1;
+    QString thumbnailPath;  // Path to generated thumbnail
 };
 
 class AssetsModel : public QAbstractListModel {

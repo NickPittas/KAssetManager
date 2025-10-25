@@ -5,6 +5,8 @@
 #include "importer.h"
 #include "db.h"
 #include "preview_overlay.h"
+#include "thumbnail_generator.h"
+#include "import_progress_dialog.h"
 #include <QHeaderView>
 #include <QStyledItemDelegate>
 #include <QPainter>
@@ -21,10 +23,15 @@
 #include <QMimeData>
 #include <QUrl>
 #include <QProgressDialog>
+#include <QProgressBar>
 #include <QDirIterator>
 #include <QStatusBar>
 #include <QDrag>
 #include <QMouseEvent>
+#include <QFuture>
+#include <QFutureWatcher>
+#include <QTimer>
+#include <QScrollBar>
 
 // Custom QListView with compact drag pixmap
 class AssetGridView : public QListView
@@ -90,55 +97,147 @@ class AssetItemDelegate : public QStyledItemDelegate
 public:
     explicit AssetItemDelegate(QObject *parent = nullptr) : QStyledItemDelegate(parent) {}
 
+    // Cache for loaded pixmaps to avoid repeated file I/O
+    mutable QHash<QString, QPixmap> pixmapCache;
+
     void paint(QPainter *painter, const QStyleOptionViewItem &option, const QModelIndex &index) const override
     {
-        painter->save();
-        
-        // Background
-        if (option.state & QStyle::State_Selected) {
-            painter->fillRect(option.rect, QColor(47, 58, 74)); // Accent background
-        } else if (option.state & QStyle::State_MouseOver) {
-            painter->fillRect(option.rect, QColor(32, 32, 32)); // Hover
-        } else {
-            painter->fillRect(option.rect, QColor(18, 18, 18)); // Default
-        }
-        
-        // Border
-        if (option.state & QStyle::State_Selected) {
-            painter->setPen(QPen(QColor(88, 166, 255), 2));
-            painter->drawRect(option.rect.adjusted(1, 1, -1, -1));
-        }
-        
-        // Thumbnail
-        QString thumbnailPath = index.data(AssetsModel::ThumbnailPathRole).toString();
-        QRect thumbRect = option.rect.adjusted(8, 8, -8, -60);
-        
-        if (!thumbnailPath.isEmpty()) {
-            QPixmap pixmap(thumbnailPath);
-            if (!pixmap.isNull()) {
-                QPixmap scaled = pixmap.scaled(thumbRect.size(), Qt::KeepAspectRatio, Qt::SmoothTransformation);
-                int x = thumbRect.x() + (thumbRect.width() - scaled.width()) / 2;
-                int y = thumbRect.y() + (thumbRect.height() - scaled.height()) / 2;
-                painter->drawPixmap(x, y, scaled);
+        // Open log file in append mode
+        QFile logFile("paint_crash.log");
+        logFile.open(QIODevice::Append | QIODevice::Text);
+        QTextStream log(&logFile);
+
+        try {
+            log << "[PAINT START] Row: " << index.row() << "\n";
+            log.flush();
+
+            painter->save();
+            log << "[PAINT] painter->save() OK\n";
+            log.flush();
+
+            // Get thumbnail path
+            QString thumbnailPath = index.data(AssetsModel::ThumbnailPathRole).toString();
+            log << "[PAINT] thumbnailPath: " << thumbnailPath << "\n";
+            log.flush();
+
+            // CRITICAL RULE: If thumbnail is not in cache, don't draw ANYTHING
+            // This prevents crashes from trying to load images in paint()
+            if (thumbnailPath.isEmpty() || !pixmapCache.contains(thumbnailPath)) {
+                log << "[PAINT] No thumbnail in cache, returning\n";
+                log.flush();
+                painter->restore();
+                return; // Don't draw anything - not even the card background
             }
-        }
-        
-        // File name
-        QString fileName = index.data(AssetsModel::FileNameRole).toString();
-        QRect textRect = option.rect.adjusted(8, option.rect.height() - 50, -8, -30);
-        painter->setPen(QColor(255, 255, 255));
-        painter->setFont(QFont("Segoe UI", 9));
-        painter->drawText(textRect, Qt::AlignLeft | Qt::AlignVCenter | Qt::TextWordWrap, fileName);
-        
-        // File type
-        QString fileType = index.data(AssetsModel::FileTypeRole).toString().toUpper();
-        QRect typeRect = option.rect.adjusted(8, option.rect.height() - 25, -8, -8);
-        painter->setPen(QColor(160, 160, 160));
-        painter->setFont(QFont("Segoe UI", 8));
-        painter->drawText(typeRect, Qt::AlignLeft | Qt::AlignVCenter, fileType);
-        
+
+            log << "[PAINT] Getting pixmap from cache\n";
+            log.flush();
+            QPixmap pixmap = pixmapCache.value(thumbnailPath);
+            log << "[PAINT] Got pixmap, isNull: " << pixmap.isNull() << "\n";
+            log.flush();
+
+            if (pixmap.isNull()) {
+                log << "[PAINT] Pixmap is null, returning\n";
+                log.flush();
+                painter->restore();
+                return; // Invalid pixmap - don't draw anything
+            }
+
+            // Now we know we have a valid thumbnail - draw the card
+            log << "[PAINT] Drawing background\n";
+            log.flush();
+
+            // Background
+            if (option.state & QStyle::State_Selected) {
+                painter->fillRect(option.rect, QColor(47, 58, 74)); // Accent background
+            } else if (option.state & QStyle::State_MouseOver) {
+                painter->fillRect(option.rect, QColor(32, 32, 32)); // Hover
+            } else {
+                painter->fillRect(option.rect, QColor(18, 18, 18)); // Default
+            }
+            log << "[PAINT] Background OK\n";
+            log.flush();
+
+            // Border
+            if (option.state & QStyle::State_Selected) {
+                painter->setPen(QPen(QColor(88, 166, 255), 2));
+                painter->drawRect(option.rect.adjusted(1, 1, -1, -1));
+            }
+            log << "[PAINT] Border OK\n";
+            log.flush();
+
+            // Draw thumbnail
+            log << "[PAINT] Scaling pixmap\n";
+            log.flush();
+            QRect thumbRect = option.rect.adjusted(8, 8, -8, -8);
+            QPixmap scaled = pixmap.scaled(thumbRect.size(), Qt::KeepAspectRatio, Qt::FastTransformation);
+            log << "[PAINT] Scaled OK, drawing\n";
+            log.flush();
+            int x = thumbRect.x() + (thumbRect.width() - scaled.width()) / 2;
+            int y = thumbRect.y() + (thumbRect.height() - scaled.height()) / 2;
+            painter->drawPixmap(x, y, scaled);
+            log << "[PAINT] Thumbnail drawn OK\n";
+            log.flush();
+
+            // File name overlay at the bottom with semi-transparent background
+            log << "[PAINT] Getting filename\n";
+            log.flush();
+            QString fileName = index.data(AssetsModel::FileNameRole).toString();
+            QString fileType = index.data(AssetsModel::FileTypeRole).toString().toUpper();
+            log << "[PAINT] fileName: " << fileName << ", fileType: " << fileType << "\n";
+            log.flush();
+
+            // Calculate text height needed
+            log << "[PAINT] Creating fonts\n";
+            log.flush();
+            QFont nameFont("Segoe UI", 9);
+            QFontMetrics nameFm(nameFont);
+            QFont typeFont("Segoe UI", 8);
+            QFontMetrics typeFm(typeFont);
+            log << "[PAINT] Fonts OK\n";
+            log.flush();
+
+            // Use elided text to fit in one line
+            int availableWidth = thumbRect.width() - 16; // 8px padding on each side
+            QString elidedName = nameFm.elidedText(fileName, Qt::ElideRight, availableWidth);
+            log << "[PAINT] Elided text OK\n";
+            log.flush();
+
+            int nameHeight = nameFm.height();
+            int typeHeight = typeFm.height();
+            int totalTextHeight = nameHeight + typeHeight + 8; // 8px padding
+
+            // Draw semi-transparent background for text
+            log << "[PAINT] Drawing text background\n";
+            log.flush();
+            QRect textBgRect(thumbRect.left(), thumbRect.bottom() - totalTextHeight, thumbRect.width(), totalTextHeight);
+            painter->fillRect(textBgRect, QColor(0, 0, 0, 180));
+            log << "[PAINT] Text background OK\n";
+            log.flush();
+
+            // Draw file name
+            log << "[PAINT] Drawing filename\n";
+            log.flush();
+            QRect nameRect = textBgRect.adjusted(8, 4, -8, -typeHeight - 4);
+            painter->setPen(QColor(255, 255, 255));
+            painter->setFont(nameFont);
+            painter->drawText(nameRect, Qt::AlignLeft | Qt::AlignVCenter, elidedName);
+            log << "[PAINT] Filename OK\n";
+            log.flush();
+
+            // Draw file type
+            log << "[PAINT] Drawing file type\n";
+            log.flush();
+            QRect typeRect = textBgRect.adjusted(8, nameHeight + 4, -8, -4);
+            painter->setPen(QColor(160, 160, 160));
+            painter->setFont(typeFont);
+            painter->drawText(typeRect, Qt::AlignLeft | Qt::AlignVCenter, fileType);
+            log << "[PAINT] File type OK\n";
+            log.flush();
+
         // Selection checkmark
         if (option.state & QStyle::State_Selected) {
+            log << "[PAINT] Drawing checkmark\n";
+            log.flush();
             QRect checkRect(option.rect.right() - 28, option.rect.top() + 4, 24, 24);
             painter->setBrush(QColor(88, 166, 255));
             painter->setPen(Qt::NoPen);
@@ -146,9 +245,26 @@ public:
             painter->setPen(QColor(255, 255, 255));
             painter->setFont(QFont("Segoe UI", 12, QFont::Bold));
             painter->drawText(checkRect, Qt::AlignCenter, "✓");
+            log << "[PAINT] Checkmark OK\n";
+            log.flush();
         }
-        
-        painter->restore();
+
+            log << "[PAINT] Restoring painter\n";
+            log.flush();
+            painter->restore();
+            log << "[PAINT END] Success\n\n";
+            log.flush();
+        } catch (const std::exception& e) {
+            log << "[PAINT CRASH] std::exception: " << e.what() << "\n\n";
+            log.flush();
+            qCritical() << "[AssetItemDelegate] Exception in paint():" << e.what();
+            painter->restore();
+        } catch (...) {
+            log << "[PAINT CRASH] Unknown exception\n\n";
+            log.flush();
+            qCritical() << "[AssetItemDelegate] Unknown exception in paint()";
+            painter->restore();
+        }
     }
 
     QSize sizeHint(const QStyleOptionViewItem &option, const QModelIndex &index) const override
@@ -179,7 +295,87 @@ MainWindow::MainWindow(QWidget *parent)
     // Create importer
     importer = new Importer(this);
     connect(importer, &Importer::progressChanged, this, &MainWindow::onImportProgress);
+    connect(importer, &Importer::currentFileChanged, this, &MainWindow::onImportFileChanged);
+    connect(importer, &Importer::currentFolderChanged, this, &MainWindow::onImportFolderChanged);
     connect(importer, &Importer::importFinished, this, &MainWindow::onImportComplete);
+
+    // Create import progress dialog (will be shown when needed)
+    importProgressDialog = nullptr;
+
+    // Setup thumbnail progress bar in status bar
+    thumbnailProgressLabel = new QLabel(this);
+    thumbnailProgressLabel->setVisible(false);
+    thumbnailProgressBar = new QProgressBar(this);
+    thumbnailProgressBar->setVisible(false);
+    thumbnailProgressBar->setMaximumWidth(200);
+    thumbnailProgressBar->setTextVisible(true);
+    statusBar()->addPermanentWidget(thumbnailProgressLabel);
+    statusBar()->addPermanentWidget(thumbnailProgressBar);
+
+    // Connect thumbnail generator progress
+    connect(&ThumbnailGenerator::instance(), &ThumbnailGenerator::progressChanged,
+            this, &MainWindow::onThumbnailProgress);
+
+    // Load thumbnail into cache when generated, then refresh view
+    connect(&ThumbnailGenerator::instance(), &ThumbnailGenerator::thumbnailGenerated,
+            this, [this](const QString& filePath, const QString& thumbnailPath) {
+        // Open crash log
+        QFile logFile("thumbnail_load_crash.log");
+        logFile.open(QIODevice::Append | QIODevice::Text);
+        QTextStream log(&logFile);
+
+        try {
+            log << "[THUMB LOAD START] filePath: " << filePath << ", thumbnailPath: " << thumbnailPath << "\n";
+            log.flush();
+
+            // Load thumbnail into delegate cache
+            AssetItemDelegate *delegate = static_cast<AssetItemDelegate*>(assetGridView->itemDelegate());
+            log << "[THUMB LOAD] Got delegate: " << (delegate ? "YES" : "NO") << "\n";
+            log.flush();
+
+            if (delegate && !thumbnailPath.isEmpty()) {
+                log << "[THUMB LOAD] Checking file exists\n";
+                log.flush();
+                QFileInfo thumbInfo(thumbnailPath);
+                log << "[THUMB LOAD] File exists: " << thumbInfo.exists() << ", size: " << thumbInfo.size() << "\n";
+                log.flush();
+
+                if (thumbInfo.exists() && thumbInfo.size() > 0) {
+                    log << "[THUMB LOAD] Loading QPixmap from: " << thumbnailPath << "\n";
+                    log.flush();
+                    QPixmap pixmap(thumbnailPath);
+                    log << "[THUMB LOAD] QPixmap loaded, isNull: " << pixmap.isNull() << "\n";
+                    log.flush();
+
+                    if (!pixmap.isNull()) {
+                        // Limit cache size
+                        if (delegate->pixmapCache.size() > 200) {
+                            log << "[THUMB LOAD] Clearing cache (size was " << delegate->pixmapCache.size() << ")\n";
+                            log.flush();
+                            delegate->pixmapCache.clear();
+                        }
+                        log << "[THUMB LOAD] Inserting into cache\n";
+                        log.flush();
+                        delegate->pixmapCache.insert(thumbnailPath, pixmap);
+                        log << "[THUMB LOAD] Cache insert OK, cache size now: " << delegate->pixmapCache.size() << "\n";
+                        log.flush();
+                    }
+                }
+            }
+            // Refresh view to show the new thumbnail
+            log << "[THUMB LOAD] Calling viewport update\n";
+            log.flush();
+            assetGridView->viewport()->update();
+            log << "[THUMB LOAD END] Success\n\n";
+            log.flush();
+        } catch (const std::exception& e) {
+            log << "[THUMB LOAD CRASH] Exception: " << e.what() << "\n\n";
+            log.flush();
+        } catch (...) {
+            log << "[THUMB LOAD CRASH] Unknown exception\n\n";
+            log.flush();
+        }
+    });
 }
 
 MainWindow::~MainWindow()
@@ -203,6 +399,9 @@ void MainWindow::setupUi()
         "QTreeView::item:selected { background-color: #2f3a4a; }"
         "QTreeView::item:hover { background-color: #202020; }"
     );
+
+    // Expand root folder by default
+    folderTreeView->expandToDepth(0);
     
     // Center panel: Asset grid (using custom AssetGridView with compact drag pixmap)
     assetGridView = new AssetGridView(this);
@@ -420,6 +619,10 @@ void MainWindow::setupConnections()
     connect(folderTreeView, &QTreeView::clicked, this, &MainWindow::onFolderSelected);
     connect(folderTreeView, &QTreeView::customContextMenuRequested, this, &MainWindow::onFolderContextMenu);
 
+    // Save/restore folder expansion state when model reloads
+    connect(folderModel, &VirtualFolderTreeModel::modelAboutToBeReset, this, &MainWindow::saveFolderExpansionState);
+    connect(folderModel, &VirtualFolderTreeModel::modelReset, this, &MainWindow::restoreFolderExpansionState);
+
     connect(assetGridView->selectionModel(), &QItemSelectionModel::selectionChanged, this, &MainWindow::onAssetSelectionChanged);
     connect(assetGridView, &QListView::doubleClicked, this, &MainWindow::onAssetDoubleClicked);
     connect(assetGridView, &QListView::customContextMenuRequested, this, &MainWindow::onAssetContextMenu);
@@ -430,17 +633,21 @@ void MainWindow::setupConnections()
 
     // Connect search box for real-time filtering
     connect(searchBox, &QLineEdit::textChanged, this, &MainWindow::onSearchTextChanged);
+
 }
 
 void MainWindow::onFolderSelected(const QModelIndex &index)
 {
+    qDebug() << "===== MainWindow::onFolderSelected - START";
+
     if (!index.isValid()) {
         qWarning() << "MainWindow::onFolderSelected - Invalid index";
         return;
     }
 
     int folderId = index.data(VirtualFolderTreeModel::IdRole).toInt();
-    qDebug() << "MainWindow::onFolderSelected - Folder ID:" << folderId;
+    QString folderName = index.data(VirtualFolderTreeModel::NameRole).toString();
+    qDebug() << "MainWindow::onFolderSelected - Folder ID:" << folderId << "Name:" << folderName;
 
     if (folderId <= 0) {
         qWarning() << "MainWindow::onFolderSelected - Invalid folder ID:" << folderId;
@@ -448,14 +655,24 @@ void MainWindow::onFolderSelected(const QModelIndex &index)
     }
 
     try {
+        qDebug() << "MainWindow::onFolderSelected - Calling assetsModel->setFolderId()...";
         assetsModel->setFolderId(folderId);
+        qDebug() << "MainWindow::onFolderSelected - setFolderId() completed";
+
+        qDebug() << "MainWindow::onFolderSelected - Clearing selection...";
         clearSelection();
+        qDebug() << "MainWindow::onFolderSelected - Selection cleared";
+
+        qDebug() << "MainWindow::onFolderSelected - Updating info panel...";
         updateInfoPanel();
+        qDebug() << "MainWindow::onFolderSelected - Info panel updated";
+
+        qDebug() << "===== MainWindow::onFolderSelected - SUCCESS";
     } catch (const std::exception& e) {
-        qCritical() << "MainWindow::onFolderSelected - Exception:" << e.what();
+        qCritical() << "===== MainWindow::onFolderSelected - EXCEPTION:" << e.what();
         QMessageBox::critical(this, "Error", QString("Failed to load folder: %1").arg(e.what()));
     } catch (...) {
-        qCritical() << "MainWindow::onFolderSelected - Unknown exception";
+        qCritical() << "===== MainWindow::onFolderSelected - UNKNOWN EXCEPTION";
         QMessageBox::critical(this, "Error", "Failed to load folder: Unknown error");
     }
 }
@@ -1088,6 +1305,14 @@ void MainWindow::dropEvent(QDropEvent *event)
 
         int totalImported = 0;
 
+        // Create and show import progress dialog
+        if (!importProgressDialog) {
+            importProgressDialog = new ImportProgressDialog(this);
+        }
+        importProgressDialog->show();
+        importProgressDialog->raise();
+        importProgressDialog->activateWindow();
+
         // Import folders with structure preservation
         for (const QString &folderPath : folderPaths) {
             qDebug() << "Importing folder with structure:" << folderPath;
@@ -1123,22 +1348,85 @@ void MainWindow::importFiles(const QStringList &filePaths)
 
     int folderId = folderTreeView->currentIndex().data(VirtualFolderTreeModel::IdRole).toInt();
 
-    // Start import in background
+    // Create and show import progress dialog
+    if (!importProgressDialog) {
+        importProgressDialog = new ImportProgressDialog(this);
+    }
+    importProgressDialog->show();
+    importProgressDialog->raise();
+    importProgressDialog->activateWindow();
+
+    // Start import
     importer->importFiles(filePaths, folderId);
 }
 
 void MainWindow::onImportProgress(int current, int total)
 {
-    // Update status bar or show progress dialog
+    // Update progress dialog
+    if (importProgressDialog) {
+        importProgressDialog->setProgress(current, total);
+    }
+
+    // Also update status bar
     statusBar()->showMessage(QString("Importing: %1 of %2 files...").arg(current).arg(total));
+}
+
+void MainWindow::onImportFileChanged(const QString& fileName)
+{
+    // Update progress dialog with current file
+    if (importProgressDialog) {
+        importProgressDialog->setCurrentFile(fileName);
+    }
+}
+
+void MainWindow::onImportFolderChanged(const QString& folderName)
+{
+    // Update progress dialog with current folder
+    if (importProgressDialog) {
+        importProgressDialog->setCurrentFolder(folderName);
+    }
 }
 
 void MainWindow::onImportComplete()
 {
+    // Close and delete the import progress dialog
+    if (importProgressDialog) {
+        importProgressDialog->accept();  // Close the dialog
+        importProgressDialog->deleteLater();
+        importProgressDialog = nullptr;
+    }
+
     statusBar()->showMessage("Import complete", 3000);
 
     // Reload assets model to show new imports
     assetsModel->reload();
+
+    // Start thumbnail generation for all assets in current folder
+    QList<int> assetIds;
+    for (int row = 0; row < assetsModel->rowCount(QModelIndex()); ++row) {
+        QModelIndex index = assetsModel->index(row, 0);
+        int assetId = index.data(AssetsModel::IdRole).toInt();
+        assetIds.append(assetId);
+    }
+
+    if (!assetIds.isEmpty()) {
+        qDebug() << "[MainWindow] Starting thumbnail generation for" << assetIds.size() << "assets";
+
+        // Get file paths for all assets
+        QStringList filePaths;
+        for (int assetId : assetIds) {
+            QString filePath = DB::instance().getAssetFilePath(assetId);
+            if (!filePath.isEmpty()) {
+                filePaths.append(filePath);
+            }
+        }
+
+        // Start thumbnail generation
+        ThumbnailGenerator::instance().startProgress(filePaths.size());
+        for (const QString &filePath : filePaths) {
+            ThumbnailGenerator::instance().requestThumbnail(filePath);
+        }
+    }
 }
 
 bool MainWindow::eventFilter(QObject *watched, QEvent *event)
@@ -1349,5 +1637,72 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
     }
 
     return QMainWindow::eventFilter(watched, event);
+}
+
+void MainWindow::saveFolderExpansionState()
+{
+    expandedFolderIds.clear();
+
+    // Recursively save expanded state
+    std::function<void(const QModelIndex&)> saveExpanded = [&](const QModelIndex& parent) {
+        int rowCount = folderModel->rowCount(parent);
+        for (int i = 0; i < rowCount; ++i) {
+            QModelIndex index = folderModel->index(i, 0, parent);
+            if (index.isValid()) {
+                if (folderTreeView->isExpanded(index)) {
+                    int folderId = index.data(VirtualFolderTreeModel::IdRole).toInt();
+                    expandedFolderIds.insert(folderId);
+                }
+                // Recurse into children
+                saveExpanded(index);
+            }
+        }
+    };
+
+    saveExpanded(QModelIndex());
+    qDebug() << "Saved expansion state for" << expandedFolderIds.size() << "folders";
+}
+
+void MainWindow::restoreFolderExpansionState()
+{
+    // Recursively restore expanded state
+    std::function<void(const QModelIndex&)> restoreExpanded = [&](const QModelIndex& parent) {
+        int rowCount = folderModel->rowCount(parent);
+        for (int i = 0; i < rowCount; ++i) {
+            QModelIndex index = folderModel->index(i, 0, parent);
+            if (index.isValid()) {
+                int folderId = index.data(VirtualFolderTreeModel::IdRole).toInt();
+                if (expandedFolderIds.contains(folderId)) {
+                    folderTreeView->setExpanded(index, true);
+                }
+                // Recurse into children
+                restoreExpanded(index);
+            }
+        }
+    };
+
+    restoreExpanded(QModelIndex());
+    qDebug() << "Restored expansion state for" << expandedFolderIds.size() << "folders";
+}
+
+// Called when thumbnail generation progress updates
+void MainWindow::onThumbnailProgress(int current, int total)
+{
+    if (total > 0) {
+        thumbnailProgressLabel->setText(QString("Generating thumbnails:"));
+        thumbnailProgressLabel->setVisible(true);
+        thumbnailProgressBar->setMaximum(total);
+        thumbnailProgressBar->setValue(current);
+        thumbnailProgressBar->setFormat(QString("%1/%2 (%p%)").arg(current).arg(total));
+        thumbnailProgressBar->setVisible(true);
+
+        // Hide when complete
+        if (current >= total) {
+            QTimer::singleShot(2000, this, [this]() {
+                thumbnailProgressLabel->setVisible(false);
+                thumbnailProgressBar->setVisible(false);
+            });
+        }
+    }
 }
 

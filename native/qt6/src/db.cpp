@@ -328,3 +328,16 @@ QList<int> DB::getAssetIdsInFolder(int folderId, bool recursive) const
     return assetIds;
 }
 
+QString DB::getAssetFilePath(int assetId) const
+{
+    QSqlQuery q(m_db);
+    q.prepare("SELECT file_path FROM assets WHERE id = ?");
+    q.addBindValue(assetId);
+
+    if (q.exec() && q.next()) {
+        return q.value(0).toString();
+    }
+
+    return QString();
+}
+

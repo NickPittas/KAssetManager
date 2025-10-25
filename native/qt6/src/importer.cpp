@@ -5,6 +5,7 @@
 #include <QDir>
 #include <QDirIterator>
 #include <QDebug>
+#include <QApplication>
 
 Importer::Importer(QObject* parent): QObject(parent) {}
 
@@ -73,6 +74,10 @@ bool Importer::importFolder(const QString& dirPath, int parentFolderId){
     QString topName = QFileInfo(dirPath).fileName(); if (topName.isEmpty()) topName = dir.dirName();
     int topId = DB::instance().createFolder(topName, parentFolderId);
     if (topId<=0) return false;
+
+    // Emit folder name for progress dialog
+    emit currentFolderChanged(topName);
+
     LogManager::instance().addLog(QString("Importing folder %1").arg(topName));
 
     // Build all subfolders first (breadth-first)
@@ -82,14 +87,41 @@ bool Importer::importFolder(const QString& dirPath, int parentFolderId){
         QString cur = pending.front(); pending.pop_front(); int curId = folderIds.value(cur);
         QDir d(cur);
         auto folders = d.entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
-        for (const auto& f: folders){ QString sub = QDir(cur).filePath(f); int id = DB::instance().createFolder(f, curId); folderIds.insert(sub, id); pending.push_back(sub); }
+        for (const auto& f: folders){
+            QString sub = QDir(cur).filePath(f);
+            int id = DB::instance().createFolder(f, curId);
+            folderIds.insert(sub, id);
+            pending.push_back(sub);
+        }
     }
-    // Add files to corresponding folders
+
+    // Count total files first for progress reporting
+    QDirIterator countIt(dirPath, QDir::Files, QDirIterator::Subdirectories);
+    int totalFiles = 0;
+    while(countIt.hasNext()) {
+        countIt.next();
+        if (isMediaFile(countIt.filePath())) totalFiles++;
+    }
+
+    // Add files to corresponding folders with progress
     QDirIterator it(dirPath, QDir::Files, QDirIterator::Subdirectories);
+    int currentFile = 0;
     while(it.hasNext()){
-        QString fp = it.next(); if (!isMediaFile(fp)) continue;
-        QString folderPath = QFileInfo(fp).absolutePath(); int fid = folderIds.value(folderPath, topId);
-        int assetId = DB::instance().upsertAsset(fp); if (assetId>0) DB::instance().setAssetFolder(assetId, fid);
+        QString fp = it.next();
+        if (!isMediaFile(fp)) continue;
+
+        currentFile++;
+        QString fileName = QFileInfo(fp).fileName();
+        emit currentFileChanged(fileName);
+        emit progressChanged(currentFile, totalFiles);
+
+        // Process events to keep UI responsive
+        QApplication::processEvents();
+
+        QString folderPath = QFileInfo(fp).absolutePath();
+        int fid = folderIds.value(folderPath, topId);
+        int assetId = DB::instance().upsertAsset(fp);
+        if (assetId>0) DB::instance().setAssetFolder(assetId, fid);
     }
     LogManager::instance().addLog(QString("Imported folder %1").arg(topName));
     return true;
@@ -146,8 +178,15 @@ void Importer::importFiles(const QStringList& filePaths, int parentFolderId)
     for (int i = 0; i < total; ++i) {
         const QString& filePath = filePaths[i];
 
+        // Emit current file name
+        QString fileName = QFileInfo(filePath).fileName();
+        emit currentFileChanged(fileName);
+
         // Emit progress
         emit progressChanged(i + 1, total);
+
+        // Process events to keep UI responsive
+        QApplication::processEvents();
 
         // Import the file
         if (importFile(filePath, parentFolderId)) {
