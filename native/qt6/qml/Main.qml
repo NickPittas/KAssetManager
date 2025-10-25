@@ -1005,8 +1005,10 @@ DropArea {
                             }
                             property bool started: false
                             property real sx: 0; property real sy: 0
+                            // Left-click and drag handling
                             MouseArea {
                                 anchors.fill: parent
+                                acceptedButtons: Qt.LeftButton
                                 onPressed: function(mouse) {
                                     var wasSelected = AppState.selectedAssetId === tile.assetId
                                     if (mouse.modifiers & Qt.ControlModifier) {
@@ -1031,7 +1033,6 @@ DropArea {
                                     AppState.previewIndex = index
                                     AppState.selectedFileType = tile.fileType
                                     AppState.selectedFileModified = tile.lastModified ? Qt.formatDateTime(tile.lastModified, Qt.DefaultLocaleShortDate) : ""
-                                    if (mouse.button === Qt.RightButton) { assetMenu.popup(); return }
                                     tile.sx = mouse.x
                                     tile.sy = mouse.y
                                     tile.started = false
@@ -1051,6 +1052,25 @@ DropArea {
                                     }
                                 }
                                 onDoubleClicked: function(mouse) { openPreview(index) }
+                            }
+                            // Right-click context menu
+                            TapHandler {
+                                acceptedButtons: Qt.RightButton
+                                onTapped: function(event) {
+                                    // Select the asset first if not already selected
+                                    if (AppState.selectedAssetIds.indexOf(tile.assetId) === -1) {
+                                        AppState.selectedAssetIds = [tile.assetId]
+                                        AppState.selectedAssetId = tile.assetId
+                                        AppState.selectedFileName = tile.fileName
+                                        AppState.selectedFilePath = tile.filePath
+                                        AppState.selectedFileSize = tile.fileSize
+                                        AppState.previewIndex = index
+                                        AppState.selectedFileType = tile.fileType
+                                        AppState.selectedFileModified = tile.lastModified ? Qt.formatDateTime(tile.lastModified, Qt.DefaultLocaleShortDate) : ""
+                                        filesGrid.currentIndex = index
+                                    }
+                                    assetMenu.popup(event.point.position.x, event.point.position.y)
+                                }
                             }
                             // Per-asset context menu (adds Assign Tag submenu)
                             Menu {
