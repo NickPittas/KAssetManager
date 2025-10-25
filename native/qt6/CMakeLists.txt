@@ -40,6 +40,8 @@ qt_add_executable(kassetmanagerqt
     src/preview_overlay.cpp
     src/import_progress_dialog.h
     src/import_progress_dialog.cpp
+    src/star_rating_widget.h
+    src/star_rating_widget.cpp
 )
 
 target_include_directories(kassetmanagerqt PRIVATE

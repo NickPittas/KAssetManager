@@ -64,6 +64,7 @@ private slots:
     void onImportFolderChanged(const QString& folderName);
     void onImportComplete();
     void onThumbnailProgress(int current, int total);
+    void onRatingChanged(int rating);
 
 private:
     void setupUi();
@@ -118,7 +119,8 @@ private:
     QLabel *infoFileSize;
     QLabel *infoFileType;
     QLabel *infoModified;
-    QLabel *infoRating;
+    QLabel *infoRatingLabel;
+    class StarRatingWidget *infoRatingWidget;
     QLabel *infoTags;
     
     // Selection state

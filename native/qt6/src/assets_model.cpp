@@ -154,6 +154,14 @@ void AssetsModel::setTypeFilter(int f) {
     emit typeFilterChanged();
 }
 
+void AssetsModel::setRatingFilter(int f) {
+    if (m_ratingFilter == f) return;
+    m_ratingFilter = f;
+    beginResetModel();
+    rebuildFilter();
+    endResetModel();
+}
+
 void AssetsModel::setSelectedTagNames(const QStringList& tags) {
     if (m_selectedTagNames == tags) return;
     m_selectedTagNames = tags;
@@ -333,6 +341,17 @@ bool AssetsModel::matchesFilter(const AssetRow& row) const {
         if (!ThumbnailGenerator::instance().isImageFile(row.filePath)) return false;
     } else if (m_typeFilter == Videos) {
         if (!ThumbnailGenerator::instance().isVideoFile(row.filePath)) return false;
+    }
+
+    // Apply rating filter
+    if (m_ratingFilter == FiveStars) {
+        if (row.rating != 5) return false;
+    } else if (m_ratingFilter == FourPlusStars) {
+        if (row.rating < 4) return false;
+    } else if (m_ratingFilter == ThreePlusStars) {
+        if (row.rating < 3) return false;
+    } else if (m_ratingFilter == Unrated) {
+        if (row.rating > 0) return false;
     }
 
     // Apply tag filter

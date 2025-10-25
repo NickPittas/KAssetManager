@@ -60,6 +60,10 @@ public:
     int typeFilter() const { return m_typeFilter; }
     void setTypeFilter(int f);
 
+    enum RatingFilter { AllRatings = 0, FiveStars = 1, FourPlusStars = 2, ThreePlusStars = 3, Unrated = 4 };
+    int ratingFilter() const { return m_ratingFilter; }
+    void setRatingFilter(int f);
+
     QStringList selectedTagNames() const { return m_selectedTagNames; }
     void setSelectedTagNames(const QStringList& tags);
 
@@ -101,6 +105,7 @@ private:
     QVector<AssetRow> m_rows;
     QString m_searchQuery;
     int m_typeFilter = All;
+    int m_ratingFilter = AllRatings;
     QStringList m_selectedTagNames;
     int m_tagFilterMode = And;
     QVector<int> m_filteredRowIndexes;

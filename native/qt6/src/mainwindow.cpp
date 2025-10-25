@@ -7,6 +7,7 @@
 #include "preview_overlay.h"
 #include "thumbnail_generator.h"
 #include "import_progress_dialog.h"
+#include "star_rating_widget.h"
 #include <QHeaderView>
 #include <QStyledItemDelegate>
 #include <QPainter>
@@ -183,7 +184,8 @@ public:
             log.flush();
             QString fileName = index.data(AssetsModel::FileNameRole).toString();
             QString fileType = index.data(AssetsModel::FileTypeRole).toString().toUpper();
-            log << "[PAINT] fileName: " << fileName << ", fileType: " << fileType << "\n";
+            int rating = index.data(AssetsModel::RatingRole).toInt();
+            log << "[PAINT] fileName: " << fileName << ", fileType: " << fileType << ", rating: " << rating << "\n";
             log.flush();
 
             // Calculate text height needed
@@ -193,6 +195,8 @@ public:
             QFontMetrics nameFm(nameFont);
             QFont typeFont("Segoe UI", 8);
             QFontMetrics typeFm(typeFont);
+            QFont starFont("Segoe UI", 10);
+            QFontMetrics starFm(starFont);
             log << "[PAINT] Fonts OK\n";
             log.flush();
 
@@ -233,6 +237,23 @@ public:
             painter->drawText(typeRect, Qt::AlignLeft | Qt::AlignVCenter, fileType);
             log << "[PAINT] File type OK\n";
             log.flush();
+
+            // Draw rating stars (if rated)
+            if (rating > 0 && rating <= 5) {
+                log << "[PAINT] Drawing rating stars\n";
+                log.flush();
+                QString stars;
+                for (int i = 0; i < 5; i++) {
+                    stars += (i < rating) ? "★" : "☆";
+                }
+                QRect starRect(thumbRect.left() + 4, thumbRect.top() + 4, thumbRect.width() - 8, starFm.height() + 4);
+                painter->fillRect(starRect, QColor(0, 0, 0, 180));
+                painter->setPen(QColor(255, 215, 0)); // Gold color
+                painter->setFont(starFont);
+                painter->drawText(starRect, Qt::AlignCenter, stars);
+                log << "[PAINT] Rating stars OK\n";
+                log.flush();
+            }
 
         // Selection checkmark
         if (option.state & QStyle::State_Selected) {
@@ -464,8 +485,11 @@ void MainWindow::setupUi()
     ratingFilter->setStyleSheet(
         "QComboBox { background-color: #1a1a1a; color: #ffffff; border: 1px solid #333; padding: 6px; border-radius: 4px; }"
     );
+    connect(ratingFilter, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int index) {
+        assetsModel->setRatingFilter(index);
+    });
     filtersLayout->addWidget(ratingFilter);
-    
+
     // Tags section with + button
     QHBoxLayout *tagsHeaderLayout = new QHBoxLayout();
     QLabel *tagsLabel = new QLabel("Tags:", this);
@@ -580,13 +604,18 @@ void MainWindow::setupUi()
     infoModified = new QLabel("", this);
     infoModified->setStyleSheet("color: #ccc;");
     infoLayout->addWidget(infoModified);
-    
-    infoRating = new QLabel("", this);
-    infoRating->setStyleSheet("color: #ccc;");
-    infoLayout->addWidget(infoRating);
-    
+
+    // Rating widget
+    infoRatingLabel = new QLabel("Rating:", this);
+    infoRatingLabel->setStyleSheet("color: #ccc; margin-top: 8px;");
+    infoLayout->addWidget(infoRatingLabel);
+
+    infoRatingWidget = new StarRatingWidget(this);
+    infoLayout->addWidget(infoRatingWidget);
+    connect(infoRatingWidget, &StarRatingWidget::ratingChanged, this, &MainWindow::onRatingChanged);
+
     infoTags = new QLabel("", this);
-    infoTags->setStyleSheet("color: #ccc;");
+    infoTags->setStyleSheet("color: #ccc; margin-top: 8px;");
     infoTags->setWordWrap(true);
     infoLayout->addWidget(infoTags);
     
@@ -972,7 +1001,8 @@ void MainWindow::updateInfoPanel()
         infoFileSize->clear();
         infoFileType->clear();
         infoModified->clear();
-        infoRating->clear();
+        infoRatingLabel->setVisible(false);
+        infoRatingWidget->setVisible(false);
         infoTags->clear();
         return;
     }
@@ -1005,11 +1035,11 @@ void MainWindow::updateInfoPanel()
         infoFileType->setText("Type: " + fileType.toUpper());
         infoModified->setText("Modified: " + modified.toString("yyyy-MM-dd hh:mm"));
 
-        QString ratingStr = "Rating: ";
-        for (int i = 0; i < 5; i++) {
-            ratingStr += (i < rating) ? "★" : "☆";
-        }
-        infoRating->setText(ratingStr);
+        // Show rating widget
+        infoRatingLabel->setVisible(true);
+        infoRatingWidget->setVisible(true);
+        infoRatingWidget->setReadOnly(false);
+        infoRatingWidget->setRating(rating);
 
         // Load tags for this asset
         int assetId = index.data(AssetsModel::IdRole).toInt();
@@ -1025,8 +1055,26 @@ void MainWindow::updateInfoPanel()
         infoFileSize->clear();
         infoFileType->clear();
         infoModified->clear();
-        infoRating->clear();
+        infoRatingLabel->setVisible(false);
+        infoRatingWidget->setVisible(false);
         infoTags->clear();
+    }
+}
+
+void MainWindow::onRatingChanged(int rating)
+{
+    // Get currently selected asset
+    QModelIndexList selected = assetGridView->selectionModel()->selectedIndexes();
+    if (selected.size() != 1) return;
+
+    int assetId = selected.first().data(AssetsModel::IdRole).toInt();
+
+    // Update rating in database
+    if (DB::instance().setAssetsRating({assetId}, rating)) {
+        assetsModel->reload();
+        statusBar()->showMessage(QString("Rating set to %1 star%2").arg(rating).arg(rating == 1 ? "" : "s"), 2000);
+    } else {
+        QMessageBox::warning(this, "Error", "Failed to set rating");
     }
 }
 
