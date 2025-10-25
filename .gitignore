@@ -43,3 +43,14 @@ coverage/
 tmp/
 temp/
 
+# Media and binary artifacts
+*.mov
+*.mp4
+*.avi
+
+# Local runtime binaries
+resources/ffmpeg/
+*.exe
+*.dll
+*.pdb
+
