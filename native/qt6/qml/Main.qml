@@ -1005,11 +1005,27 @@ DropArea {
                             }
                             property bool started: false
                             property real sx: 0; property real sy: 0
-                            // Left-click and drag handling
                             MouseArea {
                                 anchors.fill: parent
-                                acceptedButtons: Qt.LeftButton
+                                acceptedButtons: Qt.LeftButton | Qt.RightButton
                                 onPressed: function(mouse) {
+                                    if (mouse.button === Qt.RightButton) {
+                                        // Right-click: select and show menu
+                                        if (AppState.selectedAssetIds.indexOf(tile.assetId) === -1) {
+                                            AppState.selectedAssetIds = [tile.assetId]
+                                            AppState.selectedAssetId = tile.assetId
+                                            AppState.selectedFileName = tile.fileName
+                                            AppState.selectedFilePath = tile.filePath
+                                            AppState.selectedFileSize = tile.fileSize
+                                            AppState.previewIndex = index
+                                            AppState.selectedFileType = tile.fileType
+                                            AppState.selectedFileModified = tile.lastModified ? Qt.formatDateTime(tile.lastModified, Qt.DefaultLocaleShortDate) : ""
+                                            filesGrid.currentIndex = index
+                                        }
+                                        assetMenu.popup(mouse.x, mouse.y)
+                                        return
+                                    }
+                                    // Left-click handling
                                     var wasSelected = AppState.selectedAssetId === tile.assetId
                                     if (mouse.modifiers & Qt.ControlModifier) {
                                         // toggle multi-select
@@ -1042,7 +1058,7 @@ DropArea {
                                     }
                                 }
                                 onPositionChanged: function(mouse) {
-                                    if (pressed && !tile.started) {
+                                    if (pressed && mouse.button === Qt.LeftButton && !tile.started) {
                                         if (Math.abs(mouse.x - tile.sx) > 6 || Math.abs(mouse.y - tile.sy) > 6) {
                                             tile.started = true
                                             // Start internal drag so folder DropArea can accept
@@ -1051,25 +1067,10 @@ DropArea {
                                         }
                                     }
                                 }
-                                onDoubleClicked: function(mouse) { openPreview(index) }
-                            }
-                            // Right-click context menu
-                            TapHandler {
-                                acceptedButtons: Qt.RightButton
-                                onTapped: function(event) {
-                                    // Select the asset first if not already selected
-                                    if (AppState.selectedAssetIds.indexOf(tile.assetId) === -1) {
-                                        AppState.selectedAssetIds = [tile.assetId]
-                                        AppState.selectedAssetId = tile.assetId
-                                        AppState.selectedFileName = tile.fileName
-                                        AppState.selectedFilePath = tile.filePath
-                                        AppState.selectedFileSize = tile.fileSize
-                                        AppState.previewIndex = index
-                                        AppState.selectedFileType = tile.fileType
-                                        AppState.selectedFileModified = tile.lastModified ? Qt.formatDateTime(tile.lastModified, Qt.DefaultLocaleShortDate) : ""
-                                        filesGrid.currentIndex = index
+                                onDoubleClicked: function(mouse) {
+                                    if (mouse.button === Qt.LeftButton) {
+                                        openPreview(index)
                                     }
-                                    assetMenu.popup(event.point.position.x, event.point.position.y)
                                 }
                             }
                             // Per-asset context menu (adds Assign Tag submenu)
