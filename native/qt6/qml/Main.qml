@@ -1023,8 +1023,10 @@ DropArea {
                                             AppState.selectedFileModified = tile.lastModified ? Qt.formatDateTime(tile.lastModified, Qt.DefaultLocaleShortDate) : ""
                                             filesGrid.currentIndex = index
                                         }
-                                        console.log("Opening context menu at", mouse.x, mouse.y)
-                                        assetMenu.popup(mouse.x, mouse.y)
+                                        // Get global position for menu popup
+                                        var globalPos = mapToGlobal(mouse.x, mouse.y)
+                                        console.log("Opening context menu at global pos", globalPos.x, globalPos.y)
+                                        assetMenu.popup(globalPos.x, globalPos.y)
                                         LogManager.addLog("Right-click context menu opened for asset " + tile.assetId)
                                         return
                                     }
