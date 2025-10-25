@@ -1085,6 +1085,7 @@ DropArea {
                             // Per-asset context menu (adds Assign Tag submenu)
                             Menu {
                                 id: assetMenu
+                                z: 1000  // Ensure menu appears above other content
                                 background: Rectangle { color: Theme.surface; radius: Theme.radius; border.color: Theme.border }
                                 MenuItem { text: "Show in Explorer"; onTriggered: { DragUtils.showInExplorer(tile.filePath); LogManager.addLog("Show in Explorer: " + tile.filePath) } }
                                 MenuItem { text: "Move to selected folder"; enabled: AppState.selectedFolderId>0; onTriggered: {
