@@ -134,3 +134,31 @@ int Importer::purgeAutotestAssets() {
     LogManager::instance().addLog(QString("Purged autotest assets (%1)").arg(affected));
     return affected;
 }
+
+void Importer::importFiles(const QStringList& filePaths, int parentFolderId)
+{
+    qDebug() << "Importer::importFiles() called with" << filePaths.size() << "files, folderId:" << parentFolderId;
+    LogManager::instance().addLog(QString("Importing %1 file%2...").arg(filePaths.size()).arg(filePaths.size()==1?"":"s"));
+
+    int imported = 0;
+    int total = filePaths.size();
+
+    for (int i = 0; i < total; ++i) {
+        const QString& filePath = filePaths[i];
+
+        // Emit progress
+        emit progressChanged(i + 1, total);
+
+        // Import the file
+        if (importFile(filePath, parentFolderId)) {
+            ++imported;
+        }
+    }
+
+    qDebug() << "Importer::importFiles() completed, imported" << imported << "of" << total << "files";
+    LogManager::instance().addLog(QString("Import completed: %1 of %2 file%3").arg(imported).arg(total).arg(total==1?"":"s"));
+
+    // Emit completion signal
+    emit importFinished();
+    emit importCompleted(imported);
+}

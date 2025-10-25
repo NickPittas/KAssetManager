@@ -1,24 +1,27 @@
 #pragma once
 #include <QObject>
 #include <QStringList>
-#include <QtQml/qqml.h>
 
 class Importer : public QObject {
     Q_OBJECT
-    QML_ELEMENT
 public:
     explicit Importer(QObject* parent=nullptr);
 
-    Q_INVOKABLE bool importPaths(const QStringList& paths);
-    Q_INVOKABLE bool importFile(const QString& filePath, int parentFolderId = 0);
-    Q_INVOKABLE bool importFolder(const QString& dirPath, int parentFolderId = 0);
+    bool importPaths(const QStringList& paths);
+    bool importFile(const QString& filePath, int parentFolderId = 0);
+    bool importFolder(const QString& dirPath, int parentFolderId = 0);
+
+    // Batch import with progress reporting
+    void importFiles(const QStringList& filePaths, int parentFolderId);
 
     // Maintenance utilities
-    Q_INVOKABLE int purgeMissingAssets();
-    Q_INVOKABLE int purgeAutotestAssets();
+    int purgeMissingAssets();
+    int purgeAutotestAssets();
 
 signals:
     void importCompleted(int filesImported);
+    void progressChanged(int current, int total);
+    void importFinished();
 
 private:
     static bool isMediaFile(const QString& path);

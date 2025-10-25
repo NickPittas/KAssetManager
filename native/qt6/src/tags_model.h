@@ -1,13 +1,11 @@
 #pragma once
 #include <QAbstractListModel>
-#include <QtQml/qqml.h>
 #include <QVector>
 #include <QPair>
 #include "db.h"
 
 class TagsModel : public QAbstractListModel {
     Q_OBJECT
-    QML_ELEMENT
 public:
     enum Roles { IdRole = Qt::UserRole + 1, NameRole };
     explicit TagsModel(QObject* parent=nullptr): QAbstractListModel(parent) {
@@ -20,7 +18,7 @@ public:
         if (!idx.isValid() || idx.row()<0 || idx.row()>=m_rows.size()) return {};
         const auto &p = m_rows[idx.row()];
         if (role == IdRole) return p.first;
-        if (role == NameRole) return p.second;
+        if (role == NameRole || role == Qt::DisplayRole) return p.second;
         return {};
     }
     QHash<int,QByteArray> roleNames() const override { QHash<int,QByteArray> r; r[IdRole]="id"; r[NameRole]="name"; return r; }

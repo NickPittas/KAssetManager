@@ -44,6 +44,11 @@ public:
     QVariant data(const QModelIndex& idx, int role) const override;
     QHash<int,QByteArray> roleNames() const override;
 
+    // Drag-and-drop support
+    Qt::ItemFlags flags(const QModelIndex &index) const override;
+    QMimeData *mimeData(const QModelIndexList &indexes) const override;
+    Qt::DropActions supportedDragActions() const override;
+
     int folderId() const { return m_folderId; }
     void setFolderId(int id);
 

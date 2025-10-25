@@ -9,6 +9,7 @@
 #include <QDebug>
 #include <QThread>
 #include <QElapsedTimer>
+#include <QMimeData>
 
 AssetsModel::AssetsModel(QObject* parent): QAbstractListModel(parent){
     // Debounce DB-driven reloads to avoid re-entrancy and view churn during batch imports
@@ -73,6 +74,43 @@ QHash<int,QByteArray> AssetsModel::roleNames() const{
     return r;
 }
 
+Qt::ItemFlags AssetsModel::flags(const QModelIndex &index) const
+{
+    Qt::ItemFlags defaultFlags = QAbstractListModel::flags(index);
+    if (index.isValid()) {
+        return defaultFlags | Qt::ItemIsDragEnabled;
+    }
+    return defaultFlags;
+}
+
+QMimeData *AssetsModel::mimeData(const QModelIndexList &indexes) const
+{
+    QMimeData *mimeData = new QMimeData();
+    QByteArray encodedData;
+    QDataStream stream(&encodedData, QIODevice::WriteOnly);
+
+    // Encode asset IDs
+    QList<int> assetIds;
+    for (const QModelIndex &index : indexes) {
+        if (index.isValid()) {
+            int assetId = data(index, IdRole).toInt();
+            assetIds.append(assetId);
+        }
+    }
+
+    stream << assetIds;
+    mimeData->setData("application/x-kasset-asset-ids", encodedData);
+
+    qDebug() << "AssetsModel::mimeData() - Dragging" << assetIds.size() << "assets:" << assetIds;
+
+    return mimeData;
+}
+
+Qt::DropActions AssetsModel::supportedDragActions() const
+{
+    return Qt::CopyAction | Qt::MoveAction;
+}
+
 void AssetsModel::setFolderId(int id){
     if (m_folderId==id) return;
     m_folderId=id;
@@ -104,7 +142,9 @@ void AssetsModel::setSelectedTagNames(const QStringList& tags) {
     if (m_selectedTagNames == tags) return;
     m_selectedTagNames = tags;
     // Changing tag selection may require loading assets across folders
-    reload();
+    beginResetModel();
+    rebuildFilter();
+    endResetModel();
     emit selectedTagNamesChanged();
 }
 

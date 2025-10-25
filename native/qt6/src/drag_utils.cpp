@@ -2,7 +2,7 @@
 #include <QDrag>
 #include <QMimeData>
 #include <QUrl>
-#include <QGuiApplication>
+#include <QApplication>
 #include <QFileInfo>
 #include <QDebug>
 #include <QTemporaryDir>
@@ -14,8 +14,6 @@
 #include <shellapi.h>
 #include "virtual_drag.h"
 #endif
-#include <QQmlEngine>
-#include <QJSEngine>
 
 
 static void logLine(const QString &msg) {
@@ -26,8 +24,8 @@ static void logLine(const QString &msg) {
     }
 }
 
-DragUtils* DragUtils::create(QQmlEngine*, QJSEngine*) {
-    static DragUtils* instance = new DragUtils();
+DragUtils& DragUtils::instance() {
+    static DragUtils instance;
     return instance;
 }
 

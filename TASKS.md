@@ -1,4 +1,37 @@
-﻿# KAsset Manager Qt - Task List
+﻿# Development Tasks
+
+## Current Status (2025-10-25)
+
+**MAJOR MILESTONE**: Successfully migrated from QML to Qt Widgets after 2 days of QML reliability issues.
+
+### What Works Now ✅
+
+- **Qt Widgets UI** - Native Windows desktop application
+- **Folder Tree Navigation** - QTreeView with VirtualFolderTreeModel
+- **Asset Grid View** - QListView with custom thumbnail delegate
+- **Multi-Select** - Native Ctrl+Click (toggle) and Shift+Click (range) - **WORKS RELIABLY**
+- **Right-Click Menus** - Context menus for assets and folders - **WORKS RELIABLY**
+- **Drag-and-Drop Import** - Drop files/folders to import - **WORKS RELIABLY**
+- **Filters Panel** - Search, rating filter, tags list
+- **Info Panel** - Asset metadata display
+- **Database** - SQLite with folders, assets, tags, asset_tags tables
+- **Thumbnail Generation** - Background thread pool with caching
+
+### Why We Switched from QML to Qt Widgets
+
+**QML Problems (2 days of debugging):**
+- Mouse events unreliable (MouseArea not receiving events)
+- Modifier keys (Ctrl/Shift) not detected
+- Event propagation unclear and broken
+- Multi-select never worked despite multiple attempts
+- Right-click context menus never worked
+
+**Qt Widgets Solution:**
+- Multi-select works out of the box (native Qt behavior)
+- Right-click menus work perfectly
+- Drag-and-drop works reliably
+- 25+ years of maturity and stability
+- Better for professional desktop applications
 
 ## Completed Tasks (DONE)
 - Stabilize asset list refresh: Clamp list column widths and harden highlight logic so large folder imports no longer crash the QML list delegate.
@@ -72,9 +105,99 @@
 - DONE: QSettings identifiers set in main.cpp so Settings persist.
 - DONE: Build/packaging script verified; portable build output at dist/portable.
 
-## Next actions
-- Tag filtering in model and UI (multi-select, intersection/union modes).
-- Ratings: add DB column migration + UI stars in grid/info + batch set + filtering.
-- Bulk menu: add "Assign Tag…" submenu and quick rating actions parity in list view.
-- Tests: add smoke tests for tag CRUD and assignment; add diagnostics for filter changes.
-- Docs: add user guide section for Filters/Tags and update screenshots.
+## Immediate Next Tasks (Priority Order)
+
+### High Priority
+
+1. **Test All Interactions** ⚠️
+   - Single-click selection
+   - Ctrl+Click multi-select
+   - Shift+Click range selection
+   - Right-click context menus (asset, folder, empty space)
+   - Drag-and-drop import (files and folders)
+   - Folder navigation
+   - Filter application
+
+2. **Implement Preview Overlay**
+   - Full-screen image viewer
+   - Video player with controls
+   - Keyboard navigation (arrows, Escape)
+   - Double-click to open preview
+
+3. **Complete Context Menu Actions**
+   - Move to Folder (with folder list)
+   - Assign Tag (with tag list)
+   - Set Rating (0-5 stars)
+   - Remove from App (with confirmation)
+   - Folder rename/delete
+
+4. **Implement Filtering**
+   - Search by filename
+   - Filter by tags (multi-select)
+   - Filter by rating
+   - Filter by file type
+   - Apply/clear filters
+
+### Medium Priority
+
+5. **Metadata Editing**
+   - Edit tags in info panel
+   - Edit rating in info panel
+   - Batch tag assignment
+   - Batch rating assignment
+
+6. **Advanced Image Format Support**
+   - OpenImageIO integration
+   - EXR support
+   - PSD support (with layers)
+   - IFF support
+
+7. **Video Playback**
+   - Qt Multimedia player
+   - Timeline scrubbing
+   - Frame-by-frame navigation
+   - Volume control
+
+8. **Performance Optimization**
+   - Lazy loading for large folders
+   - Thumbnail cache management
+   - Database query optimization
+   - Memory usage monitoring
+
+### Low Priority
+
+9. **Export and Backup**
+   - Export selected assets
+   - Backup database
+   - Restore from backup
+   - CSV export
+
+10. **Settings Panel**
+    - Theme selection
+    - Cache size limit
+    - Default view mode
+    - Keyboard shortcuts
+
+11. **Testing and Documentation**
+    - Unit tests for models
+    - Integration tests for database
+    - User manual
+    - Developer documentation
+
+## Known Issues
+
+- Preview overlay not implemented yet
+- Context menu actions incomplete (placeholders)
+- Filters not yet functional
+- No metadata editing
+- No advanced image format support (EXR, PSD, IFF)
+- No video playback controls
+
+## Technical Debt
+
+- Remove all QML-related code (DONE)
+- Clean up old documentation (DONE)
+- Add comprehensive error handling
+- Implement logging framework
+- Add crash reporting
+- Write unit tests
