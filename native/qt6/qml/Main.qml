@@ -1008,9 +1008,10 @@ DropArea {
                             MouseArea {
                                 anchors.fill: parent
                                 acceptedButtons: Qt.LeftButton | Qt.RightButton
-                                onPressed: function(mouse) {
+                                onClicked: function(mouse) {
                                     if (mouse.button === Qt.RightButton) {
                                         // Right-click: select and show menu
+                                        console.log("Right-click detected on asset", tile.assetId)
                                         if (AppState.selectedAssetIds.indexOf(tile.assetId) === -1) {
                                             AppState.selectedAssetIds = [tile.assetId]
                                             AppState.selectedAssetId = tile.assetId
@@ -1022,39 +1023,45 @@ DropArea {
                                             AppState.selectedFileModified = tile.lastModified ? Qt.formatDateTime(tile.lastModified, Qt.DefaultLocaleShortDate) : ""
                                             filesGrid.currentIndex = index
                                         }
+                                        console.log("Opening context menu at", mouse.x, mouse.y)
                                         assetMenu.popup(mouse.x, mouse.y)
+                                        LogManager.addLog("Right-click context menu opened for asset " + tile.assetId)
                                         return
                                     }
-                                    // Left-click handling
-                                    var wasSelected = AppState.selectedAssetId === tile.assetId
-                                    if (mouse.modifiers & Qt.ControlModifier) {
-                                        // toggle multi-select
-                                        var arr = AppState.selectedAssetIds.slice(0)
-                                        var idx = arr.indexOf(tile.assetId)
-                                        if (idx >= 0) arr.splice(idx,1); else arr.push(tile.assetId)
-                                        AppState.selectedAssetIds = arr
-                                        if (AppState.selectionAnchorIndex < 0) AppState.selectionAnchorIndex = index
-                                    } else if (mouse.modifiers & Qt.ShiftModifier) {
-                                        var anchor = AppState.selectionAnchorIndex >= 0 ? AppState.selectionAnchorIndex : filesGrid.currentIndex
-                                        var ids = selectRange(anchor, index)
-                                        AppState.selectedAssetIds = ids
-                                    } else {
-                                        AppState.selectedAssetIds = [ tile.assetId ]
-                                        AppState.selectionAnchorIndex = index
-                                    }
-                                    AppState.selectedAssetId = tile.assetId
-                                    AppState.selectedFileName = tile.fileName
-                                    AppState.selectedFilePath = tile.filePath
-                                    AppState.selectedFileSize = tile.fileSize
-                                    AppState.previewIndex = index
-                                    AppState.selectedFileType = tile.fileType
-                                    AppState.selectedFileModified = tile.lastModified ? Qt.formatDateTime(tile.lastModified, Qt.DefaultLocaleShortDate) : ""
-                                    tile.sx = mouse.x
-                                    tile.sy = mouse.y
-                                    tile.started = false
-                                    filesGrid.currentIndex = index
-                                    if (!wasSelected) {
-                                        LogManager.addLog("Selected asset: " + (tile.fileName || tile.filePath))
+                                }
+                                onPressed: function(mouse) {
+                                    if (mouse.button === Qt.LeftButton) {
+                                        // Left-click handling
+                                        var wasSelected = AppState.selectedAssetId === tile.assetId
+                                        if (mouse.modifiers & Qt.ControlModifier) {
+                                            // toggle multi-select
+                                            var arr = AppState.selectedAssetIds.slice(0)
+                                            var idx = arr.indexOf(tile.assetId)
+                                            if (idx >= 0) arr.splice(idx,1); else arr.push(tile.assetId)
+                                            AppState.selectedAssetIds = arr
+                                            if (AppState.selectionAnchorIndex < 0) AppState.selectionAnchorIndex = index
+                                        } else if (mouse.modifiers & Qt.ShiftModifier) {
+                                            var anchor = AppState.selectionAnchorIndex >= 0 ? AppState.selectionAnchorIndex : filesGrid.currentIndex
+                                            var ids = selectRange(anchor, index)
+                                            AppState.selectedAssetIds = ids
+                                        } else {
+                                            AppState.selectedAssetIds = [ tile.assetId ]
+                                            AppState.selectionAnchorIndex = index
+                                        }
+                                        AppState.selectedAssetId = tile.assetId
+                                        AppState.selectedFileName = tile.fileName
+                                        AppState.selectedFilePath = tile.filePath
+                                        AppState.selectedFileSize = tile.fileSize
+                                        AppState.previewIndex = index
+                                        AppState.selectedFileType = tile.fileType
+                                        AppState.selectedFileModified = tile.lastModified ? Qt.formatDateTime(tile.lastModified, Qt.DefaultLocaleShortDate) : ""
+                                        tile.sx = mouse.x
+                                        tile.sy = mouse.y
+                                        tile.started = false
+                                        filesGrid.currentIndex = index
+                                        if (!wasSelected) {
+                                            LogManager.addLog("Selected asset: " + (tile.fileName || tile.filePath))
+                                        }
                                     }
                                 }
                                 onPositionChanged: function(mouse) {
