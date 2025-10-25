@@ -261,3 +261,70 @@ bool DB::assignTagsToAssets(const QList<int>& assetIds, const QList<int>& tagIds
     return ok;
 }
 
+QList<int> DB::getAssetIdsInFolder(int folderId, bool recursive) const
+{
+    QList<int> assetIds;
+
+    if (recursive) {
+        // Get all descendant folder IDs
+        QList<int> folderIds;
+        folderIds.append(folderId);
+
+        // Recursively collect all child folders
+        QSqlQuery q(m_db);
+        q.prepare("WITH RECURSIVE folder_tree AS ("
+                  "  SELECT id FROM virtual_folders WHERE id = ?"
+                  "  UNION ALL"
+                  "  SELECT vf.id FROM virtual_folders vf"
+                  "  INNER JOIN folder_tree ft ON vf.parent_id = ft.id"
+                  ") SELECT id FROM folder_tree");
+        q.addBindValue(folderId);
+
+        if (q.exec()) {
+            folderIds.clear();
+            while (q.next()) {
+                folderIds.append(q.value(0).toInt());
+            }
+        } else {
+            qWarning() << "DB::getAssetIdsInFolder - Failed to get folder tree:" << q.lastError();
+            return assetIds;
+        }
+
+        // Get all assets in these folders
+        if (!folderIds.isEmpty()) {
+            QString placeholders = QString("?").repeated(folderIds.size());
+            for (int i = 1; i < folderIds.size(); ++i) {
+                placeholders.replace(i * 2 - 1, 1, ",?");
+            }
+
+            q.prepare(QString("SELECT id FROM assets WHERE virtual_folder_id IN (%1)").arg(placeholders));
+            for (int fid : folderIds) {
+                q.addBindValue(fid);
+            }
+
+            if (q.exec()) {
+                while (q.next()) {
+                    assetIds.append(q.value(0).toInt());
+                }
+            } else {
+                qWarning() << "DB::getAssetIdsInFolder - Failed to get assets:" << q.lastError();
+            }
+        }
+    } else {
+        // Non-recursive: just get assets in this folder
+        QSqlQuery q(m_db);
+        q.prepare("SELECT id FROM assets WHERE virtual_folder_id = ?");
+        q.addBindValue(folderId);
+
+        if (q.exec()) {
+            while (q.next()) {
+                assetIds.append(q.value(0).toInt());
+            }
+        } else {
+            qWarning() << "DB::getAssetIdsInFolder - Failed to get assets:" << q.lastError();
+        }
+    }
+
+    return assetIds;
+}
+

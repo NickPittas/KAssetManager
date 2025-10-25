@@ -21,6 +21,12 @@ public:
     QVariant data(const QModelIndex& idx, int role) const override;
     QHash<int,QByteArray> roleNames() const override;
 
+    // Drag-and-drop support
+    Qt::ItemFlags flags(const QModelIndex &index) const override;
+    QMimeData *mimeData(const QModelIndexList &indexes) const override;
+    Qt::DropActions supportedDragActions() const override;
+    Qt::DropActions supportedDropActions() const override;
+
     Q_INVOKABLE int rootId() const { return m_rootId; }
     Q_INVOKABLE int createFolder(int parentId, const QString& name);
     Q_INVOKABLE bool renameFolder(int id, const QString& name);

@@ -89,19 +89,33 @@ QMimeData *AssetsModel::mimeData(const QModelIndexList &indexes) const
     QByteArray encodedData;
     QDataStream stream(&encodedData, QIODevice::WriteOnly);
 
-    // Encode asset IDs
+    // Encode asset IDs for internal drag-drop
     QList<int> assetIds;
+    QList<QUrl> urls;
+
     for (const QModelIndex &index : indexes) {
         if (index.isValid()) {
             int assetId = data(index, IdRole).toInt();
             assetIds.append(assetId);
+
+            // Get file path and add as URL for external drag-drop
+            QString filePath = data(index, FilePathRole).toString();
+            if (!filePath.isEmpty()) {
+                urls.append(QUrl::fromLocalFile(filePath));
+            }
         }
     }
 
     stream << assetIds;
     mimeData->setData("application/x-kasset-asset-ids", encodedData);
 
+    // Add file URLs for external apps (Windows Explorer, Desktop, etc.)
+    if (!urls.isEmpty()) {
+        mimeData->setUrls(urls);
+    }
+
     qDebug() << "AssetsModel::mimeData() - Dragging" << assetIds.size() << "assets:" << assetIds;
+    qDebug() << "  File URLs:" << urls;
 
     return mimeData;
 }

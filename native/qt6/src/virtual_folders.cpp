@@ -3,6 +3,7 @@
 #include <QSqlQuery>
 #include <QSqlError>
 #include <QDebug>
+#include <QMimeData>
 #include "log_manager.h"
 
 VirtualFolderTreeModel::VirtualFolderTreeModel(QObject* parent): QAbstractItemModel(parent){
@@ -124,3 +125,47 @@ int VirtualFolderTreeModel::nodeIdAt(int row, int parentId) const{
 
 QString VirtualFolderTreeModel::nodeName(int id) const{ const VFNode* n=nodeForId(id); return n? n->name:QString(); }
 
+// Drag-and-drop support
+Qt::ItemFlags VirtualFolderTreeModel::flags(const QModelIndex &index) const
+{
+    Qt::ItemFlags defaultFlags = QAbstractItemModel::flags(index);
+    if (index.isValid()) {
+        return defaultFlags | Qt::ItemIsDragEnabled | Qt::ItemIsDropEnabled;
+    }
+    return defaultFlags | Qt::ItemIsDropEnabled;
+}
+
+QMimeData *VirtualFolderTreeModel::mimeData(const QModelIndexList &indexes) const
+{
+    QMimeData *mimeData = new QMimeData();
+    QByteArray encodedData;
+    QDataStream stream(&encodedData, QIODevice::WriteOnly);
+
+    // Encode folder IDs
+    QList<int> folderIds;
+    for (const QModelIndex &index : indexes) {
+        if (index.isValid()) {
+            const VFNode* node = static_cast<const VFNode*>(index.internalPointer());
+            if (node) {
+                folderIds.append(node->id);
+            }
+        }
+    }
+
+    stream << folderIds;
+    mimeData->setData("application/x-kasset-folder-ids", encodedData);
+
+    qDebug() << "VirtualFolderTreeModel::mimeData() - Dragging" << folderIds.size() << "folders:" << folderIds;
+
+    return mimeData;
+}
+
+Qt::DropActions VirtualFolderTreeModel::supportedDragActions() const
+{
+    return Qt::MoveAction;
+}
+
+Qt::DropActions VirtualFolderTreeModel::supportedDropActions() const
+{
+    return Qt::MoveAction | Qt::CopyAction;
+}

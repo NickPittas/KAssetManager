@@ -225,10 +225,12 @@ void MainWindow::setupUi()
     assetGridView->setDefaultDropAction(Qt::MoveAction);
     assetGridView->setSelectionRectVisible(false);
 
-    // Enable drops on folder tree for moving assets to folders
+    // Enable drag-and-drop on folder tree for moving assets to folders AND reorganizing folders
+    folderTreeView->setDragEnabled(true);
     folderTreeView->setAcceptDrops(true);
     folderTreeView->setDropIndicatorShown(true);
-    folderTreeView->setDragDropMode(QAbstractItemView::DropOnly);
+    folderTreeView->setDragDropMode(QAbstractItemView::DragDrop);
+    folderTreeView->setDefaultDropAction(Qt::MoveAction);
     folderTreeView->viewport()->installEventFilter(this);
     
     // Right panel: Filters + Info
@@ -424,6 +426,9 @@ void MainWindow::setupConnections()
     // Update tag button states when selections change
     connect(tagsListView->selectionModel(), &QItemSelectionModel::selectionChanged, this, &MainWindow::updateTagButtonStates);
     connect(assetGridView->selectionModel(), &QItemSelectionModel::selectionChanged, this, &MainWindow::updateTagButtonStates);
+
+    // Connect search box for real-time filtering
+    connect(searchBox, &QLineEdit::textChanged, this, &MainWindow::onSearchTextChanged);
 }
 
 void MainWindow::onFolderSelected(const QModelIndex &index)
@@ -501,23 +506,66 @@ void MainWindow::onFolderContextMenu(const QPoint &pos)
     QModelIndex index = folderTreeView->indexAt(pos);
     if (!index.isValid()) return;
 
+    int folderId = folderModel->data(index, VirtualFolderTreeModel::IdRole).toInt();
+    QString folderName = folderModel->data(index, Qt::DisplayRole).toString();
+
     QMenu menu(this);
     menu.setStyleSheet(
         "QMenu { background-color: #1a1a1a; color: #ffffff; border: 1px solid #333; }"
         "QMenu::item:selected { background-color: #2f3a4a; }"
     );
 
+    QAction *createAction = menu.addAction("Create Subfolder");
     QAction *renameAction = menu.addAction("Rename");
     QAction *deleteAction = menu.addAction("Delete");
 
     QAction *selected = menu.exec(folderTreeView->mapToGlobal(pos));
 
-    if (selected == renameAction) {
-        // TODO: Implement rename
-        QMessageBox::information(this, "Rename", "Rename functionality not yet implemented");
+    if (selected == createAction) {
+        // Create subfolder
+        bool ok;
+        QString name = QInputDialog::getText(this, "Create Subfolder",
+                                            "Enter subfolder name:",
+                                            QLineEdit::Normal, "", &ok);
+        if (ok && !name.isEmpty()) {
+            int newId = DB::instance().createFolder(name, folderId);
+            if (newId > 0) {
+                folderModel->reload();
+                statusBar()->showMessage(QString("Created subfolder '%1'").arg(name), 3000);
+            } else {
+                QMessageBox::warning(this, "Error", "Failed to create subfolder");
+            }
+        }
+    } else if (selected == renameAction) {
+        // Rename folder
+        bool ok;
+        QString newName = QInputDialog::getText(this, "Rename Folder",
+                                               "Enter new name:",
+                                               QLineEdit::Normal, folderName, &ok);
+        if (ok && !newName.isEmpty() && newName != folderName) {
+            if (DB::instance().renameFolder(folderId, newName)) {
+                folderModel->reload();
+                statusBar()->showMessage(QString("Renamed folder to '%1'").arg(newName), 3000);
+            } else {
+                QMessageBox::warning(this, "Error", "Failed to rename folder");
+            }
+        }
     } else if (selected == deleteAction) {
-        // TODO: Implement delete
-        QMessageBox::information(this, "Delete", "Delete functionality not yet implemented");
+        // Delete folder
+        QMessageBox::StandardButton reply = QMessageBox::question(
+            this, "Delete Folder",
+            QString("Are you sure you want to delete '%1' and all its contents?").arg(folderName),
+            QMessageBox::Yes | QMessageBox::No);
+
+        if (reply == QMessageBox::Yes) {
+            if (DB::instance().deleteFolder(folderId)) {
+                folderModel->reload();
+                assetsModel->reload();
+                statusBar()->showMessage(QString("Deleted folder '%1'").arg(folderName), 3000);
+            } else {
+                QMessageBox::warning(this, "Error", "Failed to delete folder");
+            }
+        }
     }
 }
 
@@ -722,6 +770,17 @@ void MainWindow::clearFilters()
     assetsModel->setSelectedTagNames(QStringList());
 
     statusBar()->showMessage("Filters cleared", 2000);
+}
+
+void MainWindow::onSearchTextChanged(const QString &text)
+{
+    assetsModel->setSearchQuery(text);
+
+    if (text.isEmpty()) {
+        statusBar()->showMessage("Search cleared", 1000);
+    } else {
+        statusBar()->showMessage(QString("Searching for: %1").arg(text), 2000);
+    }
 }
 
 void MainWindow::onCreateTag()
@@ -947,14 +1006,16 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
     if (watched == folderTreeView->viewport()) {
         if (event->type() == QEvent::DragEnter) {
             QDragEnterEvent *dragEvent = static_cast<QDragEnterEvent*>(event);
-            if (dragEvent->mimeData()->hasFormat("application/x-kasset-asset-ids")) {
+            if (dragEvent->mimeData()->hasFormat("application/x-kasset-asset-ids") ||
+                dragEvent->mimeData()->hasFormat("application/x-kasset-folder-ids")) {
                 dragEvent->acceptProposedAction();
                 return true;
             }
         }
         else if (event->type() == QEvent::DragMove) {
             QDragMoveEvent *dragEvent = static_cast<QDragMoveEvent*>(event);
-            if (dragEvent->mimeData()->hasFormat("application/x-kasset-asset-ids")) {
+            if (dragEvent->mimeData()->hasFormat("application/x-kasset-asset-ids") ||
+                dragEvent->mimeData()->hasFormat("application/x-kasset-folder-ids")) {
                 // Highlight the folder under cursor using selection
                 QPoint pos = dragEvent->position().toPoint();
                 QModelIndex index = folderTreeView->indexAt(pos);
@@ -975,21 +1036,22 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
             QDropEvent *dropEvent = static_cast<QDropEvent*>(event);
             const QMimeData *mimeData = dropEvent->mimeData();
 
-            if (mimeData->hasFormat("application/x-kasset-asset-ids")) {
-                // Get the folder at drop position
-                QPoint pos = dropEvent->position().toPoint();
-                QModelIndex folderIndex = folderTreeView->indexAt(pos);
+            // Get the folder at drop position
+            QPoint pos = dropEvent->position().toPoint();
+            QModelIndex folderIndex = folderTreeView->indexAt(pos);
 
-                if (folderIndex.isValid()) {
-                    int targetFolderId = folderModel->data(folderIndex, VirtualFolderTreeModel::IdRole).toInt();
+            if (folderIndex.isValid()) {
+                int targetFolderId = folderModel->data(folderIndex, VirtualFolderTreeModel::IdRole).toInt();
 
+                // Handle asset drops
+                if (mimeData->hasFormat("application/x-kasset-asset-ids")) {
                     // Decode asset IDs
                     QByteArray encodedData = mimeData->data("application/x-kasset-asset-ids");
                     QDataStream stream(&encodedData, QIODevice::ReadOnly);
                     QList<int> assetIds;
                     stream >> assetIds;
 
-                    qDebug() << "Drop on folder" << targetFolderId << "- moving" << assetIds.size() << "assets";
+                    qDebug() << "Drop assets on folder" << targetFolderId << "- moving" << assetIds.size() << "assets";
 
                     // Move assets to folder
                     for (int assetId : assetIds) {
@@ -997,6 +1059,43 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
                     }
 
                     statusBar()->showMessage(QString("Moved %1 asset(s) to folder").arg(assetIds.size()), 3000);
+                    dropEvent->acceptProposedAction();
+                    return true;
+                }
+                // Handle folder drops (reorganize hierarchy)
+                else if (mimeData->hasFormat("application/x-kasset-folder-ids")) {
+                    // Decode folder IDs
+                    QByteArray encodedData = mimeData->data("application/x-kasset-folder-ids");
+                    QDataStream stream(&encodedData, QIODevice::ReadOnly);
+                    QList<int> folderIds;
+                    stream >> folderIds;
+
+                    qDebug() << "Drop folders on folder" << targetFolderId << "- moving" << folderIds.size() << "folders";
+
+                    // Move folders to new parent
+                    bool success = true;
+                    for (int folderId : folderIds) {
+                        // Don't allow moving a folder into itself or its descendants
+                        if (folderId == targetFolderId) {
+                            QMessageBox::warning(this, "Error", "Cannot move a folder into itself");
+                            success = false;
+                            continue;
+                        }
+
+                        if (folderModel->moveFolder(folderId, targetFolderId)) {
+                            qDebug() << "Moved folder" << folderId << "to parent" << targetFolderId;
+                        } else {
+                            success = false;
+                        }
+                    }
+
+                    if (success) {
+                        folderModel->reload();
+                        statusBar()->showMessage(QString("Moved %1 folder(s)").arg(folderIds.size()), 3000);
+                    } else {
+                        statusBar()->showMessage("Failed to move some folders", 3000);
+                    }
+
                     dropEvent->acceptProposedAction();
                     return true;
                 }
@@ -1008,14 +1107,16 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
     if (watched == tagsListView->viewport()) {
         if (event->type() == QEvent::DragEnter) {
             QDragEnterEvent *dragEvent = static_cast<QDragEnterEvent*>(event);
-            if (dragEvent->mimeData()->hasFormat("application/x-kasset-asset-ids")) {
+            if (dragEvent->mimeData()->hasFormat("application/x-kasset-asset-ids") ||
+                dragEvent->mimeData()->hasFormat("application/x-kasset-folder-ids")) {
                 dragEvent->acceptProposedAction();
                 return true;
             }
         }
         else if (event->type() == QEvent::DragMove) {
             QDragMoveEvent *dragEvent = static_cast<QDragMoveEvent*>(event);
-            if (dragEvent->mimeData()->hasFormat("application/x-kasset-asset-ids")) {
+            if (dragEvent->mimeData()->hasFormat("application/x-kasset-asset-ids") ||
+                dragEvent->mimeData()->hasFormat("application/x-kasset-folder-ids")) {
                 // Highlight the tag under cursor using selection
                 QPoint pos = dragEvent->position().toPoint();
                 QModelIndex index = tagsListView->indexAt(pos);
@@ -1036,22 +1137,23 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
             QDropEvent *dropEvent = static_cast<QDropEvent*>(event);
             const QMimeData *mimeData = dropEvent->mimeData();
 
-            if (mimeData->hasFormat("application/x-kasset-asset-ids")) {
-                // Get the tag at drop position
-                QPoint pos = dropEvent->position().toPoint();
-                QModelIndex tagIndex = tagsListView->indexAt(pos);
+            // Get the tag at drop position
+            QPoint pos = dropEvent->position().toPoint();
+            QModelIndex tagIndex = tagsListView->indexAt(pos);
 
-                if (tagIndex.isValid()) {
-                    int tagId = tagsModel->data(tagIndex, TagsModel::IdRole).toInt();
-                    QString tagName = tagsModel->data(tagIndex, TagsModel::NameRole).toString();
+            if (tagIndex.isValid()) {
+                int tagId = tagsModel->data(tagIndex, TagsModel::IdRole).toInt();
+                QString tagName = tagsModel->data(tagIndex, TagsModel::NameRole).toString();
 
+                // Handle asset drops
+                if (mimeData->hasFormat("application/x-kasset-asset-ids")) {
                     // Decode asset IDs
                     QByteArray encodedData = mimeData->data("application/x-kasset-asset-ids");
                     QDataStream stream(&encodedData, QIODevice::ReadOnly);
                     QList<int> assetIds;
                     stream >> assetIds;
 
-                    qDebug() << "Drop on tag" << tagName << "- assigning to" << assetIds.size() << "assets";
+                    qDebug() << "Drop assets on tag" << tagName << "- assigning to" << assetIds.size() << "assets";
 
                     // Assign tag to assets
                     QList<int> tagIds;
@@ -1061,6 +1163,41 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
                         updateInfoPanel();
                     } else {
                         statusBar()->showMessage("Failed to assign tag", 3000);
+                    }
+
+                    dropEvent->acceptProposedAction();
+                    return true;
+                }
+                // Handle folder drops (assign tag to all assets in folder)
+                else if (mimeData->hasFormat("application/x-kasset-folder-ids")) {
+                    // Decode folder IDs
+                    QByteArray encodedData = mimeData->data("application/x-kasset-folder-ids");
+                    QDataStream stream(&encodedData, QIODevice::ReadOnly);
+                    QList<int> folderIds;
+                    stream >> folderIds;
+
+                    qDebug() << "Drop folders on tag" << tagName << "- assigning to all assets in" << folderIds.size() << "folders";
+
+                    // Get all assets in these folders (recursive)
+                    QList<int> allAssetIds;
+                    for (int folderId : folderIds) {
+                        QList<int> assetIds = DB::instance().getAssetIdsInFolder(folderId, true);
+                        allAssetIds.append(assetIds);
+                    }
+
+                    if (!allAssetIds.isEmpty()) {
+                        // Assign tag to all assets
+                        QList<int> tagIds;
+                        tagIds.append(tagId);
+                        if (DB::instance().assignTagsToAssets(allAssetIds, tagIds)) {
+                            statusBar()->showMessage(QString("Assigned tag '%1' to %2 asset(s) in %3 folder(s)")
+                                .arg(tagName).arg(allAssetIds.size()).arg(folderIds.size()), 3000);
+                            updateInfoPanel();
+                        } else {
+                            statusBar()->showMessage("Failed to assign tag", 3000);
+                        }
+                    } else {
+                        statusBar()->showMessage("No assets found in selected folder(s)", 3000);
                     }
 
                     dropEvent->acceptProposedAction();

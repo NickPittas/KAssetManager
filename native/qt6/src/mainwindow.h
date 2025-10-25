@@ -49,6 +49,7 @@ private slots:
     
     void applyFilters();
     void clearFilters();
+    void onSearchTextChanged(const QString &text);
 
     void onCreateTag();
     void onApplyTags();
