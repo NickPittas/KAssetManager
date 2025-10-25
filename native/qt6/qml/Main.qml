@@ -1,9 +1,11 @@
-﻿import QtQuick
+import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import QtMultimedia
 import QtCore
+import QtQuick.Dialogs
 import KAssetManager 1.0
+import "controls"
 
 
 ApplicationWindow {
@@ -11,8 +13,8 @@ ApplicationWindow {
     visible: true
     width: 1200; height: 800
     title: "KAsset Manager (Qt6)"
-    color: "#121212"
-    background: Rectangle { color: "#0d0d0d" }
+    color: Theme.bg
+    background: Rectangle { color: Theme.bg }
     property int debugProgressStep: 0
     property bool progressActive: false
     property string progressMessage: ""
@@ -27,6 +29,13 @@ ApplicationWindow {
             return false
         }
     }
+    property bool diagnosticsVerboseEnabled: {
+        try {
+            return Qt.application && Qt.application.arguments && Qt.application.arguments.indexOf("--verbose") !== -1
+        } catch (err) {
+            return false
+        }
+    }
     property bool autotestEnabled: {
         try {
             if (!diagnosticsEnabled || !Qt.application || !Qt.application.arguments)
@@ -37,6 +46,7 @@ ApplicationWindow {
         }
     }
     property string autotestMediaPath: ""
+    property int autotestBatchCount: 0
     property bool autotestRunning: false
     property bool autotestCompleted: false
     property bool autotestImportSucceeded: false
@@ -51,12 +61,20 @@ ApplicationWindow {
 
     function diagLog() {
         if (!diagnosticsEnabled) return
-        console.log.apply(console, arguments)
+        if (diagnosticsVerboseEnabled) {
+            console.log.apply(console, arguments)
+        } else {
+            try { LogManager.addLog(Array.prototype.join.call(arguments, ' '), 'DEBUG') } catch (e) {}
+        }
     }
 
     function diagWarn() {
         if (!diagnosticsEnabled) return
-        console.warn.apply(console, arguments)
+        if (diagnosticsVerboseEnabled) {
+            console.warn.apply(console, arguments)
+        } else {
+            try { LogManager.addLog(Array.prototype.join.call(arguments, ' '), 'WARN') } catch (e) {}
+        }
     }
 
     function escapeRegex(str) {
@@ -131,6 +149,18 @@ ApplicationWindow {
         LogManager.addLog("View mode changed to " + mode)
     }
 
+    function selectRange(anchorIndex, toIndex) {
+        if (!assetsModel) return []
+        var lo = Math.min(anchorIndex, toIndex)
+        var hi = Math.max(anchorIndex, toIndex)
+        var ids = []
+        for (var i = lo; i <= hi; ++i) {
+            var item = assetsModel.get(i)
+            if (item && item.assetId !== undefined) ids.push(item.assetId)
+        }
+        return ids
+    }
+
 
     function currentAssetIndex() {
         var candidate = viewMode === "list" ? listView.currentIndex : filesGrid.currentIndex
@@ -179,6 +209,9 @@ ApplicationWindow {
             var arg = Qt.application.arguments[i]
             if (arg.indexOf("--autotest-media=") === 0) {
                 autotestMediaPath = arg.substring("--autotest-media=".length)
+            } else if (arg.indexOf("--autotest-batch=") === 0) {
+                var v = parseInt(arg.substring("--autotest-batch=".length))
+                autotestBatchCount = isNaN(v) ? 0 : Math.max(0, v)
             }
         }
     }
@@ -223,14 +256,17 @@ ApplicationWindow {
             LogManager.addLog("Loaded folder " + folderId + " (" + rowCount() + " assets)")
         }
     }
-    Importer {
+Importer {
         id: importer
         onImportCompleted: function(count) {
             diagLog("Import completed:", count, "files")
-                            LogManager.addLog("Import completed with " + count + " item(s)")
-                            AppState.previewIndex = assetsModel.rowCount() > 0 ? 0 : -1
-            // Refresh the current folder view
-            assetsModel.folderId = assetsModel.folderId
+            LogManager.addLog("Import completed with " + count + " item(s)")
+            AppState.previewIndex = assetsModel.rowCount() > 0 ? 0 : -1
+            // Let DB signals drive a debounced reload; avoid immediate re-entrancy
+            // If the current view is empty (e.g., imported into a different folder), request a single explicit reload
+            if (assetsModel.rowCount() === 0) {
+                assetsModel.reload()
+            }
             if (autotestRunning) {
                 if (count <= 0) {
                     finishAutotest(false, "Importer reported zero files")
@@ -245,7 +281,7 @@ ApplicationWindow {
     Connections {
         target: LogManager
         function onLogAdded(message) {
-            diagLog("LogManager.logAdded:", message)
+            if (diagnosticsVerboseEnabled) diagLog("LogManager.logAdded:", message)
             Qt.callLater(function() {
                 if (typeof logView !== "undefined" && logView) {
                     logView.positionViewAtEnd()
@@ -253,7 +289,7 @@ ApplicationWindow {
             })
         }
         function onLogsChanged() {
-            diagLog("LogManager.logs changed; size:", LogManager.logs.length)
+            if (diagnosticsVerboseEnabled) diagLog("LogManager.logs changed; size:", LogManager.logs.length)
             Qt.callLater(function() {
                 if (typeof logView !== "undefined" && logView) {
                     logView.positionViewAtEnd()
@@ -264,7 +300,7 @@ ApplicationWindow {
     Connections {
         target: ProgressManager
         function onIsActiveChanged() {
-            diagLog("ProgressManager.isActive changed:", ProgressManager.isActive)
+            if (diagnosticsVerboseEnabled) diagLog("ProgressManager.isActive changed:", ProgressManager.isActive)
             root.progressActive = ProgressManager.isActive
             if (autotestRunning) {
                 if (ProgressManager.isActive) {
@@ -277,23 +313,23 @@ ApplicationWindow {
             LogManager.addLog(ProgressManager.isActive ? "Progress started" : "Progress finished")
         }
         function onMessageChanged() {
-            diagLog("ProgressManager.message changed:", ProgressManager.message)
+            if (diagnosticsVerboseEnabled) diagLog("ProgressManager.message changed:", ProgressManager.message)
             root.progressMessage = ProgressManager.message
             if (ProgressManager.message && ProgressManager.message.length > 0) {
                 LogManager.addLog("Progress: " + ProgressManager.message)
             }
         }
         function onCurrentChanged() {
-            diagLog("ProgressManager.current changed:", ProgressManager.current)
+            if (diagnosticsVerboseEnabled) diagLog("ProgressManager.current changed:", ProgressManager.current)
             root.progressCurrent = ProgressManager.current
         }
         function onTotalChanged() {
-            diagLog("ProgressManager.total changed:", ProgressManager.total)
+            if (diagnosticsVerboseEnabled) diagLog("ProgressManager.total changed:", ProgressManager.total)
             root.progressTotal = ProgressManager.total
             LogManager.addLog("Progress total: " + ProgressManager.total)
         }
         function onPercentageChanged() {
-            diagLog("ProgressManager.percentage changed:", ProgressManager.percentage)
+            if (diagnosticsVerboseEnabled) diagLog("ProgressManager.percentage changed:", ProgressManager.percentage)
             root.progressPercent = ProgressManager.percentage
             if (ProgressManager.percentage > 0) {
                 LogManager.addLog("Progress: " + ProgressManager.percentage + "%")
@@ -303,14 +339,14 @@ ApplicationWindow {
     Connections {
         target: ThumbnailGenerator
         function onThumbnailGenerated(filePath, thumbnailPath) {
-            diagLog("ThumbnailGenerator.thumbnailGenerated:", filePath, "->", thumbnailPath)
+            if (diagnosticsVerboseEnabled) diagLog("ThumbnailGenerator.thumbnailGenerated:", filePath, "->", thumbnailPath)
             if (autotestRunning) {
                 autotestThumbnailCount += 1
                 autotestEvalTimer.restart()
             }
         }
         function onThumbnailFailed(filePath) {
-            diagWarn("ThumbnailGenerator.thumbnailFailed:", filePath)
+            if (diagnosticsVerboseEnabled) diagWarn("ThumbnailGenerator.thumbnailFailed:", filePath)
             if (autotestRunning) {
                 finishAutotest(false, "Thumbnail generation failed for " + filePath)
             }
@@ -319,7 +355,7 @@ ApplicationWindow {
     Connections {
         target: assetsModel
         function onDataChanged(topLeft, bottomRight, roles) {
-            diagLog("AssetsModel.dataChanged:", topLeft.row, "->", bottomRight.row, "roles:", roles)
+            if (diagnosticsVerboseEnabled) diagLog("AssetsModel.dataChanged:", topLeft.row, "->", bottomRight.row, "roles:", roles)
             if (autotestRunning) {
                 autotestEvalTimer.restart()
             }
@@ -343,10 +379,6 @@ ApplicationWindow {
     function startAutotest() {
         if (!autotestEnabled || autotestCompleted)
             return
-        if (!autotestMediaPath || autotestMediaPath.length === 0) {
-            finishAutotest(false, "Media path missing")
-            return
-        }
         if (autotestRunning)
             return
         autotestRunning = true
@@ -354,9 +386,31 @@ ApplicationWindow {
         autotestProgressActivationCount = 0
         autotestProgressDeactivationCount = 0
         autotestThumbnailCount = 0
-        diagLog("[autotest] Starting integration workflow with media:", autotestMediaPath)
         ThumbnailGenerator.clearCache()
-        var ok = importer.importPaths([autotestMediaPath])
+
+        var paths = []
+        if (autotestBatchCount && autotestBatchCount > 1) {
+            diagLog("[autotest] Generating batch of", autotestBatchCount, "images")
+            for (var i = 0; i < autotestBatchCount; ++i) {
+                var p = ThumbnailGenerator.createSampleImage("")
+                if (p && p.length > 0)
+                    paths.push(p)
+            }
+        } else {
+            if (!autotestMediaPath || autotestMediaPath.length === 0) {
+                autotestMediaPath = ThumbnailGenerator.createSampleImage("")
+            }
+            if (autotestMediaPath && autotestMediaPath.length > 0)
+                paths = [autotestMediaPath]
+        }
+
+        if (!paths || paths.length === 0) {
+            finishAutotest(false, "No media generated for autotest")
+            return
+        }
+
+        diagLog("[autotest] Starting integration workflow with", paths.length, "file(s)")
+        var ok = importer.importPaths(paths)
         if (!ok) {
             diagWarn("[autotest] importPaths returned false")
             finishAutotest(false, "importPaths returned false")
@@ -434,8 +488,8 @@ ApplicationWindow {
         padding: 0
         implicitHeight: 72
         background: Rectangle {
-            color: "#111111"
-            border.color: "#1c1c1c"
+            color: Theme.surface
+            border.color: Theme.border
             border.width: 0
         }
         Column {
@@ -450,19 +504,60 @@ ApplicationWindow {
                 leftPadding: 8
                 rightPadding: 8
 
-                ToolButton {
+                ShButton {
                     text: AppState.infoOpen ? "Info: On" : "Info"
                     onClicked: {
                         AppState.infoOpen = !AppState.infoOpen
                         LogManager.addLog(AppState.infoOpen ? "Info panel opened" : "Info panel closed")
                     }
                 }
-                ToolButton {
+                ShButton {
+                    text: "Import"
+                    onClicked: importMenu.open()
+                }
+                Menu {
+                    id: importMenu
+                    MenuItem { text: "Files..."; onTriggered: importFilesDialog.open() }
+                    MenuItem { text: "Folder..."; onTriggered: importFolderDialog.open() }
+                }
+                ShButton {
                     text: "Move to Folder"
                     enabled: AppState.selectedAssetId>0 && AppState.selectedFolderId>0
                     onClicked: {
                         LogManager.addLog("Move asset request for assetId " + AppState.selectedAssetId + " to folder " + AppState.selectedFolderId)
                         assetsModel.moveAssetToFolder(AppState.selectedAssetId, AppState.selectedFolderId)
+                    }
+                }
+
+                FileDialog {
+                    id: importFilesDialog
+                    title: "Import Files"
+                    fileMode: FileDialog.OpenFiles
+                    nameFilters: ["Media files (*.png *.jpg *.jpeg *.bmp *.gif *.webp *.tif *.tiff *.ico *.svg *.mp4 *.mov *.avi *.mkv *.webm *.flv *.wmv *.m4v *.mpg *.mpeg)", "All files (*)"]
+                    onAccepted: {
+                        var paths = []
+                        for (var i = 0; i < selectedFiles.length; ++i) {
+                            var s = selectedFiles[i]
+                            var p = (typeof s === 'string') ? s.replace(/^file:\/\//, '') : s.toString().replace(/^file:\/\//, '')
+                            if (p && p.length>0) paths.push(p)
+                        }
+                        if (paths.length>0) {
+                            LogManager.addLog("Import requested for " + paths.length + " file(s)")
+                            importer.importPaths(paths)
+                        }
+                    }
+                }
+                FolderDialog {
+                    id: importFolderDialog
+                    title: "Import Folder"
+                    onAccepted: {
+                        if (folder && folder.toString) {
+                            var p = folder.toString().replace(/^file:\/\//, '')
+                            if (p && p.length>0) {
+                                LogManager.addLog("Import requested for folder: " + p)
+                                importer.importFolder(p, 0)
+                            }
+                        }
                     }
                 }
             }
@@ -472,65 +567,65 @@ ApplicationWindow {
                 id: tabBar
                 width: parent.width
                 background: Rectangle {
-                    color: "#141414"
-                    border.color: "#1f1f1f"
+                    color: Theme.surface
+                    border.color: Theme.border
                     border.width: 1
                 }
 
-                TabButton {
-                    text: "Browser"
-                    implicitHeight: 32
-                    implicitWidth: 120
-                    background: Rectangle {
-                        radius: 6
-                        color: parent.checked ? "#1e3a5f" : "#181818"
-                        border.color: parent.checked ? "#2d8bd3" : "#252525"
-                    }
-                    contentItem: Text {
-                        text: parent.text
-                        color: parent.checked ? "#f5f5f5" : "#bbbbbb"
-                        horizontalAlignment: Text.AlignHCenter
-                        verticalAlignment: Text.AlignVCenter
-                        anchors.fill: parent
-                        font.bold: parent.checked
-                    }
-                }
-                TabButton {
-                    text: "Log"
-                    implicitHeight: 32
-                    implicitWidth: 120
-                    background: Rectangle {
-                        radius: 6
-                        color: parent.checked ? "#1e3a5f" : "#181818"
-                        border.color: parent.checked ? "#2d8bd3" : "#252525"
-                    }
-                    contentItem: Text {
-                        text: parent.text
-                        color: parent.checked ? "#f5f5f5" : "#bbbbbb"
-                        horizontalAlignment: Text.AlignHCenter
-                        verticalAlignment: Text.AlignVCenter
-                        anchors.fill: parent
-                        font.bold: parent.checked
-                    }
-                }
-                TabButton {
-                    text: "Settings"
-                    implicitHeight: 32
-                    implicitWidth: 120
-                    background: Rectangle {
-                        radius: 6
-                        color: parent.checked ? "#1e3a5f" : "#181818"
-                        border.color: parent.checked ? "#2d8bd3" : "#252525"
-                    }
-                    contentItem: Text {
-                        text: parent.text
-                        color: parent.checked ? "#f5f5f5" : "#bbbbbb"
-                        horizontalAlignment: Text.AlignHCenter
-                        verticalAlignment: Text.AlignVCenter
-                        anchors.fill: parent
-                        font.bold: parent.checked
-                    }
-                }
+TabButton {
+    text: "Browser"
+    implicitHeight: 32
+    implicitWidth: 120
+    background: Rectangle {
+        radius: 6
+        color: parent.checked ? Theme.accentBg : Theme.surface
+        border.color: parent.checked ? Theme.accent : Theme.border
+    }
+    contentItem: Text {
+        text: parent.text
+        color: parent.checked ? Theme.text : Theme.textMuted
+        horizontalAlignment: Text.AlignHCenter
+        verticalAlignment: Text.AlignVCenter
+        anchors.fill: parent
+        font.bold: parent.checked
+    }
+}
+TabButton {
+    text: "Log"
+    implicitHeight: 32
+    implicitWidth: 120
+    background: Rectangle {
+        radius: 6
+        color: parent.checked ? Theme.accentBg : Theme.surface
+        border.color: parent.checked ? Theme.accent : Theme.border
+    }
+    contentItem: Text {
+        text: parent.text
+        color: parent.checked ? Theme.text : Theme.textMuted
+        horizontalAlignment: Text.AlignHCenter
+        verticalAlignment: Text.AlignVCenter
+        anchors.fill: parent
+        font.bold: parent.checked
+    }
+}
+TabButton {
+    text: "Settings"
+    implicitHeight: 32
+    implicitWidth: 120
+    background: Rectangle {
+        radius: 6
+        color: parent.checked ? Theme.accentBg : Theme.surface
+        border.color: parent.checked ? Theme.accent : Theme.border
+    }
+    contentItem: Text {
+        text: parent.text
+        color: parent.checked ? Theme.text : Theme.textMuted
+        horizontalAlignment: Text.AlignHCenter
+        verticalAlignment: Text.AlignVCenter
+        anchors.fill: parent
+        font.bold: parent.checked
+    }
+}
             }
         }
     }
@@ -613,14 +708,14 @@ ApplicationWindow {
             Rectangle {
                 id: foldersPane
                 width: 320; height: parent.height
-                color: "#171717"; radius: 6; border.color: "#333"; border.width: 1
+                color: Theme.surfaceAlt; radius: Theme.radius; border.color: Theme.border; border.width: 1
                 Column {
                     anchors.fill: parent; anchors.margins: 8; spacing: 6
                     Label { text: "Folders"; color: "#EEE"; font.bold: true }
                     TreeView {
                         id: folderTree
                         width: parent.width
-                        height: parent.height - 30
+                        height: Math.max(120, parent.height - tagsPanel.implicitHeight - 30)
                         clip: true
                         model: folderModel
                         delegate: Rectangle {
@@ -680,15 +775,22 @@ ApplicationWindow {
                                     }
                                 }
                             }
+DropArea {
+                                anchors.fill: parent
+                                onDropped: { if (AppState.selectedAssetIds && AppState.selectedAssetIds.length>0) { assetsModel.moveAssetsToFolder(AppState.selectedAssetIds, treeDelegate.id); LogManager.addLog("Moved " + AppState.selectedAssetIds.length + " asset(s) to folder id " + treeDelegate.id); } }
+                            }
 
                             Menu {
                                 id: folderMenu
+                                background: Rectangle { color: Theme.surface; radius: Theme.radius; border.color: Theme.border }
                                 MenuItem { text: "New Folder..."; onTriggered: { AppState.newFolderParentId = treeDelegate.id; AppState.newFolderName=""; newFolderDialog.open() } }
                                 MenuItem { text: "Rename..."; onTriggered: { AppState.renameFolderId = treeDelegate.id; AppState.renameFolderName = treeDelegate.name; renameFolderDialog.open() } }
                                 MenuItem { text: "Delete..."; onTriggered: { AppState.deleteFolderId = treeDelegate.id; deleteConfirmDialog.open() } }
                             }
                         }
                     }
+                    // Tags panel below folders
+                    FiltersPanel { id: tagsPanel; assetsModel: assetsModel }
                 }
             }
 
@@ -696,7 +798,7 @@ ApplicationWindow {
             Rectangle {
                 id: filesPane
                 width: parent.width - foldersPane.width - infoPane.width - 12; height: parent.height
-                color: "#171717"; radius: 6; border.color: "#333"; border.width: 1
+                color: Theme.surfaceAlt; radius: Theme.radius; border.color: Theme.border; border.width: 1
                 clip: true // Clip content to prevent overflow
                 Column {
                     anchors.fill: parent; anchors.margins: 8; spacing: 6
@@ -707,20 +809,26 @@ ApplicationWindow {
                         Label { text: "Assets"; color: "#EEE"; font.bold: true; Layout.alignment: Qt.AlignVCenter }
                         Item { width: 12; height: 1 }
                         ButtonGroup { id: viewModeGroup }
-                        ToolButton {
+                        ShButton {
                             text: "Grid"
                             checkable: true
                             ButtonGroup.group: viewModeGroup
                             checked: viewMode === "grid"
                             onClicked: setViewMode("grid")
                         }
-                        ToolButton {
+                        ShButton {
                             text: "List"
                             checkable: true
                             ButtonGroup.group: viewModeGroup
                             checked: viewMode === "list"
                             onClicked: setViewMode("list")
                         }
+                        Item { width: 12; height: 1 }
+                        // Type filter at top of assets pane
+                        ButtonGroup { id: typeFilterGroup }
+                        ShButton { text: "All"; checkable: true; ButtonGroup.group: typeFilterGroup; checked: assetsModel && assetsModel.typeFilter===0; onClicked: assetsModel.typeFilter=0 }
+                        ShButton { text: "Images"; checkable: true; ButtonGroup.group: typeFilterGroup; checked: assetsModel && assetsModel.typeFilter===1; onClicked: assetsModel.typeFilter=1 }
+                        ShButton { text: "Videos"; checkable: true; ButtonGroup.group: typeFilterGroup; checked: assetsModel && assetsModel.typeFilter===2; onClicked: assetsModel.typeFilter=2 }
                     }
                     TextField {
                         id: assetSearchField
@@ -737,29 +845,51 @@ ApplicationWindow {
                         placeholderTextColor: "#666"
                         background: Rectangle {
                             implicitHeight: 32
-                            radius: 6
-                            color: "#1c1c1c"
-                            border.color: "#333"
+                            radius: Theme.radius
+                            color: Theme.surface
+                            border.color: Theme.border
                         }
                     }
-                    GridView {
-                        id: filesGrid
-                        visible: viewMode === "grid"
-                        width: parent.width
-                        height: parent.height - assetSearchField.height - viewToggleRow.height - 30
-                        cellWidth: 160; cellHeight: 120
-                        model: assetsModel
-                        focus: viewMode === "grid"
-                        keyNavigationWraps: true
-                        clip: true // Clip grid content
+                        // Global right-click context menu for selection
+                        Menu {
+                            id: bulkMenu
+                            background: Rectangle { color: Theme.surface; radius: Theme.radius; border.color: Theme.border }
+                            MenuItem { text: "Move to selected folder"; enabled: AppState.selectedFolderId>0; onTriggered: assetsModel.moveAssetsToFolder(AppState.selectedAssetIds, AppState.selectedFolderId) }
+                            MenuSeparator{}
+                            MenuItem { text: "Set Rating → 0"; onTriggered: assetsModel.setAssetsRating(AppState.selectedAssetIds, 0) }
+                            MenuItem { text: "Set Rating → 1"; onTriggered: assetsModel.setAssetsRating(AppState.selectedAssetIds, 1) }
+                            MenuItem { text: "Set Rating → 2"; onTriggered: assetsModel.setAssetsRating(AppState.selectedAssetIds, 2) }
+                            MenuItem { text: "Set Rating → 3"; onTriggered: assetsModel.setAssetsRating(AppState.selectedAssetIds, 3) }
+                            MenuItem { text: "Set Rating → 4"; onTriggered: assetsModel.setAssetsRating(AppState.selectedAssetIds, 4) }
+                            MenuItem { text: "Set Rating → 5"; onTriggered: assetsModel.setAssetsRating(AppState.selectedAssetIds, 5) }
+                            MenuSeparator{}
+                            MenuItem { text: "Remove from App"; onTriggered: assetsModel.removeAssets(AppState.selectedAssetIds) }
+                        }
+                        // Right-click handler that does not block item menus
+                        GridView {
+                            id: filesGrid
+                            visible: viewMode === "grid"
+                            width: parent.width
+                            height: parent.height - assetSearchField.height - viewToggleRow.height - 30
+                            cellWidth: 160; cellHeight: 160
+                            model: assetsModel
+                            focus: viewMode === "grid"
+                            keyNavigationWraps: true
+                            clip: true // Clip grid content
+                            cacheBuffer: 400
+                            reuseItems: true
                         onCurrentIndexChanged: {
                             if (listView.currentIndex !== currentIndex)
                                 listView.currentIndex = currentIndex
                         }
                         delegate: Rectangle {
                             id: tile
+                            Drag.active: false
+                            Drag.dragType: Drag.Automatic
+                            Drag.mimeData: { "application/x-kasset-assets": JSON.stringify(AppState.selectedAssetIds && AppState.selectedAssetIds.length>0 ? AppState.selectedAssetIds : [tile.assetId]) }
+                            property bool selected: AppState.selectedAssetIds && AppState.selectedAssetIds.indexOf(tile.assetId) !== -1
+                            color: selected ? "#2f3a4a" : (GridView.isCurrentItem ? "#2a2a2a" : "#121212")
                             width: filesGrid.cellWidth - 8; height: filesGrid.cellHeight - 8
-                            color: GridView.isCurrentItem ? "#2a2a2a" : "#121212"
                             border.color: "#333"; radius: 4
 
                             required property int index
@@ -789,6 +919,7 @@ ApplicationWindow {
                                 anchors.fill: parent
                                 anchors.margins: 6
                                 spacing: 4
+                                clip: true
 
                                 // Thumbnail area
                                 Rectangle {
@@ -850,7 +981,7 @@ ApplicationWindow {
                                         width: parent.width
                                     }
                                     Text {
-                                        text: "Tags: none"
+                                        text: (function(){ var t = assetsModel.tagsForAsset(tile.assetId); return t && t.length>0 ? ("Tags: " + t.join(", ")) : "Tags: none"; })()
                                         textFormat: Text.PlainText
                                         color: "#666666"
                                         font.pixelSize: 10
@@ -865,6 +996,21 @@ ApplicationWindow {
                                 anchors.fill: parent
                                 onPressed: function(mouse) {
                                     var wasSelected = AppState.selectedAssetId === tile.assetId
+                                    if (mouse.modifiers & Qt.ControlModifier) {
+                                        // toggle multi-select
+                                        var arr = AppState.selectedAssetIds.slice(0)
+                                        var idx = arr.indexOf(tile.assetId)
+                                        if (idx >= 0) arr.splice(idx,1); else arr.push(tile.assetId)
+                                        AppState.selectedAssetIds = arr
+                                        if (AppState.selectionAnchorIndex < 0) AppState.selectionAnchorIndex = index
+                                    } else if (mouse.modifiers & Qt.ShiftModifier) {
+                                        var anchor = AppState.selectionAnchorIndex >= 0 ? AppState.selectionAnchorIndex : filesGrid.currentIndex
+                                        var ids = selectRange(anchor, index)
+                                        AppState.selectedAssetIds = ids
+                                    } else {
+                                        AppState.selectedAssetIds = [ tile.assetId ]
+                                        AppState.selectionAnchorIndex = index
+                                    }
                                     AppState.selectedAssetId = tile.assetId
                                     AppState.selectedFileName = tile.fileName
                                     AppState.selectedFilePath = tile.filePath
@@ -885,8 +1031,9 @@ ApplicationWindow {
                                     if (pressed && !tile.started) {
                                         if (Math.abs(mouse.x - tile.sx) > 6 || Math.abs(mouse.y - tile.sy) > 6) {
                                             tile.started = true
-                                            DragUtils.startFileDrag([ tile.filePath ])
-                                            LogManager.addLog("Drag started for " + tile.filePath)
+                                            // Start internal drag so folder DropArea can accept
+                                            tile.Drag.active = true
+                                            LogManager.addLog("Internal drag for selected assets started")
                                         }
                                     }
                                 }
@@ -894,15 +1041,37 @@ ApplicationWindow {
                             }
                             Menu {
                                 id: assetMenu
+                                background: Rectangle { color: Theme.surface; radius: Theme.radius; border.color: Theme.border }
                                 MenuItem { text: "Show in Explorer"; onTriggered: { DragUtils.showInExplorer(tile.filePath)
                                 LogManager.addLog("Show in Explorer: " + tile.filePath) } }
                                 MenuItem { text: "Move to selected folder"; enabled: AppState.selectedFolderId>0; onTriggered: {
-                                LogManager.addLog("Move asset request for assetId " + tile.assetId + " to folder " + AppState.selectedFolderId)
-                                var ok = assetsModel.moveAssetToFolder(tile.assetId, AppState.selectedFolderId)
+                                LogManager.addLog("Move assets request to folder " + AppState.selectedFolderId)
+                                var ok = assetsModel.moveAssetsToFolder(AppState.selectedAssetIds.length>0?AppState.selectedAssetIds:[tile.assetId], AppState.selectedFolderId)
                                 LogManager.addLog(ok ? "Move succeeded" : "Move failed")
                             } }
+                                MenuSeparator{}
+                                MenuItem { text: "Set Rating → 0"; onTriggered: assetsModel.setAssetsRating(AppState.selectedAssetIds.length>0?AppState.selectedAssetIds:[tile.assetId], 0) }
+                                MenuItem { text: "Set Rating → 1"; onTriggered: assetsModel.setAssetsRating(AppState.selectedAssetIds.length>0?AppState.selectedAssetIds:[tile.assetId], 1) }
+                                MenuItem { text: "Set Rating → 2"; onTriggered: assetsModel.setAssetsRating(AppState.selectedAssetIds.length>0?AppState.selectedAssetIds:[tile.assetId], 2) }
+                                MenuItem { text: "Set Rating → 3"; onTriggered: assetsModel.setAssetsRating(AppState.selectedAssetIds.length>0?AppState.selectedAssetIds:[tile.assetId], 3) }
+                                MenuItem { text: "Set Rating → 4"; onTriggered: assetsModel.setAssetsRating(AppState.selectedAssetIds.length>0?AppState.selectedAssetIds:[tile.assetId], 4) }
+                                MenuItem { text: "Set Rating → 5"; onTriggered: assetsModel.setAssetsRating(AppState.selectedAssetIds.length>0?AppState.selectedAssetIds:[tile.assetId], 5) }
+                                MenuSeparator{}
+                                MenuItem { text: "Remove from App"; onTriggered: assetsModel.removeAssets(AppState.selectedAssetIds.length>0?AppState.selectedAssetIds:[tile.assetId]) }
                             }
 
+                            // Context menu for empty space (right-click) without intercepting tile menus
+                            TapHandler {
+                                acceptedButtons: Qt.RightButton
+                                onTapped: function(ev) {
+                                    // Determine if click is over an item
+                                    var ix = filesGrid.indexAt(ev.point.position.x + filesGrid.contentX, ev.point.position.y + filesGrid.contentY)
+                                    if (ix < 0) {
+                                        if (AppState.selectedAssetIds && AppState.selectedAssetIds.length>0) bulkMenu.popup()
+                                    }
+                                }
+                                grabPermissions: TapHandler.CanBeGrabbedByItems
+                            }
                         }
                         Keys.onPressed: function(e) {
                             var cols = Math.max(1, Math.floor(width / cellWidth))
@@ -916,8 +1085,8 @@ ApplicationWindow {
                             }
                         }
                     }
-                    ListView {
-                        id: listView
+                        ListView {
+                            id: listView
                         visible: viewMode === "list"
                         width: parent.width
                         height: parent.height - assetSearchField.height - viewToggleRow.height - 30
@@ -929,12 +1098,23 @@ ApplicationWindow {
                             if (filesGrid.currentIndex !== currentIndex)
                                 filesGrid.currentIndex = currentIndex
                         }
+                        // Context menu for empty space in list view
+                        TapHandler {
+                            acceptedButtons: Qt.RightButton
+                            onTapped: function(ev) {
+                                var ix = listView.indexAt(ev.point.position.x + listView.contentX, ev.point.position.y + listView.contentY)
+                                if (ix < 0) {
+                                    if (AppState.selectedAssetIds && AppState.selectedAssetIds.length>0) bulkMenu.popup()
+                                }
+                            }
+                            grabPermissions: TapHandler.CanBeGrabbedByItems
+                        }
                         Rectangle {
                             anchors.fill: parent
                             color: "#101010"
                             z: -1
                         }
-                        header: Rectangle {
+header: Rectangle {
                             height: 32
                             color: "#202020"
                             border.color: "#333"
@@ -946,7 +1126,8 @@ ApplicationWindow {
                                     Text { text: "Type"; color: "#888"; width: 80 }
                                     Text { text: "Size"; color: "#888"; width: 100 }
                                     Text { text: "Modified"; color: "#888"; width: 140 }
-                                    Text { text: "Location"; color: "#888"; width: listView.width - 540 }
+                                    // Clamp to avoid negative/overflow widths during resizes
+                                    Text { text: "Location"; color: "#888"; width: Math.max(80, listView.width - 540) }
                                 }
                         }
                         delegate: Rectangle {
@@ -1028,7 +1209,7 @@ ApplicationWindow {
                 id: infoPane
                 width: AppState.infoOpen ? 360 : 0
                 height: parent.height
-                color: "#0b0b0b"; radius: 6; border.color: "#333"; border.width: 1
+                color: Theme.surface; radius: Theme.radius; border.color: Theme.border; border.width: 1
                 Behavior on width { NumberAnimation { duration: 120 } }
                 clip: true
                 Column {
@@ -1080,16 +1261,21 @@ ApplicationWindow {
                         color: "#888"
                         visible: AppState.selectedAssetId > 0
                     }
+                    Text {
+                        text: AppState.selectedAssetId > 0 ? (function(){ var t = assetsModel.tagsForAsset(AppState.selectedAssetId); return t && t.length>0 ? ("Tags: " + t.join(", ")) : "Tags: none"; })() : ""
+                        color: "#888"
+                        visible: AppState.selectedAssetId > 0
+                    }
 
                     Row {
                         spacing: 8
                         visible: AppState.selectedAssetId > 0
-                        Button {
+                        ShButton {
                             text: "Reveal in Explorer"
                             enabled: AppState.selectedFilePath && AppState.selectedFilePath.length > 0
                             onClicked: DragUtils.showInExplorer(AppState.selectedFilePath)
                         }
-                        Button {
+                        ShButton {
                             text: ThumbnailGenerator.isVideoFile(AppState.selectedFilePath) ? "Play Preview" : "View Preview"
                             enabled: AppState.selectedAssetId > 0
                             onClicked: openPreview(AppState.previewIndex)
@@ -1122,6 +1308,11 @@ ApplicationWindow {
                         Item {
                             width: infoPanelPreviewLoader.width
                             height: infoPanelPreviewLoader.height
+                            function msToTime(ms) {
+                                var s = Math.max(0, Math.floor(ms/1000));
+                                var m = Math.floor(s/60); var ss = (s%60).toString().padStart(2,'0');
+                                return m + ":" + ss
+                            }
                             Rectangle {
                                 anchors.fill: parent
                                 color: "#111"
@@ -1129,17 +1320,8 @@ ApplicationWindow {
                                 border.color: "#222"
                                 border.width: 1
                             }
-                            AudioOutput {
-                                id: previewAudio
-                                muted: true
-                                volume: 0.4
-                            }
-                            VideoOutput {
-                                id: previewVideo
-                                anchors.fill: parent
-                                anchors.margins: 6
-                                fillMode: VideoOutput.PreserveAspectFit
-                            }
+                            AudioOutput { id: previewAudio; muted: true; volume: 0.4 }
+                            VideoOutput { id: previewVideo; anchors.fill: parent; anchors.margins: 6; fillMode: VideoOutput.PreserveAspectFit }
                             MediaPlayer {
                                 id: previewPlayer
                                 source: toFileUrl(AppState.selectedFilePath)
@@ -1148,19 +1330,15 @@ ApplicationWindow {
                                 audioOutput: previewAudio
                                 videoOutput: previewVideo
                             }
+                            // Keep the sidebar preview lightweight to avoid UI stalls; full controls are in the overlay
                             Row {
                                 anchors.bottom: parent.bottom
-                                anchors.horizontalCenter: parent.horizontalCenter
+                                anchors.left: parent.left
+                                anchors.right: parent.right
                                 anchors.margins: 8
                                 spacing: 8
-                                Button {
-                                    text: previewPlayer.playbackState === MediaPlayer.PlayingState ? "Pause" : "Play"
-                                    onClicked: previewPlayer.playbackState === MediaPlayer.PlayingState ? previewPlayer.pause() : previewPlayer.play()
-                                }
-                                Button {
-                                    text: previewAudio.muted ? "Unmute" : "Mute"
-                                    onClicked: previewAudio.muted = !previewAudio.muted
-                                }
+                                    ShButton { text: previewPlayer.playbackState === MediaPlayer.PlayingState ? "Pause" : "Play"; onClicked: previewPlayer.playbackState === MediaPlayer.PlayingState ? previewPlayer.pause() : previewPlayer.play() }
+                                    ShButton { text: previewAudio.muted ? "Unmute" : "Mute"; onClicked: previewAudio.muted = !previewAudio.muted }
                             }
                         }
                     }
@@ -1232,9 +1410,9 @@ ApplicationWindow {
                 Row {
                     anchors.horizontalCenter: parent.horizontalCenter
                     spacing: 16
-                    Button { text: "Prev"; enabled: AppState.previewIndex > 0; onClicked: changePreview(-1) }
-                    Button { text: "Close"; onClicked: closePreview() }
-                    Button { text: "Next"; enabled: assetsModel && AppState.previewIndex < assetsModel.rowCount() - 1; onClicked: changePreview(1) }
+                    ShButton { text: "Prev"; enabled: AppState.previewIndex > 0; onClicked: changePreview(-1) }
+                    ShButton { text: "Close"; onClicked: closePreview() }
+                    ShButton { text: "Next"; enabled: assetsModel && AppState.previewIndex < assetsModel.rowCount() - 1; onClicked: changePreview(1) }
                 }
             }
         }
@@ -1261,15 +1439,13 @@ ApplicationWindow {
         Item {
             anchors.fill: parent
             function stop() { previewPlayer.stop() }
-            AudioOutput {
-                id: previewAudioFull
-                volume: 0.6
+            function msToTime(ms) {
+                var s = Math.max(0, Math.floor(ms/1000));
+                var m = Math.floor(s/60); var ss = (s%60).toString().padStart(2,'0');
+                return m + ":" + ss
             }
-            VideoOutput {
-                id: previewVideoFull
-                anchors.fill: parent
-                fillMode: VideoOutput.PreserveAspectFit
-            }
+            AudioOutput { id: previewAudioFull; volume: 0.6 }
+            VideoOutput { id: previewVideoFull; anchors.fill: parent; fillMode: VideoOutput.PreserveAspectFit }
             MediaPlayer {
                 id: previewPlayer
                 source: toFileUrl(AppState.previewSource)
@@ -1277,6 +1453,31 @@ ApplicationWindow {
                 loops: MediaPlayer.Infinite
                 audioOutput: previewAudioFull
                 videoOutput: previewVideoFull
+            }
+            Rectangle {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                height: 64
+                color: "#141414"
+                border.color: "#222"
+                Row {
+                    anchors.fill: parent
+                    anchors.margins: 10
+                    spacing: 10
+                    ShButton { text: previewPlayer.playbackState === MediaPlayer.PlayingState ? "Pause" : "Play"; onClicked: previewPlayer.playbackState === MediaPlayer.PlayingState ? previewPlayer.pause() : previewPlayer.play() }
+                    ShButton { text: "Stop"; onClicked: previewPlayer.stop() }
+                    Label { text: msToTime(previewPlayer.position); color: "#ccc" }
+Slider {
+                        id: fullTimeline
+                        width: parent.width - 360
+                        from: 0; to: Math.max(1, previewPlayer.duration)
+                        value: previewPlayer.position
+                        onMoved: previewPlayer.position = value
+                    }
+                    Label { text: msToTime(previewPlayer.duration); color: "#ccc" }
+                    ShButton { text: previewAudioFull.muted ? "Unmute" : "Mute"; onClicked: previewAudioFull.muted = !previewAudioFull.muted }
+                }
             }
         }
     }
@@ -1290,7 +1491,7 @@ ApplicationWindow {
             contentItem: Column {
                 spacing: 8
                 padding: 12
-                TextField { id: newFolderNameField; placeholderText: "Folder name"; text: AppState.newFolderName; onTextChanged: AppState.newFolderName = text; selectByMouse: true; focus: true }
+TextField { id: newFolderNameField; placeholderText: "Folder name"; text: AppState.newFolderName; onTextChanged: AppState.newFolderName = text; selectByMouse: true; focus: true }
             }
             footer: DialogButtonBox {
                 standardButtons: DialogButtonBox.Ok | DialogButtonBox.Cancel
@@ -1313,7 +1514,7 @@ ApplicationWindow {
             contentItem: Column {
                 spacing: 8
                 padding: 12
-                TextField { id: renameFolderNameField; placeholderText: "New name"; text: AppState.renameFolderName; onTextChanged: AppState.renameFolderName = text; selectByMouse: true; focus: true }
+TextField { id: renameFolderNameField; placeholderText: "New name"; text: AppState.renameFolderName; onTextChanged: AppState.renameFolderName = text; selectByMouse: true; focus: true }
             }
             footer: DialogButtonBox {
                 standardButtons: DialogButtonBox.Ok | DialogButtonBox.Cancel
@@ -1358,9 +1559,9 @@ ApplicationWindow {
         Item {
             Rectangle {
                 anchors.fill: parent
-                color: "#171717"
-                radius: 6
-                border.color: "#333"
+                color: Theme.surfaceAlt
+                radius: Theme.radius
+                border.color: Theme.border
                 border.width: 1
 
                 Column {
@@ -1381,7 +1582,7 @@ ApplicationWindow {
 
                         Item { width: parent.width - 200; height: 1 }
 
-                        Button {
+                        ShButton {
                             text: "Clear Log"
                             onClicked: {
                                 LogManager.clear()
@@ -1480,22 +1681,22 @@ ApplicationWindow {
                                 wrapMode: Text.WordWrap
                             }
 
-                            Button {
-                                text: "Add Test Log Entry"
-                                onClicked: LogManager.addLog("QML test log @" + new Date().toLocaleTimeString(), "DEBUG")
-                            }
+                        ShButton {
+                            text: "Add Test Log Entry"
+                            onClicked: LogManager.addLog("QML test log @" + new Date().toLocaleTimeString(), "DEBUG")
+                        }
 
                             Row {
                                 spacing: 8
 
-                                Button {
+                                ShButton {
                                     text: "Start Test Progress"
                                     onClicked: {
                                         root.debugProgressStep = 0
                                         ProgressManager.start("QML progress test", 3)
                                     }
                                 }
-                                Button {
+                                ShButton {
                                     text: "Advance Progress"
                                     enabled: root.progressActive
                                     onClicked: {
@@ -1503,14 +1704,14 @@ ApplicationWindow {
                                         ProgressManager.update(root.debugProgressStep, "QML progress step " + root.debugProgressStep)
                                     }
                                 }
-                                Button {
+                                ShButton {
                                     text: "Finish Progress"
                                     enabled: root.progressActive
                                     onClicked: ProgressManager.finish()
                                 }
                             }
 
-                            Button {
+                            ShButton {
                                 text: AppState.selectedFilePath && AppState.selectedFilePath.length > 0
                                       ? "Request Thumbnail For Selected Asset"
                                       : "Select an asset to request thumbnail"
@@ -1569,6 +1770,26 @@ ApplicationWindow {
                                 Label { text: "Location:"; color: "#CCC" }
                                 Label { text: "{appDir}/data/kasset.db"; color: "#888" }
                             }
+
+                            Row {
+                                spacing: 8
+                                Button {
+                                    text: "Purge Missing Files"
+                                    onClicked: {
+                                        var n = importer.purgeMissingAssets()
+                                        LogManager.addLog("Purged missing assets: " + n)
+                                        assetsModel.reload()
+                                    }
+                                }
+                                Button {
+                                    text: "Purge Autotest Assets"
+                                    onClicked: {
+                                        var n2 = importer.purgeAutotestAssets()
+                                        LogManager.addLog("Purged autotest assets: " + n2)
+                                        assetsModel.reload()
+                                    }
+                                }
+                            }
                         }
                     }
 
@@ -1590,8 +1811,8 @@ ApplicationWindow {
         anchors.right: parent.right
         anchors.bottom: parent.bottom
         height: 44
-        color: "#1E1E1E"
-        border.color: "#333"
+        color: Theme.surface
+        border.color: Theme.border
         border.width: 1
         visible: root.progressActive
 
@@ -1628,7 +1849,6 @@ ApplicationWindow {
         }
     }
 }
-
 
 
 

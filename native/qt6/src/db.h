@@ -5,7 +5,9 @@
 #include <QSqlError>
 #include <QVariant>
 #include <QFileInfo>
-
+#include <QVector>
+#include <QPair>
+#include <QStringList>
 class DB : public QObject {
     Q_OBJECT
 public:
@@ -26,15 +28,27 @@ public:
     // Asset ops
     int upsertAsset(const QString& filePath);
     bool setAssetFolder(int assetId, int folderId);
+    bool removeAssets(const QList<int>& assetIds);
+    bool setAssetsRating(const QList<int>& assetIds, int rating); // 0-5, -1 to clear
+
+    // Tags ops
+    int createTag(const QString& name);
+    bool renameTag(int id, const QString& name);
+    bool deleteTag(int id);
+    QVector<QPair<int, QString>> listTags() const;
+    bool assignTagsToAssets(const QList<int>& assetIds, const QList<int>& tagIds);
+    QStringList tagsForAsset(int assetId) const;
 
 signals:
     void foldersChanged();
     void assetsChanged(int folderId);
+    void tagsChanged();
 
 private:
     explicit DB(QObject* parent=nullptr);
     bool migrate();
     bool exec(const QString& sql);
+    bool hasColumn(const QString& table, const QString& column) const;
 
     QSqlDatabase m_db;
     int m_rootId = 0;

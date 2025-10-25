@@ -5,6 +5,8 @@
 #include <QStringList>
 #include <QMutex>
 #include <QDateTime>
+#include <QFile>
+#include <QTextStream>
 class LogManager : public QObject {
     Q_OBJECT
     Q_PROPERTY(QStringList logs READ logs NOTIFY logsChanged)
@@ -28,6 +30,8 @@ private:
     explicit LogManager(QObject* parent = nullptr);
     QStringList m_logs;
     QMutex m_mutex;
+    QFile m_file;
+    QTextStream m_ts;
     static constexpr int MAX_LOGS = 1000;
 };
 

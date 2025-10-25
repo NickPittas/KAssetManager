@@ -26,16 +26,19 @@ void ProgressManager::start(const QString& message, int total) {
 
 void ProgressManager::update(int current, const QString& message) {
     QMutexLocker locker(&m_mutex);
-    
+
     m_current = current;
     if (!message.isEmpty()) {
         m_message = message;
         emit messageChanged();
     }
-    
+
     emit currentChanged();
     emit percentageChanged();
-    LogManager::instance().addLog(QString("Progress update: %1 (%2/%3)").arg(m_message).arg(m_current).arg(m_total));
+    // Avoid spamming logs on every tick; gate under diagnostics only
+    if (!qEnvironmentVariableIsEmpty("KASSET_DIAGNOSTICS")) {
+        LogManager::instance().addLog(QString("Progress: %1 (%2/%3)").arg(m_message).arg(m_current).arg(m_total), "DEBUG");
+    }
 }
 
 void ProgressManager::finish() {

@@ -94,3 +94,43 @@ bool Importer::importFolder(const QString& dirPath, int parentFolderId){
     LogManager::instance().addLog(QString("Imported folder %1").arg(topName));
     return true;
 }
+
+int Importer::purgeMissingAssets() {
+    QSqlDatabase db = DB::instance().database();
+    QSqlQuery select(db);
+    if (!select.exec("SELECT id, file_path, virtual_folder_id FROM assets")) {
+        qWarning() << "purgeMissingAssets select failed:" << select.lastError();
+        return 0;
+    }
+    int removed = 0;
+    while (select.next()) {
+        int id = select.value(0).toInt();
+        QString path = select.value(1).toString();
+        int folderId = select.value(2).toInt();
+        if (!QFileInfo::exists(path)) {
+            QSqlQuery del(db);
+            del.prepare("DELETE FROM assets WHERE id=?");
+            del.addBindValue(id);
+            if (del.exec()) {
+                ++removed;
+                emit DB::instance().assetsChanged(folderId);
+            }
+        }
+    }
+    LogManager::instance().addLog(QString("Purged %1 missing asset(s)").arg(removed));
+    return removed;
+}
+
+int Importer::purgeAutotestAssets() {
+    QSqlDatabase db = DB::instance().database();
+    QSqlQuery del(db);
+    if (!del.exec("DELETE FROM assets WHERE file_name LIKE 'autotest_%' OR file_path LIKE '%kasset_autotest%'")) {
+        qWarning() << "purgeAutotestAssets failed:" << del.lastError();
+        return 0;
+    }
+    // Conservative: signal full refresh
+    emit DB::instance().assetsChanged(DB::instance().ensureRootFolder());
+    int affected = del.numRowsAffected();
+    LogManager::instance().addLog(QString("Purged autotest assets (%1)").arg(affected));
+    return affected;
+}

@@ -322,7 +322,9 @@ QString ThumbnailGenerator::generateImageThumbnail(const QString& filePath) {
     QSize originalSize = reader.size();
     if (!originalSize.isValid()) {
         qWarning() << "[ThumbnailGenerator] Failed to read image size:" << filePath << reader.errorString();
-        LogManager::instance().addLog(QString("Thumbnail read failure: %1").arg(QFileInfo(filePath).fileName()));
+        if (!qEnvironmentVariableIsEmpty("KASSET_VERBOSE")) {
+            LogManager::instance().addLog(QString("Thumbnail read failure: %1").arg(QFileInfo(filePath).fileName()), "WARN");
+        }
         return QString();
     }
 
@@ -332,19 +334,25 @@ QString ThumbnailGenerator::generateImageThumbnail(const QString& filePath) {
     QImage image = reader.read();
     if (image.isNull()) {
         qWarning() << "[ThumbnailGenerator] Failed to read image:" << filePath << reader.errorString();
-        LogManager::instance().addLog(QString("Thumbnail decode failure: %1").arg(QFileInfo(filePath).fileName()));
+        if (!qEnvironmentVariableIsEmpty("KASSET_VERBOSE")) {
+            LogManager::instance().addLog(QString("Thumbnail decode failure: %1").arg(QFileInfo(filePath).fileName()), "WARN");
+        }
         return QString();
     }
 
     QString cachePath = getThumbnailCachePath(filePath);
     if (!image.save(cachePath, "JPEG", 85)) {
         qWarning() << "[ThumbnailGenerator] Failed to save thumbnail:" << cachePath;
-        LogManager::instance().addLog(QString("Thumbnail save failure: %1").arg(QFileInfo(cachePath).fileName()));
+        if (!qEnvironmentVariableIsEmpty("KASSET_VERBOSE")) {
+            LogManager::instance().addLog(QString("Thumbnail save failure: %1").arg(QFileInfo(cachePath).fileName()), "WARN");
+        }
         return QString();
     }
 
     qDebug() << "[ThumbnailGenerator] Generated image thumbnail:" << cachePath;
-    LogManager::instance().addLog(QString("Thumbnail generated: %1").arg(QFileInfo(cachePath).fileName()));
+    if (!qEnvironmentVariableIsEmpty("KASSET_VERBOSE")) {
+        LogManager::instance().addLog(QString("Thumbnail generated: %1").arg(QFileInfo(cachePath).fileName()), "DEBUG");
+    }
     return cachePath;
 }
 
@@ -386,12 +394,16 @@ QString ThumbnailGenerator::createSampleImage(const QString& directory) {
 
     if (img.save(filePath, "PNG", 95)) {
         qDebug() << "[ThumbnailGenerator] Created sample image at" << filePath;
-        LogManager::instance().addLog(QString("Generated sample image %1").arg(fileName));
+        if (!qEnvironmentVariableIsEmpty("KASSET_VERBOSE")) {
+            LogManager::instance().addLog(QString("Generated sample image %1").arg(fileName), "DEBUG");
+        }
         return filePath;
     }
 
     qWarning() << "[ThumbnailGenerator] Failed to save sample image at" << filePath;
-    LogManager::instance().addLog(QString("Failed to create sample image %1").arg(fileName));
+    if (!qEnvironmentVariableIsEmpty("KASSET_VERBOSE")) {
+        LogManager::instance().addLog(QString("Failed to create sample image %1").arg(fileName), "WARN");
+    }
     return QString();
 }
 
@@ -422,8 +434,9 @@ void ThumbnailGenerator::updateProgress() {
 
     if (m_totalThumbnails > 0) {
         ProgressManager::instance().update(m_completedThumbnails);
-        qDebug() << "[ThumbnailGenerator] Progress:" << m_completedThumbnails << "/" << m_totalThumbnails;
-
+        if (!qEnvironmentVariableIsEmpty("KASSET_DIAGNOSTICS")) {
+            qDebug() << "[ThumbnailGenerator] Progress:" << m_completedThumbnails << "/" << m_totalThumbnails;
+        }
         if (m_completedThumbnails >= m_totalThumbnails) {
             finishProgress();
         }

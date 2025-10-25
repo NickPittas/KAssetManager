@@ -1,27 +1,41 @@
 #include "log_manager.h"
 #include <QDebug>
 #include <QMutexLocker>
+#include <QCoreApplication>
 
 LogManager::LogManager(QObject* parent) : QObject(parent) {
+    // Open persistent app log next to the executable
+    QString path = QCoreApplication::applicationDirPath() + "/app.log";
+    m_file.setFileName(path);
+    if (m_file.open(QIODevice::Append | QIODevice::Text)) {
+        m_ts.setDevice(&m_file);
+        m_ts << "\n--- session start ---\n";
+        m_ts.flush();
+    }
     // Install custom message handler to capture qDebug/qWarning/qCritical
     qInstallMessageHandler(customMessageHandler);
 }
 
 void LogManager::addLog(const QString& message, const QString& level) {
-    QMutexLocker locker(&m_mutex);
-    
-    QString timestamp = QDateTime::currentDateTime().toString("hh:mm:ss.zzz");
-    QString logEntry = QString("[%1] [%2] %3").arg(timestamp, level, message);
-    
-    m_logs.append(logEntry);
-    
-    // Keep only last MAX_LOGS entries
-    if (m_logs.size() > MAX_LOGS) {
-        m_logs.removeFirst();
-    }
-    
+    QString logEntry;
+    {
+        QMutexLocker locker(&m_mutex);
+        QString timestamp = QDateTime::currentDateTime().toString("hh:mm:ss.zzz");
+        logEntry = QString("[%1] [%2] %3").arg(timestamp, level, message);
+        m_logs.append(logEntry);
+        if (m_logs.size() > MAX_LOGS) {
+            m_logs.removeFirst();
+        }
+    } // unlock before emitting signals to avoid UI thread deadlocks
+
     emit logsChanged();
     emit logAdded(logEntry);
+
+    // Write-through to disk log
+    if (m_ts.device()) {
+        m_ts << logEntry << '\n';
+        m_ts.flush();
+    }
 }
 
 void LogManager::clear() {

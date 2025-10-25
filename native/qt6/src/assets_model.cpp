@@ -2,13 +2,21 @@
 #include "db.h"
 #include "thumbnail_generator.h"
 #include "progress_manager.h"
+#include "log_manager.h"
 #include <QSqlQuery>
 #include <QSqlError>
 #include <QFileInfo>
 #include <QDebug>
+#include <QThread>
+#include <QElapsedTimer>
 
 AssetsModel::AssetsModel(QObject* parent): QAbstractListModel(parent){
-    connect(&DB::instance(), &DB::assetsChanged, this, [this](int fid){ if (fid==m_folderId) reload(); });
+    // Debounce DB-driven reloads to avoid re-entrancy and view churn during batch imports
+    m_reloadTimer.setSingleShot(true);
+    m_reloadTimer.setInterval(100);
+    connect(&m_reloadTimer, &QTimer::timeout, this, &AssetsModel::triggerDebouncedReload);
+
+    connect(&DB::instance(), &DB::assetsChanged, this, &AssetsModel::onAssetsChangedForFolder);
 
     // Connect to thumbnail generator signals
     connect(&ThumbnailGenerator::instance(), &ThumbnailGenerator::thumbnailGenerated,
@@ -47,6 +55,7 @@ QVariant AssetsModel::data(const QModelIndex& idx, int role) const{
         }
         case FileTypeRole: return r.fileType;
         case LastModifiedRole: return r.lastModified;
+        case RatingRole: return r.rating;
     }
     return {};
 }
@@ -60,6 +69,7 @@ QHash<int,QByteArray> AssetsModel::roleNames() const{
     r[ThumbnailPathRole]="thumbnailPath";
     r[FileTypeRole] = "fileType";
     r[LastModifiedRole] = "lastModified";
+    r[RatingRole] = "rating";
     return r;
 }
 
@@ -67,7 +77,7 @@ void AssetsModel::setFolderId(int id){
     if (m_folderId==id) return;
     m_folderId=id;
     qDebug() << "AssetsModel::setFolderId" << id;
-    reload();
+    scheduleReload();
     emit folderIdChanged();
 }
 
@@ -82,27 +92,24 @@ void AssetsModel::setSearchQuery(const QString& query) {
     emit searchQueryChanged();
 }
 
+void AssetsModel::setTypeFilter(int f) {
+    if (m_typeFilter == f) return;
+    m_typeFilter = f;
+    beginResetModel();
+    rebuildFilter();
+    endResetModel();
+    emit typeFilterChanged();
+}
+
 void AssetsModel::reload(){
-    qDebug() << "AssetsModel::reload() for folderId" << m_folderId;
+    qDebug() << "AssetsModel::reload() for folderId" << m_folderId << "on thread" << QThread::currentThread();
+    QElapsedTimer t; t.start();
     beginResetModel();
     query();
     rebuildFilter();
     endResetModel();
-    qDebug() << "AssetsModel::reload() loaded" << m_rows.size() << "assets";
-
-    // Count how many thumbnails need to be generated
-    int needThumbnails = 0;
-    for (const auto& row : m_rows) {
-        if (ThumbnailGenerator::instance().getThumbnailPath(row.filePath).isEmpty()) {
-            needThumbnails++;
-        }
-    }
-
-    // Start progress tracking in ThumbnailGenerator
-    if (needThumbnails > 0) {
-        ThumbnailGenerator::instance().startProgress(needThumbnails);
-        qDebug() << "AssetsModel::reload() starting progress for" << needThumbnails << "thumbnails";
-    }
+    qDebug() << "AssetsModel::reload() loaded" << m_rows.size() << "assets in" << t.elapsed() << "ms";
+    LogManager::instance().addLog(QString("AssetsModel reload: %1 assets in %2 ms").arg(m_rows.size()).arg(t.elapsed()), "DEBUG");
 }
 
 void AssetsModel::query(){
@@ -113,12 +120,14 @@ void AssetsModel::query(){
         return;
     }
     QSqlQuery q(DB::instance().database());
-    q.prepare("SELECT id,file_name,file_path,file_size FROM assets WHERE virtual_folder_id=? ORDER BY file_name");
+    q.prepare("SELECT id,file_name,file_path,file_size,COALESCE(rating,-1) FROM assets WHERE virtual_folder_id=? ORDER BY file_name");
+    LogManager::instance().addLog(QString("DB query (assets by folder %1) started").arg(m_folderId), "DEBUG");
     q.addBindValue(m_folderId);
     if (!q.exec()) {
         qWarning() << "AssetsModel::query() SQL error:" << q.lastError();
         return;
     }
+    int rows = 0;
     while (q.next()) {
         AssetRow r;
         r.id = q.value(0).toInt();
@@ -126,11 +135,14 @@ void AssetsModel::query(){
         r.filePath = q.value(2).toString();
         r.fileSize = q.value(3).toLongLong();
         r.folderId = m_folderId;
+        r.rating = q.value(4).toInt();
         QFileInfo fi(r.filePath);
         r.fileType = fi.exists() ? fi.suffix().toLower() : QString();
         r.lastModified = fi.exists() ? fi.lastModified() : QDateTime();
         m_rows.push_back(r);
+        ++rows;
     }
+    LogManager::instance().addLog(QString("DB query complete: %1 rows").arg(rows), "DEBUG");
     qDebug() << "AssetsModel::query() found" << m_rows.size() << "assets for folderId" << m_folderId;
 }
 
@@ -151,20 +163,17 @@ void AssetsModel::onThumbnailGenerated(const QString& filePath, const QString& t
 
 bool AssetsModel::moveAssetToFolder(int assetId, int folderId){ bool ok=DB::instance().setAssetFolder(assetId,folderId); if (ok) reload(); return ok; }
 
-bool AssetsModel::moveAssetsToFolder(const QVariantList& assetIds, int folderId){ bool any=false; for (const auto& v: assetIds){ any |= DB::instance().setAssetFolder(v.toInt(),folderId); } reload(); return any; }
+bool AssetsModel::moveAssetsToFolder(const QVariantList& assetIds, int folderId){ bool any=false; for (const auto& v: assetIds){ any |= DB::instance().setAssetFolder(v.toInt(),folderId); } scheduleReload(); return any; }
+
+bool AssetsModel::removeAssets(const QVariantList& assetIds){ QList<int> ids; for (const auto &v: assetIds) ids << v.toInt(); bool ok = DB::instance().removeAssets(ids); scheduleReload(); return ok; }
+bool AssetsModel::setAssetsRating(const QVariantList& assetIds, int rating){ QList<int> ids; for (const auto &v: assetIds) ids << v.toInt(); bool ok = DB::instance().setAssetsRating(ids, rating); scheduleReload(); return ok; }
+bool AssetsModel::assignTags(const QVariantList& assetIds, const QVariantList& tagIds){ QList<int> aids; for (const auto &v: assetIds) aids << v.toInt(); QList<int> tids; for (const auto &t: tagIds) tids << t.toInt(); bool ok = DB::instance().assignTagsToAssets(aids, tids); // no need to reload entire list
+    return ok; }
 
 void AssetsModel::rebuildFilter() {
     m_filteredRowIndexes.clear();
     m_filteredRowIndexes.reserve(m_rows.size());
 
-    if (m_searchQuery.trimmed().isEmpty()) {
-        for (int i = 0; i < m_rows.size(); ++i) {
-            m_filteredRowIndexes.append(i);
-        }
-        return;
-    }
-
-    const QString needle = m_searchQuery.trimmed();
     for (int i = 0; i < m_rows.size(); ++i) {
         if (matchesFilter(m_rows[i])) {
             m_filteredRowIndexes.append(i);
@@ -173,10 +182,17 @@ void AssetsModel::rebuildFilter() {
 }
 
 bool AssetsModel::matchesFilter(const AssetRow& row) const {
+    // Apply type filter
+    if (m_typeFilter == Images) {
+        if (!ThumbnailGenerator::instance().isImageFile(row.filePath)) return false;
+    } else if (m_typeFilter == Videos) {
+        if (!ThumbnailGenerator::instance().isVideoFile(row.filePath)) return false;
+    }
+
     const QString needle = m_searchQuery.trimmed();
-    const QString needleLower = needle.toLower();
     if (needle.isEmpty())
         return true;
+    const QString needleLower = needle.toLower();
     const Qt::CaseSensitivity cs = Qt::CaseInsensitive;
     if (row.fileName.contains(needle, cs))
         return true;
@@ -201,4 +217,27 @@ QVariantMap AssetsModel::get(int row) const {
     map.insert("fileType", r.fileType);
     map.insert("lastModified", r.lastModified);
     return map;
+}
+
+QStringList AssetsModel::tagsForAsset(int assetId) const {
+    return DB::instance().tagsForAsset(assetId);
+}
+
+void AssetsModel::onAssetsChangedForFolder(int folderId) {
+    if (folderId != m_folderId)
+        return;
+    // Coalesce rapid-fire updates
+    scheduleReload();
+}
+
+void AssetsModel::triggerDebouncedReload() {
+    m_reloadScheduled = false;
+    reload();
+}
+
+void AssetsModel::scheduleReload() {
+    if (!m_reloadTimer.isActive()) {
+        m_reloadTimer.start();
+    }
+    m_reloadScheduled = true;
 }

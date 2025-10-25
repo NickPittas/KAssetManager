@@ -10,15 +10,15 @@
 -[/] NAME:Preview interactions polish DESCRIPTION:Enable double-click/space shortcuts and keyboard arrows to open and navigate the preview overlay.
 -[/] NAME:Compact dark header styling DESCRIPTION:Reduce top-bar whitespace and align theme styling with dark palette requirements.
 -[ ] NAME:Update interface colors to shadcn style DESCRIPTION:Change color scheme to more black and white shadcn vibe instead of current colors.
--[ ] NAME:Add Import Assets button to UI DESCRIPTION:Add a prominent button to import files/folders into the app
--[ ] NAME:Implement drag and drop FROM Windows Explorer TO app DESCRIPTION:Allow users to drag files/folders from Windows Explorer into the app to import them
--[ ] NAME:Add 'Show in Explorer' context menu option DESCRIPTION:Right-click menu option to open the asset's location in Windows Explorer
+-[/] NAME:Add Import Assets button to UI DESCRIPTION:Add a prominent button to import files/folders into the app
+-[/] NAME:Implement drag and drop FROM Windows Explorer TO app DESCRIPTION:Allow users to drag files/folders from Windows Explorer into the app to import them
+-[/] NAME:Add 'Show in Explorer' context menu option DESCRIPTION:Right-click menu option to open the asset's location in Windows Explorer
 -[ ] NAME:Fix backup endpoint 500 error DESCRIPTION:Backend endpoint /backup is returning 500 Internal Server Error
 -[ ] NAME:Fix FFmpeg thumbnail generation commands DESCRIPTION:Research and implement correct FFmpeg commands for each video file type (mov, mp4, mkv, etc.). Current commands use excessive/incorrect arguments causing format conversion errors. Need simple, working commands for thumbnail generation.
--[ ] NAME:Add video player with controls DESCRIPTION:Implement video player with play/pause, timeline scrubbing, and standard video controls for all video file types (mov, mp4, mkv, etc.). Currently no video preview capability exists.
+-[/] NAME:Add video player with controls DESCRIPTION:Implement video player with play/pause, timeline scrubbing, and standard video controls for all video file types (mov, mp4, mkv, etc.). Currently no video preview capability exists.
 -[ ] NAME:Qt 6 Refactor (Option 1) â€” Master Epic DESCRIPTION:Deliver a Windows-native Qt 6 front end with external drag-and-drop, pro media viewing, and UI parity. See QT6-REFACTOR-PLAN.md for scope, milestones, risks, verification matrix.
 --[/] NAME:M0: Virtual files DnD via IDataObject (FILEDESCRIPTORW/FILECONTENTS) DESCRIPTION:Implement custom IDataObject for delayed rendering; support multi-file virtual drags; temp CF_HDROP fallback.
---[ ] NAME:M0: Basic video player (Qt Multimedia) DESCRIPTION:Add player with play/pause/scrub/volume/timecode; keyboard shortcuts; verify common codecs.
+--[/] NAME:M0: Basic video player (Qt Multimedia) DESCRIPTION:Add player with play/pause/scrub/volume/timecode; keyboard shortcuts; verify common codecs.
 --[ ] NAME:M0: OIIO image viewer (EXR/DPX/PSD/PNG/JPG) DESCRIPTION:Integrate OpenImageIO for decode + metadata; show large images efficiently; generate thumbnails.
 --[ ] NAME:M0: Verification matrix run & notes DESCRIPTION:Test drag-out/in with Explorer/Photoshop/Nuke/AE/Resolve/Fusion; document results and compatibility quirks.
 --[ ] NAME:M1: Asset grid + virtualization + keyboard nav DESCRIPTION:GridView/ListView with thumbnail cache; arrow navigation and selection; drag handles.

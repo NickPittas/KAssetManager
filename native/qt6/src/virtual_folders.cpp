@@ -3,13 +3,14 @@
 #include <QSqlQuery>
 #include <QSqlError>
 #include <QDebug>
+#include "log_manager.h"
 
 VirtualFolderTreeModel::VirtualFolderTreeModel(QObject* parent): QAbstractItemModel(parent){
     connect(&DB::instance(), &DB::foldersChanged, this, &VirtualFolderTreeModel::reload);
     reload();
 }
 
-void VirtualFolderTreeModel::reload(){ beginResetModel(); build(); endResetModel(); }
+void VirtualFolderTreeModel::reload(){ qDebug() << "VirtualFolderTreeModel::reload()"; beginResetModel(); build(); endResetModel(); LogManager::instance().addLog("Folders reload complete", "DEBUG"); }
 
 void VirtualFolderTreeModel::build(){
     m_nodes.clear(); m_idToIdx.clear();

@@ -9,6 +9,8 @@ QtObject {
 
     property int selectedFolderId: 0
     property int selectedAssetId: -1
+    property var selectedAssetIds: []
+    property int selectionAnchorIndex: -1
     property string selectedFileName: ""
     property string selectedFilePath: ""
     property int selectedFileSize: 0

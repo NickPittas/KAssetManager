@@ -23,7 +23,7 @@ bool DB::init(const QString& dbFilePath){
 }
 
 bool DB::migrate(){
-    // Minimal schema for virtual folders and assets
+    // Minimal schema for virtual folders and assets + tags/ratings
     const char* ddl[] = {
         "PRAGMA foreign_keys=ON;",
         "CREATE TABLE IF NOT EXISTS virtual_folders (\n"
@@ -42,16 +42,42 @@ bool DB::migrate(){
         "  file_size INTEGER NULL,\n"
         "  mime_type TEXT NULL,\n"
         "  checksum TEXT NULL,\n"
+        "  rating INTEGER NULL,\n"
         "  created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n"
         "  updated_at TEXT DEFAULT CURRENT_TIMESTAMP\n"
         ");",
-        "CREATE INDEX IF NOT EXISTS idx_assets_folder ON assets(virtual_folder_id);"
+        "CREATE INDEX IF NOT EXISTS idx_assets_folder ON assets(virtual_folder_id);",
+        // tags
+        "CREATE TABLE IF NOT EXISTS tags (\n"
+        "  id INTEGER PRIMARY KEY AUTOINCREMENT,\n"
+        "  name TEXT NOT NULL UNIQUE\n"
+        ");",
+        "CREATE TABLE IF NOT EXISTS asset_tags (\n"
+        "  asset_id INTEGER NOT NULL REFERENCES assets(id) ON DELETE CASCADE,\n"
+        "  tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,\n"
+        "  PRIMARY KEY (asset_id, tag_id)\n"
+        ");"
     };
     for (const char* sql : ddl) if (!exec(QString::fromLatin1(sql))) return false;
+
+    // If older DB lacked 'rating' column, add it
+    if (!hasColumn("assets", "rating")) {
+        exec("ALTER TABLE assets ADD COLUMN rating INTEGER NULL");
+    }
     return true;
 }
 
 bool DB::exec(const QString& sql){ QSqlQuery q(m_db); if (!q.exec(sql)) { qWarning() << "SQL failed:" << sql << q.lastError(); return false; } return true; }
+
+bool DB::hasColumn(const QString& table, const QString& column) const {
+    QSqlQuery q(m_db);
+    q.prepare("PRAGMA table_info(" + table + ")");
+    if (!q.exec()) return false;
+    while (q.next()) {
+        if (q.value(1).toString().compare(column, Qt::CaseInsensitive) == 0) return true;
+    }
+    return false;
+}
 
 int DB::ensureRootFolder(){
     QSqlQuery q(m_db);
@@ -157,6 +183,81 @@ bool DB::setAssetFolder(int assetId, int folderId){
         }
         emit assetsChanged(folderId);
     }
+return ok;
+}
+
+bool DB::removeAssets(const QList<int>& assetIds){
+    if (assetIds.isEmpty()) return true;
+    QSqlQuery q(m_db);
+    bool ok = true;
+    for (int id : assetIds) {
+        q.prepare("DELETE FROM assets WHERE id=?");
+        q.addBindValue(id);
+        ok &= q.exec();
+    }
+    if (!ok) qWarning() << "DB::removeAssets: delete failed" << q.lastError();
+    emit assetsChanged(m_rootId);
+    return ok;
+}
+
+bool DB::setAssetsRating(const QList<int>& assetIds, int rating){
+    QSqlQuery q(m_db);
+    bool ok = true;
+    for (int id : assetIds) {
+        q.prepare("UPDATE assets SET rating=?, updated_at=CURRENT_TIMESTAMP WHERE id=?");
+        if (rating < 0) q.addBindValue(QVariant(QVariant::Int)); else q.addBindValue(rating);
+        q.addBindValue(id);
+        ok &= q.exec();
+    }
+    if (!ok) qWarning() << "DB::setAssetsRating failed" << q.lastError();
+    emit assetsChanged(m_rootId);
+    return ok;
+}
+
+int DB::createTag(const QString& name){
+    QSqlQuery q(m_db);
+    q.prepare("INSERT OR IGNORE INTO tags(name) VALUES(?)");
+    q.addBindValue(name);
+    if (!q.exec()) { qWarning() << q.lastError(); return 0; }
+    emit tagsChanged();
+    return q.lastInsertId().toInt();
+}
+
+bool DB::renameTag(int id, const QString& name){ QSqlQuery q(m_db); q.prepare("UPDATE tags SET name=? WHERE id=?"); q.addBindValue(name); q.addBindValue(id); bool ok=q.exec(); if (!ok) qWarning()<<q.lastError(); if (ok) emit tagsChanged(); return ok; }
+bool DB::deleteTag(int id){ QSqlQuery q(m_db); q.prepare("DELETE FROM tags WHERE id=?"); q.addBindValue(id); bool ok=q.exec(); if (!ok) qWarning()<<q.lastError(); if (ok) emit tagsChanged(); return ok; }
+
+QVector<QPair<int, QString>> DB::listTags() const {
+    QVector<QPair<int, QString>> tags;
+    QSqlQuery q(m_db);
+    if (!q.exec("SELECT id,name FROM tags ORDER BY name")) return tags;
+    while (q.next()) tags.append({q.value(0).toInt(), q.value(1).toString()});
+    return tags;
+}
+
+QStringList DB::tagsForAsset(int assetId) const {
+    QStringList names;
+    QSqlQuery q(m_db);
+    q.prepare("SELECT t.name FROM tags t JOIN asset_tags at ON at.tag_id=t.id WHERE at.asset_id=? ORDER BY t.name");
+    q.addBindValue(assetId);
+    if (q.exec()) {
+        while (q.next()) names << q.value(0).toString();
+    }
+    return names;
+}
+
+bool DB::assignTagsToAssets(const QList<int>& assetIds, const QList<int>& tagIds){
+    if (assetIds.isEmpty() || tagIds.isEmpty()) return true;
+    QSqlQuery q(m_db);
+    bool ok = true;
+    for (int aid : assetIds) {
+        for (int tid : tagIds) {
+            q.prepare("INSERT OR IGNORE INTO asset_tags(asset_id, tag_id) VALUES(?,?)");
+            q.addBindValue(aid); q.addBindValue(tid);
+            ok &= q.exec();
+        }
+    }
+    if (!ok) qWarning() << "DB::assignTagsToAssets failed" << q.lastError();
+    emit assetsChanged(m_rootId);
     return ok;
 }
 

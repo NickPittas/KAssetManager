@@ -13,6 +13,10 @@ public:
     Q_INVOKABLE bool importFile(const QString& filePath, int parentFolderId = 0);
     Q_INVOKABLE bool importFolder(const QString& dirPath, int parentFolderId = 0);
 
+    // Maintenance utilities
+    Q_INVOKABLE int purgeMissingAssets();
+    Q_INVOKABLE int purgeAutotestAssets();
+
 signals:
     void importCompleted(int filesImported);
 
