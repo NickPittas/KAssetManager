@@ -1,5 +1,11 @@
 cmake_minimum_required(VERSION 3.21)
 
+# Set vcpkg toolchain file if not already set and vcpkg exists
+if(NOT DEFINED CMAKE_TOOLCHAIN_FILE AND EXISTS "C:/vcpkg/scripts/buildsystems/vcpkg.cmake")
+    set(CMAKE_TOOLCHAIN_FILE "C:/vcpkg/scripts/buildsystems/vcpkg.cmake" CACHE STRING "Vcpkg toolchain file")
+    message(STATUS "Using vcpkg toolchain: ${CMAKE_TOOLCHAIN_FILE}")
+endif()
+
 project(KAssetManagerQt VERSION 0.1.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -7,6 +13,15 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(QT NAMES Qt6 REQUIRED COMPONENTS Widgets Multimedia MultimediaWidgets Sql Concurrent)
 find_package(Qt6 REQUIRED COMPONENTS Widgets Multimedia MultimediaWidgets Sql Concurrent)
+
+# Find OpenImageIO (optional - will use placeholders if not found)
+find_package(OpenImageIO CONFIG QUIET)
+if(OpenImageIO_FOUND)
+    message(STATUS "OpenImageIO found - advanced format support enabled")
+    add_compile_definitions(HAVE_OPENIMAGEIO)
+else()
+    message(WARNING "OpenImageIO not found - will use placeholder thumbnails for EXR/PSD/HDR formats")
+endif()
 
 # Standard Qt project setup (Qt6)
 if (COMMAND qt_standard_project_setup)
@@ -42,13 +57,28 @@ qt_add_executable(kassetmanagerqt
     src/import_progress_dialog.cpp
     src/star_rating_widget.h
     src/star_rating_widget.cpp
+    src/sequence_detector.h
+    src/sequence_detector.cpp
+    src/oiio_image_loader.h
+    src/oiio_image_loader.cpp
 )
 
 target_include_directories(kassetmanagerqt PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
-target_link_libraries(kassetmanagerqt PRIVATE Qt6::Widgets Qt6::Multimedia Qt6::MultimediaWidgets Qt6::Sql Qt6::Concurrent)
+target_link_libraries(kassetmanagerqt PRIVATE
+    Qt6::Widgets
+    Qt6::Multimedia
+    Qt6::MultimediaWidgets
+    Qt6::Sql
+    Qt6::Concurrent
+)
+
+# Link OpenImageIO if found
+if(OpenImageIO_FOUND)
+    target_link_libraries(kassetmanagerqt PRIVATE OpenImageIO::OpenImageIO)
+endif()
 
 # Windows-specific: hide console in release
 if (WIN32)

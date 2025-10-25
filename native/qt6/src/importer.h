@@ -1,6 +1,7 @@
 #pragma once
 #include <QObject>
 #include <QStringList>
+#include "sequence_detector.h"
 
 class Importer : public QObject {
     Q_OBJECT

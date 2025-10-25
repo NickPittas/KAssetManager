@@ -27,6 +27,7 @@ public:
 
     // Asset ops
     int upsertAsset(const QString& filePath);
+    int upsertSequence(const QString& sequencePattern, int startFrame, int endFrame, int frameCount, const QString& firstFramePath);
     bool setAssetFolder(int assetId, int folderId);
     bool removeAssets(const QList<int>& assetIds);
     bool setAssetsRating(const QList<int>& assetIds, int rating); // 0-5, -1 to clear
@@ -37,6 +38,7 @@ public:
     int createTag(const QString& name);
     bool renameTag(int id, const QString& name);
     bool deleteTag(int id);
+    bool mergeTags(int sourceTagId, int targetTagId);
     QVector<QPair<int, QString>> listTags() const;
     bool assignTagsToAssets(const QList<int>& assetIds, const QList<int>& tagIds);
     QStringList tagsForAsset(int assetId) const;

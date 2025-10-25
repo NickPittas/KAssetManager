@@ -59,6 +59,11 @@ QVariant AssetsModel::data(const QModelIndex& idx, int role) const{
         case FileTypeRole: return r.fileType;
         case LastModifiedRole: return r.lastModified;
         case RatingRole: return r.rating;
+        case IsSequenceRole: return r.isSequence;
+        case SequencePatternRole: return r.sequencePattern;
+        case SequenceStartFrameRole: return r.sequenceStartFrame;
+        case SequenceEndFrameRole: return r.sequenceEndFrame;
+        case SequenceFrameCountRole: return r.sequenceFrameCount;
     }
     return {};
 }
@@ -73,6 +78,11 @@ QHash<int,QByteArray> AssetsModel::roleNames() const{
     r[FileTypeRole] = "fileType";
     r[LastModifiedRole] = "lastModified";
     r[RatingRole] = "rating";
+    r[IsSequenceRole] = "isSequence";
+    r[SequencePatternRole] = "sequencePattern";
+    r[SequenceStartFrameRole] = "sequenceStartFrame";
+    r[SequenceEndFrameRole] = "sequenceEndFrame";
+    r[SequenceFrameCountRole] = "sequenceFrameCount";
     return r;
 }
 
@@ -211,14 +221,14 @@ void AssetsModel::query(){
     QSqlQuery q(DB::instance().database());
     if (globalScope) {
         LogManager::instance().addLog("DB query (all assets) started", "DEBUG");
-        q.prepare("SELECT id,file_name,file_path,file_size,COALESCE(rating,-1),virtual_folder_id FROM assets ORDER BY file_name");
+        q.prepare("SELECT id,file_name,file_path,file_size,COALESCE(rating,-1),virtual_folder_id,COALESCE(is_sequence,0),sequence_pattern,sequence_start_frame,sequence_end_frame,sequence_frame_count FROM assets ORDER BY file_name");
     } else {
         if (m_folderId<=0) {
             qDebug() << "AssetsModel::query() skipped - invalid folderId" << m_folderId;
             m_filteredRowIndexes.clear();
             return;
         }
-        q.prepare("SELECT id,file_name,file_path,file_size,COALESCE(rating,-1),virtual_folder_id FROM assets WHERE virtual_folder_id=? ORDER BY file_name");
+        q.prepare("SELECT id,file_name,file_path,file_size,COALESCE(rating,-1),virtual_folder_id,COALESCE(is_sequence,0),sequence_pattern,sequence_start_frame,sequence_end_frame,sequence_frame_count FROM assets WHERE virtual_folder_id=? ORDER BY file_name");
         LogManager::instance().addLog(QString("DB query (assets by folder %1) started").arg(m_folderId), "DEBUG");
         q.addBindValue(m_folderId);
     }
@@ -235,6 +245,12 @@ void AssetsModel::query(){
         r.fileSize = q.value(3).toLongLong();
         r.folderId = q.value(5).toInt();
         r.rating = q.value(4).toInt();
+        r.isSequence = q.value(6).toBool();
+        r.sequencePattern = q.value(7).toString();
+        r.sequenceStartFrame = q.value(8).toInt();
+        r.sequenceEndFrame = q.value(9).toInt();
+        r.sequenceFrameCount = q.value(10).toInt();
+
         QFileInfo fi(r.filePath);
         r.fileType = fi.exists() ? fi.suffix().toLower() : QString();
         r.lastModified = fi.exists() ? fi.lastModified() : QDateTime();

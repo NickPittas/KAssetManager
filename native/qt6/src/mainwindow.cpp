@@ -238,6 +238,38 @@ public:
             log << "[PAINT] File type OK\n";
             log.flush();
 
+            // Draw sequence badge if this is a sequence
+            bool isSequence = index.data(AssetsModel::IsSequenceRole).toBool();
+            if (isSequence) {
+                log << "[PAINT] Drawing sequence badge\n";
+                log.flush();
+
+                int frameCount = index.data(AssetsModel::SequenceFrameCountRole).toInt();
+                int startFrame = index.data(AssetsModel::SequenceStartFrameRole).toInt();
+                int endFrame = index.data(AssetsModel::SequenceEndFrameRole).toInt();
+
+                // Draw badge in top-right corner
+                QString badgeText = QString("%1 frames").arg(frameCount);
+                QFont badgeFont("Segoe UI", 8, QFont::Bold);
+                QFontMetrics badgeFm(badgeFont);
+                int badgeWidth = badgeFm.horizontalAdvance(badgeText) + 12;
+                int badgeHeight = 18;
+                int badgeX = thumbRect.right() - badgeWidth - 4;
+                int badgeY = thumbRect.top() + 4;
+
+                QRect badgeRect(badgeX, badgeY, badgeWidth, badgeHeight);
+                painter->fillRect(badgeRect, QColor(70, 130, 180, 220)); // Steel blue
+                painter->setPen(QPen(QColor(255, 255, 255, 200), 1));
+                painter->drawRect(badgeRect);
+
+                painter->setFont(badgeFont);
+                painter->setPen(Qt::white);
+                painter->drawText(badgeRect, Qt::AlignCenter, badgeText);
+
+                log << "[PAINT] Sequence badge OK\n";
+                log.flush();
+            }
+
             // Draw rating stars (if rated)
             if (rating > 0 && rating <= 5) {
                 log << "[PAINT] Drawing rating stars\n";
@@ -513,6 +545,7 @@ void MainWindow::setupUi()
     tagsModel = new TagsModel(this);
     tagsListView->setModel(tagsModel);
     tagsListView->setSelectionMode(QAbstractItemView::MultiSelection);
+    tagsListView->setContextMenuPolicy(Qt::CustomContextMenu);
     tagsListView->setStyleSheet(
         "QListView { background-color: #1a1a1a; color: #ffffff; border: 1px solid #333; }"
         "QListView::item:selected { background-color: #2f3a4a; }"
@@ -548,10 +581,20 @@ void MainWindow::setupUi()
         "QPushButton:hover { background-color: #4a8fd9; }"
         "QPushButton:disabled { background-color: #333; color: #666; }"
     );
-    filterByTagsBtn->setToolTip("Filter assets by selected tags (AND logic)");
+    filterByTagsBtn->setToolTip("Filter assets by selected tags");
     filterByTagsBtn->setEnabled(false);
     connect(filterByTagsBtn, &QPushButton::clicked, this, &MainWindow::onFilterByTags);
     tagButtonsLayout->addWidget(filterByTagsBtn);
+
+    // AND/OR mode selector
+    tagFilterModeCombo = new QComboBox(this);
+    tagFilterModeCombo->addItems({"AND", "OR"});
+    tagFilterModeCombo->setCurrentIndex(0); // Default to AND
+    tagFilterModeCombo->setStyleSheet(
+        "QComboBox { background-color: #1a1a1a; color: #ffffff; border: 1px solid #333; padding: 4px 8px; border-radius: 4px; }"
+    );
+    tagFilterModeCombo->setToolTip("AND: Assets must have ALL selected tags\nOR: Assets must have ANY selected tag");
+    tagButtonsLayout->addWidget(tagFilterModeCombo);
 
     filtersLayout->addLayout(tagButtonsLayout);
     
@@ -659,6 +702,9 @@ void MainWindow::setupConnections()
     // Update tag button states when selections change
     connect(tagsListView->selectionModel(), &QItemSelectionModel::selectionChanged, this, &MainWindow::updateTagButtonStates);
     connect(assetGridView->selectionModel(), &QItemSelectionModel::selectionChanged, this, &MainWindow::updateTagButtonStates);
+
+    // Tag context menu
+    connect(tagsListView, &QListView::customContextMenuRequested, this, &MainWindow::onTagContextMenu);
 
     // Connect search box for real-time filtering
     connect(searchBox, &QLineEdit::textChanged, this, &MainWindow::onSearchTextChanged);
@@ -1270,10 +1316,113 @@ void MainWindow::onFilterByTags()
         return;
     }
 
-    // Apply filter (AND logic)
+    // Get selected filter mode (AND or OR)
+    int mode = tagFilterModeCombo->currentIndex(); // 0 = AND, 1 = OR
+    QString modeText = (mode == AssetsModel::And) ? "AND" : "OR";
+
+    // Apply filter
     assetsModel->setSelectedTagNames(tagNames);
-    assetsModel->setTagFilterMode(AssetsModel::And);
-    statusBar()->showMessage(QString("Filtering by %1 tag(s) (AND logic)").arg(tagNames.size()), 3000);
+    assetsModel->setTagFilterMode(mode);
+
+    QString message;
+    if (tagNames.size() == 1) {
+        message = QString("Filtering by tag: %1").arg(tagNames.first());
+    } else {
+        message = QString("Filtering by %1 tag(s) (%2 logic)").arg(tagNames.size()).arg(modeText);
+    }
+    statusBar()->showMessage(message, 3000);
+}
+
+void MainWindow::onTagContextMenu(const QPoint &pos)
+{
+    QModelIndex index = tagsListView->indexAt(pos);
+    if (!index.isValid()) return;
+
+    int tagId = index.data(TagsModel::IdRole).toInt();
+    QString tagName = index.data(TagsModel::NameRole).toString();
+
+    QMenu menu(this);
+    menu.setStyleSheet(
+        "QMenu { background-color: #2a2a2a; color: #ffffff; border: 1px solid #444; }"
+        "QMenu::item:selected { background-color: #3a3a3a; }"
+    );
+
+    QAction *renameAction = menu.addAction("Rename Tag");
+    QAction *deleteAction = menu.addAction("Delete Tag");
+    menu.addSeparator();
+    QAction *mergeAction = menu.addAction("Merge Into...");
+
+    QAction *selected = menu.exec(tagsListView->mapToGlobal(pos));
+
+    if (selected == renameAction) {
+        // Rename tag
+        bool ok;
+        QString newName = QInputDialog::getText(this, "Rename Tag",
+            QString("Rename tag '%1' to:").arg(tagName),
+            QLineEdit::Normal, tagName, &ok);
+
+        if (ok && !newName.isEmpty() && newName != tagName) {
+            if (tagsModel->renameTag(tagId, newName)) {
+                statusBar()->showMessage(QString("Tag renamed to '%1'").arg(newName), 2000);
+            } else {
+                QMessageBox::warning(this, "Error", "Failed to rename tag. Tag name may already exist.");
+            }
+        }
+    } else if (selected == deleteAction) {
+        // Delete tag with confirmation
+        QMessageBox::StandardButton reply = QMessageBox::question(this, "Delete Tag",
+            QString("Are you sure you want to delete tag '%1'?\n\nThis will remove the tag from all assets.").arg(tagName),
+            QMessageBox::Yes | QMessageBox::No);
+
+        if (reply == QMessageBox::Yes) {
+            if (tagsModel->deleteTag(tagId)) {
+                statusBar()->showMessage(QString("Tag '%1' deleted").arg(tagName), 2000);
+            } else {
+                QMessageBox::warning(this, "Error", "Failed to delete tag.");
+            }
+        }
+    } else if (selected == mergeAction) {
+        // Merge tag into another
+        QVector<QPair<int, QString>> allTags = DB::instance().listTags();
+        QStringList tagNames;
+        QList<int> tagIds;
+
+        for (const auto& tag : allTags) {
+            if (tag.first != tagId) { // Exclude current tag
+                tagNames.append(tag.second);
+                tagIds.append(tag.first);
+            }
+        }
+
+        if (tagNames.isEmpty()) {
+            QMessageBox::information(this, "Merge Tag", "No other tags available to merge into.");
+            return;
+        }
+
+        bool ok;
+        QString targetTagName = QInputDialog::getItem(this, "Merge Tag",
+            QString("Merge tag '%1' into:").arg(tagName),
+            tagNames, 0, false, &ok);
+
+        if (ok && !targetTagName.isEmpty()) {
+            int targetTagId = tagIds[tagNames.indexOf(targetTagName)];
+
+            QMessageBox::StandardButton reply = QMessageBox::question(this, "Merge Tag",
+                QString("Merge tag '%1' into '%2'?\n\nAll assets tagged with '%1' will be tagged with '%2' instead, and '%1' will be deleted.")
+                    .arg(tagName).arg(targetTagName),
+                QMessageBox::Yes | QMessageBox::No);
+
+            if (reply == QMessageBox::Yes) {
+                if (DB::instance().mergeTags(tagId, targetTagId)) {
+                    tagsModel->reload();
+                    assetsModel->reload();
+                    statusBar()->showMessage(QString("Tag '%1' merged into '%2'").arg(tagName).arg(targetTagName), 3000);
+                } else {
+                    QMessageBox::warning(this, "Error", "Failed to merge tags.");
+                }
+            }
+        }
+    }
 }
 
 void MainWindow::updateTagButtonStates()

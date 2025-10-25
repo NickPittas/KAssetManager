@@ -18,6 +18,11 @@ struct AssetRow {
     QDateTime lastModified;
     int rating = -1;
     QString thumbnailPath;  // Path to generated thumbnail
+    bool isSequence = false;
+    QString sequencePattern;
+    int sequenceStartFrame = 0;
+    int sequenceEndFrame = 0;
+    int sequenceFrameCount = 0;
 };
 
 class AssetsModel : public QAbstractListModel {
@@ -37,7 +42,12 @@ public:
         ThumbnailPathRole,
         FileTypeRole,
         LastModifiedRole,
-        RatingRole
+        RatingRole,
+        IsSequenceRole,
+        SequencePatternRole,
+        SequenceStartFrameRole,
+        SequenceEndFrameRole,
+        SequenceFrameCountRole
     };
     explicit AssetsModel(QObject* parent=nullptr);
 

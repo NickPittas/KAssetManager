@@ -1,6 +1,7 @@
 ﻿#include "thumbnail_generator.h"
 #include "progress_manager.h"
 #include "log_manager.h"
+#include "oiio_image_loader.h"
 #include <QCryptographicHash>
 #include <QFileInfo>
 #include <QStandardPaths>
@@ -219,24 +220,26 @@ bool ThumbnailGenerator::isImageFile(const QString& filePath) {
     QFileInfo fi(filePath);
     QString ext = fi.suffix().toLower();
 
-    // Comprehensive list of image formats
-    QStringList imageExts = {
-        // Common formats
-        "jpg", "jpeg", "png", "gif", "bmp", "webp", "svg",
-        // TIFF variants
-        "tiff", "tif",
+    // Qt natively supported formats (via QImageReader)
+    QStringList qtSupportedExts = {
+        "jpg", "jpeg", "png", "gif", "bmp", "webp",
+        "tiff", "tif", "ico", "pbm", "pgm", "ppm", "pnm",
+        "svg", "svgz"
+    };
+
+    // Formats that need special handling (not natively supported by Qt)
+    QStringList specialFormats = {
         // RAW formats
         "raw", "cr2", "cr3", "nef", "arw", "dng", "orf", "rw2", "pef", "srw", "raf",
-        // Other formats
-        "ico", "icns", "heic", "heif", "avif", "jxl",
+        // HDR/EXR formats
+        "exr", "hdr", "pic",
         // Adobe formats
         "psd", "psb",
-        // Vector formats
-        "ai", "eps",
-        // Other raster formats
-        "tga", "pcx", "ppm", "pgm", "pbm", "pnm", "exr", "hdr"
+        // Other formats
+        "heic", "heif", "avif", "jxl", "tga", "pcx"
     };
-    return imageExts.contains(ext);
+
+    return qtSupportedExts.contains(ext) || specialFormats.contains(ext);
 }
 
 bool ThumbnailGenerator::isVideoFile(const QString& filePath) {
@@ -254,6 +257,20 @@ bool ThumbnailGenerator::isVideoFile(const QString& filePath) {
         "asf", "rm", "rmvb", "f4v", "swf", "mxf", "roq", "nsv"
     };
     return videoExts.contains(ext);
+}
+
+bool ThumbnailGenerator::isQtSupportedFormat(const QString& filePath) {
+    QFileInfo fi(filePath);
+    QString ext = fi.suffix().toLower();
+
+    // Qt natively supported image formats
+    QStringList qtSupported = {
+        "jpg", "jpeg", "png", "gif", "bmp", "webp",
+        "tiff", "tif", "ico", "pbm", "pgm", "ppm", "pnm",
+        "svg", "svgz"
+    };
+
+    return qtSupported.contains(ext);
 }
 
 bool ThumbnailGenerator::isThumbnailCached(const QString& filePath) {
@@ -362,6 +379,67 @@ QString ThumbnailGenerator::generateImageThumbnail(const QString& filePath) {
         if (!fileInfo.exists() || !fileInfo.isReadable()) {
             qWarning() << "[ThumbnailGenerator] File not accessible:" << filePath;
             return QString();
+        }
+
+        // Check if this format should be handled by OpenImageIO
+        if (OIIOImageLoader::isOIIOSupported(filePath)) {
+            qDebug() << "[ThumbnailGenerator] Using OpenImageIO for:" << filePath;
+
+            QImage image = OIIOImageLoader::loadImage(filePath, THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT);
+            if (!image.isNull()) {
+                QString cachePath = getThumbnailCachePath(filePath);
+                if (image.save(cachePath, "JPEG", 85)) {
+                    qDebug() << "[ThumbnailGenerator] OIIO thumbnail saved:" << cachePath;
+                    return cachePath;
+                } else {
+                    qWarning() << "[ThumbnailGenerator] Failed to save OIIO thumbnail";
+                    return QString();
+                }
+            } else {
+                qWarning() << "[ThumbnailGenerator] OIIO failed to load image, falling back to placeholder";
+                // Fall through to placeholder generation
+            }
+        }
+
+        // Check if this is a Qt-supported format
+        if (!isQtSupportedFormat(filePath)) {
+            qWarning() << "[ThumbnailGenerator] Format not supported by Qt or OIIO:" << filePath;
+            qWarning() << "[ThumbnailGenerator] Creating placeholder thumbnail for unsupported format";
+
+            // Create a placeholder thumbnail with format info
+            QImage placeholder(THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT, QImage::Format_RGB32);
+            placeholder.fill(QColor(50, 50, 50));
+
+            QPainter painter(&placeholder);
+            painter.setRenderHint(QPainter::Antialiasing);
+
+            // Draw file icon
+            painter.setPen(QPen(QColor(150, 150, 150), 2));
+            painter.setBrush(Qt::NoBrush);
+            QRect iconRect(THUMBNAIL_WIDTH/2 - 50, 30, 100, 100);
+            painter.drawRoundedRect(iconRect, 8, 8);
+
+            // Draw file extension
+            QFileInfo fi(filePath);
+            QString ext = fi.suffix().toUpper();
+            painter.setFont(QFont("Segoe UI", 24, QFont::Bold));
+            painter.setPen(QColor(200, 200, 200));
+            painter.drawText(iconRect, Qt::AlignCenter, ext);
+
+            // Draw "Preview Not Available" text
+            painter.setFont(QFont("Segoe UI", 10));
+            painter.setPen(QColor(180, 180, 180));
+            QRect textRect(20, 150, THUMBNAIL_WIDTH - 40, 60);
+            painter.drawText(textRect, Qt::AlignCenter | Qt::TextWordWrap, "Preview Not Available\n(Format not supported)");
+
+            QString cachePath = getThumbnailCachePath(filePath);
+            if (placeholder.save(cachePath, "JPEG", 85)) {
+                qDebug() << "[ThumbnailGenerator] Created placeholder thumbnail:" << cachePath;
+                return cachePath;
+            } else {
+                qWarning() << "[ThumbnailGenerator] Failed to save placeholder thumbnail";
+                return QString();
+            }
         }
 
         qDebug() << "[ThumbnailGenerator] Creating QImageReader...";

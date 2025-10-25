@@ -13,8 +13,18 @@ static QString norm(const QString& p){ return QFileInfo(p).absoluteFilePath(); }
 
 bool Importer::isMediaFile(const QString& path){
     static const char* exts[] = {
+        // Video formats
         ".mp4",".mov",".avi",".mkv",".wmv",".flv",".webm",".m4v",".mpg",".mpeg",".3gp",".mts",".m2ts",".ts",".vob",".ogv",
-        ".jpg",".jpeg",".png",".gif",".bmp",".tiff",".tif",".webp",".svg",".ico",".heic",".heif",".dng",".cr2",".nef",".arw",".orf",".rw2",".pef",".srw"
+        // Common image formats
+        ".jpg",".jpeg",".png",".gif",".bmp",".tiff",".tif",".webp",".svg",".ico",
+        // RAW formats
+        ".heic",".heif",".dng",".cr2",".cr3",".nef",".arw",".orf",".rw2",".pef",".srw",".raf",".raw",
+        // HDR/EXR formats
+        ".exr",".hdr",".pic",
+        // Adobe formats
+        ".psd",".psb",
+        // Other formats
+        ".tga",".pcx",".pbm",".pgm",".ppm",".pnm",".avif",".jxl"
     };
     QString e = QFileInfo(path).suffix().toLower(); e.prepend('.');
     for (auto s: exts) if (e==s) return true; return false;
@@ -103,26 +113,63 @@ bool Importer::importFolder(const QString& dirPath, int parentFolderId){
         if (isMediaFile(countIt.filePath())) totalFiles++;
     }
 
-    // Add files to corresponding folders with progress
+    // Collect all files first, grouped by directory
+    QMap<QString, QStringList> filesByDir;
     QDirIterator it(dirPath, QDir::Files, QDirIterator::Subdirectories);
-    int currentFile = 0;
     while(it.hasNext()){
         QString fp = it.next();
         if (!isMediaFile(fp)) continue;
-
-        currentFile++;
-        QString fileName = QFileInfo(fp).fileName();
-        emit currentFileChanged(fileName);
-        emit progressChanged(currentFile, totalFiles);
-
-        // Process events to keep UI responsive
-        QApplication::processEvents();
-
         QString folderPath = QFileInfo(fp).absolutePath();
-        int fid = folderIds.value(folderPath, topId);
-        int assetId = DB::instance().upsertAsset(fp);
-        if (assetId>0) DB::instance().setAssetFolder(assetId, fid);
+        filesByDir[folderPath].append(fp);
     }
+
+    // Process each directory's files, detecting sequences
+    int currentFile = 0;
+    for (auto dirIt = filesByDir.begin(); dirIt != filesByDir.end(); ++dirIt) {
+        QString folderPath = dirIt.key();
+        QStringList files = dirIt.value();
+        int fid = folderIds.value(folderPath, topId);
+
+        // Detect sequences in this directory
+        QVector<ImageSequence> sequences = SequenceDetector::detectSequences(files);
+        QSet<QString> sequenceFiles;
+
+        // Import sequences
+        for (const ImageSequence& seq : sequences) {
+            currentFile++;
+            emit currentFileChanged(seq.pattern);
+            emit progressChanged(currentFile, totalFiles);
+            QApplication::processEvents();
+
+            int seqId = DB::instance().upsertSequence(seq.pattern, seq.startFrame, seq.endFrame, seq.frameCount, seq.firstFramePath);
+            if (seqId > 0) {
+                DB::instance().setAssetFolder(seqId, fid);
+                qDebug() << "Imported sequence:" << seq.pattern << "frames:" << seq.startFrame << "-" << seq.endFrame;
+            }
+
+            // Mark all sequence files as processed
+            for (const QString& framePath : seq.framePaths) {
+                sequenceFiles.insert(framePath);
+            }
+        }
+
+        // Import remaining non-sequence files
+        for (const QString& fp : files) {
+            if (sequenceFiles.contains(fp)) continue; // Skip files that are part of sequences
+
+            currentFile++;
+            QString fileName = QFileInfo(fp).fileName();
+            emit currentFileChanged(fileName);
+            emit progressChanged(currentFile, totalFiles);
+            QApplication::processEvents();
+
+            int assetId = DB::instance().upsertAsset(fp);
+            if (assetId > 0) {
+                DB::instance().setAssetFolder(assetId, fid);
+            }
+        }
+    }
+
     LogManager::instance().addLog(QString("Imported folder %1").arg(topName));
     return true;
 }

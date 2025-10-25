@@ -56,6 +56,7 @@ private slots:
     void onCreateTag();
     void onApplyTags();
     void onFilterByTags();
+    void onTagContextMenu(const QPoint &pos);
     void updateTagButtonStates();
 
     void importFiles(const QStringList &filePaths);
@@ -112,6 +113,7 @@ private:
     TagsModel *tagsModel;
     QPushButton *applyTagsBtn;
     QPushButton *filterByTagsBtn;
+    QComboBox *tagFilterModeCombo;
     
     // Info panel labels
     QLabel *infoFileName;

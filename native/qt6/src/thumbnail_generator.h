@@ -65,6 +65,7 @@ public:
     Q_INVOKABLE void requestThumbnail(const QString& filePath);
     Q_INVOKABLE bool isImageFile(const QString& filePath);
     Q_INVOKABLE bool isVideoFile(const QString& filePath);
+    Q_INVOKABLE bool isQtSupportedFormat(const QString& filePath);
     Q_INVOKABLE void clearCache();
     Q_INVOKABLE QString createSampleImage(const QString& directory = QString());
 

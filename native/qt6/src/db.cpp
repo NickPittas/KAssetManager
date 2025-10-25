@@ -64,6 +64,24 @@ bool DB::migrate(){
     if (!hasColumn("assets", "rating")) {
         exec("ALTER TABLE assets ADD COLUMN rating INTEGER NULL");
     }
+
+    // Add image sequence support columns
+    if (!hasColumn("assets", "is_sequence")) {
+        exec("ALTER TABLE assets ADD COLUMN is_sequence INTEGER DEFAULT 0");
+    }
+    if (!hasColumn("assets", "sequence_pattern")) {
+        exec("ALTER TABLE assets ADD COLUMN sequence_pattern TEXT NULL");
+    }
+    if (!hasColumn("assets", "sequence_start_frame")) {
+        exec("ALTER TABLE assets ADD COLUMN sequence_start_frame INTEGER NULL");
+    }
+    if (!hasColumn("assets", "sequence_end_frame")) {
+        exec("ALTER TABLE assets ADD COLUMN sequence_end_frame INTEGER NULL");
+    }
+    if (!hasColumn("assets", "sequence_frame_count")) {
+        exec("ALTER TABLE assets ADD COLUMN sequence_frame_count INTEGER NULL");
+    }
+
     return true;
 }
 
@@ -158,6 +176,55 @@ int DB::upsertAsset(const QString& filePath){
     return newId;
 }
 
+int DB::upsertSequence(const QString& sequencePattern, int startFrame, int endFrame, int frameCount, const QString& firstFramePath){
+    QFileInfo fi(firstFramePath);
+    if (!fi.exists()) {
+        qDebug() << "DB::upsertSequence: first frame does not exist:" << firstFramePath;
+        return 0;
+    }
+
+    // Check if sequence already exists
+    QSqlQuery sel(m_db);
+    sel.prepare("SELECT id FROM assets WHERE sequence_pattern=? AND is_sequence=1");
+    sel.addBindValue(sequencePattern);
+    if (sel.exec() && sel.next()) {
+        int existingId = sel.value(0).toInt();
+        qDebug() << "DB::upsertSequence: sequence already exists, id=" << existingId << "pattern=" << sequencePattern;
+
+        // Update frame range if changed
+        QSqlQuery upd(m_db);
+        upd.prepare("UPDATE assets SET sequence_start_frame=?, sequence_end_frame=?, sequence_frame_count=? WHERE id=?");
+        upd.addBindValue(startFrame);
+        upd.addBindValue(endFrame);
+        upd.addBindValue(frameCount);
+        upd.addBindValue(existingId);
+        upd.exec();
+
+        return existingId;
+    }
+
+    // Create new sequence entry
+    QSqlQuery ins(m_db);
+    ins.prepare("INSERT INTO assets(file_path,file_name,virtual_folder_id,file_size,is_sequence,sequence_pattern,sequence_start_frame,sequence_end_frame,sequence_frame_count) VALUES(?,?,?,?,1,?,?,?,?)");
+    ins.addBindValue(fi.absoluteFilePath()); // Store first frame path
+    ins.addBindValue(sequencePattern); // Display name is the pattern
+    ins.addBindValue(m_rootId);
+    ins.addBindValue((qint64)fi.size());
+    ins.addBindValue(sequencePattern);
+    ins.addBindValue(startFrame);
+    ins.addBindValue(endFrame);
+    ins.addBindValue(frameCount);
+
+    if (!ins.exec()) {
+        qWarning() << "DB::upsertSequence: INSERT failed:" << ins.lastError();
+        return 0;
+    }
+    int newId = ins.lastInsertId().toInt();
+    qDebug() << "DB::upsertSequence: created new sequence, id=" << newId << "pattern=" << sequencePattern << "frames=" << startFrame << "-" << endFrame;
+    emit assetsChanged(m_rootId);
+    return newId;
+}
+
 bool DB::setAssetFolder(int assetId, int folderId){
     // Get old folder ID first
     QSqlQuery sel(m_db);
@@ -225,6 +292,67 @@ int DB::createTag(const QString& name){
 
 bool DB::renameTag(int id, const QString& name){ QSqlQuery q(m_db); q.prepare("UPDATE tags SET name=? WHERE id=?"); q.addBindValue(name); q.addBindValue(id); bool ok=q.exec(); if (!ok) qWarning()<<q.lastError(); if (ok) emit tagsChanged(); return ok; }
 bool DB::deleteTag(int id){ QSqlQuery q(m_db); q.prepare("DELETE FROM tags WHERE id=?"); q.addBindValue(id); bool ok=q.exec(); if (!ok) qWarning()<<q.lastError(); if (ok) emit tagsChanged(); return ok; }
+
+bool DB::mergeTags(int sourceTagId, int targetTagId) {
+    if (sourceTagId == targetTagId) return false;
+
+    m_db.transaction();
+
+    // Get all assets with source tag
+    QSqlQuery q(m_db);
+    q.prepare("SELECT asset_id FROM asset_tags WHERE tag_id=?");
+    q.addBindValue(sourceTagId);
+    if (!q.exec()) {
+        qWarning() << "mergeTags: Failed to query assets with source tag:" << q.lastError();
+        m_db.rollback();
+        return false;
+    }
+
+    QList<int> assetIds;
+    while (q.next()) {
+        assetIds.append(q.value(0).toInt());
+    }
+
+    // For each asset, add target tag if not already present
+    for (int assetId : assetIds) {
+        QSqlQuery checkQ(m_db);
+        checkQ.prepare("SELECT 1 FROM asset_tags WHERE asset_id=? AND tag_id=?");
+        checkQ.addBindValue(assetId);
+        checkQ.addBindValue(targetTagId);
+        if (!checkQ.exec()) {
+            qWarning() << "mergeTags: Failed to check existing tag:" << checkQ.lastError();
+            m_db.rollback();
+            return false;
+        }
+
+        // If target tag doesn't exist for this asset, add it
+        if (!checkQ.next()) {
+            QSqlQuery insertQ(m_db);
+            insertQ.prepare("INSERT INTO asset_tags (asset_id, tag_id) VALUES (?, ?)");
+            insertQ.addBindValue(assetId);
+            insertQ.addBindValue(targetTagId);
+            if (!insertQ.exec()) {
+                qWarning() << "mergeTags: Failed to insert target tag:" << insertQ.lastError();
+                m_db.rollback();
+                return false;
+            }
+        }
+    }
+
+    // Delete source tag (CASCADE will remove asset_tags entries)
+    QSqlQuery deleteQ(m_db);
+    deleteQ.prepare("DELETE FROM tags WHERE id=?");
+    deleteQ.addBindValue(sourceTagId);
+    if (!deleteQ.exec()) {
+        qWarning() << "mergeTags: Failed to delete source tag:" << deleteQ.lastError();
+        m_db.rollback();
+        return false;
+    }
+
+    m_db.commit();
+    emit tagsChanged();
+    return true;
+}
 
 QVector<QPair<int, QString>> DB::listTags() const {
     QVector<QPair<int, QString>> tags;
