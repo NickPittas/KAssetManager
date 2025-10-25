@@ -20,6 +20,7 @@
 class VirtualFolderTreeModel;
 class AssetsModel;
 class TagsModel;
+class PreviewOverlay;
 
 class MainWindow : public QMainWindow
 {
@@ -118,7 +119,7 @@ private:
     int previewIndex;
     
     // Preview overlay
-    QWidget *previewOverlay;
+    PreviewOverlay *previewOverlay;
 };
 
 #endif // MAINWINDOW_H

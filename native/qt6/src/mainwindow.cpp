@@ -4,6 +4,7 @@
 #include "tags_model.h"
 #include "importer.h"
 #include "db.h"
+#include "preview_overlay.h"
 #include <QHeaderView>
 #include <QStyledItemDelegate>
 #include <QPainter>
@@ -433,12 +434,30 @@ void MainWindow::setupConnections()
 
 void MainWindow::onFolderSelected(const QModelIndex &index)
 {
-    if (!index.isValid()) return;
+    if (!index.isValid()) {
+        qWarning() << "MainWindow::onFolderSelected - Invalid index";
+        return;
+    }
 
     int folderId = index.data(VirtualFolderTreeModel::IdRole).toInt();
-    assetsModel->setFolderId(folderId);
-    clearSelection();
-    updateInfoPanel();
+    qDebug() << "MainWindow::onFolderSelected - Folder ID:" << folderId;
+
+    if (folderId <= 0) {
+        qWarning() << "MainWindow::onFolderSelected - Invalid folder ID:" << folderId;
+        return;
+    }
+
+    try {
+        assetsModel->setFolderId(folderId);
+        clearSelection();
+        updateInfoPanel();
+    } catch (const std::exception& e) {
+        qCritical() << "MainWindow::onFolderSelected - Exception:" << e.what();
+        QMessageBox::critical(this, "Error", QString("Failed to load folder: %1").arg(e.what()));
+    } catch (...) {
+        qCritical() << "MainWindow::onFolderSelected - Unknown exception";
+        QMessageBox::critical(this, "Error", "Failed to load folder: Unknown error");
+    }
 }
 
 void MainWindow::onAssetSelectionChanged()
@@ -469,9 +488,61 @@ void MainWindow::onAssetContextMenu(const QPoint &pos)
         QAction *showInExplorerAction = menu.addAction("Show in Explorer");
         menu.addSeparator();
 
+        // Move to Folder submenu
         QMenu *moveToMenu = menu.addMenu("Move to Folder");
+        moveToMenu->setStyleSheet(menu.styleSheet());
+
+        // Get all folders from the model
+        QList<QPair<int, QString>> folders;
+        std::function<void(const QModelIndex&, int)> collectFolders = [&](const QModelIndex& parent, int depth) {
+            int rowCount = folderModel->rowCount(parent);
+            for (int i = 0; i < rowCount; ++i) {
+                QModelIndex idx = folderModel->index(i, 0, parent);
+                int folderId = folderModel->data(idx, VirtualFolderTreeModel::IdRole).toInt();
+                QString folderName = folderModel->data(idx, Qt::DisplayRole).toString();
+                QString indent = QString("  ").repeated(depth);
+                folders.append({folderId, indent + folderName});
+                collectFolders(idx, depth + 1);
+            }
+        };
+        collectFolders(QModelIndex(), 0);
+
+        for (const auto& folder : folders) {
+            QAction *folderAction = moveToMenu->addAction(folder.second);
+            folderAction->setData(folder.first);
+        }
+
+        // Assign Tag submenu
         QMenu *assignTagMenu = menu.addMenu("Assign Tag");
+        assignTagMenu->setStyleSheet(menu.styleSheet());
+
+        QVector<QPair<int, QString>> tags = DB::instance().listTags();
+        for (const auto& tag : tags) {
+            QAction *tagAction = assignTagMenu->addAction(tag.second);
+            tagAction->setData(tag.first);
+        }
+        if (tags.isEmpty()) {
+            QAction *noTagsAction = assignTagMenu->addAction("(No tags available)");
+            noTagsAction->setEnabled(false);
+        }
+
+        // Set Rating submenu
         QMenu *setRatingMenu = menu.addMenu("Set Rating");
+        setRatingMenu->setStyleSheet(menu.styleSheet());
+
+        QAction *rating0 = setRatingMenu->addAction("☆☆☆☆☆ (Clear rating)");
+        rating0->setData(-1);
+        setRatingMenu->addSeparator();
+        QAction *rating1 = setRatingMenu->addAction("★☆☆☆☆");
+        rating1->setData(1);
+        QAction *rating2 = setRatingMenu->addAction("★★☆☆☆");
+        rating2->setData(2);
+        QAction *rating3 = setRatingMenu->addAction("★★★☆☆");
+        rating3->setData(3);
+        QAction *rating4 = setRatingMenu->addAction("★★★★☆");
+        rating4->setData(4);
+        QAction *rating5 = setRatingMenu->addAction("★★★★★");
+        rating5->setData(5);
 
         menu.addSeparator();
         QAction *removeAction = menu.addAction("Remove from App");
@@ -483,11 +554,66 @@ void MainWindow::onAssetContextMenu(const QPoint &pos)
         } else if (selected == showInExplorerAction) {
             QString filePath = index.data(AssetsModel::FilePathRole).toString();
             QFileInfo fileInfo(filePath);
-            QString explorerPath = "explorer /select,\"" + QDir::toNativeSeparators(fileInfo.absoluteFilePath()) + "\"";
-            QProcess::startDetached(explorerPath);
+            QStringList args;
+            args << "/select," + QDir::toNativeSeparators(fileInfo.absoluteFilePath());
+            QProcess::startDetached("explorer", args);
+        } else if (selected && moveToMenu->actions().contains(selected)) {
+            // Move to folder action
+            int targetFolderId = selected->data().toInt();
+            QSet<int> selectedIds = getSelectedAssetIds();
+
+            for (int assetId : selectedIds) {
+                DB::instance().setAssetFolder(assetId, targetFolderId);
+            }
+
+            assetsModel->reload();
+            statusBar()->showMessage(QString("Moved %1 asset(s) to folder").arg(selectedIds.size()), 3000);
+        } else if (selected && assignTagMenu->actions().contains(selected)) {
+            // Assign tag action
+            int tagId = selected->data().toInt();
+            QSet<int> selectedIds = getSelectedAssetIds();
+            QList<int> assetIdsList = selectedIds.values();
+            QList<int> tagIds = {tagId};
+
+            if (DB::instance().assignTagsToAssets(assetIdsList, tagIds)) {
+                updateInfoPanel();
+                statusBar()->showMessage(QString("Assigned tag to %1 asset(s)").arg(assetIdsList.size()), 3000);
+            } else {
+                QMessageBox::warning(this, "Error", "Failed to assign tag");
+            }
+        } else if (selected && setRatingMenu->actions().contains(selected)) {
+            // Set rating action
+            int rating = selected->data().toInt();
+            QSet<int> selectedIds = getSelectedAssetIds();
+            QList<int> assetIdsList = selectedIds.values();
+
+            if (DB::instance().setAssetsRating(assetIdsList, rating)) {
+                assetsModel->reload();
+                updateInfoPanel();
+                QString ratingText = (rating < 0) ? "cleared" : QString::number(rating) + " star(s)";
+                statusBar()->showMessage(QString("Set rating to %1 for %2 asset(s)").arg(ratingText).arg(assetIdsList.size()), 3000);
+            } else {
+                QMessageBox::warning(this, "Error", "Failed to set rating");
+            }
         } else if (selected == removeAction) {
-            // TODO: Implement remove
-            QMessageBox::information(this, "Remove", "Remove functionality not yet implemented");
+            // Remove selected assets from database
+            QSet<int> selectedIds = getSelectedAssetIds();
+            QList<int> assetIdsList = selectedIds.values();
+
+            QMessageBox::StandardButton reply = QMessageBox::question(
+                this, "Remove Assets",
+                QString("Are you sure you want to remove %1 asset(s) from the library?\n\nThis will not delete the actual files.").arg(assetIdsList.size()),
+                QMessageBox::Yes | QMessageBox::No);
+
+            if (reply == QMessageBox::Yes) {
+                if (DB::instance().removeAssets(assetIdsList)) {
+                    assetsModel->reload();
+                    clearSelection();
+                    statusBar()->showMessage(QString("Removed %1 asset(s) from library").arg(assetIdsList.size()), 3000);
+                } else {
+                    QMessageBox::warning(this, "Error", "Failed to remove assets");
+                }
+            }
         }
     } else {
         // Empty space context menu
@@ -577,9 +703,24 @@ void MainWindow::onEmptySpaceContextMenu(const QPoint &pos)
 
 void MainWindow::showPreview(int index)
 {
-    // TODO: Implement preview overlay
+    if (index < 0 || index >= assetsModel->rowCount(QModelIndex())) return;
+
     previewIndex = index;
-    QMessageBox::information(this, "Preview", "Preview functionality not yet implemented");
+    QModelIndex modelIndex = assetsModel->index(index, 0);
+
+    QString filePath = modelIndex.data(AssetsModel::FilePathRole).toString();
+    QString fileName = modelIndex.data(AssetsModel::FileNameRole).toString();
+    QString fileType = modelIndex.data(AssetsModel::FileTypeRole).toString();
+
+    if (!previewOverlay) {
+        previewOverlay = new PreviewOverlay(this);
+        previewOverlay->setGeometry(rect());
+
+        connect(previewOverlay, &PreviewOverlay::closed, this, &MainWindow::closePreview);
+        connect(previewOverlay, &PreviewOverlay::navigateRequested, this, &MainWindow::changePreview);
+    }
+
+    previewOverlay->showAsset(filePath, fileName, fileType);
 }
 
 void MainWindow::closePreview()
@@ -598,8 +739,7 @@ void MainWindow::changePreview(int delta)
 
     int newIndex = previewIndex + delta;
     if (newIndex >= 0 && newIndex < assetsModel->rowCount(QModelIndex())) {
-        previewIndex = newIndex;
-        // TODO: Update preview content
+        showPreview(newIndex);
     }
 }
 
@@ -753,11 +893,12 @@ void MainWindow::clearSelection()
 
 void MainWindow::applyFilters()
 {
-    // TODO: Implement filtering logic
-    // - Filter by search text
-    // - Filter by rating
-    // - Filter by selected tags
-    statusBar()->showMessage("Filters applied", 2000);
+    // Filters are applied automatically via:
+    // - Search box (onSearchTextChanged)
+    // - Rating filter (connected to model)
+    // - Tags (Filter by Tags button)
+    // This button is kept for future batch filter application if needed
+    statusBar()->showMessage("Filters are active", 2000);
 }
 
 void MainWindow::clearFilters()
