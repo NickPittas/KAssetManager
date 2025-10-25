@@ -1065,27 +1065,28 @@ DropArea {
                                 MenuSeparator{}
                                 Menu {
                                     title: "Assign Tag"
-                                    // Local tags model for menu construction
-                                    contentItem: Column {
-                                        Repeater {
-                                            model: TagsModel { }
-                                            delegate: MenuItem {
-                                                required property int id
-                                                required property string name
-                                                text: name
-                                                onTriggered: {
-                                                    var ids = AppState.selectedAssetIds.length>0?AppState.selectedAssetIds:[tile.assetId]
-                                                    var ok = assetsModel.assignTags(ids, [id])
-                                                    LogManager.addLog(ok ? ("Assigned tag '" + name + "' to " + ids.length + " asset(s)") : "Tag assign failed")
-                                                }
+                                    // Use Instantiator to create MenuItems dynamically
+                                    Instantiator {
+                                        model: TagsModel { }
+                                        delegate: MenuItem {
+                                            required property int id
+                                            required property string name
+                                            text: name
+                                            onTriggered: {
+                                                var ids = AppState.selectedAssetIds.length>0?AppState.selectedAssetIds:[tile.assetId]
+                                                var ok = assetsModel.assignTags(ids, [id])
+                                                LogManager.addLog(ok ? ("Assigned tag '" + name + "' to " + ids.length + " asset(s)") : "Tag assign failed")
                                             }
                                         }
-                                        MenuItem {
-                                            text: "New Tag…"
-                                            onTriggered: {
-                                                // Open the panel's add tag dialog if visible, else log
-                                                LogManager.addLog("Use the Tags panel '+' to create a new tag")
-                                            }
+                                        onObjectAdded: (index, object) => assetMenu.insertItem(index, object)
+                                        onObjectRemoved: (index, object) => assetMenu.removeItem(object)
+                                    }
+                                    MenuSeparator { }
+                                    MenuItem {
+                                        text: "New Tag…"
+                                        onTriggered: {
+                                            // Open the panel's add tag dialog if visible, else log
+                                            LogManager.addLog("Use the Tags panel '+' to create a new tag")
                                         }
                                     }
                                 }
