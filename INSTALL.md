@@ -1,6 +1,59 @@
 # Installation Guide
 
-## Prerequisites
+## For End Users
+
+### Windows Installer (Recommended)
+
+The easiest way to install KAsset Manager is using the official Windows installer.
+
+#### Download
+
+Download the latest installer from:
+- **GitHub Releases**: https://github.com/yourusername/KAssetManager/releases
+- **File**: `KAssetManager-Setup-0.1.0.exe`
+
+#### Installation Steps
+
+1. **Download the installer** (`KAssetManager-Setup-0.1.0.exe`)
+2. **Right-click** the installer and select **"Run as administrator"**
+3. **Follow the installation wizard**:
+   - Click "Next" on the welcome screen
+   - Accept the license agreement
+   - Choose installation directory (default: `C:\Program Files\KAsset Manager`)
+   - Click "Install"
+   - Wait for installation to complete
+   - Optionally launch the application
+
+4. **Launch KAsset Manager**:
+   - From Start Menu: `KAsset Manager → KAsset Manager`
+   - From Desktop: Double-click the `KAsset Manager` shortcut
+   - From installation directory: `C:\Program Files\KAsset Manager\bin\kassetmanagerqt.exe`
+
+#### System Requirements
+
+- **OS**: Windows 10/11 (64-bit)
+- **RAM**: 4GB minimum, 8GB+ recommended
+- **Disk**: 500MB for application, additional space for thumbnails
+- **Display**: 1920x1080 or higher recommended
+
+#### Uninstallation
+
+To uninstall KAsset Manager:
+
+1. **Open Windows Settings** → Apps → Installed apps
+2. **Find "KAsset Manager"** in the list
+3. **Click "Uninstall"**
+4. **Follow the uninstallation wizard**
+5. **Choose** whether to keep or delete your database and thumbnails
+
+Or use the Start Menu:
+- Start Menu → KAsset Manager → Uninstall
+
+---
+
+## For Developers
+
+### Prerequisites
 
 ### Required Software
 

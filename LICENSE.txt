@@ -1,0 +1,70 @@
+KAsset Manager License Agreement
+
+Copyright (C) 2024 Your Company Name. All rights reserved.
+
+PROPRIETARY SOFTWARE LICENSE
+
+This software and associated documentation files (the "Software") are proprietary
+and confidential to Your Company Name.
+
+GRANT OF LICENSE
+
+Subject to the terms and conditions of this Agreement, Your Company Name grants
+you a limited, non-exclusive, non-transferable license to use the Software for
+your internal business purposes.
+
+RESTRICTIONS
+
+You may not:
+- Copy, modify, or create derivative works of the Software
+- Reverse engineer, decompile, or disassemble the Software
+- Rent, lease, lend, sell, redistribute, or sublicense the Software
+- Remove or alter any proprietary notices or labels on the Software
+- Use the Software for any unlawful purpose
+
+OWNERSHIP
+
+The Software is licensed, not sold. Your Company Name retains all right, title,
+and interest in and to the Software, including all intellectual property rights.
+
+WARRANTY DISCLAIMER
+
+THE SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE, AND NONINFRINGEMENT.
+
+LIMITATION OF LIABILITY
+
+IN NO EVENT SHALL YOUR COMPANY NAME BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT, OR OTHERWISE, ARISING FROM,
+OUT OF, OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+TERMINATION
+
+This license is effective until terminated. Your rights under this license will
+terminate automatically without notice if you fail to comply with any term of
+this Agreement.
+
+GOVERNING LAW
+
+This Agreement shall be governed by and construed in accordance with the laws
+of [Your Jurisdiction], without regard to its conflict of law provisions.
+
+ENTIRE AGREEMENT
+
+This Agreement constitutes the entire agreement between you and Your Company Name
+regarding the Software and supersedes all prior agreements and understandings.
+
+CONTACT
+
+For questions about this license, please contact:
+Your Company Name
+Email: contact@yourcompany.com
+Website: https://yourcompany.com
+
+---
+
+By installing or using this Software, you acknowledge that you have read this
+Agreement, understand it, and agree to be bound by its terms and conditions.
+
