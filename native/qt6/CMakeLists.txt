@@ -26,6 +26,20 @@ else()
     message(WARNING "OpenImageIO not found - will use placeholder thumbnails for EXR/PSD/HDR formats")
 endif()
 
+# Find FFmpeg for log suppression
+find_package(PkgConfig QUIET)
+if(PkgConfig_FOUND)
+    pkg_check_modules(FFMPEG QUIET libavutil)
+endif()
+if(NOT FFMPEG_FOUND)
+    # Try vcpkg FFmpeg
+    find_path(FFMPEG_INCLUDE_DIR libavutil/log.h PATHS "C:/vcpkg/installed/x64-windows/include")
+    if(FFMPEG_INCLUDE_DIR)
+        set(FFMPEG_FOUND TRUE)
+        message(STATUS "FFmpeg headers found at ${FFMPEG_INCLUDE_DIR}")
+    endif()
+endif()
+
 # Standard Qt project setup (Qt6)
 if (COMMAND qt_standard_project_setup)
   qt_standard_project_setup()
@@ -80,6 +94,15 @@ qt_add_executable(kassetmanagerqt
 target_include_directories(kassetmanagerqt PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
+
+# Add FFmpeg include directory if found
+if(FFMPEG_FOUND)
+    if(FFMPEG_INCLUDE_DIR)
+        target_include_directories(kassetmanagerqt PRIVATE ${FFMPEG_INCLUDE_DIR})
+    elseif(FFMPEG_INCLUDE_DIRS)
+        target_include_directories(kassetmanagerqt PRIVATE ${FFMPEG_INCLUDE_DIRS})
+    endif()
+endif()
 
 target_link_libraries(kassetmanagerqt PRIVATE
     Qt6::Widgets

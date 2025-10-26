@@ -18,6 +18,7 @@
 #include <QVideoSink>
 #include <QVideoFrame>
 #include <QTimer>
+#include <QRegularExpression>
 
 // ThumbnailTask implementation (for images only)
 ThumbnailTask::ThumbnailTask(const QString& filePath, ThumbnailGenerator* generator)
@@ -78,6 +79,7 @@ VideoThumbnailGenerator::VideoThumbnailGenerator(const QString& filePath, const 
     m_timeout->setInterval(3000);
 
     connect(m_player, &QMediaPlayer::mediaStatusChanged, this, &VideoThumbnailGenerator::onMediaStatusChanged);
+    connect(m_player, &QMediaPlayer::errorOccurred, this, &VideoThumbnailGenerator::onError);
     connect(m_videoSink, &QVideoSink::videoFrameChanged, this, &VideoThumbnailGenerator::onVideoFrameChanged);
     connect(m_timeout, &QTimer::timeout, this, &VideoThumbnailGenerator::onTimeout);
 }
@@ -122,12 +124,40 @@ void VideoThumbnailGenerator::onVideoFrameChanged() {
             m_timeout->stop();
             m_player->stop();
 
-            qDebug() << "[VideoThumbnailGenerator] Captured video frame, size:" << m_capturedFrame.size();
+            qDebug() << "[VideoThumbnailGenerator] Captured video frame, size:" << m_capturedFrame.size()
+                     << "format:" << m_capturedFrame.format();
+
+            // Handle alpha channel premultiplication for videos with transparency
+            // QVideoFrame often provides unpremultiplied alpha, but Qt expects premultiplied for proper display
+            if (m_capturedFrame.hasAlphaChannel()) {
+                QImage::Format format = m_capturedFrame.format();
+
+                // Convert to premultiplied alpha if needed
+                if (format == QImage::Format_ARGB32 || format == QImage::Format_RGBA8888) {
+                    qDebug() << "[VideoThumbnailGenerator] Converting to premultiplied alpha";
+                    m_capturedFrame = m_capturedFrame.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+                } else if (format != QImage::Format_ARGB32_Premultiplied &&
+                           format != QImage::Format_RGBA8888_Premultiplied) {
+                    // For other formats with alpha, convert to premultiplied
+                    m_capturedFrame = m_capturedFrame.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+                }
+            }
 
             QImage thumbnail = m_capturedFrame.scaled(256, 256, Qt::KeepAspectRatio, Qt::SmoothTransformation);
 
-            if (thumbnail.save(m_cachePath, "JPEG", 85)) {
-                qDebug() << "[VideoThumbnailGenerator] Saved video thumbnail:" << m_cachePath;
+            // For images with alpha, save as PNG to preserve transparency
+            // Otherwise use JPEG for smaller file size
+            QString cachePath = m_cachePath;
+            if (thumbnail.hasAlphaChannel()) {
+                // Replace .jpg extension with .png for alpha videos
+                cachePath.replace(QRegularExpression("\\.jpg$", QRegularExpression::CaseInsensitiveOption), ".png");
+            }
+
+            QString format = thumbnail.hasAlphaChannel() ? "PNG" : "JPEG";
+            int quality = thumbnail.hasAlphaChannel() ? 100 : 85;
+
+            if (thumbnail.save(cachePath, format.toUtf8().constData(), quality)) {
+                qDebug() << "[VideoThumbnailGenerator] Saved video thumbnail:" << cachePath;
 
                 QMutexLocker locker(&m_generator->m_mutex);
                 m_generator->m_pendingThumbnails.remove(m_filePath);
@@ -135,7 +165,7 @@ void VideoThumbnailGenerator::onVideoFrameChanged() {
                 // Update progress
                 m_generator->updateProgress();
 
-                emit m_generator->thumbnailGenerated(m_filePath, m_cachePath);
+                emit m_generator->thumbnailGenerated(m_filePath, cachePath);
             } else {
                 qWarning() << "[VideoThumbnailGenerator] Failed to save video thumbnail:" << m_cachePath;
 
@@ -154,7 +184,24 @@ void VideoThumbnailGenerator::onVideoFrameChanged() {
 }
 
 void VideoThumbnailGenerator::onTimeout() {
-    qWarning() << "[VideoThumbnailGenerator] Timeout waiting for video frame:" << m_filePath;
+    qDebug() << "[VideoThumbnailGenerator] Timeout waiting for video frame (video may be corrupted or unsupported):" << m_filePath;
+    m_player->stop();
+
+    QMutexLocker locker(&m_generator->m_mutex);
+    m_generator->m_pendingThumbnails.remove(m_filePath);
+
+    // Update progress
+    m_generator->updateProgress();
+
+    emit m_generator->thumbnailFailed(m_filePath);
+
+    deleteLater();
+}
+
+void VideoThumbnailGenerator::onError(QMediaPlayer::Error error, const QString &errorString) {
+    qDebug() << "[VideoThumbnailGenerator] Media player error for" << m_filePath << "- Error:" << error << errorString;
+
+    m_timeout->stop();
     m_player->stop();
 
     QMutexLocker locker(&m_generator->m_mutex);
@@ -220,6 +267,14 @@ QString ThumbnailGenerator::getFileHash(const QString& filePath) {
 
 QString ThumbnailGenerator::getThumbnailCachePath(const QString& filePath) {
     QString hash = getFileHash(filePath);
+
+    // Check if PNG version exists (for videos with alpha)
+    QString pngPath = m_thumbnailDir.absoluteFilePath(hash + ".png");
+    if (QFileInfo::exists(pngPath)) {
+        return pngPath;
+    }
+
+    // Default to JPG
     return m_thumbnailDir.absoluteFilePath(hash + ".jpg");
 }
 

@@ -321,7 +321,7 @@ void AssetsModel::onThumbnailGenerated(const QString& filePath, const QString& t
     }
 }
 
-bool AssetsModel::moveAssetToFolder(int assetId, int folderId){ bool ok=DB::instance().setAssetFolder(assetId,folderId); if (ok) reload(); return ok; }
+bool AssetsModel::moveAssetToFolder(int assetId, int folderId){ bool ok=DB::instance().setAssetFolder(assetId,folderId); if (ok) scheduleReload(); return ok; }
 
 bool AssetsModel::moveAssetsToFolder(const QVariantList& assetIds, int folderId){ bool any=false; for (const auto& v: assetIds){ any |= DB::instance().setAssetFolder(v.toInt(),folderId); } scheduleReload(); return any; }
 

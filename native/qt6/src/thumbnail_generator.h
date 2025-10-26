@@ -41,6 +41,7 @@ private slots:
     void onMediaStatusChanged();
     void onVideoFrameChanged();
     void onTimeout();
+    void onError(QMediaPlayer::Error error, const QString &errorString);
 
 private:
     QString m_filePath;

@@ -38,7 +38,7 @@ bool DB::migrate(){
         "  id INTEGER PRIMARY KEY AUTOINCREMENT,\n"
         "  file_path TEXT NOT NULL UNIQUE,\n"
         "  file_name TEXT NOT NULL,\n"
-        "  virtual_folder_id INTEGER NOT NULL REFERENCES virtual_folders(id) ON DELETE SET DEFAULT DEFAULT 1,\n"
+        "  virtual_folder_id INTEGER NOT NULL REFERENCES virtual_folders(id) ON DELETE CASCADE,\n"
         "  file_size INTEGER NULL,\n"
         "  mime_type TEXT NULL,\n"
         "  checksum TEXT NULL,\n"

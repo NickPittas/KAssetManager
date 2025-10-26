@@ -17,6 +17,16 @@
 #include <fcntl.h>
 #endif
 
+// FFmpeg log suppression (optional - only if headers are available)
+#ifdef __has_include
+#if __has_include(<libavutil/log.h>)
+extern "C" {
+#include <libavutil/log.h>
+}
+#define HAVE_FFMPEG_LOG
+#endif
+#endif
+
 static QFile *logFile = nullptr;
 
 static void messageHandler(QtMsgType type, const QMessageLogContext &context, const QString &msg)
@@ -62,6 +72,11 @@ int main(int argc, char *argv[])
         std::cout.clear();
         std::cerr.clear();
     }
+#endif
+
+    // Suppress FFmpeg error messages to prevent console spam
+#ifdef HAVE_FFMPEG_LOG
+    av_log_set_level(AV_LOG_QUIET);
 #endif
 
     QApplication app(argc, argv);

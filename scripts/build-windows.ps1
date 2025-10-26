@@ -130,8 +130,17 @@ if ($Package) {
 
         # 4) Copy verified staging to portable folder
         try { Get-Process -Name kassetmanagerqt -ErrorAction SilentlyContinue | Stop-Process -Force } catch {}
+        Start-Sleep -Seconds 1  # Wait for process to fully terminate and release file locks
         $portable = Join-Path $repoRoot 'dist/portable'
-        if (Test-Path $portable) { Remove-Item -Recurse -Force $portable }
+        if (Test-Path $portable) {
+            try {
+                Remove-Item -Recurse -Force $portable -ErrorAction Stop
+            } catch {
+                Write-Warning "Failed to remove old portable folder, retrying..."
+                Start-Sleep -Seconds 2
+                Remove-Item -Recurse -Force $portable
+            }
+        }
         Copy-Item -Recurse -Force $stage $portable
         Write-Host "Portable distribution created" -ForegroundColor Green
 

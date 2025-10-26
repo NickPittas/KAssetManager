@@ -42,6 +42,13 @@
 #include <QStackedWidget>
 #include <QCheckBox>
 #include <QFileDialog>
+#include <QImageReader>
+#include <QMediaPlayer>
+#include <QMediaMetaData>
+#include <QScrollArea>
+#include <QFrame>
+#include <QEventLoop>
+#include <QAudioOutput>
 
 // Custom QListView with compact drag pixmap
 class AssetGridView : public QListView
@@ -424,9 +431,22 @@ void MainWindow::setupUi()
     folderTreeView->setModel(folderModel);
     folderTreeView->setHeaderHidden(true);
     folderTreeView->setContextMenuPolicy(Qt::CustomContextMenu);
+
+    // Enable multi-selection with Ctrl+Click and Shift+Click
+    folderTreeView->setSelectionMode(QAbstractItemView::ExtendedSelection);
+
+    // Prevent tree from collapsing when clicking
+    folderTreeView->setExpandsOnDoubleClick(false);
+
+    // Connect to collapsed signal to prevent collapse
+    connect(folderTreeView, &QTreeView::collapsed, this, [this](const QModelIndex &index) {
+        // Re-expand immediately to prevent collapse
+        folderTreeView->expand(index);
+    });
+
     folderTreeView->setStyleSheet(
         "QTreeView { background-color: #121212; color: #ffffff; border: none; }"
-        "QTreeView::item:selected { background-color: #2f3a4a; }"
+        "QTreeView::item:selected { background-color: #2f3a4a; color: #ffffff; }"
         "QTreeView::item:hover { background-color: #202020; }"
     );
 
@@ -713,40 +733,83 @@ void MainWindow::setupUi()
     filtersLayout->addStretch();
     filtersPanel->setStyleSheet("background-color: #121212;");
     
-    // Info panel
+    // Info panel with scrollable area for all metadata
     infoPanel = new QWidget(this);
-    QVBoxLayout *infoLayout = new QVBoxLayout(infoPanel);
-    infoLayout->setContentsMargins(8, 8, 8, 8);
-    
+    QVBoxLayout *infoPanelLayout = new QVBoxLayout(infoPanel);
+    infoPanelLayout->setContentsMargins(0, 0, 0, 0);
+    infoPanelLayout->setSpacing(0);
+
     QLabel *infoTitle = new QLabel("Asset Info", this);
-    infoTitle->setStyleSheet("font-size: 14px; font-weight: bold; color: #ffffff;");
-    infoLayout->addWidget(infoTitle);
-    
+    infoTitle->setStyleSheet("font-size: 14px; font-weight: bold; color: #ffffff; padding: 8px; background-color: #1a1a1a;");
+    infoPanelLayout->addWidget(infoTitle);
+
+    // Scrollable area for metadata
+    QScrollArea *infoScrollArea = new QScrollArea(this);
+    infoScrollArea->setWidgetResizable(true);
+    infoScrollArea->setFrameShape(QFrame::NoFrame);
+    infoScrollArea->setStyleSheet("QScrollArea { background-color: #121212; border: none; }");
+
+    QWidget *infoScrollWidget = new QWidget();
+    QVBoxLayout *infoLayout = new QVBoxLayout(infoScrollWidget);
+    infoLayout->setContentsMargins(8, 8, 8, 8);
+    infoLayout->setSpacing(4);
+
     infoFileName = new QLabel("No selection", this);
-    infoFileName->setStyleSheet("color: #ffffff; margin-top: 8px;");
+    infoFileName->setStyleSheet("color: #ffffff; margin-top: 4px; font-weight: bold;");
     infoFileName->setWordWrap(true);
     infoLayout->addWidget(infoFileName);
-    
+
     infoFilePath = new QLabel("", this);
     infoFilePath->setStyleSheet("color: #999; font-size: 10px;");
     infoFilePath->setWordWrap(true);
     infoLayout->addWidget(infoFilePath);
-    
+
+    // Add separator
+    QFrame *separator1 = new QFrame(this);
+    separator1->setFrameShape(QFrame::HLine);
+    separator1->setStyleSheet("background-color: #333;");
+    separator1->setFixedHeight(1);
+    infoLayout->addWidget(separator1);
+
     infoFileSize = new QLabel("", this);
-    infoFileSize->setStyleSheet("color: #ccc;");
+    infoFileSize->setStyleSheet("color: #ccc; font-size: 11px;");
+    infoFileSize->setWordWrap(true);
     infoLayout->addWidget(infoFileSize);
-    
+
     infoFileType = new QLabel("", this);
-    infoFileType->setStyleSheet("color: #ccc;");
+    infoFileType->setStyleSheet("color: #ccc; font-size: 11px;");
+    infoFileType->setWordWrap(true);
     infoLayout->addWidget(infoFileType);
-    
+
+    infoDimensions = new QLabel("", this);
+    infoDimensions->setStyleSheet("color: #ccc; font-size: 11px;");
+    infoDimensions->setWordWrap(true);
+    infoLayout->addWidget(infoDimensions);
+
+    infoCreated = new QLabel("", this);
+    infoCreated->setStyleSheet("color: #ccc; font-size: 11px;");
+    infoCreated->setWordWrap(true);
+    infoLayout->addWidget(infoCreated);
+
     infoModified = new QLabel("", this);
-    infoModified->setStyleSheet("color: #ccc;");
+    infoModified->setStyleSheet("color: #ccc; font-size: 11px;");
+    infoModified->setWordWrap(true);
     infoLayout->addWidget(infoModified);
 
+    infoPermissions = new QLabel("", this);
+    infoPermissions->setStyleSheet("color: #ccc; font-size: 11px;");
+    infoPermissions->setWordWrap(true);
+    infoLayout->addWidget(infoPermissions);
+
     // Rating widget
+    QFrame *separator2 = new QFrame(this);
+    separator2->setFrameShape(QFrame::HLine);
+    separator2->setStyleSheet("background-color: #333;");
+    separator2->setFixedHeight(1);
+    infoLayout->addWidget(separator2);
+
     infoRatingLabel = new QLabel("Rating:", this);
-    infoRatingLabel->setStyleSheet("color: #ccc; margin-top: 8px;");
+    infoRatingLabel->setStyleSheet("color: #ccc; margin-top: 4px; font-size: 11px;");
     infoLayout->addWidget(infoRatingLabel);
 
     infoRatingWidget = new StarRatingWidget(this);
@@ -754,11 +817,14 @@ void MainWindow::setupUi()
     connect(infoRatingWidget, &StarRatingWidget::ratingChanged, this, &MainWindow::onRatingChanged);
 
     infoTags = new QLabel("", this);
-    infoTags->setStyleSheet("color: #ccc; margin-top: 8px;");
+    infoTags->setStyleSheet("color: #ccc; margin-top: 4px; font-size: 11px;");
     infoTags->setWordWrap(true);
     infoLayout->addWidget(infoTags);
-    
+
     infoLayout->addStretch();
+    infoScrollWidget->setLayout(infoLayout);
+    infoScrollArea->setWidget(infoScrollWidget);
+    infoPanelLayout->addWidget(infoScrollArea);
     infoPanel->setStyleSheet("background-color: #121212;");
     
     rightLayout->addWidget(filtersPanel, 1);
@@ -1102,6 +1168,11 @@ void MainWindow::onFolderContextMenu(const QPoint &pos)
     QModelIndex index = folderTreeView->indexAt(pos);
     if (!index.isValid()) return;
 
+    // Get all selected folders
+    QModelIndexList selectedIndexes = folderTreeView->selectionModel()->selectedIndexes();
+    if (selectedIndexes.isEmpty()) return;
+
+    // Get info from the clicked folder
     int folderId = folderModel->data(index, VirtualFolderTreeModel::IdRole).toInt();
     QString folderName = folderModel->data(index, Qt::DisplayRole).toString();
     bool isProjectFolder = folderModel->data(index, VirtualFolderTreeModel::IsProjectFolderRole).toBool();
@@ -1114,8 +1185,13 @@ void MainWindow::onFolderContextMenu(const QPoint &pos)
     );
 
     QAction *createAction = menu.addAction("Create Subfolder");
-    QAction *renameAction = menu.addAction("Rename");
+    QAction *renameAction = nullptr;
     QAction *deleteAction = nullptr;
+
+    // Only show rename for single selection
+    if (selectedIndexes.size() == 1) {
+        renameAction = menu.addAction("Rename");
+    }
 
     // Only allow deletion of non-project folders
     if (!isProjectFolder) {
@@ -1141,8 +1217,8 @@ void MainWindow::onFolderContextMenu(const QPoint &pos)
                 QMessageBox::warning(this, "Error", "Failed to create subfolder");
             }
         }
-    } else if (selected == renameAction) {
-        // Rename folder
+    } else if (renameAction && selected == renameAction) {
+        // Rename folder (only for single selection)
         bool ok;
         QString newName = QInputDialog::getText(this, "Rename Folder",
                                                "Enter new name:",
@@ -1166,40 +1242,70 @@ void MainWindow::onFolderContextMenu(const QPoint &pos)
             }
         }
     } else if (selected == deleteAction) {
-        if (isProjectFolder) {
-            // Remove project folder
-            QMessageBox::StandardButton reply = QMessageBox::question(
-                this, "Remove Project Folder",
-                QString("Are you sure you want to remove project folder '%1'?\n\nThis will remove the folder and all its assets from the library, but will not delete the actual files.").arg(folderName),
-                QMessageBox::Yes | QMessageBox::No);
+        // Collect all selected folders
+        QList<int> folderIds;
+        QList<int> projectFolderIds;
+        QStringList folderNames;
 
-            if (reply == QMessageBox::Yes) {
-                // Remove from watcher first
-                projectFolderWatcher->removeProjectFolder(projectFolderId);
+        for (const QModelIndex &idx : selectedIndexes) {
+            int id = folderModel->data(idx, VirtualFolderTreeModel::IdRole).toInt();
+            QString name = folderModel->data(idx, Qt::DisplayRole).toString();
+            bool isProjFolder = folderModel->data(idx, VirtualFolderTreeModel::IsProjectFolderRole).toBool();
+            int projFolderId = folderModel->data(idx, VirtualFolderTreeModel::ProjectFolderIdRole).toInt();
 
-                if (DB::instance().deleteProjectFolder(projectFolderId)) {
-                    folderModel->reload();
-                    assetsModel->reload();
-                    statusBar()->showMessage(QString("Removed project folder '%1'").arg(folderName), 3000);
-                } else {
-                    QMessageBox::warning(this, "Error", "Failed to remove project folder");
-                }
+            if (isProjFolder) {
+                projectFolderIds.append(projFolderId);
+            } else {
+                folderIds.append(id);
+            }
+            folderNames.append(name);
+        }
+
+        // Show confirmation dialog
+        QString message;
+        if (selectedIndexes.size() == 1) {
+            if (!projectFolderIds.isEmpty()) {
+                message = QString("Are you sure you want to remove project folder '%1'?\n\nThis will remove the folder and all its assets from the library, but will not delete the actual files.").arg(folderNames.first());
+            } else {
+                message = QString("Are you sure you want to delete '%1' and all its contents?").arg(folderNames.first());
             }
         } else {
-            // Delete regular folder
-            QMessageBox::StandardButton reply = QMessageBox::question(
-                this, "Delete Folder",
-                QString("Are you sure you want to delete '%1' and all its contents?").arg(folderName),
-                QMessageBox::Yes | QMessageBox::No);
+            message = QString("Are you sure you want to delete %1 folders and all their contents?\n\nFolders: %2")
+                .arg(selectedIndexes.size())
+                .arg(folderNames.join(", "));
+        }
 
-            if (reply == QMessageBox::Yes) {
-                if (DB::instance().deleteFolder(folderId)) {
-                    folderModel->reload();
-                    assetsModel->reload();
-                    statusBar()->showMessage(QString("Deleted folder '%1'").arg(folderName), 3000);
-                } else {
-                    QMessageBox::warning(this, "Error", "Failed to delete folder");
+        QMessageBox::StandardButton reply = QMessageBox::question(
+            this, selectedIndexes.size() == 1 ? "Delete Folder" : "Delete Folders",
+            message,
+            QMessageBox::Yes | QMessageBox::No);
+
+        if (reply == QMessageBox::Yes) {
+            int deletedCount = 0;
+
+            // Delete project folders
+            for (int projFolderId : projectFolderIds) {
+                projectFolderWatcher->removeProjectFolder(projFolderId);
+                if (DB::instance().deleteProjectFolder(projFolderId)) {
+                    deletedCount++;
                 }
+            }
+
+            // Delete regular folders
+            for (int id : folderIds) {
+                if (DB::instance().deleteFolder(id)) {
+                    deletedCount++;
+                }
+            }
+
+            folderModel->reload();
+            assetsModel->reload();
+
+            if (deletedCount == selectedIndexes.size()) {
+                statusBar()->showMessage(QString("Deleted %1 folder(s)").arg(deletedCount), 3000);
+            } else {
+                QMessageBox::warning(this, "Error",
+                    QString("Failed to delete some folders. Deleted %1 of %2").arg(deletedCount).arg(selectedIndexes.size()));
             }
         }
     }
@@ -1312,7 +1418,10 @@ void MainWindow::updateInfoPanel()
         infoFilePath->clear();
         infoFileSize->clear();
         infoFileType->clear();
+        infoDimensions->clear();
+        infoCreated->clear();
         infoModified->clear();
+        infoPermissions->clear();
         infoRatingLabel->setVisible(false);
         infoRatingWidget->setVisible(false);
         infoTags->clear();
@@ -1327,9 +1436,12 @@ void MainWindow::updateInfoPanel()
         QString fileType = index.data(AssetsModel::FileTypeRole).toString();
         QDateTime modified = index.data(AssetsModel::LastModifiedRole).toDateTime();
         int rating = index.data(AssetsModel::RatingRole).toInt();
+        bool isSequence = index.data(AssetsModel::IsSequenceRole).toBool();
 
         infoFileName->setText(fileName);
         infoFilePath->setText(filePath);
+
+        QFileInfo fileInfo(filePath);
 
         // Format file size
         QString sizeStr;
@@ -1342,10 +1454,178 @@ void MainWindow::updateInfoPanel()
         } else {
             sizeStr = QString::number(fileSize / (1024.0 * 1024.0 * 1024.0), 'f', 2) + " GB";
         }
-        infoFileSize->setText("Size: " + sizeStr);
+        infoFileSize->setText("Size: " + sizeStr.toLower());
 
         infoFileType->setText("Type: " + fileType.toUpper());
-        infoModified->setText("Modified: " + modified.toString("yyyy-MM-dd hh:mm"));
+
+        // Extract dimensions for images and videos
+        QString dimensionsStr;
+        if (isSequence) {
+            int frameCount = index.data(AssetsModel::SequenceFrameCountRole).toInt();
+            int startFrame = index.data(AssetsModel::SequenceStartFrameRole).toInt();
+            int endFrame = index.data(AssetsModel::SequenceEndFrameRole).toInt();
+
+            // Try to get dimensions from first frame
+            QImageReader reader(filePath);
+            if (reader.canRead()) {
+                QSize size = reader.size();
+                dimensionsStr = QString("Dimensions: %1 x %2 (%3 frames: %4-%5)")
+                    .arg(size.width()).arg(size.height())
+                    .arg(frameCount).arg(startFrame).arg(endFrame);
+            } else {
+                dimensionsStr = QString("Sequence: %1 frames (%2-%3)")
+                    .arg(frameCount).arg(startFrame).arg(endFrame);
+            }
+        } else {
+            // Check if it's an image
+            QStringList imageExts = {"jpg", "jpeg", "png", "gif", "bmp", "tiff", "tif", "webp",
+                                     "exr", "hdr", "psd", "psb", "tga", "dng", "cr2", "cr3",
+                                     "nef", "arw", "orf", "rw2", "pef", "srw", "raf", "raw"};
+            if (imageExts.contains(fileType.toLower())) {
+                QImageReader reader(filePath);
+                if (reader.canRead()) {
+                    QSize size = reader.size();
+                    QString format = reader.format();
+                    dimensionsStr = QString("Dimensions: %1 x %2 (%3)")
+                        .arg(size.width()).arg(size.height()).arg(QString(format).toUpper());
+                } else {
+                    dimensionsStr = "Dimensions: Unable to read";
+                }
+            }
+            // Check if it's a video
+            else {
+                QStringList videoExts = {"mp4", "mov", "avi", "mkv", "wmv", "flv", "webm",
+                                        "m4v", "mpg", "mpeg", "3gp", "mts", "m2ts"};
+                if (videoExts.contains(fileType.toLower())) {
+                    // Extract video metadata using QMediaPlayer
+                    QMediaPlayer tempPlayer;
+                    QAudioOutput tempAudio;
+                    tempPlayer.setAudioOutput(&tempAudio);
+                    tempPlayer.setSource(QUrl::fromLocalFile(filePath));
+
+                    // Wait briefly for metadata to load
+                    QEventLoop loop;
+                    QTimer timeout;
+                    timeout.setSingleShot(true);
+                    timeout.setInterval(1000); // 1 second timeout
+
+                    bool metadataLoaded = false;
+                    connect(&tempPlayer, &QMediaPlayer::metaDataChanged, &loop, [&]() {
+                        metadataLoaded = true;
+                        loop.quit();
+                    });
+                    connect(&tempPlayer, &QMediaPlayer::mediaStatusChanged, &loop, [&](QMediaPlayer::MediaStatus status) {
+                        if (status == QMediaPlayer::LoadedMedia) {
+                            metadataLoaded = true;
+                            loop.quit();
+                        }
+                    });
+                    connect(&timeout, &QTimer::timeout, &loop, &QEventLoop::quit);
+
+                    timeout.start();
+                    loop.exec();
+
+                    QStringList videoInfo;
+
+                    // Try to get codec information from all available metadata
+                    QMediaMetaData metadata = tempPlayer.metaData();
+
+                    // Video codec
+                    QString videoCodec;
+                    if (metadata.value(QMediaMetaData::VideoCodec).isValid()) {
+                        videoCodec = metadata.value(QMediaMetaData::VideoCodec).toString();
+                    }
+                    if (videoCodec.isEmpty() && metadata.stringValue(QMediaMetaData::VideoCodec).length() > 0) {
+                        videoCodec = metadata.stringValue(QMediaMetaData::VideoCodec);
+                    }
+                    if (!videoCodec.isEmpty()) {
+                        videoInfo << QString("Video Codec: %1").arg(videoCodec.toUpper());
+                    }
+
+                    // Audio codec
+                    QString audioCodec;
+                    if (metadata.value(QMediaMetaData::AudioCodec).isValid()) {
+                        audioCodec = metadata.value(QMediaMetaData::AudioCodec).toString();
+                    }
+                    if (audioCodec.isEmpty() && metadata.stringValue(QMediaMetaData::AudioCodec).length() > 0) {
+                        audioCodec = metadata.stringValue(QMediaMetaData::AudioCodec);
+                    }
+                    if (!audioCodec.isEmpty()) {
+                        videoInfo << QString("Audio Codec: %1").arg(audioCodec.toUpper());
+                    }
+
+                    // Bitrate
+                    if (metadata.value(QMediaMetaData::VideoBitRate).isValid()) {
+                        int bitrate = metadata.value(QMediaMetaData::VideoBitRate).toInt();
+                        if (bitrate > 0) {
+                            double mbps = bitrate / 1000000.0;
+                            videoInfo << QString("Bitrate: %1 Mbps").arg(mbps, 0, 'f', 2);
+                        }
+                    }
+
+                    // Resolution
+                    QVariant resVar = metadata.value(QMediaMetaData::Resolution);
+                    if (resVar.isValid() && resVar.canConvert<QSize>()) {
+                        QSize resolution = resVar.toSize();
+                        if (resolution.width() > 0 && resolution.height() > 0) {
+                            videoInfo << QString("Frame Size: %1x%2").arg(resolution.width()).arg(resolution.height());
+                        }
+                    }
+
+                    // Framerate
+                    if (metadata.value(QMediaMetaData::VideoFrameRate).isValid()) {
+                        double fps = metadata.value(QMediaMetaData::VideoFrameRate).toDouble();
+                        if (fps > 0) {
+                            videoInfo << QString("FPS: %1").arg(fps, 0, 'f', 0);
+                        }
+                    }
+
+                    if (!videoInfo.isEmpty()) {
+                        dimensionsStr = videoInfo.join("\n");
+                    } else {
+                        dimensionsStr = "Video file";
+                    }
+                }
+            }
+        }
+
+        if (!dimensionsStr.isEmpty()) {
+            infoDimensions->setText(dimensionsStr);
+            infoDimensions->setVisible(true);
+        } else {
+            infoDimensions->clear();
+            infoDimensions->setVisible(false);
+        }
+
+        // Creation and modification dates
+        if (fileInfo.exists()) {
+            QDateTime created = fileInfo.birthTime();
+            if (created.isValid()) {
+                infoCreated->setText("Created: " + created.toString("dd-MM-yyyy"));
+                infoCreated->setVisible(true);
+            } else {
+                infoCreated->clear();
+                infoCreated->setVisible(false);
+            }
+
+            infoModified->setText("Modified: " + modified.toString("dd-MM-yyyy"));
+
+            // File permissions
+            QStringList perms;
+            if (fileInfo.isReadable()) perms << "R";
+            if (fileInfo.isWritable()) perms << "W";
+            if (fileInfo.isExecutable()) perms << "X";
+            if (fileInfo.isHidden()) perms << "Hidden";
+
+            infoPermissions->setText("Permissions: " + perms.join(", "));
+            infoPermissions->setVisible(true);
+        } else {
+            infoCreated->clear();
+            infoCreated->setVisible(false);
+            infoModified->setText("Modified: File not found");
+            infoPermissions->clear();
+            infoPermissions->setVisible(false);
+        }
 
         // Show rating widget
         infoRatingLabel->setVisible(true);
@@ -1366,7 +1646,10 @@ void MainWindow::updateInfoPanel()
         infoFilePath->clear();
         infoFileSize->clear();
         infoFileType->clear();
+        infoDimensions->clear();
+        infoCreated->clear();
         infoModified->clear();
+        infoPermissions->clear();
         infoRatingLabel->setVisible(false);
         infoRatingWidget->setVisible(false);
         infoTags->clear();
@@ -2035,12 +2318,23 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
                         }
                     }
 
-                    // Move assets to folder
+                    // Move assets to folder (batch operation to avoid multiple reloads)
+                    bool success = true;
                     for (int assetId : assetIds) {
-                        assetsModel->moveAssetToFolder(assetId, targetFolderId);
+                        if (!DB::instance().setAssetFolder(assetId, targetFolderId)) {
+                            success = false;
+                        }
                     }
 
-                    statusBar()->showMessage(QString("Moved %1 asset(s) to folder").arg(assetIds.size()), 3000);
+                    // Reload once after all moves are complete
+                    if (success) {
+                        assetsModel->reload();
+                        statusBar()->showMessage(QString("Moved %1 asset(s) to folder").arg(assetIds.size()), 3000);
+                    } else {
+                        assetsModel->reload();
+                        statusBar()->showMessage("Failed to move some assets", 3000);
+                    }
+
                     dropEvent->acceptProposedAction();
                     return true;
                 }

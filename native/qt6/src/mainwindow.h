@@ -144,7 +144,10 @@ private:
     QLabel *infoFilePath;
     QLabel *infoFileSize;
     QLabel *infoFileType;
+    QLabel *infoDimensions;
+    QLabel *infoCreated;
     QLabel *infoModified;
+    QLabel *infoPermissions;
     QLabel *infoRatingLabel;
     class StarRatingWidget *infoRatingWidget;
     QLabel *infoTags;
