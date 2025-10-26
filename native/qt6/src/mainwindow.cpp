@@ -1,6 +1,7 @@
 #include "mainwindow.h"
 #include "virtual_folders.h"
 #include "assets_model.h"
+#include "assets_table_model.h"
 #include "tags_model.h"
 #include "importer.h"
 #include "db.h"
@@ -36,6 +37,8 @@
 #include <QFutureWatcher>
 #include <QTimer>
 #include <QScrollBar>
+#include <QTableView>
+#include <QStackedWidget>
 
 // Custom QListView with compact drag pixmap
 class AssetGridView : public QListView
@@ -130,8 +133,29 @@ private:
             log << "[PAINT] thumbnailPath: " << thumbnailPath << "\n";
             log.flush();
 
-            // CRITICAL RULE: If thumbnail is not in cache, don't draw ANYTHING
-            // This prevents crashes from trying to load images in paint()
+            // CRITICAL FIX: If thumbnail exists on disk but not in cache, load it now
+            if (!thumbnailPath.isEmpty() && !pixmapCache.contains(thumbnailPath)) {
+                QFileInfo thumbInfo(thumbnailPath);
+                if (thumbInfo.exists() && thumbInfo.size() > 0) {
+                    log << "[PAINT] Loading thumbnail from disk into cache: " << thumbnailPath << "\n";
+                    log.flush();
+                    QPixmap pixmap(thumbnailPath);
+                    if (!pixmap.isNull()) {
+                        // Limit cache size
+                        if (pixmapCache.size() > 200) {
+                            pixmapCache.clear();
+                        }
+                        pixmapCache.insert(thumbnailPath, pixmap);
+                        log << "[PAINT] Thumbnail loaded into cache successfully\n";
+                        log.flush();
+                    } else {
+                        log << "[PAINT] Failed to load thumbnail from disk\n";
+                        log.flush();
+                    }
+                }
+            }
+
+            // If thumbnail is still not in cache, don't draw anything
             if (thumbnailPath.isEmpty() || !pixmapCache.contains(thumbnailPath)) {
                 log << "[PAINT] No thumbnail in cache, returning\n";
                 log.flush();
@@ -542,9 +566,12 @@ void MainWindow::setupUi()
     toolbarLayout->addStretch();
     centerLayout->addWidget(toolbar);
 
-    // Asset grid (using custom AssetGridView with compact drag pixmap)
-    assetGridView = new AssetGridView(centerPanel);
-    assetsModel = new AssetsModel(centerPanel);
+    // Stacked widget to switch between grid and table views
+    viewStack = new QStackedWidget(centerPanel);
+
+    // Asset grid view (using custom AssetGridView with compact drag pixmap)
+    assetGridView = new AssetGridView(viewStack);
+    assetsModel = new AssetsModel(viewStack);
     assetGridView->setModel(assetsModel);
     assetGridView->setViewMode(QListView::IconMode);
     assetGridView->setResizeMode(QListView::Adjust);
@@ -552,12 +579,42 @@ void MainWindow::setupUi()
     assetGridView->setUniformItemSizes(true);
     assetGridView->setSelectionMode(QAbstractItemView::ExtendedSelection);
     assetGridView->setContextMenuPolicy(Qt::CustomContextMenu);
-    assetGridView->setItemDelegate(new AssetItemDelegate(centerPanel));
+    assetGridView->setItemDelegate(new AssetItemDelegate(viewStack));
     assetGridView->setIconSize(QSize(180, 180));
     assetGridView->setStyleSheet(
         "QListView { background-color: #0a0a0a; border: none; }"
     );
-    centerLayout->addWidget(assetGridView);
+    viewStack->addWidget(assetGridView); // Index 0
+
+    // Asset table view for list mode
+    assetTableView = new QTableView(viewStack);
+    AssetsTableModel* tableModel = new AssetsTableModel(assetsModel, viewStack);
+    assetTableView->setModel(tableModel);
+    assetTableView->setSelectionBehavior(QAbstractItemView::SelectRows);
+    assetTableView->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    assetTableView->setContextMenuPolicy(Qt::CustomContextMenu);
+    assetTableView->setSortingEnabled(true);
+    assetTableView->setAlternatingRowColors(true);
+    assetTableView->verticalHeader()->setVisible(false);
+    assetTableView->horizontalHeader()->setStretchLastSection(true);
+    assetTableView->setStyleSheet(
+        "QTableView { background-color: #0a0a0a; color: #ffffff; border: none; gridline-color: #1a1a1a; }"
+        "QTableView::item:selected { background-color: #2f3a4a; }"
+        "QTableView::item:hover { background-color: #1a1a1a; }"
+        "QHeaderView::section { background-color: #1a1a1a; color: #ffffff; border: none; padding: 4px; }"
+    );
+    // Set column widths
+    assetTableView->setColumnWidth(AssetsTableModel::NameColumn, 300);
+    assetTableView->setColumnWidth(AssetsTableModel::ExtensionColumn, 80);
+    assetTableView->setColumnWidth(AssetsTableModel::SizeColumn, 100);
+    assetTableView->setColumnWidth(AssetsTableModel::DateColumn, 150);
+    assetTableView->setColumnWidth(AssetsTableModel::RatingColumn, 100);
+    viewStack->addWidget(assetTableView); // Index 1
+
+    // Set grid view as default
+    viewStack->setCurrentIndex(0);
+
+    centerLayout->addWidget(viewStack);
 
     // Enable drag-and-drop
     assetGridView->setDragEnabled(true);
@@ -787,9 +844,15 @@ void MainWindow::setupConnections()
     connect(assetGridView, &QListView::doubleClicked, this, &MainWindow::onAssetDoubleClicked);
     connect(assetGridView, &QListView::customContextMenuRequested, this, &MainWindow::onAssetContextMenu);
 
+    // Connect table view signals
+    connect(assetTableView->selectionModel(), &QItemSelectionModel::selectionChanged, this, &MainWindow::onAssetSelectionChanged);
+    connect(assetTableView, &QTableView::doubleClicked, this, &MainWindow::onAssetDoubleClicked);
+    connect(assetTableView, &QTableView::customContextMenuRequested, this, &MainWindow::onAssetContextMenu);
+
     // Update tag button states when selections change
     connect(tagsListView->selectionModel(), &QItemSelectionModel::selectionChanged, this, &MainWindow::updateTagButtonStates);
     connect(assetGridView->selectionModel(), &QItemSelectionModel::selectionChanged, this, &MainWindow::updateTagButtonStates);
+    connect(assetTableView->selectionModel(), &QItemSelectionModel::selectionChanged, this, &MainWindow::updateTagButtonStates);
 
     // Tag context menu
     connect(tagsListView, &QListView::customContextMenuRequested, this, &MainWindow::onTagContextMenu);
@@ -854,7 +917,13 @@ void MainWindow::onAssetDoubleClicked(const QModelIndex &index)
 
 void MainWindow::onAssetContextMenu(const QPoint &pos)
 {
-    QModelIndex index = assetGridView->indexAt(pos);
+    // Get index from the currently active view
+    QModelIndex index;
+    if (isGridMode) {
+        index = assetGridView->indexAt(pos);
+    } else {
+        index = assetTableView->indexAt(pos);
+    }
 
     QMenu menu(this);
     menu.setStyleSheet(
@@ -1107,6 +1176,10 @@ void MainWindow::showPreview(int index)
 
         connect(previewOverlay, &PreviewOverlay::closed, this, &MainWindow::closePreview);
         connect(previewOverlay, &PreviewOverlay::navigateRequested, this, &MainWindow::changePreview);
+    } else {
+        // CRITICAL FIX: Stop any playing media before loading new content
+        qDebug() << "[MainWindow::showPreview] Reusing existing PreviewOverlay - stopping current playback";
+        previewOverlay->stopPlayback();
     }
 
     if (isSequence) {
@@ -1164,9 +1237,14 @@ void MainWindow::changePreview(int delta)
 
 
 
+QItemSelectionModel* MainWindow::getCurrentSelectionModel()
+{
+    return isGridMode ? assetGridView->selectionModel() : assetTableView->selectionModel();
+}
+
 void MainWindow::updateInfoPanel()
 {
-    QModelIndexList selected = assetGridView->selectionModel()->selectedIndexes();
+    QModelIndexList selected = getCurrentSelectionModel()->selectedIndexes();
 
     if (selected.isEmpty()) {
         infoFileName->setText("No selection");
@@ -1237,7 +1315,7 @@ void MainWindow::updateInfoPanel()
 void MainWindow::onRatingChanged(int rating)
 {
     // Get currently selected asset
-    QModelIndexList selected = assetGridView->selectionModel()->selectedIndexes();
+    QModelIndexList selected = getCurrentSelectionModel()->selectedIndexes();
     if (selected.size() != 1) return;
 
     int assetId = selected.first().data(AssetsModel::IdRole).toInt();
@@ -1255,7 +1333,7 @@ void MainWindow::updateSelectionInfo()
 {
     // Update internal selection tracking
     selectedAssetIds.clear();
-    QModelIndexList selected = assetGridView->selectionModel()->selectedIndexes();
+    QModelIndexList selected = getCurrentSelectionModel()->selectedIndexes();
     for (const QModelIndex &index : selected) {
         int assetId = index.data(AssetsModel::IdRole).toInt();
         selectedAssetIds.insert(assetId);
@@ -2048,32 +2126,18 @@ void MainWindow::onViewModeChanged()
     if (isGridMode) {
         // Switch to grid mode
         viewModeButton->setText("⊞ Grid");
-        assetGridView->setViewMode(QListView::IconMode);
-        assetGridView->setSpacing(8);
-        assetGridView->setUniformItemSizes(true);
+        viewStack->setCurrentIndex(0); // Show grid view
         thumbnailSizeSlider->setEnabled(true);
-
-        // Update icon size
-        int size = thumbnailSizeSlider->value();
-        assetGridView->setIconSize(QSize(size, size));
 
         qDebug() << "Switched to Grid view";
     } else {
-        // Switch to list mode
+        // Switch to list mode (table view)
         viewModeButton->setText("☰ List");
-        assetGridView->setViewMode(QListView::ListMode);
-        assetGridView->setSpacing(2);
-        assetGridView->setUniformItemSizes(false);
+        viewStack->setCurrentIndex(1); // Show table view
         thumbnailSizeSlider->setEnabled(false);
 
-        // Set smaller icon size for list mode
-        assetGridView->setIconSize(QSize(48, 48));
-
-        qDebug() << "Switched to List view";
+        qDebug() << "Switched to List view (table)";
     }
-
-    // Force view to update by resetting the model
-    assetGridView->reset();
 }
 
 // Called when thumbnail generation progress updates

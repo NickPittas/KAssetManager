@@ -45,6 +45,7 @@ qt_add_executable(kassetmanagerqt
     src/virtual_folders.cpp
     src/assets_model.h
     src/assets_model.cpp
+    src/assets_table_model.h
     src/importer.h
     src/importer.cpp
     src/thumbnail_generator.h

@@ -78,6 +78,7 @@ private:
     void updateSelectionInfo();
 
     QSet<int> getSelectedAssetIds() const;
+    class QItemSelectionModel* getCurrentSelectionModel();
     int getAnchorIndex() const;
     void selectAsset(int assetId, int index, Qt::KeyboardModifiers modifiers);
     void selectSingle(int assetId, int index);
@@ -102,6 +103,7 @@ private:
     VirtualFolderTreeModel *folderModel;
     
     // Center panel: Asset grid and table
+    class QStackedWidget *viewStack;
     QListView *assetGridView;
     class QTableView *assetTableView;
     AssetsModel *assetsModel;

@@ -239,10 +239,15 @@ void PreviewOverlay::showAsset(const QString &filePath, const QString &fileName,
 
 void PreviewOverlay::showImage(const QString &filePath)
 {
+    qDebug() << "[PreviewOverlay::showImage] Loading image:" << filePath;
+
+    // CRITICAL: Hide video widget and show image view
     videoWidget->hide();
     imageView->show();
 
+    // CRITICAL: Stop any video playback
     if (mediaPlayer->playbackState() != QMediaPlayer::StoppedState) {
+        qDebug() << "[PreviewOverlay::showImage] Stopping video playback";
         mediaPlayer->stop();
     }
 
@@ -253,33 +258,54 @@ void PreviewOverlay::showImage(const QString &filePath)
 
     // Try loading with OpenImageIO first for advanced formats
     QImage image;
+    QPixmap newPixmap;
     if (OIIOImageLoader::isOIIOSupported(filePath)) {
-        qDebug() << "[PreviewOverlay] Loading with OpenImageIO:" << filePath;
+        qDebug() << "[PreviewOverlay::showImage] Loading with OpenImageIO:" << filePath;
         // Load at full resolution for preview (no size limit) with current color space
         image = OIIOImageLoader::loadImage(filePath, 0, 0, currentColorSpace);
         if (!image.isNull()) {
-            originalPixmap = QPixmap::fromImage(image);
-            qDebug() << "[PreviewOverlay] OIIO loaded successfully, size:" << originalPixmap.size();
+            newPixmap = QPixmap::fromImage(image);
+            qDebug() << "[PreviewOverlay::showImage] OIIO loaded successfully, size:" << newPixmap.size();
         } else {
-            qWarning() << "[PreviewOverlay] OIIO failed to load:" << filePath;
+            qWarning() << "[PreviewOverlay::showImage] OIIO failed to load:" << filePath;
         }
     }
 
     // Fall back to Qt's native loader if OIIO didn't work or isn't supported
-    if (originalPixmap.isNull()) {
-        qDebug() << "[PreviewOverlay] Loading with Qt native loader:" << filePath;
-        originalPixmap = QPixmap(filePath);
+    if (newPixmap.isNull()) {
+        qDebug() << "[PreviewOverlay::showImage] Loading with Qt native loader:" << filePath;
+        newPixmap = QPixmap(filePath);
         isHDRImage = false; // Qt loader doesn't support HDR
     }
 
-    if (!originalPixmap.isNull()) {
-        // Clear scene and add new image
-        imageScene->clear();
-        imageItem = imageScene->addPixmap(originalPixmap);
-        imageScene->setSceneRect(originalPixmap.rect());
+    if (!newPixmap.isNull()) {
+        qDebug() << "[PreviewOverlay::showImage] Loaded new pixmap, size:" << newPixmap.size();
+
+        // CRITICAL: Update the pixmap on existing item or create new one
+        if (imageItem) {
+            qDebug() << "[PreviewOverlay::showImage] Updating existing item with setPixmap()";
+            imageItem->setPixmap(newPixmap);
+        } else {
+            qDebug() << "[PreviewOverlay::showImage] Creating new graphics item";
+            imageScene->clear();
+            imageItem = imageScene->addPixmap(newPixmap);
+        }
+
+        // Store the pixmap
+        originalPixmap = newPixmap;
+
+        // Update scene rect
+        imageScene->setSceneRect(newPixmap.rect());
 
         // Fit to view
         fitImageToView();
+
+        // CRITICAL: Force complete view refresh
+        imageView->viewport()->update();
+        imageView->update();
+        imageScene->update();
+        QApplication::processEvents(); // Force immediate processing
+        qDebug() << "[PreviewOverlay::showImage] Image displayed successfully";
 
         // Show/hide color space selector based on whether this is HDR
         if (isHDRImage) {
@@ -292,21 +318,31 @@ void PreviewOverlay::showImage(const QString &filePath)
             controlsWidget->hide();
         }
     } else {
-        qWarning() << "[PreviewOverlay] Failed to load image:" << filePath;
+        qWarning() << "[PreviewOverlay::showImage] Failed to load image:" << filePath;
     }
 }
 
 void PreviewOverlay::showVideo(const QString &filePath)
 {
+    qDebug() << "[PreviewOverlay::showVideo] Loading video:" << filePath;
+
+    // CRITICAL: Hide image view and show video widget
     imageView->hide();
     videoWidget->show();
     controlsWidget->show();
 
+    // CRITICAL: Clear the scene to free memory
+    imageScene->clear();
+    imageItem = nullptr;
+    originalPixmap = QPixmap(); // Clear the pixmap
+
+    qDebug() << "[PreviewOverlay::showVideo] Setting video source";
     mediaPlayer->setSource(QUrl::fromLocalFile(filePath));
 
     // Set video to fill the widget while maintaining aspect ratio
     videoWidget->setAspectRatioMode(Qt::KeepAspectRatio);
 
+    qDebug() << "[PreviewOverlay::showVideo] Starting playback";
     mediaPlayer->play();
 
     controlsTimer->start();
@@ -504,7 +540,7 @@ void PreviewOverlay::resetImageZoom()
 
 void PreviewOverlay::showSequence(const QStringList &framePaths, const QString &sequenceName, int startFrame, int endFrame)
 {
-    qDebug() << "[PreviewOverlay] Showing sequence:" << sequenceName << "frames:" << startFrame << "-" << endFrame;
+    qDebug() << "[PreviewOverlay::showSequence] Showing sequence:" << sequenceName << "frames:" << startFrame << "-" << endFrame;
 
     isSequence = true;
     isVideo = false;
@@ -531,6 +567,11 @@ void PreviewOverlay::showSequence(const QStringList &framePaths, const QString &
     // Process events to ensure window is properly sized
     QApplication::processEvents();
 
+    // CRITICAL: Clear scene before loading sequence
+    qDebug() << "[PreviewOverlay::showSequence] Clearing scene";
+    imageScene->clear();
+    imageItem = nullptr;
+
     // Show image view and controls
     videoWidget->hide();
     imageView->show();
@@ -538,6 +579,7 @@ void PreviewOverlay::showSequence(const QStringList &framePaths, const QString &
 
     // Stop video player if running
     if (mediaPlayer->playbackState() != QMediaPlayer::StoppedState) {
+        qDebug() << "[PreviewOverlay::showSequence] Stopping video playback";
         mediaPlayer->stop();
     }
 
@@ -710,5 +752,23 @@ void PreviewOverlay::onColorSpaceChanged(int index)
         qDebug() << "[PreviewOverlay] Reloading image with new color space";
         showImage(currentFilePath);
     }
+}
+
+void PreviewOverlay::stopPlayback()
+{
+    qDebug() << "[PreviewOverlay] Stopping playback";
+
+    // Stop video playback
+    if (mediaPlayer->playbackState() == QMediaPlayer::PlayingState) {
+        mediaPlayer->stop();
+    }
+
+    // Stop sequence playback
+    if (sequencePlaying) {
+        pauseSequence();
+    }
+
+    // Clear the media source to release the file
+    mediaPlayer->setSource(QUrl());
 }
 

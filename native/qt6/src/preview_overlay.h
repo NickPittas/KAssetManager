@@ -28,6 +28,7 @@ public:
     void showSequence(const QStringList &framePaths, const QString &sequenceName, int startFrame, int endFrame);
     void navigateNext();
     void navigatePrevious();
+    void stopPlayback();
 
 signals:
     void closed();
