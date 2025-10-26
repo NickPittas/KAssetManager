@@ -56,6 +56,14 @@ bool DB::migrate(){
         "  asset_id INTEGER NOT NULL REFERENCES assets(id) ON DELETE CASCADE,\n"
         "  tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,\n"
         "  PRIMARY KEY (asset_id, tag_id)\n"
+        ");",
+        // Project folders (watched folders)
+        "CREATE TABLE IF NOT EXISTS project_folders (\n"
+        "  id INTEGER PRIMARY KEY AUTOINCREMENT,\n"
+        "  name TEXT NOT NULL UNIQUE,\n"
+        "  path TEXT NOT NULL UNIQUE,\n"
+        "  virtual_folder_id INTEGER NOT NULL REFERENCES virtual_folders(id) ON DELETE CASCADE,\n"
+        "  created_at TEXT DEFAULT CURRENT_TIMESTAMP\n"
         ");"
     };
     for (const char* sql : ddl) if (!exec(QString::fromLatin1(sql))) return false;
@@ -552,4 +560,138 @@ bool DB::clearAllData()
     emit tagsChanged();
 
     return true;
+}
+
+// Project folder operations
+int DB::createProjectFolder(const QString& name, const QString& path)
+{
+    // First create a virtual folder for this project
+    int virtualFolderId = createFolder(name, 0); // Create at root level
+    if (virtualFolderId <= 0) {
+        qWarning() << "DB::createProjectFolder: Failed to create virtual folder";
+        return 0;
+    }
+
+    // Then create the project folder entry
+    QSqlQuery ins(m_db);
+    ins.prepare("INSERT INTO project_folders(name, path, virtual_folder_id) VALUES(?, ?, ?)");
+    ins.addBindValue(name);
+    ins.addBindValue(path);
+    ins.addBindValue(virtualFolderId);
+
+    if (!ins.exec()) {
+        qWarning() << "DB::createProjectFolder: INSERT failed:" << ins.lastError();
+        // Clean up the virtual folder
+        deleteFolder(virtualFolderId);
+        return 0;
+    }
+
+    int projectFolderId = ins.lastInsertId().toInt();
+    qDebug() << "DB::createProjectFolder: created project folder" << projectFolderId << "name=" << name << "path=" << path;
+    emit projectFoldersChanged();
+    return projectFolderId;
+}
+
+bool DB::renameProjectFolder(int id, const QString& name)
+{
+    // Get the virtual folder ID
+    QSqlQuery sel(m_db);
+    sel.prepare("SELECT virtual_folder_id FROM project_folders WHERE id=?");
+    sel.addBindValue(id);
+    if (!sel.exec() || !sel.next()) {
+        qWarning() << "DB::renameProjectFolder: Failed to find project folder" << id;
+        return false;
+    }
+    int virtualFolderId = sel.value(0).toInt();
+
+    // Update both the project folder and virtual folder names
+    QSqlQuery upd1(m_db);
+    upd1.prepare("UPDATE project_folders SET name=? WHERE id=?");
+    upd1.addBindValue(name);
+    upd1.addBindValue(id);
+
+    QSqlQuery upd2(m_db);
+    upd2.prepare("UPDATE virtual_folders SET name=?, updated_at=CURRENT_TIMESTAMP WHERE id=?");
+    upd2.addBindValue(name);
+    upd2.addBindValue(virtualFolderId);
+
+    bool ok = upd1.exec() && upd2.exec();
+    if (!ok) {
+        qWarning() << "DB::renameProjectFolder: UPDATE failed:" << upd1.lastError() << upd2.lastError();
+    } else {
+        qDebug() << "DB::renameProjectFolder: renamed project folder" << id << "to" << name;
+        emit projectFoldersChanged();
+        emit foldersChanged();
+    }
+    return ok;
+}
+
+bool DB::deleteProjectFolder(int id)
+{
+    // Get the virtual folder ID first
+    QSqlQuery sel(m_db);
+    sel.prepare("SELECT virtual_folder_id FROM project_folders WHERE id=?");
+    sel.addBindValue(id);
+    if (!sel.exec() || !sel.next()) {
+        qWarning() << "DB::deleteProjectFolder: Failed to find project folder" << id;
+        return false;
+    }
+    int virtualFolderId = sel.value(0).toInt();
+
+    // Delete the project folder entry (virtual folder will be deleted by CASCADE)
+    QSqlQuery del(m_db);
+    del.prepare("DELETE FROM project_folders WHERE id=?");
+    del.addBindValue(id);
+
+    bool ok = del.exec();
+    if (!ok) {
+        qWarning() << "DB::deleteProjectFolder: DELETE failed:" << del.lastError();
+    } else {
+        qDebug() << "DB::deleteProjectFolder: deleted project folder" << id;
+        // Also delete the virtual folder
+        deleteFolder(virtualFolderId);
+        emit projectFoldersChanged();
+    }
+    return ok;
+}
+
+QVector<QPair<int, QPair<QString, QString>>> DB::listProjectFolders() const
+{
+    QVector<QPair<int, QPair<QString, QString>>> result;
+    QSqlQuery q(m_db);
+    if (!q.exec("SELECT id, name, path FROM project_folders ORDER BY name")) {
+        qWarning() << "DB::listProjectFolders: SELECT failed:" << q.lastError();
+        return result;
+    }
+
+    while (q.next()) {
+        int id = q.value(0).toInt();
+        QString name = q.value(1).toString();
+        QString path = q.value(2).toString();
+        result.append({id, {name, path}});
+    }
+
+    return result;
+}
+
+QString DB::getProjectFolderPath(int id) const
+{
+    QSqlQuery q(m_db);
+    q.prepare("SELECT path FROM project_folders WHERE id=?");
+    q.addBindValue(id);
+    if (q.exec() && q.next()) {
+        return q.value(0).toString();
+    }
+    return QString();
+}
+
+int DB::getProjectFolderIdByVirtualFolderId(int virtualFolderId) const
+{
+    QSqlQuery q(m_db);
+    q.prepare("SELECT id FROM project_folders WHERE virtual_folder_id=?");
+    q.addBindValue(virtualFolderId);
+    if (q.exec() && q.next()) {
+        return q.value(0).toInt();
+    }
+    return 0;
 }

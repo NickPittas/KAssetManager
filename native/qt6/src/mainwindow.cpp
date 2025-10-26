@@ -10,6 +10,7 @@
 #include "import_progress_dialog.h"
 #include "settings_dialog.h"
 #include "star_rating_widget.h"
+#include "project_folder_watcher.h"
 #include <QHeaderView>
 #include <QStyledItemDelegate>
 #include <QPainter>
@@ -39,6 +40,8 @@
 #include <QScrollBar>
 #include <QTableView>
 #include <QStackedWidget>
+#include <QCheckBox>
+#include <QFileDialog>
 
 // Custom QListView with compact drag pixmap
 class AssetGridView : public QListView
@@ -298,6 +301,8 @@ MainWindow::MainWindow(QWidget *parent)
     , previewIndex(-1)
     , previewOverlay(nullptr)
     , importer(nullptr)
+    , projectFolderWatcher(nullptr)
+    , assetsLocked(true) // Locked by default
 {
     setupUi();
     setupConnections();
@@ -314,6 +319,19 @@ MainWindow::MainWindow(QWidget *parent)
     connect(importer, &Importer::currentFileChanged, this, &MainWindow::onImportFileChanged);
     connect(importer, &Importer::currentFolderChanged, this, &MainWindow::onImportFolderChanged);
     connect(importer, &Importer::importFinished, this, &MainWindow::onImportComplete);
+
+    // Create project folder watcher
+    projectFolderWatcher = new ProjectFolderWatcher(this);
+    connect(projectFolderWatcher, &ProjectFolderWatcher::projectFolderChanged,
+            this, &MainWindow::onProjectFolderChanged);
+
+    // Load existing project folders into watcher
+    auto projectFolders = DB::instance().listProjectFolders();
+    for (const auto& pf : projectFolders) {
+        int projectFolderId = pf.first;
+        QString path = pf.second.second;
+        projectFolderWatcher->addProjectFolder(projectFolderId, path);
+    }
 
     // Create import progress dialog (will be shown when needed)
     importProgressDialog = nullptr;
@@ -379,6 +397,12 @@ void MainWindow::setupUi()
         "QMenu { background-color: #1a1a1a; color: #ffffff; border: 1px solid #333; }"
         "QMenu::item:selected { background-color: #2f3a4a; }"
     );
+
+    QAction* addProjectFolderAction = fileMenu->addAction("Add &Project Folder...");
+    addProjectFolderAction->setShortcut(QKeySequence("Ctrl+P"));
+    connect(addProjectFolderAction, &QAction::triggered, this, &MainWindow::onAddProjectFolder);
+
+    fileMenu->addSeparator();
 
     QAction* settingsAction = fileMenu->addAction("&Settings");
     settingsAction->setShortcut(QKeySequence("Ctrl+,"));
@@ -462,6 +486,31 @@ void MainWindow::setupUi()
     toolbarLayout->addWidget(sizeValueLabel);
 
     toolbarLayout->addStretch();
+
+    // Lock checkbox for project folders
+    lockCheckBox = new QCheckBox("🔒 Lock Assets", toolbar);
+    lockCheckBox->setChecked(true); // Locked by default
+    lockCheckBox->setStyleSheet(
+        "QCheckBox { color: #ff4444; font-size: 12px; font-weight: bold; }"
+        "QCheckBox::indicator { width: 16px; height: 16px; }"
+        "QCheckBox::indicator:checked { background-color: #ff4444; border: 1px solid #ff4444; }"
+        "QCheckBox::indicator:unchecked { background-color: #2a2a2a; border: 1px solid #666; }"
+    );
+    lockCheckBox->setToolTip("When locked, assets can only be moved within their project folder");
+    connect(lockCheckBox, &QCheckBox::toggled, this, &MainWindow::onLockToggled);
+    toolbarLayout->addWidget(lockCheckBox);
+
+    // Refresh button
+    refreshButton = new QPushButton("🔄 Refresh", toolbar);
+    refreshButton->setFixedSize(90, 28);
+    refreshButton->setStyleSheet(
+        "QPushButton { background-color: #2a2a2a; color: #ffffff; border: 1px solid #333; border-radius: 4px; font-size: 12px; }"
+        "QPushButton:hover { background-color: #333; }"
+    );
+    refreshButton->setToolTip("Refresh assets from project folders");
+    connect(refreshButton, &QPushButton::clicked, this, &MainWindow::onRefreshAssets);
+    toolbarLayout->addWidget(refreshButton);
+
     centerLayout->addWidget(toolbar);
 
     // Stacked widget to switch between grid and table views
@@ -909,6 +958,76 @@ void MainWindow::onAssetContextMenu(const QPoint &pos)
             int targetFolderId = selected->data().toInt();
             QSet<int> selectedIds = getSelectedAssetIds();
 
+            // Check if locked and if move is allowed
+            if (assetsLocked) {
+                // Check if all assets and target are in the same project folder
+                bool canMove = true;
+                int sourceProjectFolderId = -1;
+                int targetProjectFolderId = -1;
+
+                // Get target folder's project folder ID
+                QModelIndex targetIdx = QModelIndex();
+                for (int row = 0; row < folderModel->rowCount(QModelIndex()); ++row) {
+                    QModelIndex idx = folderModel->index(row, 0, QModelIndex());
+                    if (folderModel->data(idx, VirtualFolderTreeModel::IdRole).toInt() == targetFolderId) {
+                        targetIdx = idx;
+                        break;
+                    }
+                }
+
+                // Walk up to find if target is in a project folder
+                QModelIndex current = targetIdx;
+                while (current.isValid()) {
+                    if (folderModel->data(current, VirtualFolderTreeModel::IsProjectFolderRole).toBool()) {
+                        targetProjectFolderId = folderModel->data(current, VirtualFolderTreeModel::ProjectFolderIdRole).toInt();
+                        break;
+                    }
+                    current = folderModel->parent(current);
+                }
+
+                // Check source assets
+                for (int assetId : selectedIds) {
+                    // Get asset's current folder
+                    QSqlQuery q(DB::instance().database());
+                    q.prepare("SELECT virtual_folder_id FROM assets WHERE id=?");
+                    q.addBindValue(assetId);
+                    if (q.exec() && q.next()) {
+                        int assetFolderId = q.value(0).toInt();
+
+                        // Find if asset is in a project folder
+                        int assetProjectFolderId = -1;
+                        for (int row = 0; row < folderModel->rowCount(QModelIndex()); ++row) {
+                            QModelIndex idx = folderModel->index(row, 0, QModelIndex());
+                            if (folderModel->data(idx, VirtualFolderTreeModel::IdRole).toInt() == assetFolderId) {
+                                QModelIndex cur = idx;
+                                while (cur.isValid()) {
+                                    if (folderModel->data(cur, VirtualFolderTreeModel::IsProjectFolderRole).toBool()) {
+                                        assetProjectFolderId = folderModel->data(cur, VirtualFolderTreeModel::ProjectFolderIdRole).toInt();
+                                        break;
+                                    }
+                                    cur = folderModel->parent(cur);
+                                }
+                                break;
+                            }
+                        }
+
+                        if (sourceProjectFolderId == -1) {
+                            sourceProjectFolderId = assetProjectFolderId;
+                        } else if (sourceProjectFolderId != assetProjectFolderId) {
+                            canMove = false;
+                            break;
+                        }
+                    }
+                }
+
+                if (!canMove || (sourceProjectFolderId != -1 && sourceProjectFolderId != targetProjectFolderId)) {
+                    QMessageBox::warning(this, "Move Restricted",
+                        "Assets are locked. You can only move assets within their project folder.\n"
+                        "Uncheck the 'Lock Assets' checkbox to move assets freely.");
+                    return;
+                }
+            }
+
             for (int assetId : selectedIds) {
                 DB::instance().setAssetFolder(assetId, targetFolderId);
             }
@@ -981,6 +1100,8 @@ void MainWindow::onFolderContextMenu(const QPoint &pos)
 
     int folderId = folderModel->data(index, VirtualFolderTreeModel::IdRole).toInt();
     QString folderName = folderModel->data(index, Qt::DisplayRole).toString();
+    bool isProjectFolder = folderModel->data(index, VirtualFolderTreeModel::IsProjectFolderRole).toBool();
+    int projectFolderId = folderModel->data(index, VirtualFolderTreeModel::ProjectFolderIdRole).toInt();
 
     QMenu menu(this);
     menu.setStyleSheet(
@@ -990,7 +1111,14 @@ void MainWindow::onFolderContextMenu(const QPoint &pos)
 
     QAction *createAction = menu.addAction("Create Subfolder");
     QAction *renameAction = menu.addAction("Rename");
-    QAction *deleteAction = menu.addAction("Delete");
+    QAction *deleteAction = nullptr;
+
+    // Only allow deletion of non-project folders
+    if (!isProjectFolder) {
+        deleteAction = menu.addAction("Delete");
+    } else {
+        deleteAction = menu.addAction("Remove Project Folder");
+    }
 
     QAction *selected = menu.exec(folderTreeView->mapToGlobal(pos));
 
@@ -1016,27 +1144,58 @@ void MainWindow::onFolderContextMenu(const QPoint &pos)
                                                "Enter new name:",
                                                QLineEdit::Normal, folderName, &ok);
         if (ok && !newName.isEmpty() && newName != folderName) {
-            if (DB::instance().renameFolder(folderId, newName)) {
-                folderModel->reload();
-                statusBar()->showMessage(QString("Renamed folder to '%1'").arg(newName), 3000);
+            // If it's a project folder, use the project folder rename method
+            if (isProjectFolder) {
+                if (DB::instance().renameProjectFolder(projectFolderId, newName)) {
+                    folderModel->reload();
+                    statusBar()->showMessage(QString("Renamed project folder to '%1'").arg(newName), 3000);
+                } else {
+                    QMessageBox::warning(this, "Error", "Failed to rename project folder");
+                }
             } else {
-                QMessageBox::warning(this, "Error", "Failed to rename folder");
+                if (DB::instance().renameFolder(folderId, newName)) {
+                    folderModel->reload();
+                    statusBar()->showMessage(QString("Renamed folder to '%1'").arg(newName), 3000);
+                } else {
+                    QMessageBox::warning(this, "Error", "Failed to rename folder");
+                }
             }
         }
     } else if (selected == deleteAction) {
-        // Delete folder
-        QMessageBox::StandardButton reply = QMessageBox::question(
-            this, "Delete Folder",
-            QString("Are you sure you want to delete '%1' and all its contents?").arg(folderName),
-            QMessageBox::Yes | QMessageBox::No);
+        if (isProjectFolder) {
+            // Remove project folder
+            QMessageBox::StandardButton reply = QMessageBox::question(
+                this, "Remove Project Folder",
+                QString("Are you sure you want to remove project folder '%1'?\n\nThis will remove the folder and all its assets from the library, but will not delete the actual files.").arg(folderName),
+                QMessageBox::Yes | QMessageBox::No);
 
-        if (reply == QMessageBox::Yes) {
-            if (DB::instance().deleteFolder(folderId)) {
-                folderModel->reload();
-                assetsModel->reload();
-                statusBar()->showMessage(QString("Deleted folder '%1'").arg(folderName), 3000);
-            } else {
-                QMessageBox::warning(this, "Error", "Failed to delete folder");
+            if (reply == QMessageBox::Yes) {
+                // Remove from watcher first
+                projectFolderWatcher->removeProjectFolder(projectFolderId);
+
+                if (DB::instance().deleteProjectFolder(projectFolderId)) {
+                    folderModel->reload();
+                    assetsModel->reload();
+                    statusBar()->showMessage(QString("Removed project folder '%1'").arg(folderName), 3000);
+                } else {
+                    QMessageBox::warning(this, "Error", "Failed to remove project folder");
+                }
+            }
+        } else {
+            // Delete regular folder
+            QMessageBox::StandardButton reply = QMessageBox::question(
+                this, "Delete Folder",
+                QString("Are you sure you want to delete '%1' and all its contents?").arg(folderName),
+                QMessageBox::Yes | QMessageBox::No);
+
+            if (reply == QMessageBox::Yes) {
+                if (DB::instance().deleteFolder(folderId)) {
+                    folderModel->reload();
+                    assetsModel->reload();
+                    statusBar()->showMessage(QString("Deleted folder '%1'").arg(folderName), 3000);
+                } else {
+                    QMessageBox::warning(this, "Error", "Failed to delete folder");
+                }
             }
         }
     }
@@ -1791,6 +1950,70 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
 
                     qDebug() << "Drop assets on folder" << targetFolderId << "- moving" << assetIds.size() << "assets";
 
+                    // Check if locked and if move is allowed
+                    if (assetsLocked) {
+                        // Check if target is in a project folder
+                        int targetProjectFolderId = -1;
+                        QModelIndex current = folderIndex;
+                        while (current.isValid()) {
+                            if (folderModel->data(current, VirtualFolderTreeModel::IsProjectFolderRole).toBool()) {
+                                targetProjectFolderId = folderModel->data(current, VirtualFolderTreeModel::ProjectFolderIdRole).toInt();
+                                break;
+                            }
+                            current = folderModel->parent(current);
+                        }
+
+                        // Check if all assets are from the same project folder
+                        bool canMove = true;
+                        int sourceProjectFolderId = -1;
+
+                        for (int assetId : assetIds) {
+                            QSqlQuery q(DB::instance().database());
+                            q.prepare("SELECT virtual_folder_id FROM assets WHERE id=?");
+                            q.addBindValue(assetId);
+                            if (q.exec() && q.next()) {
+                                int assetFolderId = q.value(0).toInt();
+
+                                // Find if asset is in a project folder
+                                int assetProjectFolderId = -1;
+                                std::function<void(const QModelIndex&)> findProjectFolder = [&](const QModelIndex& idx) {
+                                    if (!idx.isValid()) return;
+                                    if (folderModel->data(idx, VirtualFolderTreeModel::IdRole).toInt() == assetFolderId) {
+                                        QModelIndex cur = idx;
+                                        while (cur.isValid()) {
+                                            if (folderModel->data(cur, VirtualFolderTreeModel::IsProjectFolderRole).toBool()) {
+                                                assetProjectFolderId = folderModel->data(cur, VirtualFolderTreeModel::ProjectFolderIdRole).toInt();
+                                                return;
+                                            }
+                                            cur = folderModel->parent(cur);
+                                        }
+                                        return;
+                                    }
+                                    for (int row = 0; row < folderModel->rowCount(idx); ++row) {
+                                        findProjectFolder(folderModel->index(row, 0, idx));
+                                        if (assetProjectFolderId != -1) return;
+                                    }
+                                };
+                                findProjectFolder(QModelIndex());
+
+                                if (sourceProjectFolderId == -1) {
+                                    sourceProjectFolderId = assetProjectFolderId;
+                                } else if (sourceProjectFolderId != assetProjectFolderId) {
+                                    canMove = false;
+                                    break;
+                                }
+                            }
+                        }
+
+                        if (!canMove || (sourceProjectFolderId != -1 && sourceProjectFolderId != targetProjectFolderId)) {
+                            QMessageBox::warning(this, "Move Restricted",
+                                "Assets are locked. You can only move assets within their project folder.\n"
+                                "Uncheck the 'Lock Assets' checkbox to move assets freely.");
+                            dropEvent->ignore();
+                            return false;
+                        }
+                    }
+
                     // Move assets to folder
                     for (int assetId : assetIds) {
                         assetsModel->moveAssetToFolder(assetId, targetFolderId);
@@ -2114,3 +2337,112 @@ QStringList MainWindow::reconstructSequenceFramePaths(const QString& firstFrameP
     return framePaths;
 }
 
+void MainWindow::onAddProjectFolder()
+{
+    // Ask user to select a folder
+    QString folderPath = QFileDialog::getExistingDirectory(
+        this,
+        "Select Project Folder",
+        QString(),
+        QFileDialog::ShowDirsOnly | QFileDialog::DontResolveSymlinks
+    );
+
+    if (folderPath.isEmpty()) {
+        return;
+    }
+
+    // Ask for a name for this project folder
+    bool ok;
+    QString folderName = QInputDialog::getText(
+        this,
+        "Project Folder Name",
+        "Enter a name for this project folder:",
+        QLineEdit::Normal,
+        QFileInfo(folderPath).fileName(),
+        &ok
+    );
+
+    if (!ok || folderName.isEmpty()) {
+        return;
+    }
+
+    // Create the project folder in the database
+    int projectFolderId = DB::instance().createProjectFolder(folderName, folderPath);
+    if (projectFolderId <= 0) {
+        QMessageBox::warning(this, "Error", "Failed to create project folder. The name or path may already exist.");
+        return;
+    }
+
+    // Add to watcher
+    projectFolderWatcher->addProjectFolder(projectFolderId, folderPath);
+
+    // Reload folder tree
+    folderModel->reload();
+
+    // Import the folder contents
+    QMessageBox::StandardButton reply = QMessageBox::question(
+        this,
+        "Import Assets",
+        "Do you want to import all assets from this folder now?",
+        QMessageBox::Yes | QMessageBox::No
+    );
+
+    if (reply == QMessageBox::Yes) {
+        // Get the virtual folder ID for this project
+        auto projectFolders = DB::instance().listProjectFolders();
+        for (const auto& pf : projectFolders) {
+            if (pf.first == projectFolderId) {
+                // Import the folder
+                importFiles(QStringList() << folderPath);
+                break;
+            }
+        }
+    }
+
+    statusBar()->showMessage(QString("Added project folder '%1'").arg(folderName), 3000);
+}
+
+void MainWindow::onRefreshAssets()
+{
+    qDebug() << "MainWindow::onRefreshAssets";
+
+    // Get all project folders
+    auto projectFolders = DB::instance().listProjectFolders();
+
+    if (projectFolders.isEmpty()) {
+        statusBar()->showMessage("No project folders to refresh", 3000);
+        return;
+    }
+
+    // Manually trigger refresh for all project folders
+    for (const auto& pf : projectFolders) {
+        int projectFolderId = pf.first;
+        projectFolderWatcher->refreshProjectFolder(projectFolderId);
+    }
+
+    statusBar()->showMessage("Refreshing all project folders...", 3000);
+}
+
+void MainWindow::onLockToggled(bool checked)
+{
+    assetsLocked = checked;
+    qDebug() << "MainWindow::onLockToggled - Assets locked:" << assetsLocked;
+
+    if (checked) {
+        statusBar()->showMessage("Assets locked - can only move within project folders", 3000);
+    } else {
+        statusBar()->showMessage("Assets unlocked - can move freely", 3000);
+    }
+}
+
+void MainWindow::onProjectFolderChanged(int projectFolderId, const QString& path)
+{
+    qDebug() << "MainWindow::onProjectFolderChanged" << projectFolderId << path;
+
+    // Re-import the folder to pick up new/changed files
+    // This will update existing assets and add new ones
+    statusBar()->showMessage(QString("Refreshing project folder: %1").arg(QFileInfo(path).fileName()), 2000);
+
+    // Import the folder (this will upsert assets)
+    importFiles(QStringList() << path);
+}

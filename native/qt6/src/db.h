@@ -25,6 +25,14 @@ public:
     bool deleteFolder(int id);
     bool moveFolder(int id, int newParentId);
 
+    // Project folder ops (watched folders)
+    int createProjectFolder(const QString& name, const QString& path);
+    bool renameProjectFolder(int id, const QString& name);
+    bool deleteProjectFolder(int id);
+    QVector<QPair<int, QPair<QString, QString>>> listProjectFolders() const; // Returns (id, (name, path))
+    QString getProjectFolderPath(int id) const;
+    int getProjectFolderIdByVirtualFolderId(int virtualFolderId) const;
+
     // Asset ops
     int upsertAsset(const QString& filePath);
     int upsertSequence(const QString& sequencePattern, int startFrame, int endFrame, int frameCount, const QString& firstFramePath);
@@ -52,6 +60,7 @@ signals:
     void foldersChanged();
     void assetsChanged(int folderId);
     void tagsChanged();
+    void projectFoldersChanged();
 
 private:
     explicit DB(QObject* parent=nullptr);

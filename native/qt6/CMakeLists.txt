@@ -72,6 +72,8 @@ qt_add_executable(kassetmanagerqt
     src/sequence_detector.cpp
     src/oiio_image_loader.h
     src/oiio_image_loader.cpp
+    src/project_folder_watcher.h
+    src/project_folder_watcher.cpp
     ${APP_RESOURCES}
 )
 

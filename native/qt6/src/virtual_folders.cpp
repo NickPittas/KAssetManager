@@ -4,6 +4,7 @@
 #include <QSqlError>
 #include <QDebug>
 #include <QMimeData>
+#include <QIcon>
 #include "log_manager.h"
 
 VirtualFolderTreeModel::VirtualFolderTreeModel(QObject* parent): QAbstractItemModel(parent){
@@ -20,7 +21,30 @@ void VirtualFolderTreeModel::build(){
         qWarning() << q.lastError(); return; }
     // First pass: create nodes
     QVector<VFNode> tmp;
-    while (q.next()) { VFNode n; n.id=q.value(0).toInt(); n.name=q.value(1).toString(); n.parentId=q.value(2).toInt(); tmp.push_back(n); }
+    while (q.next()) {
+        VFNode n;
+        n.id=q.value(0).toInt();
+        n.name=q.value(1).toString();
+        n.parentId=q.value(2).toInt();
+        tmp.push_back(n);
+    }
+
+    // Mark project folders
+    QSqlQuery pq(DB::instance().database());
+    if (pq.exec("SELECT id, virtual_folder_id FROM project_folders")) {
+        while (pq.next()) {
+            int projectFolderId = pq.value(0).toInt();
+            int virtualFolderId = pq.value(1).toInt();
+            for (auto& n : tmp) {
+                if (n.id == virtualFolderId) {
+                    n.isProjectFolder = true;
+                    n.projectFolderId = projectFolderId;
+                    break;
+                }
+            }
+        }
+    }
+
     // Find root id (name='Root', parentId=0)
     for (const auto& n: tmp) if (n.parentId==0 && n.name=="Root") { m_rootId=n.id; break; }
     m_nodes = tmp; m_idToIdx.reserve(m_nodes.size());
@@ -84,6 +108,13 @@ QVariant VirtualFolderTreeModel::data(const QModelIndex& idx, int role) const{
     const VFNode* n = static_cast<const VFNode*>(idx.internalPointer());
     switch(role){
         case Qt::DisplayRole: return n->name;
+        case Qt::DecorationRole: {
+            // Return icon for project folders
+            if (n->isProjectFolder) {
+                return QIcon(":/icons/project_folder.png"); // We'll need to add this icon
+            }
+            return QVariant();
+        }
         case IdRole: return n->id;
         case NameRole: return n->name;
         case DepthRole: {
@@ -97,12 +128,21 @@ QVariant VirtualFolderTreeModel::data(const QModelIndex& idx, int role) const{
             return d;
         }
         case HasChildrenRole: return !n->children.isEmpty();
+        case IsProjectFolderRole: return n->isProjectFolder;
+        case ProjectFolderIdRole: return n->projectFolderId;
     }
     return {};
 }
 
 QHash<int,QByteArray> VirtualFolderTreeModel::roleNames() const{
-    QHash<int,QByteArray> r; r[IdRole]="id"; r[NameRole]="name"; r[DepthRole]="depth"; r[HasChildrenRole]="hasChildren"; return r;
+    QHash<int,QByteArray> r;
+    r[IdRole]="id";
+    r[NameRole]="name";
+    r[DepthRole]="depth";
+    r[HasChildrenRole]="hasChildren";
+    r[IsProjectFolderRole]="isProjectFolder";
+    r[ProjectFolderIdRole]="projectFolderId";
+    return r;
 }
 
 int VirtualFolderTreeModel::createFolder(int parentId, const QString& name){ int id=DB::instance().createFolder(name,parentId); return id; }
@@ -168,4 +208,16 @@ Qt::DropActions VirtualFolderTreeModel::supportedDragActions() const
 Qt::DropActions VirtualFolderTreeModel::supportedDropActions() const
 {
     return Qt::MoveAction | Qt::CopyAction;
+}
+
+bool VirtualFolderTreeModel::isProjectFolder(int id) const
+{
+    const VFNode* n = nodeForId(id);
+    return n ? n->isProjectFolder : false;
+}
+
+int VirtualFolderTreeModel::getProjectFolderId(int virtualFolderId) const
+{
+    const VFNode* n = nodeForId(virtualFolderId);
+    return n ? n->projectFolderId : 0;
 }

@@ -22,6 +22,7 @@ class AssetsModel;
 class TagsModel;
 class PreviewOverlay;
 class ImportProgressDialog;
+class ProjectFolderWatcher;
 
 class MainWindow : public QMainWindow
 {
@@ -70,6 +71,12 @@ private slots:
     void onImportComplete();
     void onThumbnailProgress(int current, int total);
     void onRatingChanged(int rating);
+
+    // Project folder operations
+    void onAddProjectFolder();
+    void onRefreshAssets();
+    void onLockToggled(bool checked);
+    void onProjectFolderChanged(int projectFolderId, const QString& path);
 
 private:
     void setupUi();
@@ -129,6 +136,8 @@ private:
     QSlider *thumbnailSizeSlider;
     QPushButton *viewModeButton;
     bool isGridMode;
+    class QCheckBox *lockCheckBox;
+    QPushButton *refreshButton;
     
     // Info panel labels
     QLabel *infoFileName;
@@ -155,6 +164,10 @@ private:
 
     // Import progress dialog
     ImportProgressDialog *importProgressDialog;
+
+    // Project folder watcher
+    ProjectFolderWatcher *projectFolderWatcher;
+    bool assetsLocked;
 };
 
 #endif // MAINWINDOW_H
