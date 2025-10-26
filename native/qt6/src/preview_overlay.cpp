@@ -1,4 +1,5 @@
 #include "preview_overlay.h"
+#include "oiio_image_loader.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QPixmap>
@@ -8,6 +9,7 @@
 #include <QApplication>
 #include <QWheelEvent>
 #include <QMouseEvent>
+#include <QDebug>
 
 PreviewOverlay::PreviewOverlay(QWidget *parent)
     : QWidget(parent)
@@ -20,6 +22,13 @@ PreviewOverlay::PreviewOverlay(QWidget *parent)
     , isVideo(false)
     , currentZoom(1.0)
     , isPanning(false)
+    , isSequence(false)
+    , currentSequenceFrame(0)
+    , sequenceStartFrame(0)
+    , sequenceEndFrame(0)
+    , sequencePlaying(false)
+    , currentColorSpace(OIIOImageLoader::ColorSpace::sRGB)
+    , isHDRImage(false)
 {
     setupUi();
     setFocusPolicy(Qt::StrongFocus);
@@ -29,12 +38,20 @@ PreviewOverlay::PreviewOverlay(QWidget *parent)
     controlsTimer->setSingleShot(true);
     controlsTimer->setInterval(3000);
     connect(controlsTimer, &QTimer::timeout, this, &PreviewOverlay::hideControls);
+
+    // Sequence playback timer (24 fps default)
+    sequenceTimer = new QTimer(this);
+    sequenceTimer->setInterval(1000 / 24); // 24 fps
+    connect(sequenceTimer, &QTimer::timeout, this, &PreviewOverlay::onSequenceTimerTick);
 }
 
 PreviewOverlay::~PreviewOverlay()
 {
     if (mediaPlayer) {
         mediaPlayer->stop();
+    }
+    if (sequenceTimer) {
+        sequenceTimer->stop();
     }
 }
 
@@ -132,12 +149,38 @@ void PreviewOverlay::setupUi()
     buttonsLayout->addWidget(timeLabel);
     
     buttonsLayout->addStretch();
-    
+
+    // Color space selector (for HDR/EXR images)
+    colorSpaceLabel = new QLabel("Color Space:", this);
+    colorSpaceLabel->setStyleSheet("QLabel { color: white; font-size: 14px; padding: 0 5px; }");
+    colorSpaceLabel->hide();
+    buttonsLayout->addWidget(colorSpaceLabel);
+
+    colorSpaceCombo = new QComboBox(this);
+    colorSpaceCombo->addItem("Linear");
+    colorSpaceCombo->addItem("sRGB");
+    colorSpaceCombo->addItem("Rec.709");
+    colorSpaceCombo->setCurrentIndex(1); // Default to sRGB
+    colorSpaceCombo->setStyleSheet(
+        "QComboBox { background-color: #333; color: white; border: 1px solid #555; "
+        "padding: 5px; border-radius: 3px; min-width: 100px; }"
+        "QComboBox::drop-down { border: none; }"
+        "QComboBox::down-arrow { image: none; border: none; }"
+        "QComboBox QAbstractItemView { background-color: #333; color: white; "
+        "selection-background-color: #58a6ff; }"
+    );
+    colorSpaceCombo->hide();
+    connect(colorSpaceCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &PreviewOverlay::onColorSpaceChanged);
+    buttonsLayout->addWidget(colorSpaceCombo);
+
+    buttonsLayout->addSpacing(20);
+
     // Volume control
     QLabel *volumeIcon = new QLabel("🔊", this);
     volumeIcon->setStyleSheet("QLabel { color: white; font-size: 16px; }");
     buttonsLayout->addWidget(volumeIcon);
-    
+
     volumeSlider = new QSlider(Qt::Horizontal, this);
     volumeSlider->setFixedWidth(100);
     volumeSlider->setRange(0, 100);
@@ -145,7 +188,7 @@ void PreviewOverlay::setupUi()
     volumeSlider->setStyleSheet(positionSlider->styleSheet());
     connect(volumeSlider, &QSlider::valueChanged, this, &PreviewOverlay::onVolumeChanged);
     buttonsLayout->addWidget(volumeSlider);
-    
+
     controlsLayout->addLayout(buttonsLayout);
     
     mainLayout->addWidget(controlsWidget);
@@ -164,6 +207,13 @@ void PreviewOverlay::setupUi()
 
 void PreviewOverlay::showAsset(const QString &filePath, const QString &fileName, const QString &fileType)
 {
+    // Reset sequence state
+    isSequence = false;
+    sequencePlaying = false;
+    if (sequenceTimer->isActive()) {
+        sequenceTimer->stop();
+    }
+
     currentFilePath = filePath;
     currentFileType = fileType.toLower();
     fileNameLabel->setText(fileName);
@@ -190,14 +240,38 @@ void PreviewOverlay::showAsset(const QString &filePath, const QString &fileName,
 void PreviewOverlay::showImage(const QString &filePath)
 {
     videoWidget->hide();
-    controlsWidget->hide();
     imageView->show();
 
     if (mediaPlayer->playbackState() != QMediaPlayer::StoppedState) {
         mediaPlayer->stop();
     }
 
-    originalPixmap = QPixmap(filePath);
+    // Check if this is an HDR/EXR image
+    QFileInfo fileInfo(filePath);
+    QString ext = fileInfo.suffix().toLower();
+    isHDRImage = (ext == "exr" || ext == "hdr" || ext == "pic");
+
+    // Try loading with OpenImageIO first for advanced formats
+    QImage image;
+    if (OIIOImageLoader::isOIIOSupported(filePath)) {
+        qDebug() << "[PreviewOverlay] Loading with OpenImageIO:" << filePath;
+        // Load at full resolution for preview (no size limit) with current color space
+        image = OIIOImageLoader::loadImage(filePath, 0, 0, currentColorSpace);
+        if (!image.isNull()) {
+            originalPixmap = QPixmap::fromImage(image);
+            qDebug() << "[PreviewOverlay] OIIO loaded successfully, size:" << originalPixmap.size();
+        } else {
+            qWarning() << "[PreviewOverlay] OIIO failed to load:" << filePath;
+        }
+    }
+
+    // Fall back to Qt's native loader if OIIO didn't work or isn't supported
+    if (originalPixmap.isNull()) {
+        qDebug() << "[PreviewOverlay] Loading with Qt native loader:" << filePath;
+        originalPixmap = QPixmap(filePath);
+        isHDRImage = false; // Qt loader doesn't support HDR
+    }
+
     if (!originalPixmap.isNull()) {
         // Clear scene and add new image
         imageScene->clear();
@@ -206,6 +280,19 @@ void PreviewOverlay::showImage(const QString &filePath)
 
         // Fit to view
         fitImageToView();
+
+        // Show/hide color space selector based on whether this is HDR
+        if (isHDRImage) {
+            colorSpaceLabel->show();
+            colorSpaceCombo->show();
+            controlsWidget->show();
+        } else {
+            colorSpaceLabel->hide();
+            colorSpaceCombo->hide();
+            controlsWidget->hide();
+        }
+    } else {
+        qWarning() << "[PreviewOverlay] Failed to load image:" << filePath;
     }
 }
 
@@ -227,12 +314,22 @@ void PreviewOverlay::showVideo(const QString &filePath)
 
 void PreviewOverlay::onPlayPauseClicked()
 {
-    if (mediaPlayer->playbackState() == QMediaPlayer::PlayingState) {
-        mediaPlayer->pause();
+    if (isSequence) {
+        // Handle sequence playback
+        if (sequencePlaying) {
+            pauseSequence();
+        } else {
+            playSequence();
+        }
     } else {
-        mediaPlayer->play();
+        // Handle video playback
+        if (mediaPlayer->playbackState() == QMediaPlayer::PlayingState) {
+            mediaPlayer->pause();
+        } else {
+            mediaPlayer->play();
+        }
+        updatePlayPauseButton();
     }
-    updatePlayPauseButton();
     controlsTimer->start();
 }
 
@@ -253,7 +350,13 @@ void PreviewOverlay::onDurationChanged(qint64 duration)
 
 void PreviewOverlay::onSliderMoved(int position)
 {
-    mediaPlayer->setPosition(position);
+    if (isSequence) {
+        // Seek to specific frame in sequence
+        loadSequenceFrame(position);
+    } else {
+        // Seek in video
+        mediaPlayer->setPosition(position);
+    }
     controlsTimer->start();
 }
 
@@ -397,5 +500,215 @@ void PreviewOverlay::resetImageZoom()
     currentZoom = 1.0;
     imageView->resetTransform();
     imageView->centerOn(imageItem);
+}
+
+void PreviewOverlay::showSequence(const QStringList &framePaths, const QString &sequenceName, int startFrame, int endFrame)
+{
+    qDebug() << "[PreviewOverlay] Showing sequence:" << sequenceName << "frames:" << startFrame << "-" << endFrame;
+
+    isSequence = true;
+    isVideo = false;
+    sequenceFramePaths = framePaths;
+    sequenceStartFrame = startFrame;
+    sequenceEndFrame = endFrame;
+    currentSequenceFrame = 0;
+    sequencePlaying = false;
+
+    // Check if this is an HDR/EXR sequence
+    if (!framePaths.isEmpty()) {
+        QFileInfo fileInfo(framePaths.first());
+        QString ext = fileInfo.suffix().toLower();
+        isHDRImage = (ext == "exr" || ext == "hdr" || ext == "pic");
+    } else {
+        isHDRImage = false;
+    }
+
+    // Make sure widget is shown and sized before loading content
+    show();
+    raise();
+    setFocus();
+
+    // Process events to ensure window is properly sized
+    QApplication::processEvents();
+
+    // Show image view and controls
+    videoWidget->hide();
+    imageView->show();
+    controlsWidget->show();
+
+    // Stop video player if running
+    if (mediaPlayer->playbackState() != QMediaPlayer::StoppedState) {
+        mediaPlayer->stop();
+    }
+
+    // Update file name label
+    fileNameLabel->setText(sequenceName);
+
+    // Show/hide color space selector based on whether this is HDR
+    if (isHDRImage) {
+        colorSpaceLabel->show();
+        colorSpaceCombo->show();
+    } else {
+        colorSpaceLabel->hide();
+        colorSpaceCombo->hide();
+    }
+
+    // Load first frame
+    if (!sequenceFramePaths.isEmpty()) {
+        loadSequenceFrame(0);
+    }
+
+    // Update slider for sequence
+    positionSlider->setRange(0, sequenceFramePaths.size() - 1);
+    positionSlider->setValue(0);
+
+    // Update time label
+    timeLabel->setText(QString("Frame %1 / %2").arg(startFrame).arg(endFrame));
+
+    // Update play/pause button
+    updatePlayPauseButton();
+
+    // Show controls
+    controlsWidget->show();
+    controlsTimer->start();
+}
+
+void PreviewOverlay::loadSequenceFrame(int frameIndex)
+{
+    qDebug() << "[PreviewOverlay::loadSequenceFrame] Called with frameIndex:" << frameIndex << "total frames:" << sequenceFramePaths.size();
+
+    if (frameIndex < 0 || frameIndex >= sequenceFramePaths.size()) {
+        qWarning() << "[PreviewOverlay::loadSequenceFrame] Invalid frame index:" << frameIndex;
+        return;
+    }
+
+    currentSequenceFrame = frameIndex;
+    QString framePath = sequenceFramePaths[frameIndex];
+
+    qDebug() << "[PreviewOverlay::loadSequenceFrame] Loading frame:" << framePath;
+
+    // Load frame with OpenImageIO if supported
+    QImage image;
+    if (OIIOImageLoader::isOIIOSupported(framePath)) {
+        qDebug() << "[PreviewOverlay::loadSequenceFrame] Using OIIO to load frame with color space";
+        image = OIIOImageLoader::loadImage(framePath, 0, 0, currentColorSpace);
+        if (!image.isNull()) {
+            originalPixmap = QPixmap::fromImage(image);
+            qDebug() << "[PreviewOverlay::loadSequenceFrame] OIIO loaded successfully, size:" << originalPixmap.size();
+        } else {
+            qWarning() << "[PreviewOverlay::loadSequenceFrame] OIIO failed to load frame";
+        }
+    }
+
+    // Fall back to Qt loader
+    if (originalPixmap.isNull()) {
+        qDebug() << "[PreviewOverlay::loadSequenceFrame] Using Qt to load frame";
+        originalPixmap = QPixmap(framePath);
+        if (!originalPixmap.isNull()) {
+            qDebug() << "[PreviewOverlay::loadSequenceFrame] Qt loaded successfully, size:" << originalPixmap.size();
+        } else {
+            qWarning() << "[PreviewOverlay::loadSequenceFrame] Qt failed to load frame";
+        }
+    }
+
+    if (!originalPixmap.isNull()) {
+        qDebug() << "[PreviewOverlay::loadSequenceFrame] Adding pixmap to scene";
+        imageScene->clear();
+        imageItem = imageScene->addPixmap(originalPixmap);
+        imageScene->setSceneRect(originalPixmap.rect());
+        fitImageToView();
+        qDebug() << "[PreviewOverlay::loadSequenceFrame] Frame loaded and displayed";
+    } else {
+        qWarning() << "[PreviewOverlay::loadSequenceFrame] Failed to load frame - pixmap is null!";
+    }
+
+    // Update slider and time label
+    positionSlider->blockSignals(true);
+    positionSlider->setValue(frameIndex);
+    positionSlider->blockSignals(false);
+
+    int actualFrame = sequenceStartFrame + frameIndex;
+    timeLabel->setText(QString("Frame %1 / %2").arg(actualFrame).arg(sequenceEndFrame));
+
+    qDebug() << "[PreviewOverlay::loadSequenceFrame] Frame loading complete";
+}
+
+void PreviewOverlay::playSequence()
+{
+    if (!isSequence || sequenceFramePaths.isEmpty()) {
+        return;
+    }
+
+    sequencePlaying = true;
+    sequenceTimer->start();
+    updatePlayPauseButton();
+    qDebug() << "[PreviewOverlay] Playing sequence at 24 fps";
+}
+
+void PreviewOverlay::pauseSequence()
+{
+    sequencePlaying = false;
+    sequenceTimer->stop();
+    updatePlayPauseButton();
+    qDebug() << "[PreviewOverlay] Paused sequence";
+}
+
+void PreviewOverlay::stopSequence()
+{
+    sequencePlaying = false;
+    sequenceTimer->stop();
+    currentSequenceFrame = 0;
+    loadSequenceFrame(0);
+    updatePlayPauseButton();
+}
+
+void PreviewOverlay::onSequenceTimerTick()
+{
+    if (!isSequence || !sequencePlaying) {
+        return;
+    }
+
+    // Advance to next frame
+    currentSequenceFrame++;
+
+    // Loop back to start if at end
+    if (currentSequenceFrame >= sequenceFramePaths.size()) {
+        currentSequenceFrame = 0;
+    }
+
+    loadSequenceFrame(currentSequenceFrame);
+}
+
+void PreviewOverlay::onColorSpaceChanged(int index)
+{
+    qDebug() << "[PreviewOverlay] Color space changed to index:" << index;
+
+    // Update current color space
+    switch (index) {
+        case 0:
+            currentColorSpace = OIIOImageLoader::ColorSpace::Linear;
+            qDebug() << "[PreviewOverlay] Switched to Linear color space";
+            break;
+        case 1:
+            currentColorSpace = OIIOImageLoader::ColorSpace::sRGB;
+            qDebug() << "[PreviewOverlay] Switched to sRGB color space";
+            break;
+        case 2:
+            currentColorSpace = OIIOImageLoader::ColorSpace::Rec709;
+            qDebug() << "[PreviewOverlay] Switched to Rec.709 color space";
+            break;
+        default:
+            currentColorSpace = OIIOImageLoader::ColorSpace::sRGB;
+            break;
+    }
+
+    // Reload current frame/image with new color space
+    if (isSequence) {
+        qDebug() << "[PreviewOverlay] Reloading sequence frame with new color space";
+        loadSequenceFrame(currentSequenceFrame);
+    } else if (!currentFilePath.isEmpty() && isHDRImage) {
+        qDebug() << "[PreviewOverlay] Reloading image with new color space";
+        showImage(currentFilePath);
+    }
 }
 

@@ -3,7 +3,10 @@ cmake_minimum_required(VERSION 3.21)
 # Set vcpkg toolchain file if not already set and vcpkg exists
 if(NOT DEFINED CMAKE_TOOLCHAIN_FILE AND EXISTS "C:/vcpkg/scripts/buildsystems/vcpkg.cmake")
     set(CMAKE_TOOLCHAIN_FILE "C:/vcpkg/scripts/buildsystems/vcpkg.cmake" CACHE STRING "Vcpkg toolchain file")
+    # Use x64-windows triplet (MSVC) for OpenImageIO since MinGW has compatibility issues
+    set(VCPKG_TARGET_TRIPLET "x64-windows" CACHE STRING "Vcpkg target triplet")
     message(STATUS "Using vcpkg toolchain: ${CMAKE_TOOLCHAIN_FILE}")
+    message(STATUS "Using vcpkg triplet: ${VCPKG_TARGET_TRIPLET}")
 endif()
 
 project(KAssetManagerQt VERSION 0.1.0 LANGUAGES CXX)

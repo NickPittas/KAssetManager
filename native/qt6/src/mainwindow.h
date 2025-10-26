@@ -85,6 +85,9 @@ private:
     void saveFolderExpansionState();
     void restoreFolderExpansionState();
     QSet<int> expandedFolderIds;
+
+    // Sequence helper
+    QStringList reconstructSequenceFramePaths(const QString& firstFramePath, int startFrame, int endFrame);
     
     // UI Components
     QSplitter *mainSplitter;

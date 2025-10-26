@@ -136,10 +136,8 @@ bool Importer::importFolder(const QString& dirPath, int parentFolderId){
 
         // Import sequences
         for (const ImageSequence& seq : sequences) {
-            currentFile++;
+            // Update progress for the sequence (count all frames in the sequence)
             emit currentFileChanged(seq.pattern);
-            emit progressChanged(currentFile, totalFiles);
-            QApplication::processEvents();
 
             int seqId = DB::instance().upsertSequence(seq.pattern, seq.startFrame, seq.endFrame, seq.frameCount, seq.firstFramePath);
             if (seqId > 0) {
@@ -147,9 +145,12 @@ bool Importer::importFolder(const QString& dirPath, int parentFolderId){
                 qDebug() << "Imported sequence:" << seq.pattern << "frames:" << seq.startFrame << "-" << seq.endFrame;
             }
 
-            // Mark all sequence files as processed
+            // Mark all sequence files as processed and update progress for each frame
             for (const QString& framePath : seq.framePaths) {
                 sequenceFiles.insert(framePath);
+                currentFile++;
+                emit progressChanged(currentFile, totalFiles);
+                QApplication::processEvents();
             }
         }
 

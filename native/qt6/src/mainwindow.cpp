@@ -995,7 +995,12 @@ void MainWindow::onEmptySpaceContextMenu(const QPoint &pos)
 
 void MainWindow::showPreview(int index)
 {
-    if (index < 0 || index >= assetsModel->rowCount(QModelIndex())) return;
+    qDebug() << "[MainWindow::showPreview] Called with index:" << index;
+
+    if (index < 0 || index >= assetsModel->rowCount(QModelIndex())) {
+        qWarning() << "[MainWindow::showPreview] Invalid index:" << index << "rowCount:" << assetsModel->rowCount(QModelIndex());
+        return;
+    }
 
     previewIndex = index;
     QModelIndex modelIndex = assetsModel->index(index, 0);
@@ -1003,8 +1008,12 @@ void MainWindow::showPreview(int index)
     QString filePath = modelIndex.data(AssetsModel::FilePathRole).toString();
     QString fileName = modelIndex.data(AssetsModel::FileNameRole).toString();
     QString fileType = modelIndex.data(AssetsModel::FileTypeRole).toString();
+    bool isSequence = modelIndex.data(AssetsModel::IsSequenceRole).toBool();
+
+    qDebug() << "[MainWindow::showPreview] File:" << fileName << "Type:" << fileType << "IsSequence:" << isSequence;
 
     if (!previewOverlay) {
+        qDebug() << "[MainWindow::showPreview] Creating new PreviewOverlay";
         previewOverlay = new PreviewOverlay(this);
         previewOverlay->setGeometry(rect());
 
@@ -1012,7 +1021,37 @@ void MainWindow::showPreview(int index)
         connect(previewOverlay, &PreviewOverlay::navigateRequested, this, &MainWindow::changePreview);
     }
 
-    previewOverlay->showAsset(filePath, fileName, fileType);
+    if (isSequence) {
+        qDebug() << "[MainWindow::showPreview] Opening as sequence";
+
+        // Get sequence information
+        QString sequencePattern = modelIndex.data(AssetsModel::SequencePatternRole).toString();
+        int startFrame = modelIndex.data(AssetsModel::SequenceStartFrameRole).toInt();
+        int endFrame = modelIndex.data(AssetsModel::SequenceEndFrameRole).toInt();
+        int frameCount = modelIndex.data(AssetsModel::SequenceFrameCountRole).toInt();
+
+        qDebug() << "[MainWindow::showPreview] Sequence info - Pattern:" << sequencePattern << "Start:" << startFrame << "End:" << endFrame << "Count:" << frameCount;
+
+        // Reconstruct frame paths from first frame path and pattern
+        QStringList framePaths = reconstructSequenceFramePaths(filePath, startFrame, endFrame);
+
+        qDebug() << "[MainWindow] Opening sequence:" << sequencePattern << "frames:" << startFrame << "-" << endFrame << "paths:" << framePaths.size();
+
+        if (framePaths.isEmpty()) {
+            qWarning() << "[MainWindow::showPreview] No frame paths reconstructed! Cannot show sequence.";
+            QMessageBox::warning(this, "Error", "Failed to reconstruct sequence frame paths.");
+            return;
+        }
+
+        previewOverlay->showSequence(framePaths, sequencePattern, startFrame, endFrame);
+        qDebug() << "[MainWindow::showPreview] showSequence() called";
+    } else {
+        qDebug() << "[MainWindow::showPreview] Opening as regular asset";
+        previewOverlay->showAsset(filePath, fileName, fileType);
+        qDebug() << "[MainWindow::showPreview] showAsset() called";
+    }
+
+    qDebug() << "[MainWindow::showPreview] Preview overlay visible:" << previewOverlay->isVisible();
 }
 
 void MainWindow::closePreview()
@@ -1510,6 +1549,9 @@ void MainWindow::dropEvent(QDropEvent *event)
         importProgressDialog->raise();
         importProgressDialog->activateWindow();
 
+        // Disconnect importFinished temporarily to prevent premature dialog closure
+        disconnect(importer, &Importer::importFinished, this, &MainWindow::onImportComplete);
+
         // Import folders with structure preservation
         for (const QString &folderPath : folderPaths) {
             qDebug() << "Importing folder with structure:" << folderPath;
@@ -1523,6 +1565,12 @@ void MainWindow::dropEvent(QDropEvent *event)
             importFiles(filePaths);
             totalImported += filePaths.size();
         }
+
+        // Reconnect importFinished signal
+        connect(importer, &Importer::importFinished, this, &MainWindow::onImportComplete);
+
+        // Manually trigger import complete
+        onImportComplete();
 
         if (totalImported > 0) {
             statusBar()->showMessage(QString("Import complete: %1 item(s)").arg(totalImported), 3000);
@@ -1901,5 +1949,60 @@ void MainWindow::onThumbnailProgress(int current, int total)
             });
         }
     }
+}
+
+QStringList MainWindow::reconstructSequenceFramePaths(const QString& firstFramePath, int startFrame, int endFrame)
+{
+    QStringList framePaths;
+    QFileInfo firstFrameInfo(firstFramePath);
+    QString fileName = firstFrameInfo.fileName();
+    QString dirPath = firstFrameInfo.absolutePath();
+    QString extension = firstFrameInfo.suffix();
+
+    // Find the LAST frame number pattern in the first frame filename
+    // Use globalMatch to find all occurrences, then take the last one
+    QRegularExpression re("(\\d{3,})");
+    QRegularExpressionMatchIterator it = re.globalMatch(fileName);
+
+    QRegularExpressionMatch lastMatch;
+    bool hasMatch = false;
+
+    while (it.hasNext()) {
+        lastMatch = it.next();
+        hasMatch = true;
+    }
+
+    if (!hasMatch) {
+        qWarning() << "[MainWindow] Could not find frame number pattern in:" << fileName;
+        return framePaths;
+    }
+
+    QString frameNumberStr = lastMatch.captured(1);
+    int paddingLength = frameNumberStr.length();
+    int matchPos = lastMatch.capturedStart(1);
+
+    // Extract the base name (everything before the frame number)
+    QString baseName = fileName.left(matchPos);
+
+    // Extract the suffix (everything after the frame number, including extension)
+    QString suffix = fileName.mid(matchPos + paddingLength);
+
+    qDebug() << "[MainWindow] Reconstructing sequence from:" << fileName;
+    qDebug() << "[MainWindow] Base:" << baseName << "Padding:" << paddingLength << "Suffix:" << suffix;
+    qDebug() << "[MainWindow] Frame range:" << startFrame << "-" << endFrame;
+
+    // Reconstruct all frame paths
+    for (int frame = startFrame; frame <= endFrame; ++frame) {
+        QString frameNum = QString("%1").arg(frame, paddingLength, 10, QChar('0'));
+        QString framePath = QDir(dirPath).filePath(baseName + frameNum + suffix);
+
+        // Only add if file exists
+        if (QFile::exists(framePath)) {
+            framePaths.append(framePath);
+        }
+    }
+
+    qDebug() << "[MainWindow] Reconstructed" << framePaths.size() << "frame paths for sequence";
+    return framePaths;
 }
 

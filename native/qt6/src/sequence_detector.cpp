@@ -6,41 +6,68 @@
 QVector<ImageSequence> SequenceDetector::detectSequences(const QStringList& filePaths) {
     QMap<SequenceKey, QVector<FrameInfo>> sequenceGroups;
     QStringList nonSequenceFiles;
-    
+
+    // Define image extensions (not video)
+    QStringList imageExtensions = {
+        "jpg", "jpeg", "png", "gif", "bmp", "tif", "tiff", "webp", "svg",
+        "exr", "hdr", "pic", "psd", "psb", "dpx", "cin", "iff", "sgi",
+        "tga", "ico", "pbm", "pgm", "ppm", "pnm",
+        "cr2", "cr3", "nef", "arw", "dng", "orf", "rw2", "pef", "srw", "raf", "raw"
+    };
+
     // Group files by sequence pattern
     for (const QString& filePath : filePaths) {
         QFileInfo fi(filePath);
         QString fileName = fi.fileName();
-        
+        QString extension = fi.suffix().toLower();
+
+        // Only detect sequences for image files, not videos
+        if (!imageExtensions.contains(extension)) {
+            nonSequenceFiles.append(filePath);
+            continue;
+        }
+
         int paddingLength = 0;
         int frameNumber = extractFrameNumber(fileName, paddingLength);
-        
+
         if (frameNumber >= 0 && paddingLength > 0) {
             // This is a sequence file
-            QString baseName = fileName;
-            QString extension = fi.suffix();
-            
-            // Remove the frame number and extension to get base name
-            // Pattern: name.####.ext or name_####.ext or name####.ext
+            // Find the LAST occurrence of the frame number pattern
             QRegularExpression re(QString("(\\d{%1})").arg(paddingLength));
-            baseName.remove(re);
-            baseName.remove("." + extension);
-            baseName.remove("_" + extension);
-            
+            QRegularExpressionMatchIterator it = re.globalMatch(fileName);
+
+            QRegularExpressionMatch lastMatch;
+            while (it.hasNext()) {
+                lastMatch = it.next();
+            }
+
+            // Remove only the last occurrence (the frame number) and extension
+            QString baseName = fileName;
+            if (lastMatch.hasMatch()) {
+                int matchStart = lastMatch.capturedStart(1);
+                int matchLength = lastMatch.capturedLength(1);
+                baseName.remove(matchStart, matchLength);
+            }
+
+            // Remove extension
+            if (baseName.endsWith("." + extension)) {
+                baseName.chop(extension.length() + 1);
+            }
+
             // Clean up any trailing dots or underscores
             while (baseName.endsWith('.') || baseName.endsWith('_')) {
                 baseName.chop(1);
             }
-            
+
             SequenceKey key;
             key.baseName = baseName;
             key.extension = extension;
             key.paddingLength = paddingLength;
-            
+
             FrameInfo frame;
             frame.frameNumber = frameNumber;
             frame.filePath = filePath;
-            
+
             sequenceGroups[key].append(frame);
         } else {
             nonSequenceFiles.append(filePath);
@@ -107,25 +134,36 @@ bool SequenceDetector::isSequenceFile(const QString& fileName) {
 
 int SequenceDetector::extractFrameNumber(const QString& fileName, int& paddingLength) {
     // Find sequences of digits (3+ digits for padding detection)
+    // Use globalMatch to find ALL occurrences, then take the LAST one
+    // This handles cases like "C0642_comp_v01.1001.exr" where we want 1001, not 0642
     QRegularExpression re("(\\d{3,})");
-    QRegularExpressionMatch match = re.match(fileName);
-    
-    if (!match.hasMatch()) {
+    QRegularExpressionMatchIterator it = re.globalMatch(fileName);
+
+    QRegularExpressionMatch lastMatch;
+    bool hasMatch = false;
+
+    // Find the last match
+    while (it.hasNext()) {
+        lastMatch = it.next();
+        hasMatch = true;
+    }
+
+    if (!hasMatch) {
         paddingLength = 0;
         return -1;
     }
-    
-    QString numberStr = match.captured(1);
+
+    QString numberStr = lastMatch.captured(1);
     paddingLength = numberStr.length();
-    
+
     bool ok;
     int frameNumber = numberStr.toInt(&ok);
-    
+
     if (!ok) {
         paddingLength = 0;
         return -1;
     }
-    
+
     return frameNumber;
 }
 

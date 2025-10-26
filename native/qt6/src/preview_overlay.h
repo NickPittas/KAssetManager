@@ -13,6 +13,8 @@
 #include <QGraphicsView>
 #include <QGraphicsScene>
 #include <QGraphicsPixmapItem>
+#include <QComboBox>
+#include "oiio_image_loader.h"
 
 class PreviewOverlay : public QWidget
 {
@@ -23,6 +25,7 @@ public:
     ~PreviewOverlay();
 
     void showAsset(const QString &filePath, const QString &fileName, const QString &fileType);
+    void showSequence(const QStringList &framePaths, const QString &sequenceName, int startFrame, int endFrame);
     void navigateNext();
     void navigatePrevious();
 
@@ -43,6 +46,8 @@ private slots:
     void onSliderMoved(int position);
     void onVolumeChanged(int value);
     void hideControls();
+    void onSequenceTimerTick();
+    void onColorSpaceChanged(int index);
 
 private:
     void setupUi();
@@ -53,6 +58,10 @@ private:
     void zoomImage(double factor);
     void fitImageToView();
     void resetImageZoom();
+    void loadSequenceFrame(int frameIndex);
+    void playSequence();
+    void pauseSequence();
+    void stopSequence();
 
     // UI Components
     QGraphicsView *imageView;
@@ -66,6 +75,8 @@ private:
     QSlider *volumeSlider;
     QPushButton *closeBtn;
     QLabel *fileNameLabel;
+    QComboBox *colorSpaceCombo;
+    QLabel *colorSpaceLabel;
 
     // Media player
     QMediaPlayer *mediaPlayer;
@@ -82,6 +93,19 @@ private:
     QPixmap originalPixmap;
     QPoint lastPanPoint;
     bool isPanning;
+
+    // Image sequence playback state
+    bool isSequence;
+    QStringList sequenceFramePaths;
+    int currentSequenceFrame;
+    int sequenceStartFrame;
+    int sequenceEndFrame;
+    QTimer *sequenceTimer;
+    bool sequencePlaying;
+
+    // Color space for HDR/EXR images
+    OIIOImageLoader::ColorSpace currentColorSpace;
+    bool isHDRImage;
 };
 
 #endif // PREVIEW_OVERLAY_H

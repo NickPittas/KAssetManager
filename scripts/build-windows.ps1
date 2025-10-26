@@ -117,6 +117,16 @@ if ($Package) {
         $portable = Join-Path $repoRoot 'dist/portable'
         if (Test-Path $portable) { Remove-Item -Recurse -Force $portable }
         Copy-Item -Recurse -Force $stage $portable
+
+        # Copy OpenImageIO DLLs from vcpkg if using MSVC
+        if ($Generator -eq 'Visual Studio 17 2022') {
+            $vcpkgBin = 'C:\vcpkg\installed\x64-windows\bin'
+            if (Test-Path $vcpkgBin) {
+                Write-Host "Copying OpenImageIO DLLs from vcpkg..."
+                Copy-Item "$vcpkgBin\*.dll" -Destination (Join-Path $portable 'bin') -Force -ErrorAction SilentlyContinue
+            }
+        }
+
         Write-Host ("UPDATED_PORTABLE:{0}" -f (Resolve-Path $portable))
 
         # 3) Package only after successful verify run
