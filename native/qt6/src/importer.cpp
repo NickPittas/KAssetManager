@@ -31,24 +31,19 @@ bool Importer::isMediaFile(const QString& path){
 }
 
 bool Importer::importPaths(const QStringList& paths){
-    qDebug() << "Importer::importPaths() called with" << paths.size() << "paths";
     LogManager::instance().addLog(QString("Import requested (%1 item%2)").arg(paths.size()).arg(paths.size()==1?"":"s"));
     int imported=0;
     for (const auto& p: paths){
         QFileInfo fi(p);
         if (!fi.exists()) {
-            qDebug() << "  Path does not exist:" << p;
             continue;
         }
         if (fi.isDir()) {
-            qDebug() << "  Importing folder:" << p;
             if (importFolder(fi.absoluteFilePath())) ++imported;
         } else {
-            qDebug() << "  Importing file:" << p;
             if (importFile(fi.absoluteFilePath())) ++imported;
         }
     }
-    qDebug() << "Importer::importPaths() completed, imported" << imported << "items";
     emit importCompleted(imported);
     LogManager::instance().addLog(QString("Import completed: %1 item%2").arg(imported).arg(imported==1?"":"s"));
     return imported>0;
@@ -56,22 +51,17 @@ bool Importer::importPaths(const QStringList& paths){
 
 bool Importer::importFile(const QString& filePath, int parentFolderId){
     if (!QFileInfo::exists(filePath)) {
-        qDebug() << "  importFile: file does not exist:" << filePath;
         return false;
     }
     if (!isMediaFile(filePath)) {
-        qDebug() << "  importFile: not a media file:" << filePath;
-        LogManager::instance().addLog(QString("Skipped non-media: %1").arg(QFileInfo(filePath).fileName()));
         return false;
     }
     int assetId = DB::instance().upsertAsset(norm(filePath));
     if (assetId<=0) {
-        qDebug() << "  importFile: failed to upsert asset:" << filePath;
         return false;
     }
     if (parentFolderId<=0) parentFolderId = DB::instance().ensureRootFolder();
     bool ok = DB::instance().setAssetFolder(assetId, parentFolderId);
-    qDebug() << "  importFile: imported" << filePath << "to folder" << parentFolderId << "assetId=" << assetId << "ok=" << ok;
     if (ok) {
         LogManager::instance().addLog(QString("Imported %1").arg(QFileInfo(filePath).fileName()));
     }

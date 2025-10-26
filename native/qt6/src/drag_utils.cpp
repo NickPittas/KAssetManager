@@ -7,7 +7,6 @@
 #include <QDebug>
 #include <QTemporaryDir>
 #include <QFile>
-#include <QTextStream>
 #include <QDesktopServices>
 #ifdef _WIN32
 #include <windows.h>
@@ -15,34 +14,19 @@
 #include "virtual_drag.h"
 #endif
 
-
-static void logLine(const QString &msg) {
-    QFile f("startup.log");
-    if (f.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text)) {
-        QTextStream ts(&f);
-        ts << msg << '\n';
-    }
-}
-
 DragUtils& DragUtils::instance() {
     static DragUtils instance;
     return instance;
 }
 
-
 bool DragUtils::startFileDrag(const QStringList &paths) {
     if (paths.isEmpty()) return false;
-
-    logLine(QString("[drag] startFileDrag count=%1 first='%2'")
-            .arg(paths.size()).arg(paths.first()));
 
 #ifdef _WIN32
     // Use native OLE CF_HDROP drag for maximum compatibility
     QVector<QString> v; v.reserve(paths.size());
     for (const auto &p : paths) v.push_back(p);
-    bool ok = VirtualDrag::startRealPathsDrag(v);
-    logLine(QString("[drag] startRealPathsDrag returned %1").arg(ok));
-    return ok;
+    return VirtualDrag::startRealPathsDrag(v);
 #else
     // Fallback to Qt cross-platform drag (non-Windows)
     auto *mime = new QMimeData();

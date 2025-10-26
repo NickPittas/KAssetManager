@@ -115,30 +115,16 @@ private:
 
     void paint(QPainter *painter, const QStyleOptionViewItem &option, const QModelIndex &index) const override
     {
-        // Open log file in append mode
-        QFile logFile("paint_crash.log");
-        logFile.open(QIODevice::Append | QIODevice::Text);
-        QTextStream log(&logFile);
-
         try {
-            log << "[PAINT START] Row: " << index.row() << "\n";
-            log.flush();
-
             painter->save();
-            log << "[PAINT] painter->save() OK\n";
-            log.flush();
 
             // Get thumbnail path
             QString thumbnailPath = index.data(AssetsModel::ThumbnailPathRole).toString();
-            log << "[PAINT] thumbnailPath: " << thumbnailPath << "\n";
-            log.flush();
 
             // PERFORMANCE: Lazy loading - if thumbnail doesn't exist, request it
             if (thumbnailPath.isEmpty()) {
                 QString filePath = index.data(AssetsModel::FilePathRole).toString();
                 if (!filePath.isEmpty()) {
-                    log << "[PAINT] No thumbnail, requesting generation for: " << filePath << "\n";
-                    log.flush();
                     // Request thumbnail generation asynchronously
                     ThumbnailGenerator::instance().requestThumbnail(filePath);
                 }
@@ -150,8 +136,6 @@ private:
             if (!pixmapCache.contains(thumbnailPath)) {
                 QFileInfo thumbInfo(thumbnailPath);
                 if (thumbInfo.exists() && thumbInfo.size() > 0) {
-                    log << "[PAINT] Loading thumbnail from disk into cache: " << thumbnailPath << "\n";
-                    log.flush();
                     QPixmap pixmap(thumbnailPath);
                     if (!pixmap.isNull()) {
                         // PERFORMANCE: Increased cache size from 200 to 1000 for better performance
@@ -160,40 +144,24 @@ private:
                             pixmapCache.clear();
                         }
                         pixmapCache.insert(thumbnailPath, pixmap);
-                        log << "[PAINT] Thumbnail loaded into cache successfully\n";
-                        log.flush();
-                    } else {
-                        log << "[PAINT] Failed to load thumbnail from disk\n";
-                        log.flush();
                     }
                 }
             }
 
             // If thumbnail is still not in cache, don't draw anything
             if (!pixmapCache.contains(thumbnailPath)) {
-                log << "[PAINT] No thumbnail in cache, returning\n";
-                log.flush();
                 painter->restore();
                 return; // Don't draw anything - not even the card background
             }
 
-            log << "[PAINT] Getting pixmap from cache\n";
-            log.flush();
             QPixmap pixmap = pixmapCache.value(thumbnailPath);
-            log << "[PAINT] Got pixmap, isNull: " << pixmap.isNull() << "\n";
-            log.flush();
 
             if (pixmap.isNull()) {
-                log << "[PAINT] Pixmap is null, returning\n";
-                log.flush();
                 painter->restore();
                 return; // Invalid pixmap - don't draw anything
             }
 
-            // Now we know we have a valid thumbnail - draw the card
-            log << "[PAINT] Drawing background\n";
-            log.flush();
-
+            // Now we have a valid thumbnail - draw the card
             // Background
             if (option.state & QStyle::State_Selected) {
                 painter->fillRect(option.rect, QColor(47, 58, 74)); // Accent background
@@ -202,95 +170,60 @@ private:
             } else {
                 painter->fillRect(option.rect, QColor(18, 18, 18)); // Default
             }
-            log << "[PAINT] Background OK\n";
-            log.flush();
 
             // Border
             if (option.state & QStyle::State_Selected) {
                 painter->setPen(QPen(QColor(88, 166, 255), 2));
                 painter->drawRect(option.rect.adjusted(1, 1, -1, -1));
             }
-            log << "[PAINT] Border OK\n";
-            log.flush();
 
             // Draw thumbnail
-            log << "[PAINT] Scaling pixmap\n";
-            log.flush();
             QRect thumbRect = option.rect.adjusted(8, 8, -8, -8);
             QPixmap scaled = pixmap.scaled(thumbRect.size(), Qt::KeepAspectRatio, Qt::FastTransformation);
-            log << "[PAINT] Scaled OK, drawing\n";
-            log.flush();
             int x = thumbRect.x() + (thumbRect.width() - scaled.width()) / 2;
             int y = thumbRect.y() + (thumbRect.height() - scaled.height()) / 2;
             painter->drawPixmap(x, y, scaled);
-            log << "[PAINT] Thumbnail drawn OK\n";
-            log.flush();
 
             // File name overlay at the bottom with semi-transparent background
-            log << "[PAINT] Getting filename\n";
-            log.flush();
             QString fileName = index.data(AssetsModel::FileNameRole).toString();
             QString fileType = index.data(AssetsModel::FileTypeRole).toString().toUpper();
             int rating = index.data(AssetsModel::RatingRole).toInt();
-            log << "[PAINT] fileName: " << fileName << ", fileType: " << fileType << ", rating: " << rating << "\n";
-            log.flush();
 
             // Calculate text height needed
-            log << "[PAINT] Creating fonts\n";
-            log.flush();
             QFont nameFont("Segoe UI", 9);
             QFontMetrics nameFm(nameFont);
             QFont typeFont("Segoe UI", 8);
             QFontMetrics typeFm(typeFont);
             QFont starFont("Segoe UI", 10);
             QFontMetrics starFm(starFont);
-            log << "[PAINT] Fonts OK\n";
-            log.flush();
 
             // Use elided text to fit in one line
             int availableWidth = thumbRect.width() - 16; // 8px padding on each side
             QString elidedName = nameFm.elidedText(fileName, Qt::ElideRight, availableWidth);
-            log << "[PAINT] Elided text OK\n";
-            log.flush();
 
             int nameHeight = nameFm.height();
             int typeHeight = typeFm.height();
             int totalTextHeight = nameHeight + typeHeight + 8; // 8px padding
 
             // Draw semi-transparent background for text
-            log << "[PAINT] Drawing text background\n";
-            log.flush();
             QRect textBgRect(thumbRect.left(), thumbRect.bottom() - totalTextHeight, thumbRect.width(), totalTextHeight);
             painter->fillRect(textBgRect, QColor(0, 0, 0, 180));
-            log << "[PAINT] Text background OK\n";
-            log.flush();
 
             // Draw file name
-            log << "[PAINT] Drawing filename\n";
-            log.flush();
             QRect nameRect = textBgRect.adjusted(8, 4, -8, -typeHeight - 4);
             painter->setPen(QColor(255, 255, 255));
             painter->setFont(nameFont);
             painter->drawText(nameRect, Qt::AlignLeft | Qt::AlignVCenter, elidedName);
-            log << "[PAINT] Filename OK\n";
-            log.flush();
 
             // Draw file type
-            log << "[PAINT] Drawing file type\n";
-            log.flush();
             QRect typeRect = textBgRect.adjusted(8, nameHeight + 4, -8, -4);
             painter->setPen(QColor(160, 160, 160));
             painter->setFont(typeFont);
             painter->drawText(typeRect, Qt::AlignLeft | Qt::AlignVCenter, fileType);
-            log << "[PAINT] File type OK\n";
-            log.flush();
 
             // Draw sequence badge if this is a sequence
             bool isSequence = index.data(AssetsModel::IsSequenceRole).toBool();
             if (isSequence) {
-                log << "[PAINT] Drawing sequence badge\n";
-                log.flush();
-
                 int frameCount = index.data(AssetsModel::SequenceFrameCountRole).toInt();
                 int startFrame = index.data(AssetsModel::SequenceStartFrameRole).toInt();
                 int endFrame = index.data(AssetsModel::SequenceEndFrameRole).toInt();
@@ -312,15 +245,10 @@ private:
                 painter->setFont(badgeFont);
                 painter->setPen(Qt::white);
                 painter->drawText(badgeRect, Qt::AlignCenter, badgeText);
-
-                log << "[PAINT] Sequence badge OK\n";
-                log.flush();
             }
 
             // Draw rating stars (if rated)
             if (rating > 0 && rating <= 5) {
-                log << "[PAINT] Drawing rating stars\n";
-                log.flush();
                 QString stars;
                 for (int i = 0; i < 5; i++) {
                     stars += (i < rating) ? "★" : "☆";
@@ -330,38 +258,24 @@ private:
                 painter->setPen(QColor(255, 215, 0)); // Gold color
                 painter->setFont(starFont);
                 painter->drawText(starRect, Qt::AlignCenter, stars);
-                log << "[PAINT] Rating stars OK\n";
-                log.flush();
             }
 
-        // Selection checkmark
-        if (option.state & QStyle::State_Selected) {
-            log << "[PAINT] Drawing checkmark\n";
-            log.flush();
-            QRect checkRect(option.rect.right() - 28, option.rect.top() + 4, 24, 24);
-            painter->setBrush(QColor(88, 166, 255));
-            painter->setPen(Qt::NoPen);
-            painter->drawEllipse(checkRect);
-            painter->setPen(QColor(255, 255, 255));
-            painter->setFont(QFont("Segoe UI", 12, QFont::Bold));
-            painter->drawText(checkRect, Qt::AlignCenter, "✓");
-            log << "[PAINT] Checkmark OK\n";
-            log.flush();
-        }
+            // Selection checkmark
+            if (option.state & QStyle::State_Selected) {
+                QRect checkRect(option.rect.right() - 28, option.rect.top() + 4, 24, 24);
+                painter->setBrush(QColor(88, 166, 255));
+                painter->setPen(Qt::NoPen);
+                painter->drawEllipse(checkRect);
+                painter->setPen(QColor(255, 255, 255));
+                painter->setFont(QFont("Segoe UI", 12, QFont::Bold));
+                painter->drawText(checkRect, Qt::AlignCenter, "✓");
+            }
 
-            log << "[PAINT] Restoring painter\n";
-            log.flush();
             painter->restore();
-            log << "[PAINT END] Success\n\n";
-            log.flush();
         } catch (const std::exception& e) {
-            log << "[PAINT CRASH] std::exception: " << e.what() << "\n\n";
-            log.flush();
             qCritical() << "[AssetItemDelegate] Exception in paint():" << e.what();
             painter->restore();
         } catch (...) {
-            log << "[PAINT CRASH] Unknown exception\n\n";
-            log.flush();
             qCritical() << "[AssetItemDelegate] Unknown exception in paint()";
             painter->restore();
         }
@@ -421,61 +335,31 @@ MainWindow::MainWindow(QWidget *parent)
     // Load thumbnail into cache when generated, then refresh view
     connect(&ThumbnailGenerator::instance(), &ThumbnailGenerator::thumbnailGenerated,
             this, [this](const QString& filePath, const QString& thumbnailPath) {
-        // Open crash log
-        QFile logFile("thumbnail_load_crash.log");
-        logFile.open(QIODevice::Append | QIODevice::Text);
-        QTextStream log(&logFile);
-
         try {
-            log << "[THUMB LOAD START] filePath: " << filePath << ", thumbnailPath: " << thumbnailPath << "\n";
-            log.flush();
-
             // Load thumbnail into delegate cache
             AssetItemDelegate *delegate = static_cast<AssetItemDelegate*>(assetGridView->itemDelegate());
-            log << "[THUMB LOAD] Got delegate: " << (delegate ? "YES" : "NO") << "\n";
-            log.flush();
 
             if (delegate && !thumbnailPath.isEmpty()) {
-                log << "[THUMB LOAD] Checking file exists\n";
-                log.flush();
                 QFileInfo thumbInfo(thumbnailPath);
-                log << "[THUMB LOAD] File exists: " << thumbInfo.exists() << ", size: " << thumbInfo.size() << "\n";
-                log.flush();
 
                 if (thumbInfo.exists() && thumbInfo.size() > 0) {
-                    log << "[THUMB LOAD] Loading QPixmap from: " << thumbnailPath << "\n";
-                    log.flush();
                     QPixmap pixmap(thumbnailPath);
-                    log << "[THUMB LOAD] QPixmap loaded, isNull: " << pixmap.isNull() << "\n";
-                    log.flush();
 
                     if (!pixmap.isNull()) {
                         // PERFORMANCE: Increased cache size from 200 to 1000 for better performance
                         if (delegate->pixmapCache.size() > 1000) {
-                            log << "[THUMB LOAD] Clearing cache (size was " << delegate->pixmapCache.size() << ")\n";
-                            log.flush();
                             delegate->pixmapCache.clear();
                         }
-                        log << "[THUMB LOAD] Inserting into cache\n";
-                        log.flush();
                         delegate->pixmapCache.insert(thumbnailPath, pixmap);
-                        log << "[THUMB LOAD] Cache insert OK, cache size now: " << delegate->pixmapCache.size() << "\n";
-                        log.flush();
                     }
                 }
             }
             // Refresh view to show the new thumbnail
-            log << "[THUMB LOAD] Calling viewport update\n";
-            log.flush();
             assetGridView->viewport()->update();
-            log << "[THUMB LOAD END] Success\n\n";
-            log.flush();
         } catch (const std::exception& e) {
-            log << "[THUMB LOAD CRASH] Exception: " << e.what() << "\n\n";
-            log.flush();
+            qCritical() << "[MainWindow] Exception loading thumbnail:" << e.what();
         } catch (...) {
-            log << "[THUMB LOAD CRASH] Unknown exception\n\n";
-            log.flush();
+            qCritical() << "[MainWindow] Unknown exception loading thumbnail";
         }
     });
 }

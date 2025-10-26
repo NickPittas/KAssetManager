@@ -31,6 +31,11 @@ if (COMMAND qt_standard_project_setup)
   qt_standard_project_setup()
 endif()
 
+# Add Windows resource file for icon
+if(WIN32)
+    set(APP_RESOURCES src/app.rc)
+endif()
+
 qt_add_executable(kassetmanagerqt
     src/main.cpp
     src/mainwindow.h
@@ -67,6 +72,7 @@ qt_add_executable(kassetmanagerqt
     src/sequence_detector.cpp
     src/oiio_image_loader.h
     src/oiio_image_loader.cpp
+    ${APP_RESOURCES}
 )
 
 target_include_directories(kassetmanagerqt PRIVATE
