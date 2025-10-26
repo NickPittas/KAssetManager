@@ -4,18 +4,46 @@
 
 ## Overview
 
-KAsset Manager provides a Windows Explorer-like interface for managing digital assets with:
+KAsset Manager is a native Windows desktop application built with Qt 6 that provides a professional-grade solution for managing digital media assets. Whether you're a VFX artist, photographer, video editor, or content creator, KAsset Manager helps you organize, find, and preview your files efficiently.
 
-- **Folder Tree Navigation** - Organize assets in virtual folders
-- **Asset Grid View** - Thumbnail previews with file information
-- **Multi-Select** - Ctrl+Click (toggle), Shift+Click (range selection)
-- **Drag-and-Drop Import** - Drop files or folders to import
-- **Tagging System** - Assign multiple tags to assets
-- **Rating System** - 5-star rating for assets
-- **Filters** - Search, filter by tags, rating, file type
-- **Metadata Display** - View file size, type, modification date
-- **Context Menus** - Right-click for quick actions
-- **Preview** - View assets in full-screen preview mode
+### Key Features
+
+#### 🗂️ **Organization**
+- **Virtual Folder System** - Organize assets without moving files on disk
+- **Hierarchical Structure** - Create nested folders for complex projects
+- **Drag-and-Drop Import** - Import files and folders with a simple drag
+- **Batch Operations** - Move, tag, and rate multiple assets at once
+
+#### 🏷️ **Tagging & Rating**
+- **Multi-Tag Support** - Assign multiple tags to each asset
+- **Tag Management** - Create, rename, delete, and merge tags
+- **5-Star Rating System** - Rate assets for quality or importance
+- **Smart Filtering** - Filter by tags (AND/OR mode), rating, and file type
+
+#### 🔍 **Search & Filter**
+- **Real-time Search** - Find assets by name instantly
+- **Advanced Filters** - Combine search, tags, rating, and file type
+- **Sortable Views** - Sort by name, type, size, date, or rating
+- **Grid & List Views** - Switch between thumbnail grid and detailed list
+
+#### 👁️ **Preview & Playback**
+- **Full-Screen Preview** - View images, videos, and sequences
+- **Image Zoom & Pan** - Inspect images in detail
+- **Video Playback** - Play videos with timeline and volume controls
+- **Image Sequences** - Automatic detection and playback at 24fps
+- **HDR/EXR Support** - Color space selection (Linear, sRGB, Rec.709)
+
+#### 🚀 **Performance**
+- **Multi-threaded Thumbnails** - Fast thumbnail generation (2-8 threads)
+- **Smart Caching** - 1000-thumbnail memory cache (~250MB)
+- **Database Indexes** - Optimized queries for large libraries
+- **Lazy Loading** - On-demand thumbnail generation
+
+#### 📊 **Professional Formats**
+- **Images**: PNG, JPG, JPEG, BMP, GIF, TIFF, TIF, EXR, HDR, PSD, IFF, RAW
+- **Videos**: MOV, MP4, AVI, MP5, MKV, WMV (via FFmpeg)
+- **Audio**: MP3, WAV, OGG, FLAC
+- **Sequences**: Automatic detection of numbered image sequences
 
 ## Quick Start
 
@@ -39,10 +67,21 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-windows.ps1 
 6. **Filter** - Use the filters panel on the right to search and filter assets
 7. **Preview** - Double-click an asset to open preview mode
 
+## Screenshots
+
+*Coming soon - Screenshots will be added in a future update*
+
 ## Documentation
 
+### For Users
+- **[USER_GUIDE.md](USER_GUIDE.md)** - Complete user guide with tutorials and workflows
 - **[INSTALL.md](INSTALL.md)** - Installation and build instructions
-- **[TECH.md](TECH.md)** - Technology stack and architecture
+
+### For Developers
+- **[DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md)** - Architecture, code structure, and contribution guidelines
+- **[API_REFERENCE.md](API_REFERENCE.md)** - Complete API documentation for all classes
+- **[TECH.md](TECH.md)** - Technology stack and design decisions
+- **[PERFORMANCE_OPTIMIZATIONS.md](PERFORMANCE_OPTIMIZATIONS.md)** - Performance optimization details
 - **[TASKS.md](TASKS.md)** - Development tasks and roadmap
 
 ## Project Structure
@@ -75,6 +114,49 @@ SQLite database stored in `data/kasset.db`:
 - **assets** - Asset metadata (file path, size, type, rating, etc.)
 - **tags** - Tag definitions
 - **asset_tags** - Many-to-many relationship between assets and tags
+
+## Troubleshooting
+
+### Common Issues
+
+**Thumbnails not showing:**
+- Wait for thumbnail generation to complete (check progress in status bar)
+- Restart the application to reload thumbnail cache
+- Check that files still exist at their original locations
+
+**Import not working:**
+- Verify file permissions (files must be readable)
+- Ensure files are not locked by another application
+- Check available disk space for database and thumbnails
+
+**Preview not opening:**
+- Verify the file format is supported
+- Check that the file still exists at the original path
+- Try right-click → Preview instead of double-click
+
+**Performance issues:**
+- Reduce thumbnail size using the slider
+- Use filters to reduce the number of visible assets
+- Close preview when not in use to free memory
+- Restart the application if it becomes sluggish
+
+**Database errors:**
+- Export your database as a backup (Settings → Export Database)
+- Try importing a backup if corruption occurs
+- As a last resort, clear the database and re-import assets
+
+### Getting Help
+
+- Check the **[USER_GUIDE.md](USER_GUIDE.md)** for detailed instructions
+- Review **[TECH.md](TECH.md)** for technical information
+- Report bugs on GitHub Issues (include steps to reproduce)
+
+## System Requirements
+
+- **OS**: Windows 10/11 (64-bit)
+- **RAM**: 4GB minimum, 8GB+ recommended
+- **Disk**: 500MB for application, additional space for thumbnails
+- **Display**: 1920x1080 or higher recommended
 
 ## License
 
