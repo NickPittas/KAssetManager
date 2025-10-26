@@ -98,11 +98,11 @@ cd KAssetManager
 The build script automatically configures CMake, compiles the application, and creates a portable package.
 
 ```powershell
-# Full build with packaging
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-windows.ps1 -Generator Ninja -Package
+# Full build with packaging (uses Visual Studio 2022 by default)
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-windows.ps1 -Package
 
 # Build only (no packaging)
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-windows.ps1 -Generator Ninja
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-windows.ps1
 ```
 
 ### 3. Build Output
@@ -124,11 +124,11 @@ After successful build:
 The `build-windows.ps1` script supports the following options:
 
 ```powershell
-# Use Ninja generator (recommended, faster)
--Generator Ninja
-
-# Use Visual Studio generator
+# Use Visual Studio 2022 generator (default, recommended for DLL compatibility)
 -Generator "Visual Studio 17 2022"
+
+# Use Ninja generator (alternative, faster builds)
+-Generator Ninja
 
 # Create portable package
 -Package
@@ -140,11 +140,11 @@ The `build-windows.ps1` script supports the following options:
 ### Examples
 
 ```powershell
-# Clean build with Ninja and packaging
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-windows.ps1 -Generator Ninja -Clean -Package
+# Clean build with default generator (Visual Studio 2022) and packaging
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-windows.ps1 -Clean -Package
 
-# Build with Visual Studio generator
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-windows.ps1 -Generator "Visual Studio 17 2022"
+# Build with Ninja generator
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-windows.ps1 -Generator Ninja
 ```
 
 ## Manual Build (Advanced)
@@ -257,10 +257,10 @@ To debug the application:
 The `-Package` option creates a ZIP file with all dependencies:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-windows.ps1 -Generator Ninja -Package
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-windows.ps1 -Package
 ```
 
-Output: `native/qt6/build/ninja/KAsset Manager Qt-0.1.0-win64.zip`
+Output: `native/qt6/build/vs2022/KAsset Manager Qt-0.1.0-win64.zip`
 
 ### Distribution
 
@@ -299,7 +299,7 @@ The SQLite database is created at:
 To update to a new version:
 
 1. Pull latest changes: `git pull`
-2. Clean build: `powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-windows.ps1 -Generator Ninja -Clean -Package`
+2. Clean build: `powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-windows.ps1 -Clean -Package`
 3. Database migrations are applied automatically on first run
 
 ## Uninstalling

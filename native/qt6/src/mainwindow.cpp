@@ -577,6 +577,10 @@ void MainWindow::setupUi()
     folderTreeView->setDragDropMode(QAbstractItemView::DragDrop);
     folderTreeView->setDefaultDropAction(Qt::MoveAction);
     folderTreeView->viewport()->installEventFilter(this);
+
+    // Install event filter on asset views to handle Space key for preview
+    assetGridView->installEventFilter(this);
+    assetTableView->installEventFilter(this);
     
     // Right panel: Filters + Info
     rightPanel = new QWidget(this);
@@ -1899,6 +1903,23 @@ void MainWindow::onImportComplete()
 
 bool MainWindow::eventFilter(QObject *watched, QEvent *event)
 {
+    // Handle Space key on asset views to open preview
+    if ((watched == assetGridView || watched == assetTableView) && event->type() == QEvent::KeyPress) {
+        QKeyEvent *keyEvent = static_cast<QKeyEvent*>(event);
+        if (keyEvent->key() == Qt::Key_Space && !keyEvent->isAutoRepeat()) {
+            // Get the current selection
+            QItemSelectionModel *selectionModel = isGridMode ? assetGridView->selectionModel() : assetTableView->selectionModel();
+            QModelIndexList selected = selectionModel->selectedIndexes();
+
+            if (!selected.isEmpty()) {
+                // Open preview for the first selected item
+                QModelIndex index = selected.first();
+                showPreview(index.row());
+                return true; // Event handled
+            }
+        }
+    }
+
     // Handle drops on folder tree
     if (watched == folderTreeView->viewport()) {
         if (event->type() == QEvent::DragEnter) {

@@ -1,7 +1,7 @@
 param(
     [string]$QtPrefix="",
     [ValidateSet("Ninja","Visual Studio 17 2022")]
-    [string]$Generator="Ninja",
+    [string]$Generator="Visual Studio 17 2022",
     [switch]$Package
 )
 
@@ -23,38 +23,33 @@ function Find-QtPrefix {
             Where-Object { $_.Name -like '6*' -or $_.Name -like '5*' } |
             Sort-Object Name -Descending
         foreach ($d in $dirs) {
+            # ALWAYS prefer MSVC over MinGW for better DLL compatibility
             $msvc2022 = Join-Path $d.FullName "msvc2022_64"
             $msvc2019 = Join-Path $d.FullName "msvc2019_64"
-            if (Test-Path $msvc2022) { return $msvc2022 }
-            if (Test-Path $msvc2019) { return $msvc2019 }
-            $mingw64 = Join-Path $d.FullName "mingw_64"
-            if (Test-Path $mingw64) { return $mingw64 }
-            $mingwAny = Get-ChildItem -Path $d.FullName -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -like 'mingw*' } | Select-Object -First 1
-            if ($mingwAny) { return $mingwAny.FullName }
+            if (Test-Path $msvc2022) {
+                Write-Host "Found Qt with MSVC 2022" -ForegroundColor Green
+                return $msvc2022
+            }
+            if (Test-Path $msvc2019) {
+                Write-Host "Found Qt with MSVC 2019" -ForegroundColor Green
+                return $msvc2019
+            }
         }
     }
-    throw "Qt prefix not found. Install Qt 6 and pass -QtPrefix or set Qt6/Qt6_DIR/QT_DIR env var."
+    throw "Qt with MSVC not found. Please install Qt 6 with MSVC 2022 or 2019 compiler."
 }
 
 function Initialize-QtToolchain {
     param([string]$QtPrefix)
-    if ($QtPrefix -match 'mingw') {
-        $tool = Get-ChildItem -Path 'C:/Qt/Tools' -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -like 'mingw*' } | Sort-Object Name -Descending | Select-Object -First 1
-        if ($tool) {
-            $bin = Join-Path $tool.FullName 'bin'
-            $env:PATH = "$bin;$env:PATH"
-            $env:CC   = Join-Path $bin 'gcc.exe'
-            $env:CXX  = Join-Path $bin 'g++.exe'
-            Write-Host "Configured MinGW toolchain: $($env:CC)"
-        } else {
-            Write-Warning 'MinGW toolchain not found under C:\Qt\Tools. Build may fail.'
-        }
-    }
-    # Ensure Qt bin and Ninja on PATH
+    # Ensure Qt bin on PATH for moc, rcc, windeployqt, etc.
     $qtBin = Join-Path $QtPrefix 'bin'
-    if (Test-Path $qtBin) { $env:PATH = "$qtBin;$env:PATH" }
+    if (Test-Path $qtBin) {
+        $env:PATH = "$qtBin;$env:PATH"
+        Write-Host "Added Qt bin to PATH" -ForegroundColor Green
+    }
     if (Test-Path 'C:/Qt/Tools/Ninja') {
         $env:PATH = "C:/Qt/Tools/Ninja;$env:PATH"
+        Write-Host "Added Ninja to PATH" -ForegroundColor Green
     }
 }
 
@@ -104,6 +99,26 @@ if ($Package) {
         $exe = Join-Path $stage 'bin/kassetmanagerqt.exe'
         if (-not (Test-Path $exe)) { throw "Installed exe not found: $exe" }
 
+        # 2) Copy ALL vcpkg DLLs BEFORE running verification (OpenImageIO has many dependencies)
+        if ($Generator -eq 'Visual Studio 17 2022') {
+            $vcpkgBin = 'C:\vcpkg\installed\x64-windows\bin'
+            if (Test-Path $vcpkgBin) {
+                Write-Host "Copying ALL vcpkg DLLs to staging directory..." -ForegroundColor Cyan
+                $stageBinDir = Join-Path $stage 'bin'
+                $dlls = Get-ChildItem -Path $vcpkgBin -Filter "*.dll" -ErrorAction SilentlyContinue
+                $copiedCount = 0
+                foreach ($dll in $dlls) {
+                    Copy-Item $dll.FullName -Destination $stageBinDir -Force
+                    $copiedCount++
+                }
+                Write-Host "Copied $copiedCount DLL files from vcpkg" -ForegroundColor Green
+            } else {
+                Write-Warning "vcpkg not found at $vcpkgBin - application may be missing required DLLs"
+            }
+        }
+
+        # 3) Verify the app runs with all DLLs present
+        Write-Host "Verifying application starts correctly..." -ForegroundColor Yellow
         $p = Start-Process -FilePath $exe -PassThru
         Start-Sleep -Seconds 4
         $running = $false
@@ -111,25 +126,18 @@ if ($Package) {
         if (-not $running) { throw "Verify run failed: process exited early. Check $stage/bin/startup.log" }
         # Stop after verification window
         $p | Stop-Process -Force
+        Write-Host "Application verification successful" -ForegroundColor Green
 
-        # 2) ALWAYS refresh portable folder from the verified install_run
+        # 4) Copy verified staging to portable folder
         try { Get-Process -Name kassetmanagerqt -ErrorAction SilentlyContinue | Stop-Process -Force } catch {}
         $portable = Join-Path $repoRoot 'dist/portable'
         if (Test-Path $portable) { Remove-Item -Recurse -Force $portable }
         Copy-Item -Recurse -Force $stage $portable
-
-        # Copy OpenImageIO DLLs from vcpkg if using MSVC
-        if ($Generator -eq 'Visual Studio 17 2022') {
-            $vcpkgBin = 'C:\vcpkg\installed\x64-windows\bin'
-            if (Test-Path $vcpkgBin) {
-                Write-Host "Copying OpenImageIO DLLs from vcpkg..."
-                Copy-Item "$vcpkgBin\*.dll" -Destination (Join-Path $portable 'bin') -Force -ErrorAction SilentlyContinue
-            }
-        }
+        Write-Host "Portable distribution created" -ForegroundColor Green
 
         Write-Host ("UPDATED_PORTABLE:{0}" -f (Resolve-Path $portable))
 
-        # 3) Package only after successful verify run
+        # 5) Package only after successful verify run
         $nsis = Get-Command makensis.exe -ErrorAction SilentlyContinue
         if ($Generator -eq 'Visual Studio 17 2022') {
             if ($nsis) { cpack -G NSIS -C Release } else { cpack -G ZIP -C Release }

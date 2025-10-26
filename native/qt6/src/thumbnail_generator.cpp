@@ -197,7 +197,7 @@ void ThumbnailGenerator::ensureThumbnailDir() {
     QString appDir = QCoreApplication::applicationDirPath();
     QString dataDir = appDir + "/data";
     QString thumbDir = dataDir + "/thumbnails";
-    
+
     QDir dir;
     if (!dir.exists(dataDir)) {
         dir.mkpath(dataDir);
@@ -205,7 +205,7 @@ void ThumbnailGenerator::ensureThumbnailDir() {
     if (!dir.exists(thumbDir)) {
         dir.mkpath(thumbDir);
     }
-    
+
     m_thumbnailDir = QDir(thumbDir);
     qDebug() << "[ThumbnailGenerator] Cache directory:" << m_thumbnailDir.absolutePath();
 }
