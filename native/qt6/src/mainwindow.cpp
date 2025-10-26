@@ -133,16 +133,30 @@ private:
             log << "[PAINT] thumbnailPath: " << thumbnailPath << "\n";
             log.flush();
 
+            // PERFORMANCE: Lazy loading - if thumbnail doesn't exist, request it
+            if (thumbnailPath.isEmpty()) {
+                QString filePath = index.data(AssetsModel::FilePathRole).toString();
+                if (!filePath.isEmpty()) {
+                    log << "[PAINT] No thumbnail, requesting generation for: " << filePath << "\n";
+                    log.flush();
+                    // Request thumbnail generation asynchronously
+                    ThumbnailGenerator::instance().requestThumbnail(filePath);
+                }
+                painter->restore();
+                return; // Don't draw anything yet - thumbnail is being generated
+            }
+
             // CRITICAL FIX: If thumbnail exists on disk but not in cache, load it now
-            if (!thumbnailPath.isEmpty() && !pixmapCache.contains(thumbnailPath)) {
+            if (!pixmapCache.contains(thumbnailPath)) {
                 QFileInfo thumbInfo(thumbnailPath);
                 if (thumbInfo.exists() && thumbInfo.size() > 0) {
                     log << "[PAINT] Loading thumbnail from disk into cache: " << thumbnailPath << "\n";
                     log.flush();
                     QPixmap pixmap(thumbnailPath);
                     if (!pixmap.isNull()) {
-                        // Limit cache size
-                        if (pixmapCache.size() > 200) {
+                        // PERFORMANCE: Increased cache size from 200 to 1000 for better performance
+                        // At 256x256 thumbnails, this is ~250MB of memory which is reasonable
+                        if (pixmapCache.size() > 1000) {
                             pixmapCache.clear();
                         }
                         pixmapCache.insert(thumbnailPath, pixmap);
@@ -156,7 +170,7 @@ private:
             }
 
             // If thumbnail is still not in cache, don't draw anything
-            if (thumbnailPath.isEmpty() || !pixmapCache.contains(thumbnailPath)) {
+            if (!pixmapCache.contains(thumbnailPath)) {
                 log << "[PAINT] No thumbnail in cache, returning\n";
                 log.flush();
                 painter->restore();
@@ -436,8 +450,8 @@ MainWindow::MainWindow(QWidget *parent)
                     log.flush();
 
                     if (!pixmap.isNull()) {
-                        // Limit cache size
-                        if (delegate->pixmapCache.size() > 200) {
+                        // PERFORMANCE: Increased cache size from 200 to 1000 for better performance
+                        if (delegate->pixmapCache.size() > 1000) {
                             log << "[THUMB LOAD] Clearing cache (size was " << delegate->pixmapCache.size() << ")\n";
                             log.flush();
                             delegate->pixmapCache.clear();

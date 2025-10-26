@@ -82,6 +82,13 @@ bool DB::migrate(){
         exec("ALTER TABLE assets ADD COLUMN sequence_frame_count INTEGER NULL");
     }
 
+    // PERFORMANCE: Add indexes for frequently queried columns
+    exec("CREATE INDEX IF NOT EXISTS idx_assets_file_name ON assets(file_name);");
+    exec("CREATE INDEX IF NOT EXISTS idx_assets_rating ON assets(rating);");
+    exec("CREATE INDEX IF NOT EXISTS idx_assets_updated_at ON assets(updated_at);");
+    exec("CREATE INDEX IF NOT EXISTS idx_asset_tags_tag_id ON asset_tags(tag_id);");
+    exec("CREATE INDEX IF NOT EXISTS idx_asset_tags_asset_id ON asset_tags(asset_id);");
+
     return true;
 }
 

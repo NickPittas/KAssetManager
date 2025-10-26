@@ -180,9 +180,16 @@ ThumbnailGenerator::ThumbnailGenerator(QObject* parent)
 
     // Create thread pool for thumbnail generation
     m_threadPool = new QThreadPool(this);
-    m_threadPool->setMaxThreadCount(1); // CRITICAL: Only 1 thread to avoid race conditions with large images
 
-    qDebug() << "[ThumbnailGenerator] Initialized with" << m_threadPool->maxThreadCount() << "threads";
+    // PERFORMANCE: Use optimal thread count for thumbnail generation
+    // Use half of available CPU cores to avoid overwhelming the system
+    // Minimum 2 threads, maximum 8 threads for best balance
+    int idealThreads = QThread::idealThreadCount();
+    int optimalThreads = qBound(2, idealThreads / 2, 8);
+    m_threadPool->setMaxThreadCount(optimalThreads);
+
+    qDebug() << "[ThumbnailGenerator] Initialized with" << m_threadPool->maxThreadCount()
+             << "threads (ideal:" << idealThreads << ")";
 }
 
 void ThumbnailGenerator::ensureThumbnailDir() {
