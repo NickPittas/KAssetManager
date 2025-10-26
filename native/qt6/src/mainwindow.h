@@ -59,6 +59,10 @@ private slots:
     void onTagContextMenu(const QPoint &pos);
     void updateTagButtonStates();
 
+    void onOpenSettings();
+    void onThumbnailSizeChanged(int size);
+    void onViewModeChanged();
+
     void importFiles(const QStringList &filePaths);
     void onImportProgress(int current, int total);
     void onImportFileChanged(const QString& fileName);
@@ -97,8 +101,9 @@ private:
     QTreeView *folderTreeView;
     VirtualFolderTreeModel *folderModel;
     
-    // Center panel: Asset grid
+    // Center panel: Asset grid and table
     QListView *assetGridView;
+    class QTableView *assetTableView;
     AssetsModel *assetsModel;
     
     // Right panel: Filters + Info
@@ -117,6 +122,11 @@ private:
     QPushButton *applyTagsBtn;
     QPushButton *filterByTagsBtn;
     QComboBox *tagFilterModeCombo;
+
+    // View controls
+    QSlider *thumbnailSizeSlider;
+    QPushButton *viewModeButton;
+    bool isGridMode;
     
     // Info panel labels
     QLabel *infoFileName;

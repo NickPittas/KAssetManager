@@ -7,6 +7,7 @@
 #include "preview_overlay.h"
 #include "thumbnail_generator.h"
 #include "import_progress_dialog.h"
+#include "settings_dialog.h"
 #include "star_rating_widget.h"
 #include <QHeaderView>
 #include <QStyledItemDelegate>
@@ -14,6 +15,8 @@
 #include <QApplication>
 #include <QMessageBox>
 #include <QInputDialog>
+#include <QMenuBar>
+#include <QSlider>
 #include <QFileInfo>
 #include <QDateTime>
 #include <QDir>
@@ -96,10 +99,16 @@ protected:
 class AssetItemDelegate : public QStyledItemDelegate
 {
 public:
-    explicit AssetItemDelegate(QObject *parent = nullptr) : QStyledItemDelegate(parent) {}
+    explicit AssetItemDelegate(QObject *parent = nullptr) : QStyledItemDelegate(parent), m_thumbnailSize(180) {}
+
+    void setThumbnailSize(int size) { m_thumbnailSize = size; }
+    int thumbnailSize() const { return m_thumbnailSize; }
 
     // Cache for loaded pixmaps to avoid repeated file I/O
     mutable QHash<QString, QPixmap> pixmapCache;
+
+private:
+    int m_thumbnailSize;
 
     void paint(QPainter *painter, const QStyleOptionViewItem &option, const QModelIndex &index) const override
     {
@@ -320,11 +329,13 @@ public:
         }
     }
 
+public:
     QSize sizeHint(const QStyleOptionViewItem &option, const QModelIndex &index) const override
     {
         Q_UNUSED(option);
         Q_UNUSED(index);
-        return QSize(180, 200);
+        int height = m_thumbnailSize + 60; // Add space for text overlay
+        return QSize(m_thumbnailSize, height);
     }
 };
 
@@ -437,6 +448,26 @@ MainWindow::~MainWindow()
 
 void MainWindow::setupUi()
 {
+    // Menu bar
+    QMenuBar* menuBar = new QMenuBar(this);
+    setMenuBar(menuBar);
+
+    QMenu* fileMenu = menuBar->addMenu("&File");
+    fileMenu->setStyleSheet(
+        "QMenu { background-color: #1a1a1a; color: #ffffff; border: 1px solid #333; }"
+        "QMenu::item:selected { background-color: #2f3a4a; }"
+    );
+
+    QAction* settingsAction = fileMenu->addAction("&Settings");
+    settingsAction->setShortcut(QKeySequence("Ctrl+,"));
+    connect(settingsAction, &QAction::triggered, this, &MainWindow::onOpenSettings);
+
+    fileMenu->addSeparator();
+
+    QAction* exitAction = fileMenu->addAction("E&xit");
+    exitAction->setShortcut(QKeySequence("Ctrl+Q"));
+    connect(exitAction, &QAction::triggered, this, &QMainWindow::close);
+
     // Main splitter: left (folders) | center (assets) | right (filters+info)
     mainSplitter = new QSplitter(Qt::Horizontal, this);
     setCentralWidget(mainSplitter);
@@ -455,10 +486,65 @@ void MainWindow::setupUi()
 
     // Expand root folder by default
     folderTreeView->expandToDepth(0);
-    
-    // Center panel: Asset grid (using custom AssetGridView with compact drag pixmap)
-    assetGridView = new AssetGridView(this);
-    assetsModel = new AssetsModel(this);
+
+    // Center panel: Asset grid with toolbar
+    QWidget* centerPanel = new QWidget(this);
+    QVBoxLayout* centerLayout = new QVBoxLayout(centerPanel);
+    centerLayout->setContentsMargins(0, 0, 0, 0);
+    centerLayout->setSpacing(0);
+
+    // Toolbar for view controls
+    QWidget* toolbar = new QWidget(centerPanel);
+    toolbar->setStyleSheet("QWidget { background-color: #1a1a1a; border-bottom: 1px solid #333; }");
+    QHBoxLayout* toolbarLayout = new QHBoxLayout(toolbar);
+    toolbarLayout->setContentsMargins(8, 4, 8, 4);
+    toolbarLayout->setSpacing(8);
+
+    // View mode toggle button
+    isGridMode = true;
+    viewModeButton = new QPushButton("⊞ Grid", toolbar);
+    viewModeButton->setFixedSize(80, 28);
+    viewModeButton->setStyleSheet(
+        "QPushButton { background-color: #2a2a2a; color: #ffffff; border: 1px solid #333; border-radius: 4px; font-size: 12px; }"
+        "QPushButton:hover { background-color: #333; }"
+    );
+    viewModeButton->setToolTip("Toggle between Grid and List view");
+    connect(viewModeButton, &QPushButton::clicked, this, &MainWindow::onViewModeChanged);
+    toolbarLayout->addWidget(viewModeButton);
+
+    // Thumbnail size label
+    QLabel* sizeLabel = new QLabel("Size:", toolbar);
+    sizeLabel->setStyleSheet("color: #ffffff; font-size: 12px;");
+    toolbarLayout->addWidget(sizeLabel);
+
+    // Thumbnail size slider
+    thumbnailSizeSlider = new QSlider(Qt::Horizontal, toolbar);
+    thumbnailSizeSlider->setRange(100, 400);
+    thumbnailSizeSlider->setValue(180);
+    thumbnailSizeSlider->setFixedWidth(150);
+    thumbnailSizeSlider->setStyleSheet(
+        "QSlider::groove:horizontal { background: #333; height: 4px; border-radius: 2px; }"
+        "QSlider::handle:horizontal { background: #58a6ff; width: 14px; height: 14px; margin: -5px 0; border-radius: 7px; }"
+        "QSlider::handle:horizontal:hover { background: #4a8fd9; }"
+    );
+    thumbnailSizeSlider->setToolTip("Adjust thumbnail size");
+    connect(thumbnailSizeSlider, &QSlider::valueChanged, this, &MainWindow::onThumbnailSizeChanged);
+    toolbarLayout->addWidget(thumbnailSizeSlider);
+
+    // Size value label
+    QLabel* sizeValueLabel = new QLabel("180px", toolbar);
+    sizeValueLabel->setStyleSheet("color: #999; font-size: 11px; min-width: 45px;");
+    connect(thumbnailSizeSlider, &QSlider::valueChanged, [sizeValueLabel](int value) {
+        sizeValueLabel->setText(QString("%1px").arg(value));
+    });
+    toolbarLayout->addWidget(sizeValueLabel);
+
+    toolbarLayout->addStretch();
+    centerLayout->addWidget(toolbar);
+
+    // Asset grid (using custom AssetGridView with compact drag pixmap)
+    assetGridView = new AssetGridView(centerPanel);
+    assetsModel = new AssetsModel(centerPanel);
     assetGridView->setModel(assetsModel);
     assetGridView->setViewMode(QListView::IconMode);
     assetGridView->setResizeMode(QListView::Adjust);
@@ -466,10 +552,12 @@ void MainWindow::setupUi()
     assetGridView->setUniformItemSizes(true);
     assetGridView->setSelectionMode(QAbstractItemView::ExtendedSelection);
     assetGridView->setContextMenuPolicy(Qt::CustomContextMenu);
-    assetGridView->setItemDelegate(new AssetItemDelegate(this));
+    assetGridView->setItemDelegate(new AssetItemDelegate(centerPanel));
+    assetGridView->setIconSize(QSize(180, 180));
     assetGridView->setStyleSheet(
         "QListView { background-color: #0a0a0a; border: none; }"
     );
+    centerLayout->addWidget(assetGridView);
 
     // Enable drag-and-drop
     assetGridView->setDragEnabled(true);
@@ -670,7 +758,7 @@ void MainWindow::setupUi()
     
     // Add panels to main splitter
     mainSplitter->addWidget(folderTreeView);
-    mainSplitter->addWidget(assetGridView);
+    mainSplitter->addWidget(centerPanel);
     mainSplitter->addWidget(rightPanel);
     mainSplitter->setStretchFactor(0, 1);
     mainSplitter->setStretchFactor(1, 3);
@@ -1928,6 +2016,64 @@ void MainWindow::restoreFolderExpansionState()
 
     restoreExpanded(QModelIndex());
     qDebug() << "Restored expansion state for" << expandedFolderIds.size() << "folders";
+}
+
+void MainWindow::onOpenSettings()
+{
+    SettingsDialog dialog(this);
+    dialog.exec();
+}
+
+void MainWindow::onThumbnailSizeChanged(int size)
+{
+    // Update delegate thumbnail size
+    AssetItemDelegate* delegate = static_cast<AssetItemDelegate*>(assetGridView->itemDelegate());
+    if (delegate) {
+        delegate->setThumbnailSize(size);
+    }
+
+    // Update icon size for the view
+    assetGridView->setIconSize(QSize(size, size));
+
+    // Force view to update by resetting the model
+    assetGridView->reset();
+
+    qDebug() << "Thumbnail size changed to:" << size;
+}
+
+void MainWindow::onViewModeChanged()
+{
+    isGridMode = !isGridMode;
+
+    if (isGridMode) {
+        // Switch to grid mode
+        viewModeButton->setText("⊞ Grid");
+        assetGridView->setViewMode(QListView::IconMode);
+        assetGridView->setSpacing(8);
+        assetGridView->setUniformItemSizes(true);
+        thumbnailSizeSlider->setEnabled(true);
+
+        // Update icon size
+        int size = thumbnailSizeSlider->value();
+        assetGridView->setIconSize(QSize(size, size));
+
+        qDebug() << "Switched to Grid view";
+    } else {
+        // Switch to list mode
+        viewModeButton->setText("☰ List");
+        assetGridView->setViewMode(QListView::ListMode);
+        assetGridView->setSpacing(2);
+        assetGridView->setUniformItemSizes(false);
+        thumbnailSizeSlider->setEnabled(false);
+
+        // Set smaller icon size for list mode
+        assetGridView->setIconSize(QSize(48, 48));
+
+        qDebug() << "Switched to List view";
+    }
+
+    // Force view to update by resetting the model
+    assetGridView->reset();
 }
 
 // Called when thumbnail generation progress updates

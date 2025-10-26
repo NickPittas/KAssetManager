@@ -469,3 +469,80 @@ QString DB::getAssetFilePath(int assetId) const
     return QString();
 }
 
+bool DB::exportDatabase(const QString& filePath)
+{
+    // Close current connection
+    QString dbName = m_db.databaseName();
+    m_db.close();
+
+    // Copy database file
+    bool success = QFile::copy(dbName, filePath);
+
+    // Reopen connection
+    m_db.open();
+
+    if (!success) {
+        qWarning() << "DB::exportDatabase: Failed to copy database to" << filePath;
+    }
+
+    return success;
+}
+
+bool DB::importDatabase(const QString& filePath)
+{
+    if (!QFile::exists(filePath)) {
+        qWarning() << "DB::importDatabase: Source file does not exist:" << filePath;
+        return false;
+    }
+
+    // Close current connection
+    QString dbName = m_db.databaseName();
+    m_db.close();
+
+    // Remove old database
+    QFile::remove(dbName);
+
+    // Copy new database
+    bool success = QFile::copy(filePath, dbName);
+
+    // Reopen connection
+    m_db.open();
+
+    if (!success) {
+        qWarning() << "DB::importDatabase: Failed to copy database from" << filePath;
+    } else {
+        // Reload root folder ID
+        m_rootId = ensureRootFolder();
+        emit foldersChanged();
+        emit assetsChanged(m_rootId);
+        emit tagsChanged();
+    }
+
+    return success;
+}
+
+bool DB::clearAllData()
+{
+    QSqlQuery q(m_db);
+
+    // Delete all data
+    bool ok = true;
+    ok &= q.exec("DELETE FROM asset_tags");
+    ok &= q.exec("DELETE FROM assets");
+    ok &= q.exec("DELETE FROM tags");
+    ok &= q.exec("DELETE FROM virtual_folders");
+
+    if (!ok) {
+        qWarning() << "DB::clearAllData: Failed to clear data:" << q.lastError();
+        return false;
+    }
+
+    // Recreate root folder
+    m_rootId = ensureRootFolder();
+
+    emit foldersChanged();
+    emit assetsChanged(m_rootId);
+    emit tagsChanged();
+
+    return true;
+}

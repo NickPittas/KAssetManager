@@ -58,6 +58,8 @@ qt_add_executable(kassetmanagerqt
     src/preview_overlay.cpp
     src/import_progress_dialog.h
     src/import_progress_dialog.cpp
+    src/settings_dialog.h
+    src/settings_dialog.cpp
     src/star_rating_widget.h
     src/star_rating_widget.cpp
     src/sequence_detector.h

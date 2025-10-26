@@ -43,6 +43,11 @@ public:
     bool assignTagsToAssets(const QList<int>& assetIds, const QList<int>& tagIds);
     QStringList tagsForAsset(int assetId) const;
 
+    // Database management
+    bool exportDatabase(const QString& filePath);
+    bool importDatabase(const QString& filePath);
+    bool clearAllData();
+
 signals:
     void foldersChanged();
     void assetsChanged(int folderId);
