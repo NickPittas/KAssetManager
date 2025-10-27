@@ -10,6 +10,121 @@
 #include <QWheelEvent>
 #include <QMouseEvent>
 #include <QDebug>
+#include <QDir>
+
+#include <atomic>
+
+#ifdef HAVE_FFMPEG
+extern "C" {
+#include <libavformat/avformat.h>
+#include <libavcodec/avcodec.h>
+}
+#include <QImage>
+#include <QRegularExpression>
+
+// Worker that reads PNG-coded frames from a MOV and emits QImage frames
+class PreviewOverlay::FallbackPngMovReader : public QObject {
+    Q_OBJECT
+public:
+    explicit FallbackPngMovReader(const QString& path)
+        : m_path(path) {}
+
+public slots:
+    void start() {
+        if (!open()) { emit finished(); return; }
+        const double intervalMs = m_fps > 0.0 ? (1000.0 / m_fps) : (1000.0 / 24.0);
+        AVPacket pkt; av_init_packet(&pkt);
+        const uint8_t sig[8] = {0x89, 'P','N','G', 0x0D, 0x0A, 0x1A, 0x0A};
+        qint64 lastPtsMs = 0;
+        while (!m_stop) {
+            if (m_paused) { QThread::msleep(10); continue; }
+            if (av_read_frame(m_fmt, &pkt) < 0) {
+                break; // EOF
+            }
+            if (pkt.stream_index == m_vIdx && pkt.size >= 8 && pkt.data) {
+                int limit = pkt.size - 8;
+                int pos = -1;
+                for (int i = 0; i <= limit; ++i) {
+                    if (pkt.data[i] == sig[0]) {
+                        bool match = true;
+                        for (int j = 1; j < 8; ++j) {
+                            if (pkt.data[i + j] != sig[j]) { match = false; break; }
+                        }
+                        if (match) { pos = i; break; }
+                    }
+                }
+                if (pos >= 0) {
+                    QByteArray bytes(reinterpret_cast<const char*>(pkt.data + pos), pkt.size - pos);
+                    QImage img = QImage::fromData(bytes, "PNG");
+                    if (!img.isNull()) {
+                        qint64 ptsMs = 0;
+                        if (pkt.pts != AV_NOPTS_VALUE) {
+                            AVRational ms = {1, 1000};
+                            ptsMs = av_rescale_q(pkt.pts, m_stream->time_base, ms);
+                        } else {
+                            ptsMs = lastPtsMs + static_cast<qint64>(intervalMs);
+                        }
+                        lastPtsMs = ptsMs;
+                        emit frameReady(img, ptsMs);
+                        // Pace roughly to FPS; keep it simple
+                        QThread::msleep(static_cast<unsigned long>(intervalMs));
+                    }
+                }
+            }
+            av_packet_unref(&pkt);
+        }
+        avformat_close_input(&m_fmt);
+        emit finished();
+    }
+    void stop() { m_stop = true; }
+    void setPaused(bool p) { m_paused = p; }
+
+signals:
+    void frameReady(const QImage& image, qint64 ptsMs);
+    void finished();
+
+public:
+    double fps() const { return m_fps; }
+    qint64 durationMs() const { return m_durationMs; }
+
+private:
+    bool open() {
+        if (avformat_open_input(&m_fmt, m_path.toUtf8().constData(), nullptr, nullptr) < 0) {
+            return false;
+        }
+        if (avformat_find_stream_info(m_fmt, nullptr) < 0) {
+            avformat_close_input(&m_fmt);
+            return false;
+        }
+        int vIdx = av_find_best_stream(m_fmt, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
+        if (vIdx < 0) {
+            avformat_close_input(&m_fmt);
+            return false;
+        }
+        m_vIdx = vIdx;
+        m_stream = m_fmt->streams[m_vIdx];
+        AVRational r = m_stream->avg_frame_rate.num > 0 ? m_stream->avg_frame_rate : m_stream->r_frame_rate;
+        m_fps = (r.num > 0 && r.den > 0) ? (static_cast<double>(r.num) / r.den) : 24.0;
+        if (m_fmt->duration > 0) {
+            m_durationMs = static_cast<qint64>( (m_fmt->duration * 1000) / AV_TIME_BASE );
+        } else {
+            m_durationMs = 0;
+        }
+        // Rewind to start for clean playback
+        av_seek_frame(m_fmt, m_vIdx, 0, AVSEEK_FLAG_BACKWARD);
+        return true;
+    }
+
+    QString m_path;
+    AVFormatContext* m_fmt = nullptr;
+    AVStream* m_stream = nullptr;
+    int m_vIdx = -1;
+    double m_fps = 24.0;
+    qint64 m_durationMs = 0;
+    std::atomic<bool> m_stop{false};
+    std::atomic<bool> m_paused{false};
+};
+#endif // HAVE_FFMPEG
 
 PreviewOverlay::PreviewOverlay(QWidget *parent)
     : QWidget(parent)
@@ -47,9 +162,14 @@ PreviewOverlay::PreviewOverlay(QWidget *parent)
 
 PreviewOverlay::~PreviewOverlay()
 {
-    if (mediaPlayer) {
-        mediaPlayer->stop();
+    // Ensure all playback modes are fully stopped before destruction
+    stopPlayback();
+#ifdef HAVE_FFMPEG
+    // As an extra safety net, wait a bit if the worker thread is still winding down
+    if (fallbackThread) {
+        fallbackThread->wait(3000);
     }
+#endif
     if (sequenceTimer) {
         sequenceTimer->stop();
     }
@@ -60,34 +180,34 @@ void PreviewOverlay::setupUi()
     // Full-screen black background
     setStyleSheet("QWidget { background-color: #000000; }");
     setAttribute(Qt::WA_StyledBackground, true);
-    
+
     QVBoxLayout *mainLayout = new QVBoxLayout(this);
     mainLayout->setContentsMargins(0, 0, 0, 0);
     mainLayout->setSpacing(0);
-    
+
     // Top bar with filename and close button
     QWidget *topBar = new QWidget(this);
     topBar->setStyleSheet("QWidget { background-color: rgba(0, 0, 0, 180); }");
     topBar->setFixedHeight(50);
     QHBoxLayout *topLayout = new QHBoxLayout(topBar);
-    
+
     fileNameLabel = new QLabel(this);
     fileNameLabel->setStyleSheet("QLabel { color: white; font-size: 16px; padding: 10px; }");
     topLayout->addWidget(fileNameLabel);
-    
+
     topLayout->addStretch();
-    
+
     closeBtn = new QPushButton("✕", this);
     closeBtn->setStyleSheet(
         "QPushButton { background-color: transparent; color: white; font-size: 24px; "
         "border: none; padding: 10px 20px; }"
         "QPushButton:hover { background-color: rgba(255, 255, 255, 30); }"
     );
-    connect(closeBtn, &QPushButton::clicked, this, &PreviewOverlay::closed);
+    connect(closeBtn, &QPushButton::clicked, this, [this]() { stopPlayback(); emit closed(); });
     topLayout->addWidget(closeBtn);
-    
+
     mainLayout->addWidget(topBar);
-    
+
     // Content area (image or video)
     QWidget *contentWidget = new QWidget(this);
     QVBoxLayout *contentLayout = new QVBoxLayout(contentWidget);
@@ -112,16 +232,16 @@ void PreviewOverlay::setupUi()
     contentLayout->addWidget(videoWidget);
 
     mainLayout->addWidget(contentWidget, 1);
-    
+
     // Bottom controls (for video)
     controlsWidget = new QWidget(this);
     controlsWidget->setStyleSheet("QWidget { background-color: rgba(0, 0, 0, 180); }");
     controlsWidget->setFixedHeight(80);
     controlsWidget->hide();
-    
+
     QVBoxLayout *controlsLayout = new QVBoxLayout(controlsWidget);
     controlsLayout->setContentsMargins(20, 10, 20, 10);
-    
+
     // Position slider
     positionSlider = new QSlider(Qt::Horizontal, this);
     positionSlider->setStyleSheet(
@@ -130,10 +250,10 @@ void PreviewOverlay::setupUi()
     );
     connect(positionSlider, &QSlider::sliderMoved, this, &PreviewOverlay::onSliderMoved);
     controlsLayout->addWidget(positionSlider);
-    
+
     // Control buttons row
     QHBoxLayout *buttonsLayout = new QHBoxLayout();
-    
+
     playPauseBtn = new QPushButton("▶", this);
     playPauseBtn->setFixedSize(40, 40);
     playPauseBtn->setStyleSheet(
@@ -143,11 +263,11 @@ void PreviewOverlay::setupUi()
     );
     connect(playPauseBtn, &QPushButton::clicked, this, &PreviewOverlay::onPlayPauseClicked);
     buttonsLayout->addWidget(playPauseBtn);
-    
+
     timeLabel = new QLabel("0:00 / 0:00", this);
     timeLabel->setStyleSheet("QLabel { color: white; font-size: 14px; padding: 0 10px; }");
     buttonsLayout->addWidget(timeLabel);
-    
+
     buttonsLayout->addStretch();
 
     // Color space selector (for HDR/EXR images)
@@ -190,23 +310,28 @@ void PreviewOverlay::setupUi()
     buttonsLayout->addWidget(volumeSlider);
 
     controlsLayout->addLayout(buttonsLayout);
-    
+
     mainLayout->addWidget(controlsWidget);
-    
+
     // Initialize media player
     mediaPlayer = new QMediaPlayer(this);
     audioOutput = new QAudioOutput(this);
     mediaPlayer->setAudioOutput(audioOutput);
     mediaPlayer->setVideoOutput(videoWidget);
-    
+
     connect(mediaPlayer, &QMediaPlayer::positionChanged, this, &PreviewOverlay::onPositionChanged);
     connect(mediaPlayer, &QMediaPlayer::durationChanged, this, &PreviewOverlay::onDurationChanged);
-    
+    connect(mediaPlayer, &QMediaPlayer::errorOccurred, this, &PreviewOverlay::onPlayerError);
+    connect(mediaPlayer, &QMediaPlayer::mediaStatusChanged, this, &PreviewOverlay::onMediaStatusChanged);
+
     audioOutput->setVolume(0.5);
 }
 
 void PreviewOverlay::showAsset(const QString &filePath, const QString &fileName, const QString &fileType)
 {
+    // First, stop any ongoing playback (video, fallback, or sequence)
+    stopPlayback();
+
     // Reset sequence state
     isSequence = false;
     sequencePlaying = false;
@@ -250,6 +375,12 @@ void PreviewOverlay::showImage(const QString &filePath)
         qDebug() << "[PreviewOverlay::showImage] Stopping video playback";
         mediaPlayer->stop();
     }
+#ifdef HAVE_FFMPEG
+    if (usingFallbackVideo) {
+        qDebug() << "[PreviewOverlay::showImage] Stopping fallback playback";
+        stopFallbackVideo();
+    }
+#endif
 
     // Check if this is an HDR/EXR image
     QFileInfo fileInfo(filePath);
@@ -326,6 +457,20 @@ void PreviewOverlay::showVideo(const QString &filePath)
 {
     qDebug() << "[PreviewOverlay::showVideo] Loading video:" << filePath;
 
+    // Ensure any fallback is stopped before starting normal video
+#ifdef HAVE_FFMPEG
+    if (usingFallbackVideo) {
+        stopFallbackVideo();
+    }
+#endif
+
+    // Ensure media player is in a clean state
+    if (mediaPlayer->playbackState() != QMediaPlayer::StoppedState) {
+        mediaPlayer->stop();
+    }
+    mediaPlayer->setSource(QUrl()); // clear previous source to avoid stray signals
+    mediaPlayer->setPosition(0);
+
     // CRITICAL: Hide image view and show video widget
     imageView->hide();
     videoWidget->show();
@@ -359,12 +504,23 @@ void PreviewOverlay::onPlayPauseClicked()
         }
     } else {
         // Handle video playback
-        if (mediaPlayer->playbackState() == QMediaPlayer::PlayingState) {
-            mediaPlayer->pause();
-        } else {
-            mediaPlayer->play();
+#ifdef HAVE_FFMPEG
+        if (usingFallbackVideo) {
+            fallbackPaused = !fallbackPaused;
+            if (fallbackReader) {
+                QMetaObject::invokeMethod(fallbackReader, "setPaused", Qt::QueuedConnection, Q_ARG(bool, fallbackPaused));
+            }
+            updatePlayPauseButton();
+        } else
+#endif
+        {
+            if (mediaPlayer->playbackState() == QMediaPlayer::PlayingState) {
+                mediaPlayer->pause();
+            } else {
+                mediaPlayer->play();
+            }
+            updatePlayPauseButton();
         }
-        updatePlayPauseButton();
     }
     controlsTimer->start();
 }
@@ -374,7 +530,7 @@ void PreviewOverlay::onPositionChanged(qint64 position)
     if (!positionSlider->isSliderDown()) {
         positionSlider->setValue(position);
     }
-    
+
     qint64 duration = mediaPlayer->duration();
     timeLabel->setText(QString("%1 / %2").arg(formatTime(position)).arg(formatTime(duration)));
 }
@@ -390,6 +546,12 @@ void PreviewOverlay::onSliderMoved(int position)
         // Seek to specific frame in sequence
         loadSequenceFrame(position);
     } else {
+#ifdef HAVE_FFMPEG
+        if (usingFallbackVideo) {
+            // Seeking not supported in fallback mode yet
+            return;
+        }
+#endif
         // Seek in video
         mediaPlayer->setPosition(position);
     }
@@ -411,6 +573,12 @@ void PreviewOverlay::hideControls()
 
 void PreviewOverlay::updatePlayPauseButton()
 {
+#ifdef HAVE_FFMPEG
+    if (usingFallbackVideo) {
+        playPauseBtn->setText(fallbackPaused ? "▶" : "⏸");
+        return;
+    }
+#endif
     if (mediaPlayer->playbackState() == QMediaPlayer::PlayingState) {
         playPauseBtn->setText("⏸");
     } else {
@@ -440,18 +608,18 @@ void PreviewOverlay::keyPressEvent(QKeyEvent *event)
 {
     switch (event->key()) {
         case Qt::Key_Escape:
+            // Ensure playback fully stops before closing overlay
+            stopPlayback();
             emit closed();
             break;
         case Qt::Key_Left:
-            if (isVideo && mediaPlayer->playbackState() == QMediaPlayer::PlayingState) {
-                mediaPlayer->stop();
-            }
+            // Always stop any playback before navigating to avoid mixing
+            stopPlayback();
             navigatePrevious();
             break;
         case Qt::Key_Right:
-            if (isVideo && mediaPlayer->playbackState() == QMediaPlayer::PlayingState) {
-                mediaPlayer->stop();
-            }
+            // Always stop any playback before navigating to avoid mixing
+            stopPlayback();
             navigateNext();
             break;
         case Qt::Key_Space:
@@ -662,6 +830,8 @@ void PreviewOverlay::loadSequenceFrame(int frameIndex)
         qDebug() << "[PreviewOverlay::loadSequenceFrame] Frame loaded and displayed";
     } else {
         qWarning() << "[PreviewOverlay::loadSequenceFrame] Failed to load frame - pixmap is null!";
+
+
     }
 
     // Update slider and time label
@@ -763,6 +933,13 @@ void PreviewOverlay::stopPlayback()
         mediaPlayer->stop();
     }
 
+#ifdef HAVE_FFMPEG
+    // Stop fallback playback if active
+    if (usingFallbackVideo) {
+        stopFallbackVideo();
+    }
+#endif
+
     // Stop sequence playback
     if (sequencePlaying) {
         pauseSequence();
@@ -772,3 +949,162 @@ void PreviewOverlay::stopPlayback()
     mediaPlayer->setSource(QUrl());
 }
 
+
+
+#ifdef HAVE_FFMPEG
+void PreviewOverlay::startFallbackVideo(const QString &filePath)
+{
+    if (usingFallbackVideo) {
+        stopFallbackVideo();
+    }
+
+    qDebug() << "[PreviewOverlay] Starting fallback PNG-in-MOV playback for" << filePath;
+
+    // Stop and hide the video widget path
+    mediaPlayer->stop();
+    videoWidget->hide();
+    imageView->show();
+    controlsWidget->show();
+
+    // Clear scene and reset pixmap
+    imageScene->clear();
+    imageItem = nullptr;
+    originalPixmap = QPixmap();
+
+    // Probe duration and fps for UI
+    fallbackDurationMs = 0;
+    fallbackFps = 24.0;
+    AVFormatContext* fmt = nullptr;
+    if (avformat_open_input(&fmt, filePath.toUtf8().constData(), nullptr, nullptr) == 0) {
+        if (avformat_find_stream_info(fmt, nullptr) == 0) {
+            int vIdx = av_find_best_stream(fmt, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
+            if (vIdx >= 0) {
+                AVStream* vs = fmt->streams[vIdx];
+                AVRational r = vs->avg_frame_rate.num > 0 ? vs->avg_frame_rate : vs->r_frame_rate;
+                if (r.num > 0 && r.den > 0) fallbackFps = static_cast<double>(r.num) / r.den;
+            }
+            if (fmt->duration > 0) {
+                fallbackDurationMs = static_cast<qint64>((fmt->duration * 1000) / AV_TIME_BASE);
+            }
+        }
+        avformat_close_input(&fmt);
+    }
+
+    if (fallbackDurationMs > 0) {
+        positionSlider->setRange(0, fallbackDurationMs);
+        timeLabel->setText(QString("%1 / %2").arg(formatTime(0)).arg(formatTime(fallbackDurationMs)));
+    } else {
+        // Unknown duration
+        positionSlider->setRange(0, 0);
+        timeLabel->setText(QString("%1 / --:--").arg(formatTime(0)));
+    }
+
+    // Spin up worker thread
+    fallbackThread = new QThread();
+    fallbackReader = new FallbackPngMovReader(filePath);
+    fallbackReader->moveToThread(fallbackThread);
+
+    connect(fallbackThread, &QThread::started, fallbackReader, &FallbackPngMovReader::start);
+    connect(fallbackReader, &FallbackPngMovReader::frameReady, this, &PreviewOverlay::onFallbackFrameReady, Qt::QueuedConnection);
+    connect(fallbackReader, &FallbackPngMovReader::finished, this, &PreviewOverlay::onFallbackFinished, Qt::QueuedConnection);
+    connect(fallbackReader, &FallbackPngMovReader::finished, fallbackThread, &QThread::quit);
+    connect(fallbackThread, &QThread::finished, fallbackReader, &QObject::deleteLater);
+    connect(fallbackThread, &QThread::finished, fallbackThread, &QObject::deleteLater);
+
+    usingFallbackVideo = true;
+    // Ensure reader and thread will stop on overlay destruction as a last resort
+    connect(this, &QObject::destroyed, fallbackReader, &FallbackPngMovReader::stop, Qt::DirectConnection);
+    connect(this, &QObject::destroyed, fallbackThread, &QThread::quit);
+    fallbackThread->start();
+}
+
+void PreviewOverlay::stopFallbackVideo()
+{
+    if (!usingFallbackVideo) return;
+    usingFallbackVideo = false;
+
+    if (fallbackReader) {
+        // Disconnect to avoid queued frames landing after teardown
+        disconnect(fallbackReader, nullptr, this, nullptr);
+        // Set stop flag immediately (atomic) without relying on the worker event loop
+        fallbackReader->stop(); // thread-safe: sets std::atomic<bool>
+    }
+    if (fallbackThread) {
+        fallbackThread->quit();
+        // Give the worker time to exit its loop and close input
+        fallbackThread->wait(3000);
+    }
+    fallbackReader = nullptr;
+    fallbackThread = nullptr;
+}
+#endif // HAVE_FFMPEG
+
+void PreviewOverlay::onPlayerError(QMediaPlayer::Error error, const QString &errorString)
+{
+    qWarning() << "[PreviewOverlay] Media player error:" << error << errorString;
+#ifdef HAVE_FFMPEG
+    // Only trigger fallback if the error belongs to the currently requested source
+    if (!isVideo) return;
+    const QUrl src = mediaPlayer->source();
+    if (src.isLocalFile()) {
+        const QString srcPath = QDir::fromNativeSeparators(src.toLocalFile());
+        const QString curPath = QDir::fromNativeSeparators(currentFilePath);
+        if (srcPath != curPath) {
+            qDebug() << "[PreviewOverlay] Ignoring error for stale source" << srcPath;
+            return;
+        }
+    }
+    // Fallback if codec is unsupported (e.g., PNG in MOV)
+    if (!usingFallbackVideo) {
+        startFallbackVideo(currentFilePath);
+    }
+#endif
+}
+
+void PreviewOverlay::onMediaStatusChanged(QMediaPlayer::MediaStatus status)
+{
+    // If media loads but never produces frames (black screen), we could add a timeout-based fallback here.
+    Q_UNUSED(status);
+}
+
+void PreviewOverlay::onFallbackFrameReady(const QImage &image, qint64 ptsMs)
+{
+#ifdef HAVE_FFMPEG
+    // Ignore frames from stale fallback readers
+    if (!usingFallbackVideo || sender() != fallbackReader) {
+        return;
+    }
+#endif
+    // Update pixmap in the image scene
+    originalPixmap = QPixmap::fromImage(image);
+    if (!imageItem) {
+        imageItem = imageScene->addPixmap(originalPixmap);
+    } else {
+        imageItem->setPixmap(originalPixmap);
+    }
+    fitImageToView();
+
+    // Update UI time/slider
+    if (fallbackDurationMs > 0) {
+        positionSlider->setValue(static_cast<int>(ptsMs));
+        timeLabel->setText(QString("%1 / %2").arg(formatTime(ptsMs)).arg(formatTime(fallbackDurationMs)));
+    } else {
+        timeLabel->setText(QString("%1 / --:--").arg(formatTime(ptsMs)));
+    }
+}
+
+void PreviewOverlay::onFallbackFinished()
+{
+#ifdef HAVE_FFMPEG
+    // Ignore finish from stale readers
+    if (sender() != fallbackReader) {
+        return;
+    }
+#endif
+    qDebug() << "[PreviewOverlay] Fallback playback finished";
+    stopFallbackVideo();
+}
+
+
+// Required because this .cpp defines a QObject with Q_OBJECT (FallbackPngMovReader)
+#include "preview_overlay.moc"

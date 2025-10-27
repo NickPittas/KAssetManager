@@ -4,6 +4,8 @@
 #include "oiio_image_loader.h"
 #include <QCryptographicHash>
 #include <QFileInfo>
+#include <QFile>
+
 #include <QStandardPaths>
 #include <QCoreApplication>
 #include <QDateTime>
@@ -19,6 +21,17 @@
 #include <QVideoFrame>
 #include <QTimer>
 #include <QRegularExpression>
+
+
+#ifdef HAVE_FFMPEG
+extern "C" {
+#include <libavformat/avformat.h>
+#include <libavcodec/avcodec.h>
+#include <libswscale/swscale.h>
+#include <libavutil/imgutils.h>
+#include <libavutil/log.h>
+}
+#endif
 
 // ThumbnailTask implementation (for images only)
 ThumbnailTask::ThumbnailTask(const QString& filePath, ThumbnailGenerator* generator)
@@ -53,12 +66,239 @@ void ThumbnailTask::run() {
     QMetaObject::invokeMethod(generator, [generator, filePath, thumbnailPath, success]() {
         QMutexLocker locker(&generator->m_mutex);
         generator->m_pendingThumbnails.remove(filePath);
-
         // Update progress
         generator->updateProgress();
-
         if (success) {
             emit generator->thumbnailGenerated(filePath, thumbnailPath);
+        } else {
+            emit generator->thumbnailFailed(filePath);
+        }
+    }, Qt::QueuedConnection);
+
+}
+
+// VideoFFmpegTask implementation (fallback path)
+VideoFFmpegTask::VideoFFmpegTask(const QString& filePath, const QString& cachePath, ThumbnailGenerator* generator)
+    : m_filePath(filePath), m_cachePath(cachePath), m_generator(generator)
+{
+    setAutoDelete(true);
+}
+
+// Helper: decode first frame and save thumbnail using FFmpeg
+bool VideoFFmpegTask::decodeAndSave()
+{
+#ifndef HAVE_FFMPEG
+    return false;
+#else
+    // Reduce FFmpeg logging noise once
+    static bool s_logSet = false;
+    if (!s_logSet) { av_log_set_level(AV_LOG_ERROR); s_logSet = true; }
+
+    AVFormatContext* fmt = nullptr;
+    QByteArray localPath = QFile::encodeName(m_filePath);
+    if (avformat_open_input(&fmt, localPath.constData(), nullptr, nullptr) < 0) {
+        qWarning() << "[VideoFFmpegTask] avformat_open_input failed for" << m_filePath;
+        return false;
+    }
+    if (avformat_find_stream_info(fmt, nullptr) < 0) {
+        qWarning() << "[VideoFFmpegTask] avformat_find_stream_info failed";
+        avformat_close_input(&fmt);
+        return false;
+    }
+
+    int vIdx = av_find_best_stream(fmt, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
+    if (vIdx < 0) {
+        qWarning() << "[VideoFFmpegTask] No video stream";
+        avformat_close_input(&fmt);
+        return false;
+    }
+
+    AVStream* vs = fmt->streams[vIdx];
+    AVCodecParameters* vp = vs->codecpar;
+    const AVCodec* dec = avcodec_find_decoder(vp->codec_id);
+    if (!dec) {
+        const AVCodecDescriptor* desc = avcodec_descriptor_get(vp->codec_id);
+        const char* name = desc ? desc->name : "?";
+        qWarning() << "[VideoFFmpegTask] Decoder not found for codec" << (int)vp->codec_id << "(" << name << ")";
+
+        // Special-case: MOV with PNG-coded frames. Many stock clips store full PNG images per packet.
+        if (vp->codec_id == AV_CODEC_ID_PNG) {
+            // Rewind to start and scan packets for a PNG signature
+            av_seek_frame(fmt, vIdx, 0, AVSEEK_FLAG_BACKWARD);
+            AVPacket pkt;
+            av_init_packet(&pkt);
+            const uint8_t sig[8] = {0x89, 'P','N','G', 0x0D, 0x0A, 0x1A, 0x0A};
+            int scanned = 0;
+            while (scanned < 1024 && av_read_frame(fmt, &pkt) >= 0) {
+                if (pkt.stream_index == vIdx && pkt.size >= 8 && pkt.data) {
+                    int limit = pkt.size - 8;
+                    int pos = -1;
+                    for (int i = 0; i <= limit; ++i) {
+                        if (pkt.data[i] == sig[0]) {
+                            bool match = true;
+                            for (int j = 1; j < 8; ++j) {
+                                if (pkt.data[i + j] != sig[j]) { match = false; break; }
+                            }
+                            if (match) { pos = i; break; }
+                        }
+                    }
+                    if (pos >= 0) {
+                        QByteArray bytes(reinterpret_cast<const char*>(pkt.data + pos), pkt.size - pos);
+                        QImage img = QImage::fromData(bytes, "PNG");
+                        if (!img.isNull()) {
+                            // Scale and save using same policy as QMedia path
+                            QImage thumb = img.scaled(256, 256, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+                            QString cachePath = m_cachePath;
+                            if (thumb.hasAlphaChannel()) {
+                                cachePath.replace(QRegularExpression("\\.jpg$", QRegularExpression::CaseInsensitiveOption), ".png");
+                            }
+                            const char* fmtName = thumb.hasAlphaChannel() ? "PNG" : "JPEG";
+                            int quality = thumb.hasAlphaChannel() ? 100 : 85;
+                            bool ok = thumb.save(cachePath, fmtName, quality);
+                            av_packet_unref(&pkt);
+                            avformat_close_input(&fmt);
+                            if (!ok) {
+                                qWarning() << "[VideoFFmpegTask] Failed to save PNG-extracted thumbnail:" << cachePath;
+                                return false;
+                            }
+                            m_cachePath = cachePath;
+                            qDebug() << "[VideoFFmpegTask] Extracted embedded PNG frame successfully";
+                            return true;
+                        }
+                    }
+                }
+                av_packet_unref(&pkt);
+                ++scanned;
+            }
+            avformat_close_input(&fmt);
+            qWarning() << "[VideoFFmpegTask] Embedded PNG scan failed";
+            return false;
+        }
+        avformat_close_input(&fmt);
+        return false;
+    }
+
+    AVCodecContext* ctx = avcodec_alloc_context3(dec);
+    if (!ctx) { avformat_close_input(&fmt); return false; }
+    if (avcodec_parameters_to_context(ctx, vp) < 0) {
+        avcodec_free_context(&ctx);
+        avformat_close_input(&fmt);
+        return false;
+    }
+    if (avcodec_open2(ctx, dec, nullptr) < 0) {
+        qWarning() << "[VideoFFmpegTask] avcodec_open2 failed";
+        avcodec_free_context(&ctx);
+        avformat_close_input(&fmt);
+        return false;
+    }
+
+    AVPacket* pkt = av_packet_alloc();
+    AVFrame* frame = av_frame_alloc();
+    if (!pkt || !frame) {
+        av_packet_free(&pkt); av_frame_free(&frame);
+        avcodec_free_context(&ctx); avformat_close_input(&fmt);
+        return false;
+    }
+
+    bool gotFrame = false;
+    int packetsRead = 0;
+    const int maxPackets = 200; // keep fast
+
+    while (packetsRead < maxPackets) {
+        int r = av_read_frame(fmt, pkt);
+        if (r == AVERROR_EOF) {
+            // Flush decoder
+            avcodec_send_packet(ctx, nullptr);
+            while (true) {
+                r = avcodec_receive_frame(ctx, frame);
+                if (r == 0) { gotFrame = true; break; }
+                if (r == AVERROR(EAGAIN) || r == AVERROR_EOF) break;
+            }
+            break;
+        } else if (r < 0) {
+            break;
+        }
+        if (pkt->stream_index == vIdx) {
+            if (avcodec_send_packet(ctx, pkt) == 0) {
+                while (true) {
+                    r = avcodec_receive_frame(ctx, frame);
+                    if (r == 0) { gotFrame = true; break; }
+                    if (r == AVERROR(EAGAIN) || r == AVERROR_EOF) break;
+                    if (r < 0) break;
+                }
+            }
+        }
+        av_packet_unref(pkt);
+        if (gotFrame) break;
+        ++packetsRead;
+    }
+
+    QImage outImage;
+    if (gotFrame) {
+        SwsContext* sws = sws_getContext(
+            frame->width, frame->height, (AVPixelFormat)frame->format,
+            frame->width, frame->height, AV_PIX_FMT_BGRA,
+            SWS_BILINEAR, nullptr, nullptr, nullptr);
+        if (!sws) {
+            qWarning() << "[VideoFFmpegTask] sws_getContext failed";
+        } else {
+            uint8_t* dstData[4]; int dstLinesize[4];
+            if (av_image_alloc(dstData, dstLinesize, frame->width, frame->height, AV_PIX_FMT_BGRA, 1) >= 0) {
+                sws_scale(sws, frame->data, frame->linesize, 0, frame->height, dstData, dstLinesize);
+                // Copy to QImage
+                QImage img(frame->width, frame->height, QImage::Format_ARGB32);
+                for (int y = 0; y < frame->height; ++y) {
+                    memcpy(img.scanLine(y), dstData[0] + y * dstLinesize[0], frame->width * 4);
+                }
+                outImage = img;
+                av_freep(&dstData[0]);
+            }
+            sws_freeContext(sws);
+        }
+    }
+
+    av_frame_free(&frame);
+    av_packet_free(&pkt);
+    avcodec_free_context(&ctx);
+    avformat_close_input(&fmt);
+
+    if (outImage.isNull()) {
+        return false;
+    }
+
+    // Scale and save using same policy as QMedia path
+    QImage thumb = outImage.scaled(256, 256, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+
+    QString cachePath = m_cachePath;
+    if (thumb.hasAlphaChannel()) {
+        cachePath.replace(QRegularExpression("\\.jpg$", QRegularExpression::CaseInsensitiveOption), ".png");
+    }
+    const char* fmtName = thumb.hasAlphaChannel() ? "PNG" : "JPEG";
+    int quality = thumb.hasAlphaChannel() ? 100 : 85;
+    if (!thumb.save(cachePath, fmtName, quality)) {
+        qWarning() << "[VideoFFmpegTask] Failed to save thumbnail:" << cachePath;
+        return false;
+    }
+
+    m_cachePath = cachePath; // in case extension changed
+    return true;
+#endif
+}
+
+void VideoFFmpegTask::run()
+{
+    qDebug() << "[VideoFFmpegTask] Fallback decoding for" << m_filePath;
+    const bool success = decodeAndSave();
+    const QString filePath = m_filePath;
+    const QString cachePath = m_cachePath;
+    ThumbnailGenerator* generator = m_generator;
+
+    QMetaObject::invokeMethod(generator, [generator, filePath, cachePath, success]() {
+        QMutexLocker locker(&generator->m_mutex);
+        generator->m_pendingThumbnails.remove(filePath);
+        generator->updateProgress();
+        if (success) {
+            emit generator->thumbnailGenerated(filePath, cachePath);
         } else {
             emit generator->thumbnailFailed(filePath);
         }
@@ -88,6 +328,16 @@ VideoThumbnailGenerator::~VideoThumbnailGenerator() {
     if (m_player) {
         m_player->stop();
     }
+}
+
+void VideoThumbnailGenerator::startFfmpegFallback()
+{
+#ifdef HAVE_FFMPEG
+    // Keep pending set entry; FFmpeg task will clear it on completion
+    VideoFFmpegTask* task = new VideoFFmpegTask(m_filePath, m_cachePath, m_generator);
+    m_generator->m_threadPool->start(task);
+    qDebug() << "[VideoThumbnailGenerator] Scheduled FFmpeg fallback for:" << m_filePath;
+#endif
 }
 
 void VideoThumbnailGenerator::start() {
@@ -186,15 +436,16 @@ void VideoThumbnailGenerator::onVideoFrameChanged() {
 void VideoThumbnailGenerator::onTimeout() {
     qDebug() << "[VideoThumbnailGenerator] Timeout waiting for video frame (video may be corrupted or unsupported):" << m_filePath;
     m_player->stop();
-
+#ifdef HAVE_FFMPEG
+    // Try FFmpeg fallback asynchronously
+    startFfmpegFallback();
+    deleteLater();
+    return;
+#endif
     QMutexLocker locker(&m_generator->m_mutex);
     m_generator->m_pendingThumbnails.remove(m_filePath);
-
-    // Update progress
     m_generator->updateProgress();
-
     emit m_generator->thumbnailFailed(m_filePath);
-
     deleteLater();
 }
 
@@ -203,15 +454,16 @@ void VideoThumbnailGenerator::onError(QMediaPlayer::Error error, const QString &
 
     m_timeout->stop();
     m_player->stop();
-
+#ifdef HAVE_FFMPEG
+    // Try FFmpeg fallback asynchronously
+    startFfmpegFallback();
+    deleteLater();
+    return;
+#endif
     QMutexLocker locker(&m_generator->m_mutex);
     m_generator->m_pendingThumbnails.remove(m_filePath);
-
-    // Update progress
     m_generator->updateProgress();
-
     emit m_generator->thumbnailFailed(m_filePath);
-
     deleteLater();
 }
 

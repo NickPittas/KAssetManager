@@ -29,7 +29,20 @@ private:
     ThumbnailGenerator* m_generator;
 };
 
-// Async video thumbnail generator (runs on main thread without blocking)
+// Fallback task: decode a still frame using FFmpeg in background
+class VideoFFmpegTask : public QObject, public QRunnable {
+    Q_OBJECT
+public:
+    VideoFFmpegTask(const QString& filePath, const QString& cachePath, ThumbnailGenerator* generator);
+    void run() override;
+private:
+    bool decodeAndSave();
+    QString m_filePath;
+    QString m_cachePath;
+    ThumbnailGenerator* m_generator;
+};
+
+// Async video thumbnail generator (primary path via QMediaPlayer; falls back to FFmpeg task when needed)
 class VideoThumbnailGenerator : public QObject {
     Q_OBJECT
 public:
@@ -44,6 +57,7 @@ private slots:
     void onError(QMediaPlayer::Error error, const QString &errorString);
 
 private:
+    void startFfmpegFallback();
     QString m_filePath;
     QString m_cachePath;
     ThumbnailGenerator* m_generator;
@@ -58,6 +72,7 @@ class ThumbnailGenerator : public QObject {
     Q_OBJECT
     friend class ThumbnailTask;
     friend class VideoThumbnailGenerator;
+    friend class VideoFFmpegTask;
 
 public:
     static ThumbnailGenerator& instance();

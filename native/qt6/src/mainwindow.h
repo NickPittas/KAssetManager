@@ -16,6 +16,7 @@
 #include <QMenu>
 #include <QAction>
 #include <QSet>
+#include <QTimer>
 
 class VirtualFolderTreeModel;
 class AssetsModel;
@@ -86,6 +87,10 @@ private:
     void setupConnections();
     void updateInfoPanel();
     void updateSelectionInfo();
+
+    // Visible-only thumbnail progress (Option B)
+    void scheduleVisibleThumbProgressUpdate();
+    void updateVisibleThumbProgress();
 
     QSet<int> getSelectedAssetIds() const;
     class QItemSelectionModel* getCurrentSelectionModel();
@@ -168,6 +173,9 @@ private:
     // Thumbnail generation progress
     QLabel *thumbnailProgressLabel;
     class QProgressBar *thumbnailProgressBar;
+
+    // Debounced updater for visible-only thumbnail progress
+    QTimer visibleThumbTimer;
 
     // Import progress dialog
     ImportProgressDialog *importProgressDialog;

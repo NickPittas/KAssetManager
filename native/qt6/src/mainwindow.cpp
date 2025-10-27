@@ -12,6 +12,8 @@
 #include "star_rating_widget.h"
 #include "project_folder_watcher.h"
 #include "log_viewer_widget.h"
+#include "progress_manager.h"
+
 #include <QHeaderView>
 #include <QStyledItemDelegate>
 #include <QPainter>
@@ -51,6 +53,8 @@
 #include <QDockWidget>
 #include <QEventLoop>
 #include <QAudioOutput>
+
+#include "video_metadata.h"
 
 // Custom QListView with compact drag pixmap
 class AssetGridView : public QListView
@@ -355,9 +359,13 @@ MainWindow::MainWindow(QWidget *parent)
     statusBar()->addPermanentWidget(thumbnailProgressLabel);
     statusBar()->addPermanentWidget(thumbnailProgressBar);
 
-    // Connect thumbnail generator progress
+    // Connect thumbnail generator progress (import-wide determinate)
     connect(&ThumbnailGenerator::instance(), &ThumbnailGenerator::progressChanged,
             this, &MainWindow::onThumbnailProgress);
+
+    // Debounced timer for visible-only thumbnail progress
+    visibleThumbTimer.setSingleShot(true);
+    connect(&visibleThumbTimer, &QTimer::timeout, this, &MainWindow::updateVisibleThumbProgress);
 
     // Load thumbnail into cache when generated, then refresh view
     connect(&ThumbnailGenerator::instance(), &ThumbnailGenerator::thumbnailGenerated,
@@ -632,33 +640,36 @@ void MainWindow::setupUi()
     // Install event filter on asset views to handle Space key for preview
     assetGridView->installEventFilter(this);
     assetTableView->installEventFilter(this);
-    
+    // Also monitor viewport resize to update visible-only progress
+    assetGridView->viewport()->installEventFilter(this);
+    assetTableView->viewport()->installEventFilter(this);
+
     // Right panel: Filters + Info
     rightPanel = new QWidget(this);
     QVBoxLayout *rightLayout = new QVBoxLayout(rightPanel);
     rightLayout->setContentsMargins(0, 0, 0, 0);
     rightLayout->setSpacing(0);
-    
+
     // Filters panel
     filtersPanel = new QWidget(this);
     QVBoxLayout *filtersLayout = new QVBoxLayout(filtersPanel);
     filtersLayout->setContentsMargins(8, 8, 8, 8);
-    
+
     QLabel *filtersTitle = new QLabel("Filters", this);
     filtersTitle->setStyleSheet("font-size: 14px; font-weight: bold; color: #ffffff;");
     filtersLayout->addWidget(filtersTitle);
-    
+
     searchBox = new QLineEdit(this);
     searchBox->setPlaceholderText("Search...");
     searchBox->setStyleSheet(
         "QLineEdit { background-color: #1a1a1a; color: #ffffff; border: 1px solid #333; padding: 6px; border-radius: 4px; }"
     );
     filtersLayout->addWidget(searchBox);
-    
+
     QLabel *ratingLabel = new QLabel("Rating:", this);
     ratingLabel->setStyleSheet("color: #ffffff; margin-top: 8px;");
     filtersLayout->addWidget(ratingLabel);
-    
+
     ratingFilter = new QComboBox(this);
     ratingFilter->addItems({"All", "5 Stars", "4+ Stars", "3+ Stars", "Unrated"});
     ratingFilter->setStyleSheet(
@@ -744,7 +755,7 @@ void MainWindow::setupUi()
     tagButtonsLayout->addWidget(tagFilterModeCombo);
 
     filtersLayout->addLayout(tagButtonsLayout);
-    
+
     QPushButton *applyFiltersBtn = new QPushButton("Apply Filters", this);
     applyFiltersBtn->setStyleSheet(
         "QPushButton { background-color: #58a6ff; color: #ffffff; border: none; padding: 8px; border-radius: 4px; }"
@@ -752,7 +763,7 @@ void MainWindow::setupUi()
     );
     connect(applyFiltersBtn, &QPushButton::clicked, this, &MainWindow::applyFilters);
     filtersLayout->addWidget(applyFiltersBtn);
-    
+
     QPushButton *clearFiltersBtn = new QPushButton("Clear Filters", this);
     clearFiltersBtn->setStyleSheet(
         "QPushButton { background-color: #333; color: #ffffff; border: none; padding: 8px; border-radius: 4px; }"
@@ -760,10 +771,10 @@ void MainWindow::setupUi()
     );
     connect(clearFiltersBtn, &QPushButton::clicked, this, &MainWindow::clearFilters);
     filtersLayout->addWidget(clearFiltersBtn);
-    
+
     filtersLayout->addStretch();
     filtersPanel->setStyleSheet("background-color: #121212;");
-    
+
     // Info panel with scrollable area for all metadata
     infoPanel = new QWidget(this);
     QVBoxLayout *infoPanelLayout = new QVBoxLayout(infoPanel);
@@ -857,10 +868,10 @@ void MainWindow::setupUi()
     infoScrollArea->setWidget(infoScrollWidget);
     infoPanelLayout->addWidget(infoScrollArea);
     infoPanel->setStyleSheet("background-color: #121212;");
-    
+
     rightLayout->addWidget(filtersPanel, 1);
     rightLayout->addWidget(infoPanel, 1);
-    
+
     // Add panels to main splitter
     mainSplitter->addWidget(leftPanel);
     mainSplitter->addWidget(centerPanel);
@@ -930,6 +941,25 @@ void MainWindow::setupConnections()
 
     // Connect search box for real-time filtering
     connect(searchBox, &QLineEdit::textChanged, this, &MainWindow::onSearchTextChanged);
+
+    // Visible-only thumbnail progress (Option B) wiring
+    connect(assetsModel, &QAbstractItemModel::modelReset, this, &MainWindow::scheduleVisibleThumbProgressUpdate);
+    connect(assetGridView->verticalScrollBar(), &QScrollBar::valueChanged, this, &MainWindow::scheduleVisibleThumbProgressUpdate);
+    connect(assetGridView->horizontalScrollBar(), &QScrollBar::valueChanged, this, &MainWindow::scheduleVisibleThumbProgressUpdate);
+    connect(assetTableView->verticalScrollBar(), &QScrollBar::valueChanged, this, &MainWindow::scheduleVisibleThumbProgressUpdate);
+    connect(assetTableView->horizontalScrollBar(), &QScrollBar::valueChanged, this, &MainWindow::scheduleVisibleThumbProgressUpdate);
+    connect(viewStack, &QStackedWidget::currentChanged, this, &MainWindow::scheduleVisibleThumbProgressUpdate);
+    connect(&ThumbnailGenerator::instance(), &ThumbnailGenerator::thumbnailGenerated,
+            this, &MainWindow::scheduleVisibleThumbProgressUpdate);
+    connect(&ProgressManager::instance(), &ProgressManager::isActiveChanged, this, [this]() {
+        if (ProgressManager::instance().isActive()) {
+            // Hide our visible-only progress while an import/global progress is active
+            thumbnailProgressLabel->setVisible(false);
+            thumbnailProgressBar->setVisible(false);
+        } else {
+            scheduleVisibleThumbProgressUpdate();
+        }
+    });
 }
 
 void MainWindow::onFolderSelected(const QModelIndex &index)
@@ -1439,6 +1469,8 @@ void MainWindow::closePreview()
 {
     previewIndex = -1;
     if (previewOverlay) {
+        // Stop any playback (video, fallback, sequence) before hiding/deleting
+        previewOverlay->stopPlayback();
         previewOverlay->hide();
         previewOverlay->deleteLater();
         previewOverlay = nullptr;
@@ -1583,7 +1615,7 @@ void MainWindow::updateInfoPanel()
                     // Try to get codec information from all available metadata
                     QMediaMetaData metadata = tempPlayer.metaData();
 
-                    // Video codec
+                    // Video codec (do not add to UI yet; we may replace with FFmpeg + profile)
                     QString videoCodec;
                     if (metadata.value(QMediaMetaData::VideoCodec).isValid()) {
                         videoCodec = metadata.value(QMediaMetaData::VideoCodec).toString();
@@ -1591,8 +1623,13 @@ void MainWindow::updateInfoPanel()
                     if (videoCodec.isEmpty() && metadata.stringValue(QMediaMetaData::VideoCodec).length() > 0) {
                         videoCodec = metadata.stringValue(QMediaMetaData::VideoCodec);
                     }
+                    // Treat "UNSPECIFIED" / "UNKNOWN" as missing
                     if (!videoCodec.isEmpty()) {
-                        videoInfo << QString("Video Codec: %1").arg(videoCodec.toUpper());
+                        const QString vc = videoCodec.trimmed();
+                        if (vc.compare("UNSPECIFIED", Qt::CaseInsensitive) == 0 ||
+                            vc.compare("UNKNOWN", Qt::CaseInsensitive) == 0) {
+                            videoCodec.clear();
+                        }
                     }
 
                     // Audio codec
@@ -1608,28 +1645,78 @@ void MainWindow::updateInfoPanel()
                     }
 
                     // Bitrate
+                    bool hasBitrate = false;
                     if (metadata.value(QMediaMetaData::VideoBitRate).isValid()) {
                         int bitrate = metadata.value(QMediaMetaData::VideoBitRate).toInt();
                         if (bitrate > 0) {
+                            hasBitrate = true;
                             double mbps = bitrate / 1000000.0;
                             videoInfo << QString("Bitrate: %1 Mbps").arg(mbps, 0, 'f', 2);
                         }
                     }
 
                     // Resolution
+                    bool hasResolution = false;
                     QVariant resVar = metadata.value(QMediaMetaData::Resolution);
                     if (resVar.isValid() && resVar.canConvert<QSize>()) {
                         QSize resolution = resVar.toSize();
                         if (resolution.width() > 0 && resolution.height() > 0) {
+                            hasResolution = true;
                             videoInfo << QString("Frame Size: %1x%2").arg(resolution.width()).arg(resolution.height());
                         }
                     }
 
                     // Framerate
+                    bool hasFps = false;
                     if (metadata.value(QMediaMetaData::VideoFrameRate).isValid()) {
+
                         double fps = metadata.value(QMediaMetaData::VideoFrameRate).toDouble();
                         if (fps > 0) {
+                            hasFps = true;
                             videoInfo << QString("FPS: %1").arg(fps, 0, 'f', 0);
+                        }
+                    }
+
+                    // FFmpeg probing for reliable codecs, profiles, and details
+#ifdef HAVE_FFMPEG
+                    MediaInfo::VideoMetadata ff;
+                    QString ffErr;
+                    if (MediaInfo::probeVideoFile(filePath, ff, &ffErr)) {
+                        // Fill missing audio/bitrate/resolution/fps
+                        if (audioCodec.isEmpty() && !ff.audioCodec.isEmpty()) {
+                            videoInfo << QString("Audio Codec: %1").arg(ff.audioCodec.toUpper());
+                        }
+                        if (!hasBitrate && ff.bitrate > 0) {
+                            double mbps = ff.bitrate / 1000000.0;
+                            videoInfo << QString("Bitrate: %1 Mbps").arg(mbps, 0, 'f', 2);
+                        }
+                        if (!hasResolution && ff.width > 0 && ff.height > 0) {
+                            videoInfo << QString("Frame Size: %1x%2").arg(ff.width).arg(ff.height);
+                        }
+                        if (!hasFps && ff.fps > 0) {
+                            videoInfo << QString("FPS: %1").arg(ff.fps, 0, 'f', 0);
+                        }
+                    }
+#endif
+
+
+                    // Compose final Video Codec line once (prefer Qt value unless empty/unspecified; append FFmpeg profile if available)
+                    {
+                        QString finalCodec = videoCodec;
+                        QString finalProfile;
+#ifdef HAVE_FFMPEG
+                        if (finalCodec.isEmpty() && !ff.videoCodec.isEmpty()) {
+                            finalCodec = ff.videoCodec;
+                        }
+                        if (!ff.videoProfile.isEmpty()) {
+                            finalProfile = ff.videoProfile;
+                        }
+#endif
+                        if (!finalCodec.isEmpty()) {
+                            const QString line = finalProfile.isEmpty()
+                                ? QString("Video Codec: %1").arg(finalCodec.toUpper())
+                                : QString("Video Codec: %1 %2").arg(finalCodec.toUpper(), finalProfile.toUpper());
+                            videoInfo << line;
                         }
                     }
 
@@ -2239,6 +2326,11 @@ void MainWindow::onImportComplete()
 
 bool MainWindow::eventFilter(QObject *watched, QEvent *event)
 {
+    // Update visible-only progress when asset viewports resize
+    if ((watched == assetGridView->viewport() || watched == assetTableView->viewport()) && event->type() == QEvent::Resize) {
+        scheduleVisibleThumbProgressUpdate();
+    }
+
     // Handle Space key on asset views to open preview
     if ((watched == assetGridView || watched == assetTableView) && event->type() == QEvent::KeyPress) {
         QKeyEvent *keyEvent = static_cast<QKeyEvent*>(event);
@@ -2606,6 +2698,9 @@ void MainWindow::onThumbnailSizeChanged(int size)
     assetGridView->reset();
 
     qDebug() << "Thumbnail size changed to:" << size;
+
+    // Recompute visible-only progress since layout changed
+    scheduleVisibleThumbProgressUpdate();
 }
 
 void MainWindow::onViewModeChanged()
@@ -2627,6 +2722,9 @@ void MainWindow::onViewModeChanged()
 
         qDebug() << "Switched to List view (table)";
     }
+
+    // Recompute visible-only progress for the new view
+    scheduleVisibleThumbProgressUpdate();
 }
 
 // Called when thumbnail generation progress updates
@@ -2648,6 +2746,92 @@ void MainWindow::onThumbnailProgress(int current, int total)
             });
         }
     }
+}
+
+void MainWindow::scheduleVisibleThumbProgressUpdate()
+{
+    // Do not show our visible-only progress while a global/import progress is active
+    if (ProgressManager::instance().isActive()) {
+        return;
+    }
+    // Debounce frequent scroll/resize updates
+    visibleThumbTimer.start(100);
+}
+
+void MainWindow::updateVisibleThumbProgress()
+{
+    // If an import/global progress is active, hide ours and bail
+    if (ProgressManager::instance().isActive()) {
+        thumbnailProgressLabel->setVisible(false);
+        thumbnailProgressBar->setVisible(false);
+        return;
+    }
+
+    QAbstractItemView* view = isGridMode ? static_cast<QAbstractItemView*>(assetGridView)
+                                         : static_cast<QAbstractItemView*>(assetTableView);
+    if (!view || !view->isVisible()) {
+        thumbnailProgressLabel->setVisible(false);
+        thumbnailProgressBar->setVisible(false);
+        return;
+    }
+
+    const QRect viewportRect = view->viewport()->rect();
+    const int totalRows = assetsModel ? assetsModel->rowCount(QModelIndex()) : 0;
+
+    int visibleTotal = 0;
+    int readyCount = 0;
+
+    if (totalRows <= 0) {
+        thumbnailProgressLabel->setVisible(false);
+        thumbnailProgressBar->setVisible(false);
+        return;
+    }
+
+    if (isGridMode) {
+        for (int row = 0; row < totalRows; ++row) {
+            const QModelIndex srcIdx = assetsModel->index(row, 0);
+            const QRect itemRect = assetGridView->visualRect(srcIdx);
+            if (itemRect.isValid() && itemRect.intersects(viewportRect)) {
+                ++visibleTotal;
+                const QString filePath = assetsModel->data(srcIdx, AssetsModel::FilePathRole).toString();
+                const QString thumbPath = ThumbnailGenerator::instance().getThumbnailPath(filePath);
+                if (!thumbPath.isEmpty()) {
+                    ++readyCount;
+                }
+            }
+        }
+    } else {
+        QAbstractItemModel* tableModel = assetTableView->model();
+        for (int row = 0; row < totalRows; ++row) {
+            const QModelIndex tableIdx = tableModel->index(row, 0);
+            const QRect itemRect = assetTableView->visualRect(tableIdx);
+            if (itemRect.isValid() && itemRect.intersects(viewportRect)) {
+                ++visibleTotal;
+                const QModelIndex srcIdx = assetsModel->index(row, 0);
+                const QString filePath = assetsModel->data(srcIdx, AssetsModel::FilePathRole).toString();
+                const QString thumbPath = ThumbnailGenerator::instance().getThumbnailPath(filePath);
+                if (!thumbPath.isEmpty()) {
+                    ++readyCount;
+                }
+            }
+        }
+    }
+
+    if (visibleTotal == 0 || readyCount >= visibleTotal) {
+        // Nothing to show or already complete for visible items
+        thumbnailProgressLabel->setVisible(false);
+        thumbnailProgressBar->setVisible(false);
+        return;
+    }
+
+    // Show determinate progress for currently visible items only
+    thumbnailProgressLabel->setText("Thumbnails (visible):");
+    thumbnailProgressLabel->setVisible(true);
+
+    thumbnailProgressBar->setMaximum(visibleTotal);
+    thumbnailProgressBar->setValue(readyCount);
+    thumbnailProgressBar->setFormat(QString("%1/%2 (%p%)").arg(readyCount).arg(visibleTotal));
+    thumbnailProgressBar->setVisible(true);
 }
 
 void MainWindow::onToggleLogViewer()

@@ -10,6 +10,7 @@
 #include <QAudioOutput>
 #include <QKeyEvent>
 #include <QTimer>
+#include <QThread>
 #include <QGraphicsView>
 #include <QGraphicsScene>
 #include <QGraphicsPixmapItem>
@@ -49,6 +50,10 @@ private slots:
     void hideControls();
     void onSequenceTimerTick();
     void onColorSpaceChanged(int index);
+    void onPlayerError(QMediaPlayer::Error error, const QString &errorString);
+    void onMediaStatusChanged(QMediaPlayer::MediaStatus status);
+    void onFallbackFrameReady(const QImage &image, qint64 ptsMs);
+    void onFallbackFinished();
 
 private:
     void setupUi();
@@ -63,6 +68,8 @@ private:
     void playSequence();
     void pauseSequence();
     void stopSequence();
+    void startFallbackVideo(const QString &filePath);
+    void stopFallbackVideo();
 
     // UI Components
     QGraphicsView *imageView;
@@ -103,6 +110,15 @@ private:
     int sequenceEndFrame;
     QTimer *sequenceTimer;
     bool sequencePlaying;
+
+    // Fallback (software) video playback state for unsupported codecs (e.g., PNG-in-MOV)
+    bool usingFallbackVideo = false;
+    class FallbackPngMovReader; // defined in .cpp
+    FallbackPngMovReader* fallbackReader = nullptr;
+    QThread* fallbackThread = nullptr;
+    qint64 fallbackDurationMs = 0;
+    double fallbackFps = 0.0;
+    bool fallbackPaused = false;
 
     // Color space for HDR/EXR images
     OIIOImageLoader::ColorSpace currentColorSpace;

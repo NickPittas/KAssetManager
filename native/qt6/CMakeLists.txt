@@ -90,6 +90,8 @@ qt_add_executable(kassetmanagerqt
     src/project_folder_watcher.cpp
     src/log_viewer_widget.h
     src/log_viewer_widget.cpp
+    src/video_metadata.h
+    src/video_metadata.cpp
     ${APP_RESOURCES}
 )
 
@@ -105,6 +107,31 @@ if(FFMPEG_FOUND)
         target_include_directories(kassetmanagerqt PRIVATE ${FFMPEG_INCLUDE_DIRS})
     endif()
 endif()
+# Try to link FFmpeg core libs when headers are present
+if(FFMPEG_FOUND)
+    if(NOT DEFINED FFMPEG_LIBRARY_DIRS)
+        set(FFMPEG_LIBRARY_DIRS "C:/vcpkg/installed/x64-windows/lib")
+    endif()
+    find_library(FFMPEG_AVFORMAT avformat HINTS ${FFMPEG_LIBRARY_DIRS})
+    find_library(FFMPEG_AVCODEC  avcodec  HINTS ${FFMPEG_LIBRARY_DIRS})
+    find_library(FFMPEG_AVUTIL   avutil   HINTS ${FFMPEG_LIBRARY_DIRS})
+    find_library(FFMPEG_SWSCALE  swscale  HINTS ${FFMPEG_LIBRARY_DIRS})
+
+    if(FFMPEG_AVFORMAT AND FFMPEG_AVCODEC AND FFMPEG_AVUTIL)
+        target_link_libraries(kassetmanagerqt PRIVATE ${FFMPEG_AVFORMAT} ${FFMPEG_AVCODEC} ${FFMPEG_AVUTIL})
+        if(FFMPEG_SWSCALE)
+            target_link_libraries(kassetmanagerqt PRIVATE ${FFMPEG_SWSCALE})
+            message(STATUS "FFmpeg swscale linked: ${FFMPEG_SWSCALE}")
+        else()
+            message(WARNING "FFmpeg swscale not found. FFmpeg thumbnail fallback will be disabled.")
+        endif()
+        target_compile_definitions(kassetmanagerqt PRIVATE HAVE_FFMPEG)
+        message(STATUS "FFmpeg libraries linked: ${FFMPEG_AVFORMAT}; ${FFMPEG_AVCODEC}; ${FFMPEG_AVUTIL}")
+    else()
+        message(WARNING "FFmpeg headers found but libraries missing. Install via vcpkg: vcpkg install ffmpeg:x64-windows")
+    endif()
+endif()
+
 
 target_link_libraries(kassetmanagerqt PRIVATE
     Qt6::Widgets
