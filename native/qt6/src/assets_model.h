@@ -33,6 +33,7 @@ class AssetsModel : public QAbstractListModel {
     Q_PROPERTY(int typeFilter READ typeFilter WRITE setTypeFilter NOTIFY typeFilterChanged)
     Q_PROPERTY(QStringList selectedTagNames READ selectedTagNames WRITE setSelectedTagNames NOTIFY selectedTagNamesChanged)
     Q_PROPERTY(int tagFilterMode READ tagFilterMode WRITE setTagFilterMode NOTIFY tagFilterModeChanged)
+    Q_PROPERTY(bool recursiveMode READ recursiveMode WRITE setRecursiveMode NOTIFY recursiveModeChanged)
 public:
     enum Roles {
         IdRole = Qt::UserRole + 1,
@@ -81,6 +82,9 @@ public:
     int tagFilterMode() const { return m_tagFilterMode; }
     void setTagFilterMode(int mode);
 
+    bool recursiveMode() const { return m_recursiveMode; }
+    void setRecursiveMode(bool recursive);
+
     Q_INVOKABLE bool moveAssetToFolder(int assetId, int folderId);
     Q_INVOKABLE bool moveAssetsToFolder(const QVariantList& assetIds, int folderId);
     Q_INVOKABLE bool removeAssets(const QVariantList& assetIds);
@@ -98,6 +102,7 @@ signals:
     void typeFilterChanged();
     void selectedTagNamesChanged();
     void tagFilterModeChanged();
+    void recursiveModeChanged();
     void tagsChangedForAsset(int assetId);
 
 private slots:
@@ -118,6 +123,7 @@ private:
     int m_ratingFilter = AllRatings;
     QStringList m_selectedTagNames;
     int m_tagFilterMode = And;
+    bool m_recursiveMode = false;
     QVector<int> m_filteredRowIndexes;
 
     QTimer m_reloadTimer;

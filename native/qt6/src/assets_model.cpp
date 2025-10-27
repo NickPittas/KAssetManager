@@ -191,6 +191,14 @@ void AssetsModel::setTagFilterMode(int mode) {
     emit tagFilterModeChanged();
 }
 
+void AssetsModel::setRecursiveMode(bool recursive) {
+    if (m_recursiveMode == recursive) return;
+    m_recursiveMode = recursive;
+    qDebug() << "AssetsModel::setRecursiveMode" << recursive;
+    scheduleReload();
+    emit recursiveModeChanged();
+}
+
 void AssetsModel::reload(){
     qDebug() << "===== AssetsModel::reload() START for folderId" << m_folderId << "on thread" << QThread::currentThread();
     QElapsedTimer t; t.start();
@@ -228,9 +236,33 @@ void AssetsModel::query(){
             m_filteredRowIndexes.clear();
             return;
         }
-        q.prepare("SELECT id,file_name,file_path,file_size,COALESCE(rating,-1),virtual_folder_id,COALESCE(is_sequence,0),sequence_pattern,sequence_start_frame,sequence_end_frame,sequence_frame_count FROM assets WHERE virtual_folder_id=? ORDER BY file_name");
-        LogManager::instance().addLog(QString("DB query (assets by folder %1) started").arg(m_folderId), "DEBUG");
-        q.addBindValue(m_folderId);
+
+        // If recursive mode is enabled, get all asset IDs from this folder and subfolders
+        if (m_recursiveMode) {
+            QList<int> assetIds = DB::instance().getAssetIdsInFolder(m_folderId, true);
+            if (assetIds.isEmpty()) {
+                qDebug() << "AssetsModel::query() - No assets found in folder" << m_folderId << "(recursive)";
+                m_filteredRowIndexes.clear();
+                return;
+            }
+
+            // Build IN clause for asset IDs
+            QString placeholders = QString("?").repeated(assetIds.size());
+            for (int i = 1; i < assetIds.size(); ++i) {
+                placeholders.replace(i * 2 - 1, 1, ",?");
+            }
+
+            q.prepare(QString("SELECT id,file_name,file_path,file_size,COALESCE(rating,-1),virtual_folder_id,COALESCE(is_sequence,0),sequence_pattern,sequence_start_frame,sequence_end_frame,sequence_frame_count FROM assets WHERE id IN (%1) ORDER BY file_name").arg(placeholders));
+            LogManager::instance().addLog(QString("DB query (assets by folder %1, recursive) started - %2 assets").arg(m_folderId).arg(assetIds.size()), "DEBUG");
+            for (int assetId : assetIds) {
+                q.addBindValue(assetId);
+            }
+        } else {
+            // Non-recursive: just get assets in this folder
+            q.prepare("SELECT id,file_name,file_path,file_size,COALESCE(rating,-1),virtual_folder_id,COALESCE(is_sequence,0),sequence_pattern,sequence_start_frame,sequence_end_frame,sequence_frame_count FROM assets WHERE virtual_folder_id=? ORDER BY file_name");
+            LogManager::instance().addLog(QString("DB query (assets by folder %1) started").arg(m_folderId), "DEBUG");
+            q.addBindValue(m_folderId);
+        }
     }
     if (!q.exec()) {
         qWarning() << "AssetsModel::query() SQL error:" << q.lastError();

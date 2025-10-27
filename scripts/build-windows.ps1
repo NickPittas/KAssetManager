@@ -53,6 +53,53 @@ function Initialize-QtToolchain {
     }
 }
 
+function Initialize-MSVC {
+    param([string]$Generator)
+
+    if ($Generator -ne "Ninja") {
+        return  # Visual Studio generator handles this automatically
+    }
+
+    # For Ninja, we need to set up MSVC environment
+    Write-Host "Setting up MSVC environment for Ninja..." -ForegroundColor Cyan
+
+    # Find vswhere.exe
+    $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+    if (-not (Test-Path $vswhere)) {
+        throw "vswhere.exe not found. Please install Visual Studio 2022 or 2019."
+    }
+
+    # Find Visual Studio installation
+    $vsPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+    if (-not $vsPath) {
+        throw "Visual Studio with C++ tools not found. Please install Visual Studio 2022 or 2019 with C++ workload."
+    }
+
+    # Find vcvarsall.bat
+    $vcvarsall = Join-Path $vsPath "VC\Auxiliary\Build\vcvarsall.bat"
+    if (-not (Test-Path $vcvarsall)) {
+        throw "vcvarsall.bat not found at: $vcvarsall"
+    }
+
+    Write-Host "Found Visual Studio at: $vsPath" -ForegroundColor Green
+
+    # Run vcvarsall.bat and capture environment variables
+    $tempFile = [System.IO.Path]::GetTempFileName()
+    cmd /c "`"$vcvarsall`" x64 && set" > $tempFile
+
+    # Parse and set environment variables
+    Get-Content $tempFile | ForEach-Object {
+        if ($_ -match '^([^=]+)=(.*)$') {
+            $name = $matches[1]
+            $value = $matches[2]
+            Set-Item -Path "env:$name" -Value $value
+        }
+    }
+
+    Remove-Item $tempFile
+    Write-Host "MSVC environment initialized for x64" -ForegroundColor Green
+}
+
 
 # Compute paths and initialize toolchain
 $repoRoot = (Resolve-Path "$PSScriptRoot/.." ).Path
@@ -66,6 +113,7 @@ if ($Generator -eq "Ninja") {
 
 if (-not $QtPrefix) { $QtPrefix = Find-QtPrefix -Hint $QtPrefix }
 Write-Host "Using Qt prefix: $QtPrefix"
+Initialize-MSVC -Generator $Generator
 Initialize-QtToolchain -QtPrefix $QtPrefix
 
 
@@ -76,6 +124,11 @@ $configureArgs = @(
     "-G", $Generator,
     "-DCMAKE_PREFIX_PATH=$QtPrefix"
 )
+
+# For Ninja, set build type during configuration
+if ($Generator -eq "Ninja") {
+    $configureArgs += @("-DCMAKE_BUILD_TYPE=Release")
+}
 
 cmake @configureArgs
 
@@ -93,28 +146,28 @@ if ($Package) {
         $stage = Join-Path $build 'install_run'
         if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
         $installArgs = @('--install', $build, '--prefix', $stage)
-        if ($Generator -eq 'Visual Studio 17 2022') { $installArgs += @('--config','Release') }
+        if ($Generator -eq 'Visual Studio 17 2022' -or $Generator -eq 'Ninja') {
+            $installArgs += @('--config','Release')
+        }
         cmake @installArgs
 
         $exe = Join-Path $stage 'bin/kassetmanagerqt.exe'
         if (-not (Test-Path $exe)) { throw "Installed exe not found: $exe" }
 
         # 2) Copy ALL vcpkg DLLs BEFORE running verification (OpenImageIO has many dependencies)
-        if ($Generator -eq 'Visual Studio 17 2022') {
-            $vcpkgBin = 'C:\vcpkg\installed\x64-windows\bin'
-            if (Test-Path $vcpkgBin) {
-                Write-Host "Copying ALL vcpkg DLLs to staging directory..." -ForegroundColor Cyan
-                $stageBinDir = Join-Path $stage 'bin'
-                $dlls = Get-ChildItem -Path $vcpkgBin -Filter "*.dll" -ErrorAction SilentlyContinue
-                $copiedCount = 0
-                foreach ($dll in $dlls) {
-                    Copy-Item $dll.FullName -Destination $stageBinDir -Force
-                    $copiedCount++
-                }
-                Write-Host "Copied $copiedCount DLL files from vcpkg" -ForegroundColor Green
-            } else {
-                Write-Warning "vcpkg not found at $vcpkgBin - application may be missing required DLLs"
+        $vcpkgBin = 'C:\vcpkg\installed\x64-windows\bin'
+        if (Test-Path $vcpkgBin) {
+            Write-Host "Copying ALL vcpkg DLLs to staging directory..." -ForegroundColor Cyan
+            $stageBinDir = Join-Path $stage 'bin'
+            $dlls = Get-ChildItem -Path $vcpkgBin -Filter "*.dll" -ErrorAction SilentlyContinue
+            $copiedCount = 0
+            foreach ($dll in $dlls) {
+                Copy-Item $dll.FullName -Destination $stageBinDir -Force
+                $copiedCount++
             }
+            Write-Host "Copied $copiedCount DLL files from vcpkg" -ForegroundColor Green
+        } else {
+            Write-Warning "vcpkg not found at $vcpkgBin - application may be missing required DLLs"
         }
 
         # 3) Verify the app runs with all DLLs present
@@ -148,7 +201,7 @@ if ($Package) {
 
         # 5) Package only after successful verify run
         $nsis = Get-Command makensis.exe -ErrorAction SilentlyContinue
-        if ($Generator -eq 'Visual Studio 17 2022') {
+        if ($Generator -eq 'Visual Studio 17 2022' -or $Generator -eq 'Ninja') {
             if ($nsis) { cpack -G NSIS -C Release } else { cpack -G ZIP -C Release }
         } else {
             if ($nsis) { cpack -G NSIS } else { cpack -G ZIP }

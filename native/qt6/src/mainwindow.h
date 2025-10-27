@@ -78,6 +78,9 @@ private slots:
     void onLockToggled(bool checked);
     void onProjectFolderChanged(int projectFolderId, const QString& path);
 
+    // Log viewer
+    void onToggleLogViewer();
+
 private:
     void setupUi();
     void setupConnections();
@@ -137,6 +140,7 @@ private:
     QPushButton *viewModeButton;
     bool isGridMode;
     class QCheckBox *lockCheckBox;
+    class QCheckBox *recursiveCheckBox;
     QPushButton *refreshButton;
     
     // Info panel labels
@@ -171,6 +175,10 @@ private:
     // Project folder watcher
     ProjectFolderWatcher *projectFolderWatcher;
     bool assetsLocked;
+
+    // Log viewer
+    class LogViewerWidget *logViewerWidget;
+    QAction *toggleLogViewerAction;
 };
 
 #endif // MAINWINDOW_H

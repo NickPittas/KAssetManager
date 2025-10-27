@@ -11,6 +11,7 @@
 #include "settings_dialog.h"
 #include "star_rating_widget.h"
 #include "project_folder_watcher.h"
+#include "log_viewer_widget.h"
 #include <QHeaderView>
 #include <QStyledItemDelegate>
 #include <QPainter>
@@ -47,6 +48,7 @@
 #include <QMediaMetaData>
 #include <QScrollArea>
 #include <QFrame>
+#include <QDockWidget>
 #include <QEventLoop>
 #include <QAudioOutput>
 
@@ -421,13 +423,31 @@ void MainWindow::setupUi()
     exitAction->setShortcut(QKeySequence("Ctrl+Q"));
     connect(exitAction, &QAction::triggered, this, &QMainWindow::close);
 
+    // View menu
+    QMenu* viewMenu = menuBar->addMenu("&View");
+    viewMenu->setStyleSheet(
+        "QMenu { background-color: #1a1a1a; color: #ffffff; border: 1px solid #333; }"
+        "QMenu::item:selected { background-color: #2f3a4a; }"
+    );
+
+    toggleLogViewerAction = viewMenu->addAction("Show &Log Viewer");
+    toggleLogViewerAction->setShortcut(QKeySequence("Ctrl+L"));
+    toggleLogViewerAction->setCheckable(true);
+    toggleLogViewerAction->setChecked(false);
+    connect(toggleLogViewerAction, &QAction::triggered, this, &MainWindow::onToggleLogViewer);
+
     // Main splitter: left (folders) | center (assets) | right (filters+info)
     mainSplitter = new QSplitter(Qt::Horizontal, this);
     setCentralWidget(mainSplitter);
-    
-    // Left panel: Folder tree
-    folderTreeView = new QTreeView(this);
-    folderModel = new VirtualFolderTreeModel(this);
+
+    // Left panel: Folder tree with recursive checkbox
+    QWidget* leftPanel = new QWidget(this);
+    QVBoxLayout* leftLayout = new QVBoxLayout(leftPanel);
+    leftLayout->setContentsMargins(0, 0, 0, 0);
+    leftLayout->setSpacing(0);
+
+    folderTreeView = new QTreeView(leftPanel);
+    folderModel = new VirtualFolderTreeModel(leftPanel);
     folderTreeView->setModel(folderModel);
     folderTreeView->setHeaderHidden(true);
     folderTreeView->setContextMenuPolicy(Qt::CustomContextMenu);
@@ -435,14 +455,8 @@ void MainWindow::setupUi()
     // Enable multi-selection with Ctrl+Click and Shift+Click
     folderTreeView->setSelectionMode(QAbstractItemView::ExtendedSelection);
 
-    // Prevent tree from collapsing when clicking
+    // Allow normal expand/collapse behavior like Windows Explorer
     folderTreeView->setExpandsOnDoubleClick(false);
-
-    // Connect to collapsed signal to prevent collapse
-    connect(folderTreeView, &QTreeView::collapsed, this, [this](const QModelIndex &index) {
-        // Re-expand immediately to prevent collapse
-        folderTreeView->expand(index);
-    });
 
     folderTreeView->setStyleSheet(
         "QTreeView { background-color: #121212; color: #ffffff; border: none; }"
@@ -452,6 +466,23 @@ void MainWindow::setupUi()
 
     // Expand root folder by default
     folderTreeView->expandToDepth(0);
+
+    leftLayout->addWidget(folderTreeView);
+
+    // Recursive checkbox at bottom of folder pane
+    recursiveCheckBox = new QCheckBox("Include subfolder contents", leftPanel);
+    recursiveCheckBox->setChecked(false);
+    recursiveCheckBox->setStyleSheet(
+        "QCheckBox { color: #ffffff; font-size: 11px; padding: 4px 8px; background-color: #1a1a1a; }"
+        "QCheckBox::indicator { width: 14px; height: 14px; }"
+        "QCheckBox::indicator:checked { background-color: #58a6ff; border: 1px solid #58a6ff; }"
+        "QCheckBox::indicator:unchecked { background-color: #2a2a2a; border: 1px solid #666; }"
+    );
+    recursiveCheckBox->setToolTip("When checked, shows assets from selected folder and all its subfolders");
+    connect(recursiveCheckBox, &QCheckBox::toggled, this, [this](bool checked) {
+        assetsModel->setRecursiveMode(checked);
+    });
+    leftLayout->addWidget(recursiveCheckBox);
 
     // Center panel: Asset grid with toolbar
     QWidget* centerPanel = new QWidget(this);
@@ -831,13 +862,36 @@ void MainWindow::setupUi()
     rightLayout->addWidget(infoPanel, 1);
     
     // Add panels to main splitter
-    mainSplitter->addWidget(folderTreeView);
+    mainSplitter->addWidget(leftPanel);
     mainSplitter->addWidget(centerPanel);
     mainSplitter->addWidget(rightPanel);
     mainSplitter->setStretchFactor(0, 1);
     mainSplitter->setStretchFactor(1, 3);
     mainSplitter->setStretchFactor(2, 1);
-    
+
+    // Log viewer as dock widget at bottom (hidden by default)
+    QDockWidget* logDock = new QDockWidget("Application Log", this);
+    logDock->setAllowedAreas(Qt::BottomDockWidgetArea);
+    logDock->setFeatures(QDockWidget::DockWidgetClosable);
+    logViewerWidget = new LogViewerWidget(logDock);
+    logDock->setWidget(logViewerWidget);
+    logDock->setStyleSheet(
+        "QDockWidget { background-color: #121212; color: #ffffff; }"
+        "QDockWidget::title { background-color: #1a1a1a; padding: 4px; }"
+    );
+    addDockWidget(Qt::BottomDockWidgetArea, logDock);
+    logDock->hide(); // Hidden by default
+
+    // Connect dock visibility to menu action
+    connect(logDock, &QDockWidget::visibilityChanged, this, [this](bool visible) {
+        toggleLogViewerAction->setChecked(visible);
+        if (visible) {
+            toggleLogViewerAction->setText("Hide &Log Viewer");
+        } else {
+            toggleLogViewerAction->setText("Show &Log Viewer");
+        }
+    });
+
     // Load initial data
     folderModel->reload();
     tagsModel->reload();
@@ -876,7 +930,6 @@ void MainWindow::setupConnections()
 
     // Connect search box for real-time filtering
     connect(searchBox, &QLineEdit::textChanged, this, &MainWindow::onSearchTextChanged);
-
 }
 
 void MainWindow::onFolderSelected(const QModelIndex &index)
@@ -2593,6 +2646,18 @@ void MainWindow::onThumbnailProgress(int current, int total)
                 thumbnailProgressLabel->setVisible(false);
                 thumbnailProgressBar->setVisible(false);
             });
+        }
+    }
+}
+
+void MainWindow::onToggleLogViewer()
+{
+    // Find the log dock widget
+    QList<QDockWidget*> docks = findChildren<QDockWidget*>();
+    for (QDockWidget* dock : docks) {
+        if (dock->windowTitle() == "Application Log") {
+            dock->setVisible(!dock->isVisible());
+            break;
         }
     }
 }

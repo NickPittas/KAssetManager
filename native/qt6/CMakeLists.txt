@@ -88,6 +88,8 @@ qt_add_executable(kassetmanagerqt
     src/oiio_image_loader.cpp
     src/project_folder_watcher.h
     src/project_folder_watcher.cpp
+    src/log_viewer_widget.h
+    src/log_viewer_widget.cpp
     ${APP_RESOURCES}
 )
 
