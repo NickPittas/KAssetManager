@@ -40,6 +40,7 @@ protected:
     void resizeEvent(QResizeEvent *event) override;
     void mousePressEvent(QMouseEvent *event) override;
     void wheelEvent(QWheelEvent *event) override;
+    bool eventFilter(QObject* watched, QEvent* event) override;
 
 private slots:
     void onPlayPauseClicked();

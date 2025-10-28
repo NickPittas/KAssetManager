@@ -10,6 +10,7 @@
 #include <QMediaPlayer>
 #include <QVideoSink>
 #include <QTimer>
+#include <atomic>
 
 // Forward declaration
 class ThumbnailGenerator;
@@ -18,7 +19,7 @@ class ThumbnailGenerator;
 class ThumbnailTask : public QObject, public QRunnable {
     Q_OBJECT
 public:
-    ThumbnailTask(const QString& filePath, ThumbnailGenerator* generator);
+    ThumbnailTask(const QString& filePath, ThumbnailGenerator* generator, int sessionId);
     void run() override;
 
 signals:
@@ -27,6 +28,7 @@ signals:
 private:
     QString m_filePath;
     ThumbnailGenerator* m_generator;
+    int m_sessionId = 0;
 };
 
 // Fallback task: decode a still frame using FFmpeg in background
@@ -46,7 +48,7 @@ private:
 class VideoThumbnailGenerator : public QObject {
     Q_OBJECT
 public:
-    VideoThumbnailGenerator(const QString& filePath, const QString& cachePath, ThumbnailGenerator* generator);
+    VideoThumbnailGenerator(const QString& filePath, const QString& cachePath, ThumbnailGenerator* generator, int sessionId);
     ~VideoThumbnailGenerator();
     void start();
 
@@ -66,6 +68,7 @@ private:
     QTimer* m_timeout;
     bool m_frameReceived;
     QImage m_capturedFrame;
+    int m_sessionId = 0;
 };
 
 class ThumbnailGenerator : public QObject {
@@ -84,6 +87,10 @@ public:
     Q_INVOKABLE bool isQtSupportedFormat(const QString& filePath);
     Q_INVOKABLE void clearCache();
     Q_INVOKABLE QString createSampleImage(const QString& directory = QString());
+
+    // Session control: cancel previous generation and only allow current-folder work
+    void beginNewSession();
+    int currentSessionId() const { return m_sessionId.load(); }
 
     void startProgress(int total);
     void updateProgress();
@@ -109,9 +116,12 @@ private:
     QThreadPool* m_threadPool;
     QMutex m_mutex;
     QSet<QString> m_pendingThumbnails;
+    QSet<class VideoThumbnailGenerator*> m_activeVideoGenerators;
 
     int m_totalThumbnails;
     int m_completedThumbnails;
+
+    std::atomic<int> m_sessionId{0};
 
     static constexpr int THUMBNAIL_WIDTH = 256;
     static constexpr int THUMBNAIL_HEIGHT = 256;

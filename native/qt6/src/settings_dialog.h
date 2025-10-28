@@ -11,6 +11,8 @@
 #include <QCheckBox>
 #include <QGroupBox>
 #include <QTextEdit>
+#include <QTableWidget>
+#include <QKeySequenceEdit>
 
 class SettingsDialog : public QDialog {
     Q_OBJECT
@@ -48,9 +50,10 @@ private:
     QCheckBox* showFileExtensionsCheck;
     QCheckBox* showSequenceOverlayCheck;
     
-    // Shortcuts tab
-    QTextEdit* shortcutsText;
-    
+    // Shortcuts tab (editable)
+    QTableWidget* fmShortcutsTable;
+    QPushButton* fmResetAllBtn;
+
     // About tab
     QLabel* versionLabel;
     QLabel* qtVersionLabel;

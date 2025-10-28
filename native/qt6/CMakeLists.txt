@@ -92,6 +92,10 @@ qt_add_executable(kassetmanagerqt
     src/log_viewer_widget.cpp
     src/video_metadata.h
     src/video_metadata.cpp
+    src/file_ops.h
+    src/file_ops.cpp
+    src/file_ops_dialog.h
+    src/file_ops_dialog.cpp
     ${APP_RESOURCES}
 )
 

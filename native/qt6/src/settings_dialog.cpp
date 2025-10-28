@@ -8,6 +8,8 @@
 #include <QApplication>
 #include <QStandardPaths>
 #include <QScrollArea>
+#include <QSettings>
+#include <QHeaderView>
 
 SettingsDialog::SettingsDialog(QWidget* parent)
     : QDialog(parent, Qt::Window | Qt::WindowTitleHint | Qt::WindowCloseButtonHint)
@@ -205,40 +207,93 @@ void SettingsDialog::setupShortcutsTab()
     QWidget* shortcutsTab = new QWidget();
     QVBoxLayout* layout = new QVBoxLayout(shortcutsTab);
     layout->setContentsMargins(20, 20, 20, 20);
-    
-    QLabel* title = new QLabel("Keyboard Shortcuts", shortcutsTab);
+    layout->setSpacing(10);
+
+    QLabel* title = new QLabel("File Manager Keyboard Shortcuts", shortcutsTab);
     title->setStyleSheet("font-size: 14px; font-weight: bold; color: #ffffff;");
     layout->addWidget(title);
-    
-    shortcutsText = new QTextEdit(shortcutsTab);
-    shortcutsText->setReadOnly(true);
-    shortcutsText->setStyleSheet(
-        "QTextEdit { background-color: #1a1a1a; color: #ffffff; border: 1px solid #333; padding: 10px; }"
-    );
-    shortcutsText->setHtml(
-        "<h3>Preview Navigation</h3>"
-        "<ul>"
-        "<li><b>Space</b> - Play/Pause sequence</li>"
-        "<li><b>Left Arrow</b> - Previous frame/asset</li>"
-        "<li><b>Right Arrow</b> - Next frame/asset</li>"
-        "<li><b>Escape</b> - Close preview</li>"
-        "</ul>"
-        "<h3>Asset Management</h3>"
-        "<ul>"
-        "<li><b>Double Click</b> - Open preview</li>"
-        "<li><b>Right Click</b> - Context menu</li>"
-        "<li><b>Ctrl+A</b> - Select all</li>"
-        "<li><b>Delete</b> - Remove from library (not implemented)</li>"
-        "</ul>"
-        "<h3>Zoom & Pan (Preview)</h3>"
-        "<ul>"
-        "<li><b>Mouse Wheel</b> - Zoom in/out</li>"
-        "<li><b>Left Click + Drag</b> - Pan image</li>"
-        "<li><b>Double Click</b> - Reset zoom</li>"
-        "</ul>"
-    );
-    layout->addWidget(shortcutsText);
-    
+
+    // Table: Action | Shortcut | Reset
+    fmShortcutsTable = new QTableWidget(shortcutsTab);
+    fmShortcutsTable->setColumnCount(3);
+    QStringList headers; headers << "Action" << "Shortcut" << "Reset";
+    fmShortcutsTable->setHorizontalHeaderLabels(headers);
+    fmShortcutsTable->horizontalHeader()->setStretchLastSection(false);
+    fmShortcutsTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
+    fmShortcutsTable->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+    fmShortcutsTable->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+    fmShortcutsTable->verticalHeader()->setVisible(false);
+    fmShortcutsTable->setAlternatingRowColors(true);
+    fmShortcutsTable->setStyleSheet("QTableWidget { background-color:#1a1a1a; color:#fff; border:1px solid #333; } QHeaderView::section { background:#222; color:#fff; }");
+
+    struct Row { const char* name; QKeySequence def; const char* label; };
+    const Row rows[] = {
+        {"OpenOverlay", QKeySequence(Qt::Key_Space), "Open Overlay/Preview"},
+        {"Copy", QKeySequence::Copy, "Copy"},
+        {"Cut", QKeySequence::Cut, "Cut"},
+        {"Paste", QKeySequence::Paste, "Paste"},
+        {"Delete", QKeySequence::Delete, "Delete (Recycle Bin)"},
+        {"Rename", QKeySequence(Qt::Key_F2), "Rename"},
+        {"DeletePermanent", QKeySequence(Qt::SHIFT | Qt::Key_Delete), "Permanent Delete"},
+        {"NewFolder", QKeySequence::New, "New Folder"},
+        {"CreateFolderWithSelected", QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_N), "Create Folder with Selected Files"},
+        {"BackToParent", QKeySequence(Qt::Key_Backspace), "Back to Parent"}
+    };
+
+    QSettings s("AugmentCode", "KAssetManager");
+    s.beginGroup("FileManager/Shortcuts");
+    fmShortcutsTable->setRowCount(int(sizeof(rows)/sizeof(rows[0])));
+
+    for (int i=0; i< int(sizeof(rows)/sizeof(rows[0])); ++i) {
+        const QString actionName = rows[i].name;
+        const QKeySequence def = rows[i].def;
+        const QString label = rows[i].label;
+
+        // Action label
+        auto item = new QTableWidgetItem(label);
+        item->setData(Qt::UserRole, actionName);
+        item->setData(Qt::UserRole+1, rows[i].def.toString(QKeySequence::PortableText)); // default
+        fmShortcutsTable->setItem(i, 0, item);
+
+        // Shortcut editor
+        auto editor = new QKeySequenceEdit();
+        QString stored = s.value(actionName).toString();
+        QKeySequence seq = stored.isEmpty() ? def : QKeySequence(stored);
+        editor->setKeySequence(seq);
+        fmShortcutsTable->setCellWidget(i, 1, editor);
+
+        // Reset button
+        auto resetBtn = new QPushButton("Reset");
+        resetBtn->setProperty("actionName", actionName);
+        QObject::connect(resetBtn, &QPushButton::clicked, this, [this, i]() {
+            QTableWidgetItem* it = fmShortcutsTable->item(i, 0);
+            if (!it) return;
+            QString defStr = it->data(Qt::UserRole+1).toString();
+            auto ed = qobject_cast<QKeySequenceEdit*>(fmShortcutsTable->cellWidget(i, 1));
+            if (ed) ed->setKeySequence(QKeySequence(defStr));
+        });
+        fmShortcutsTable->setCellWidget(i, 2, resetBtn);
+    }
+    s.endGroup();
+
+    layout->addWidget(fmShortcutsTable);
+
+    // Footer buttons
+    QHBoxLayout* footer = new QHBoxLayout();
+    footer->addStretch();
+    fmResetAllBtn = new QPushButton("Reset All");
+    connect(fmResetAllBtn, &QPushButton::clicked, this, [this]() {
+        for (int r=0; r<fmShortcutsTable->rowCount(); ++r) {
+            QTableWidgetItem* it = fmShortcutsTable->item(r, 0);
+            if (!it) continue;
+            QString defStr = it->data(Qt::UserRole+1).toString();
+            auto ed = qobject_cast<QKeySequenceEdit*>(fmShortcutsTable->cellWidget(r, 1));
+            if (ed) ed->setKeySequence(QKeySequence(defStr));
+        }
+    });
+    footer->addWidget(fmResetAllBtn);
+    layout->addLayout(footer);
+
     tabWidget->addTab(shortcutsTab, "Shortcuts");
 }
 
@@ -369,8 +424,43 @@ void SettingsDialog::onImportDatabase()
 
 void SettingsDialog::saveSettings()
 {
-    // Save settings to QSettings or database
-    // For now, just show a message
+    // Persist File Manager shortcuts
+    if (fmShortcutsTable) {
+        // Detect conflicts
+        QSet<QString> seen;
+        QStringList conflicts;
+        struct Entry { QString action; QString seq; QString def; };
+        QList<Entry> entries;
+        for (int r=0; r<fmShortcutsTable->rowCount(); ++r) {
+            QTableWidgetItem* it = fmShortcutsTable->item(r, 0);
+            auto ed = qobject_cast<QKeySequenceEdit*>(fmShortcutsTable->cellWidget(r, 1));
+            if (!it || !ed) continue;
+            QString action = it->data(Qt::UserRole).toString();
+            QString defStr = it->data(Qt::UserRole+1).toString();
+            QString seqStr = ed->keySequence().toString(QKeySequence::PortableText);
+            if (!seqStr.isEmpty()) {
+                if (seen.contains(seqStr)) conflicts << seqStr;
+                else seen.insert(seqStr);
+            }
+            entries.append({action, seqStr, defStr});
+        }
+        if (!conflicts.isEmpty()) {
+            QMessageBox::warning(this, "Shortcut Conflict",
+                                 QString("Conflicting shortcuts detected: %1\nPlease resolve duplicates before saving.")
+                                 .arg(conflicts.join(", ")));
+            return;
+        }
+        QSettings s("AugmentCode", "KAssetManager");
+        s.beginGroup("FileManager/Shortcuts");
+        // Remove all existing keys first to avoid stale entries
+        for (const QString& k : s.childKeys()) s.remove(k);
+        for (const auto& e : entries) {
+            if (!e.seq.isEmpty()) s.setValue(e.action, e.seq);
+            // Empty means use default; don't set value
+        }
+        s.endGroup();
+    }
+
     QMessageBox::information(this, "Settings Saved", "Settings have been saved successfully.");
     accept();
 }

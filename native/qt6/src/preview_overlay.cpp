@@ -223,6 +223,9 @@ void PreviewOverlay::setupUi()
     imageView->setDragMode(QGraphicsView::ScrollHandDrag);
     imageView->setTransformationAnchor(QGraphicsView::AnchorUnderMouse);
     imageView->setResizeAnchor(QGraphicsView::AnchorUnderMouse);
+    // Consume wheel on the view/viewport to avoid parent scrolling
+    imageView->installEventFilter(this);
+    imageView->viewport()->installEventFilter(this);
     imageView->hide();
     contentLayout->addWidget(imageView);
 
@@ -660,13 +663,27 @@ void PreviewOverlay::mousePressEvent(QMouseEvent *event)
 void PreviewOverlay::wheelEvent(QWheelEvent *event)
 {
     if (!isVideo && !originalPixmap.isNull()) {
-        // Zoom with mouse wheel
+        // Zoom with mouse wheel (fallback if event reached overlay)
         double factor = event->angleDelta().y() > 0 ? 1.15 : 0.85;
         zoomImage(factor);
         event->accept();
-    } else {
-        QWidget::wheelEvent(event);
+        return;
     }
+    QWidget::wheelEvent(event);
+}
+
+bool PreviewOverlay::eventFilter(QObject* watched, QEvent* event)
+{
+    if ((watched == imageView || (imageView && watched == imageView->viewport())) && event->type() == QEvent::Wheel) {
+        if (!isVideo && !originalPixmap.isNull()) {
+            QWheelEvent* wheel = static_cast<QWheelEvent*>(event);
+            double factor = wheel->angleDelta().y() > 0 ? 1.15 : 0.85;
+            zoomImage(factor);
+            wheel->accept();
+            return true; // consume to prevent any scrolling
+        }
+    }
+    return QWidget::eventFilter(watched, event);
 }
 
 void PreviewOverlay::zoomImage(double factor)

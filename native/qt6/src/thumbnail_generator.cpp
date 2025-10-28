@@ -34,12 +34,24 @@ extern "C" {
 #endif
 
 // ThumbnailTask implementation (for images only)
-ThumbnailTask::ThumbnailTask(const QString& filePath, ThumbnailGenerator* generator)
-    : m_filePath(filePath), m_generator(generator) {
+ThumbnailTask::ThumbnailTask(const QString& filePath, ThumbnailGenerator* generator, int sessionId)
+    : m_filePath(filePath), m_generator(generator), m_sessionId(sessionId) {
     setAutoDelete(true);
 }
 
 void ThumbnailTask::run() {
+    // Fast-cancel if session changed
+    if (m_generator->m_sessionId.load() != m_sessionId) {
+        // Remove from pending and return without work
+        QString filePath = m_filePath;
+        ThumbnailGenerator* generator = m_generator;
+        QMetaObject::invokeMethod(generator, [generator, filePath]() {
+            QMutexLocker locker(&generator->m_mutex);
+            generator->m_pendingThumbnails.remove(filePath);
+            generator->updateProgress();
+        }, Qt::QueuedConnection);
+        return;
+    }
     qDebug() << "[ThumbnailTask] Generating image thumbnail for:" << m_filePath;
 
     QString thumbnailPath;
@@ -306,9 +318,9 @@ void VideoFFmpegTask::run()
 }
 
 // VideoThumbnailGenerator implementation
-VideoThumbnailGenerator::VideoThumbnailGenerator(const QString& filePath, const QString& cachePath, ThumbnailGenerator* generator)
+VideoThumbnailGenerator::VideoThumbnailGenerator(const QString& filePath, const QString& cachePath, ThumbnailGenerator* generator, int sessionId)
     : QObject(nullptr), m_filePath(filePath), m_cachePath(cachePath), m_generator(generator),
-      m_frameReceived(false) {
+      m_frameReceived(false), m_sessionId(sessionId) {
 
     m_player = new QMediaPlayer(this);
     m_videoSink = new QVideoSink(this);
@@ -327,6 +339,12 @@ VideoThumbnailGenerator::VideoThumbnailGenerator(const QString& filePath, const 
 VideoThumbnailGenerator::~VideoThumbnailGenerator() {
     if (m_player) {
         m_player->stop();
+        m_player->setSource(QUrl());
+    }
+    // Remove from active set
+    if (m_generator) {
+        QMutexLocker locker(&m_generator->m_mutex);
+        m_generator->m_activeVideoGenerators.remove(this);
     }
 }
 
@@ -341,7 +359,14 @@ void VideoThumbnailGenerator::startFfmpegFallback()
 }
 
 void VideoThumbnailGenerator::start() {
+    // Fast-cancel if session changed
+    if (m_generator->m_sessionId.load() != m_sessionId) { deleteLater(); return; }
     qDebug() << "[VideoThumbnailGenerator] Starting async video thumbnail generation for:" << m_filePath;
+    // Track as active for cancellation
+    {
+        QMutexLocker locker(&m_generator->m_mutex);
+        m_generator->m_activeVideoGenerators.insert(this);
+    }
     m_player->setSource(QUrl::fromLocalFile(m_filePath));
     m_timeout->start();
 }
@@ -361,6 +386,7 @@ void VideoThumbnailGenerator::onMediaStatusChanged() {
 
 void VideoThumbnailGenerator::onVideoFrameChanged() {
     if (m_frameReceived) return;
+    if (m_generator->m_sessionId.load() != m_sessionId) { deleteLater(); return; }
 
     QVideoFrame frame = m_videoSink->videoFrame();
     if (!frame.isValid()) return;
@@ -373,6 +399,7 @@ void VideoThumbnailGenerator::onVideoFrameChanged() {
             m_frameReceived = true;
             m_timeout->stop();
             m_player->stop();
+            m_player->setSource(QUrl());
 
             qDebug() << "[VideoThumbnailGenerator] Captured video frame, size:" << m_capturedFrame.size()
                      << "format:" << m_capturedFrame.format();
@@ -434,8 +461,10 @@ void VideoThumbnailGenerator::onVideoFrameChanged() {
 }
 
 void VideoThumbnailGenerator::onTimeout() {
+    if (m_generator->m_sessionId.load() != m_sessionId) { deleteLater(); return; }
     qDebug() << "[VideoThumbnailGenerator] Timeout waiting for video frame (video may be corrupted or unsupported):" << m_filePath;
     m_player->stop();
+    m_player->setSource(QUrl());
 #ifdef HAVE_FFMPEG
     // Try FFmpeg fallback asynchronously
     startFfmpegFallback();
@@ -450,10 +479,12 @@ void VideoThumbnailGenerator::onTimeout() {
 }
 
 void VideoThumbnailGenerator::onError(QMediaPlayer::Error error, const QString &errorString) {
+    if (m_generator->m_sessionId.load() != m_sessionId) { deleteLater(); return; }
     qDebug() << "[VideoThumbnailGenerator] Media player error for" << m_filePath << "- Error:" << error << errorString;
 
     m_timeout->stop();
     m_player->stop();
+    m_player->setSource(QUrl());
 #ifdef HAVE_FFMPEG
     // Try FFmpeg fallback asynchronously
     startFfmpegFallback();
@@ -625,6 +656,7 @@ QString ThumbnailGenerator::getThumbnailPath(const QString& filePath) {
 }
 
 void ThumbnailGenerator::requestThumbnail(const QString& filePath) {
+    int session = m_sessionId.load();
     if (filePath.isEmpty()) {
         return;
     }
@@ -671,11 +703,11 @@ void ThumbnailGenerator::requestThumbnail(const QString& filePath) {
 
     if (isVideo) {
         QString cachePath = getThumbnailCachePath(filePath);
-        VideoThumbnailGenerator* videoGen = new VideoThumbnailGenerator(filePath, cachePath, this);
+        VideoThumbnailGenerator* videoGen = new VideoThumbnailGenerator(filePath, cachePath, this, session);
         videoGen->start();
         qDebug() << "[ThumbnailGenerator] Started async video thumbnail generation for:" << filePath;
     } else {
-        ThumbnailTask* task = new ThumbnailTask(filePath, this);
+        ThumbnailTask* task = new ThumbnailTask(filePath, this, session);
         m_threadPool->start(task);
         qDebug() << "[ThumbnailGenerator] Queued image thumbnail generation for:" << filePath
                  << "(active threads:" << m_threadPool->activeThreadCount() << ")";
@@ -928,6 +960,18 @@ void ThumbnailGenerator::finishProgress() {
     qDebug() << "[ThumbnailGenerator] Finished progress tracking";
     m_totalThumbnails = 0;
     m_completedThumbnails = 0;
+}
+
+void ThumbnailGenerator::beginNewSession() {
+    QMutexLocker locker(&m_mutex);
+    m_sessionId.fetch_add(1);
+    // Clear pending (new requests will repopulate only for current view)
+    m_pendingThumbnails.clear();
+    // Stop active video generators immediately
+    for (auto *v : std::as_const(m_activeVideoGenerators)) {
+        QMetaObject::invokeMethod(v, "deleteLater", Qt::QueuedConnection);
+    }
+    m_activeVideoGenerators.clear();
 }
 
 QString ThumbnailGenerator::createUnsupportedThumbnail(const QString& filePath) {

@@ -8,6 +8,20 @@
 #include <QVector>
 #include <QPair>
 #include <QStringList>
+
+// Version history row for an asset
+struct AssetVersionRow {
+    int id = 0;
+    int assetId = 0;
+    int versionNumber = 0;      // 1-based
+    QString versionName;        // e.g., "v1"
+    QString filePath;           // path to stored version copy
+    qint64 fileSize = 0;
+    QString checksum;           // SHA-256
+    QString createdAt;          // ISO timestamp
+    QString notes;              // optional user notes
+};
+
 class DB : public QObject {
     Q_OBJECT
 public:
@@ -42,6 +56,12 @@ public:
     QList<int> getAssetIdsInFolder(int folderId, bool recursive = true) const;
     QString getAssetFilePath(int assetId) const;
 
+    // Versioning ops
+    int getAssetIdByPath(const QString& filePath) const;
+    QVector<AssetVersionRow> listAssetVersions(int assetId) const;
+    int createAssetVersion(int assetId, const QString& srcFilePath, const QString& notes = QString());
+    bool revertAssetToVersion(int assetId, int versionId, bool createBackupVersion);
+
     // Tags ops
     int createTag(const QString& name);
     bool renameTag(int id, const QString& name);
@@ -61,6 +81,7 @@ signals:
     void assetsChanged(int folderId);
     void tagsChanged();
     void projectFoldersChanged();
+    void assetVersionsChanged(int assetId);
 
 private:
     explicit DB(QObject* parent=nullptr);
@@ -70,5 +91,6 @@ private:
 
     QSqlDatabase m_db;
     int m_rootId = 0;
+    QString m_dataDir; // directory that holds the DB; used for version storage
 };
 
