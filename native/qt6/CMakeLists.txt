@@ -9,7 +9,7 @@ if(NOT DEFINED CMAKE_TOOLCHAIN_FILE AND EXISTS "C:/vcpkg/scripts/buildsystems/vc
     message(STATUS "Using vcpkg triplet: ${VCPKG_TARGET_TRIPLET}")
 endif()
 
-project(KAssetManagerQt VERSION 0.1.0 LANGUAGES CXX)
+project(KAssetManagerQt VERSION 0.2.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

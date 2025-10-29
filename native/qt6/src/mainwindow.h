@@ -203,7 +203,7 @@ private:
 
     // View controls
     QSlider *thumbnailSizeSlider;
-    QPushButton *viewModeButton;
+    QToolButton *viewModeButton;
     bool isGridMode;
     class QCheckBox *lockCheckBox;
     class QCheckBox *recursiveCheckBox;
@@ -271,9 +271,9 @@ private:
     // Right pane
     QFileSystemModel *fmDirModel;
     QWidget *fmToolbar;
-    QPushButton *fmViewModeButton;
+    QToolButton *fmViewModeButton;
     class QSlider *fmThumbnailSizeSlider;
-    QPushButton *fmPreviewToggleButton;
+    QToolButton *fmPreviewToggleButton;
     class QStackedWidget *fmViewStack;
     QListView *fmGridView;
     class QTableView *fmListView;

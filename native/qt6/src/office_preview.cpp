@@ -54,6 +54,19 @@ static QByteArray readZipEntry(const QString& zipPath, const QString& entryPath)
     }
     char buf[8192];
     int32_t read = 0;
+    while ((read = mz_zip_reader_entry_read(reader, buf, (int32_t)sizeof(buf))) > 0) {
+        out.append(buf, read);
+        if (out.size() > 10 * 1024 * 1024) { // safety cap 10MB
+            break;
+        }
+    }
+    mz_zip_reader_entry_close(reader);
+    mz_zip_reader_close(reader);
+    mz_zip_reader_delete(&reader);
+    return out;
+}
+
+
 
 #ifdef _WIN32
 static QByteArray readOleStream(const QString &filePath, const wchar_t *name)
@@ -97,18 +110,6 @@ static QByteArray readOleStream(const QString &filePath, const wchar_t *name)
     return result;
 }
 #endif
-
-    while ((read = mz_zip_reader_entry_read(reader, buf, (int32_t)sizeof(buf))) > 0) {
-        out.append(buf, read);
-        if (out.size() > 10 * 1024 * 1024) { // safety cap 10MB
-            break;
-        }
-    }
-    mz_zip_reader_entry_close(reader);
-    mz_zip_reader_close(reader);
-    mz_zip_reader_delete(&reader);
-    return out;
-}
 
 static int colIndexFromRef(const QString& cellRef)
 {
@@ -261,102 +262,88 @@ static bool looksWestern(const QString &s, double minRatio)
 
 QString extractDocBinaryText(const QString& filePath, int maxChars)
 {
-    QByteArray data;
 #ifdef _WIN32
-    data = readOleStream(filePath, L"WordDocument");
-#endif
-    if (data.isEmpty()) {
-        QFile f(filePath);
-        if (!f.open(QIODevice::ReadOnly)) return QString();
-        const qint64 kMaxRead = 32ll * 1024 * 1024; // read up to 32 MB
-        data = f.read(kMaxRead);
-        f.close();
-        if (data.isEmpty()) return QString();
-    }
+    // Read the WordDocument stream which contains the FIB (File Information Block) and text
+    QByteArray wordDoc = readOleStream(filePath, L"WordDocument");
+    if (wordDoc.size() < 512) return QString(); // FIB is at least 512 bytes
 
-    QString out;
-    out.reserve(64 * 1024);
+    // Read FIB header to locate text
+    // FIB structure: first 32 bytes contain magic and version info
+    // Offset 0x000A (10): flags (2 bytes) - bit 6 indicates if text is in 0Table or 1Table
+    // Offset 0x0018 (24): fcMin (4 bytes) - start of text in WordDocument stream
+    // Offset 0x001C (28): fcMac (4 bytes) - end of text in WordDocument stream
 
-    bool useFilter = false; // do not filter when reading WordDocument stream
-    auto appendSeg = [&](QString seg) {
-        seg.replace("\r\n", "\n");
-        seg.replace('\r', '\n');
-        while (seg.contains("\n\n\n")) seg.replace("\n\n\n", "\n\n");
-        seg = seg.trimmed();
-        if (seg.size() < 20) return; // ignore very short/noisy chunks
-        if (useFilter && !looksWestern(seg, 0.55)) return; // optional filter for full-file fallback
-        if (!out.isEmpty() && !out.endsWith('\n')) out += '\n';
-        out += seg;
-        out += '\n';
+    auto readU16 = [](const QByteArray &d, int off) -> quint16 {
+        if (off + 1 >= d.size()) return 0;
+        return (quint16)(uchar)d[off] | ((quint16)(uchar)d[off + 1] << 8);
+    };
+    auto readU32 = [](const QByteArray &d, int off) -> quint32 {
+        if (off + 3 >= d.size()) return 0;
+        return (quint32)(uchar)d[off] | ((quint32)(uchar)d[off + 1] << 8) |
+               ((quint32)(uchar)d[off + 2] << 16) | ((quint32)(uchar)d[off + 3] << 24);
     };
 
-    // First, try to extract UTF-16LE runs (common for .doc text storage)
-    for (int offset = 0; offset < 2 && out.size() < maxChars; ++offset) {
-        const int n = data.size() - offset;
-        int i = 0;
-        while (i + 1 < n && out.size() < maxChars) {
-            // Advance to start of a likely text char
-            while (i + 1 < n) {
-                quint16 c = (quint16)(uchar)data[offset + i] | ((quint16)(uchar)data[offset + i + 1] << 8);
-                if (isUtf16TextChar(c)) break;
-                i += 2;
-            }
-            if (i + 1 >= n) break;
+    Q_UNUSED(readU16);
 
-            QVector<quint16> buf;
-            int bad = 0;
-            while (i + 1 < n) {
-                quint16 c = (quint16)(uchar)data[offset + i] | ((quint16)(uchar)data[offset + i + 1] << 8);
-                if (isUtf16TextChar(c)) {
-                    buf.push_back(c);
-                    bad = 0;
-                } else {
-                    // allow brief noise within a run; insert space once
-                    if (!buf.isEmpty()) buf.push_back((quint16)' ');
-                    if (++bad >= 2) { i += 2; break; }
-                }
-                i += 2;
-                if (buf.size() >= 8192) break; // cap individual run
-            }
-            if (buf.size() >= 16) {
-                QString seg = QString::fromUtf16(reinterpret_cast<const char16_t*>(buf.constData()), buf.size());
-                appendSeg(seg);
-            }
-        }
+    quint32 fcMin = readU32(wordDoc, 0x0018);
+    quint32 fcMac = readU32(wordDoc, 0x001C);
+
+    // Check if text range is valid
+    if (fcMin >= fcMac || fcMac > (quint32)wordDoc.size()) {
+        return QString(); // Invalid text range
     }
 
-    // If nothing substantial extracted, scan for long ASCII/ANSI runs
-    if (out.size() < 256) {
-        const int n = data.size();
-        int i = 0;
-        while (i < n && out.size() < maxChars) {
-            // advance to likely text byte
-            while (i < n) {
-                uchar b = (uchar)data[i];
-                if (b == 0x09 || b == 0x0A || b == 0x0D || (b >= 0x20 && b <= 0x7E)) break;
-                ++i;
-            }
-            if (i >= n) break;
-            const int start = i;
-            int count = 0;
-            while (i < n) {
-                uchar b = (uchar)data[i];
-                if (b == 0x09 || b == 0x0A || b == 0x0D || (b >= 0x20 && b <= 0x7E)) {
-                    ++count; ++i;
-                    if (count >= 16384) break;
-                } else {
-                    break;
-                }
-            }
-            if (count >= 32) {
-                QString seg = QString::fromLatin1(data.constData() + start, count);
-                appendSeg(seg);
-            }
+    quint32 textLen = fcMac - fcMin;
+    if (textLen == 0) return QString();
+    if (textLen > (quint32)maxChars * 2) textLen = (quint32)maxChars * 2; // cap
+
+    const QByteArray seg = wordDoc.mid(fcMin, textLen);
+
+    auto decodeUtf16LE = [](const QByteArray &bytes) -> QString {
+        const int ulen = bytes.size() / 2;
+        const ushort *u = reinterpret_cast<const ushort*>(bytes.constData());
+        QString s = QString::fromUtf16(u, ulen);
+        // Normalize special Word control characters
+        for (int i = 0; i < s.size(); ++i) {
+            const ushort c = s.at(i).unicode();
+            if (c == 0x000D || c == 0x000B) s[i] = QChar('\n');
+            else if (c == 0x0007) s[i] = QChar(' ');
         }
-    }
+        return s;
+    };
+
+    auto decodeLocal8 = [](const QByteArray &bytes) -> QString {
+        QString s = QString::fromLocal8Bit(bytes);
+        s.replace('\r', '\n');
+        s.replace(QChar(0x000B), QLatin1Char('\n'));
+        s.replace(QChar(0x0007), QLatin1Char(' '));
+        return s;
+    };
+
+    // Quick heuristic: if many NULs exist, likely UTF-16; otherwise 8-bit
+    const int sample = qMin(seg.size(), 8192);
+    int nuls = 0; for (int i = 0; i < sample; ++i) if (seg[i] == 0) ++nuls;
+    const bool likelyUtf16 = (nuls > sample / 8); // ~12.5% threshold
+
+    QString s16 = decodeUtf16LE(seg);
+    QString s8  = decodeLocal8(seg);
+
+    // Choose the more "western-looking" text, unless heuristic strongly suggests UTF-16
+    const bool ok16 = looksWestern(s16, 0.20);
+    const bool ok8  = looksWestern(s8,  0.20);
+
+    QString out;
+    if (likelyUtf16)      out = ok16 ? s16 : s8;
+    else if (ok8 && !ok16) out = s8;
+    else if (ok16 && !ok8) out = s16;
+    else                   out = (s8.size() > s16.size() ? s8 : s16);
 
     if (out.size() > maxChars) out.truncate(maxChars);
     return out.trimmed();
+#else
+    // Non-Windows fallback: not implemented
+    return QString();
+#endif
 }
 
 

@@ -58,6 +58,8 @@
 #include <QStandardPaths>
 #include <QTextOption>
 
+#include <QVector>
+
 
 #include <QPlainTextEdit>
 #include <QStandardItemModel>
@@ -74,6 +76,105 @@
 #include <QImageReader>
 
 // Forward declare helper
+// Lightweight icon painters (no external resources) for toolbar buttons
+#include <functional>
+static QIcon mkIcon(const std::function<void(QPainter&, const QRectF&)>& draw)
+{
+    QPixmap pm(24, 24); pm.fill(Qt::transparent);
+    QPainter p(&pm); p.setRenderHint(QPainter::Antialiasing);
+    QRectF r(3, 3, 18, 18);
+    QPen pen(QColor(235,235,235)); pen.setWidthF(1.6);
+    p.setPen(pen); p.setBrush(Qt::NoBrush);
+    draw(p, r);
+    p.end();
+    return QIcon(pm);
+}
+
+static QIcon icoFolderNew() { return mkIcon([](QPainter& p, const QRectF& r){
+    QRectF body(r.x()+3, r.y()+6, r.width()-6, r.height()-9);
+    p.drawRoundedRect(body, 2, 2);
+    QRectF tab(r.x()+5, r.y()+3, r.width()*0.35, 6);
+    p.drawRoundedRect(tab, 2, 2);
+    QPointF c(r.right()-6, r.top()+8);
+    p.drawLine(QPointF(c.x()-3, c.y()), QPointF(c.x()+3, c.y()));
+    p.drawLine(QPointF(c.x(), c.y()-3), QPointF(c.x(), c.y()+3));
+}); }
+
+static QIcon icoCopy() { return mkIcon([](QPainter& p, const QRectF& r){
+    QRectF a(r.x()+5, r.y()+6, r.width()-10, r.height()-10); p.drawRoundedRect(a,2,2);
+    QRectF b = a.translated(-4,-4); p.drawRoundedRect(b,2,2);
+}); }
+
+static QIcon icoCut() { return mkIcon([](QPainter& p, const QRectF& r){
+    p.drawLine(QPointF(r.left()+4, r.bottom()-6), QPointF(r.right()-4, r.top()+6));
+    p.drawLine(QPointF(r.left()+4, r.top()+6), QPointF(r.right()-4, r.bottom()-6));
+    QPointF c1(r.center().x()-3, r.center().y()-2), c2(r.center().x()+3, r.center().y()+2);
+    p.drawEllipse(c1, 2.5, 2.5); p.drawEllipse(c2, 2.5, 2.5);
+}); }
+
+static QIcon icoPaste() { return mkIcon([](QPainter& p, const QRectF& r){
+    QRectF clip(r.x()+5, r.y()+6, r.width()-10, r.height()-8); p.drawRoundedRect(clip,2,2);
+    QRectF head(r.center().x()-6, r.y()+2, 12, 6); p.drawRoundedRect(head,2,2);
+}); }
+
+static QIcon icoDelete() { return mkIcon([](QPainter& p, const QRectF& r){
+    QRectF bin(r.x()+6, r.y()+7, r.width()-12, r.height()-9); p.drawRoundedRect(bin,2,2);
+    p.drawLine(QPointF(r.x()+4, r.y()+7), QPointF(r.right()-4, r.y()+7));
+    QRectF lid(r.x()+8, r.y()+4, r.width()-16, 4); p.drawRoundedRect(lid,1,1);
+}); }
+
+static QIcon icoRename() { return mkIcon([](QPainter& p, const QRectF& r){
+    QPainterPath pencil; QPointF a(r.x()+6, r.bottom()-7), b(r.right()-6, r.y()+7);
+    QPointF c(b.x()-3, b.y()-3), d(a.x()+3, a.y()+3);
+    pencil.moveTo(a); pencil.lineTo(c); pencil.lineTo(b); pencil.lineTo(d); pencil.closeSubpath();
+    p.drawPath(pencil);
+}); }
+
+static QIcon icoAdd() { return mkIcon([](QPainter& p, const QRectF& r){
+    QPointF c = r.center(); p.drawEllipse(QRectF(c.x()-7,c.y()-7,14,14));
+    p.drawLine(QPointF(c.x()-4,c.y()), QPointF(c.x()+4,c.y()));
+    p.drawLine(QPointF(c.x(), c.y()-4), QPointF(c.x(), c.y()+4));
+}); }
+
+static QIcon icoGrid() { return mkIcon([](QPainter& p, const QRectF& r){
+    const qreal s = (r.width()-6)/3.0;
+    for (int i=0;i<3;i++) for (int j=0;j<3;j++) {
+        QRectF cell(r.x()+3+i*s, r.y()+3+j*s, s-2, s-2); p.drawRect(cell);
+    }
+}); }
+
+static QIcon icoList() { return mkIcon([](QPainter& p, const QRectF& r){
+    for (int i=0;i<3;i++) {
+        qreal y = r.y()+4+i*6; p.drawRect(QRectF(r.x()+3, y, 3, 3));
+        p.drawLine(QPointF(r.x()+10, y+1.5), QPointF(r.right()-3, y+1.5));
+    }
+}); }
+
+static QIcon icoGroup() { return mkIcon([](QPainter& p, const QRectF& r){
+    QRectF a(r.x()+4, r.center().y()-5, 10, 10);
+    QRectF b(r.center().x()-1, r.center().y()-5, 10, 10);
+    p.drawArc(a, 45*16, 270*16); p.drawArc(b, 225*16, 270*16);
+}); }
+
+static QIcon icoEye() { return mkIcon([](QPainter& p, const QRectF& r){
+    QPainterPath path; QPointF c = r.center(); qreal rx = r.width()/2 - 2; qreal ry = r.height()/3;
+    path.moveTo(r.x()+2, c.y());
+    path.cubicTo(r.x()+rx/2, r.y()+2, r.right()-rx/2, r.y()+2, r.right()-2, c.y());
+    path.cubicTo(r.right()-rx/2, r.bottom()-2, r.x()+rx/2, r.bottom()-2, r.x()+2, c.y());
+    p.drawPath(path); p.drawEllipse(QRectF(c.x()-3, c.y()-3, 6, 6));
+}); }
+
+
+static QIcon icoRefresh() { return mkIcon([](QPainter& p, const QRectF& r){
+    QPointF c = r.center(); qreal rad = r.width()/2 - 4;
+    QPainterPath path; path.moveTo(c.x()+rad, c.y());
+    path.arcTo(QRectF(c.x()-rad, c.y()-rad, 2*rad, 2*rad), 0, 270);
+    p.drawPath(path);
+    QPointF a(c.x()-rad, c.y()-rad+2);
+    p.drawLine(QPointF(a.x(), a.y()), QPointF(a.x()-4, a.y()+2));
+    p.drawLine(QPointF(a.x(), a.y()), QPointF(a.x()+2, a.y()+4));
+}); }
+
 static bool isImageFile(const QString &ext);
 
 // Lightweight proxy that groups numbered image sequences into a single representative row
@@ -355,115 +456,36 @@ private:
                 return; // Invalid pixmap - don't draw anything
             }
 
-            // Now we have a valid thumbnail - draw the card
-            // Background
-            if (option.state & QStyle::State_Selected) {
-                painter->fillRect(option.rect, QColor(47, 58, 74)); // Accent background
-            } else if (option.state & QStyle::State_MouseOver) {
-                painter->fillRect(option.rect, QColor(32, 32, 32)); // Hover
-            } else {
-                painter->fillRect(option.rect, QColor(18, 18, 18)); // Default
-            }
+            // Now we have a valid thumbnail - draw the item
+            // No background fill to achieve Explorer-like no-cell look
 
-            // Border
-            if (option.state & QStyle::State_Selected) {
-                painter->setPen(QPen(QColor(88, 166, 255), 2));
+            // Outline on hover/selection only
+            if (option.state & (QStyle::State_Selected | QStyle::State_MouseOver)) {
+                QColor c = (option.state & QStyle::State_Selected) ? QColor(88,166,255) : QColor(80,80,80);
+                painter->setPen(QPen(c, 1.5)); painter->setBrush(Qt::NoBrush);
                 painter->drawRect(option.rect.adjusted(1, 1, -1, -1));
             }
 
-            // Draw thumbnail
-            QRect thumbRect = option.rect.adjusted(8, 8, -8, -8);
-            QPixmap scaled = pixmap.scaled(thumbRect.size(), Qt::KeepAspectRatio, Qt::FastTransformation);
+            // Draw thumbnail centered within square top area
+            const int margin = 6;
+            const int thumbSide = m_thumbnailSize;
+            QRect thumbRect(option.rect.x() + (option.rect.width()-thumbSide)/2, option.rect.y() + margin, thumbSide, thumbSide);
+            QPixmap scaled = pixmap.scaled(thumbRect.size(), Qt::KeepAspectRatio, Qt::SmoothTransformation);
             int x = thumbRect.x() + (thumbRect.width() - scaled.width()) / 2;
             int y = thumbRect.y() + (thumbRect.height() - scaled.height()) / 2;
             painter->drawPixmap(x, y, scaled);
 
-            // File name overlay at the bottom with semi-transparent background
+            // Name label below thumbnail
             QString fileName = index.data(AssetsModel::FileNameRole).toString();
-            QString fileType = index.data(AssetsModel::FileTypeRole).toString().toUpper();
-            int rating = index.data(AssetsModel::RatingRole).toInt();
-
-            // Calculate text height needed
             QFont nameFont("Segoe UI", 9);
-            QFontMetrics nameFm(nameFont);
-            QFont typeFont("Segoe UI", 8);
-            QFontMetrics typeFm(typeFont);
-            QFont starFont("Segoe UI", 10);
-            QFontMetrics starFm(starFont);
-
-            // Use elided text to fit in one line
-            int availableWidth = thumbRect.width() - 16; // 8px padding on each side
-            QString elidedName = nameFm.elidedText(fileName, Qt::ElideRight, availableWidth);
-
-            int nameHeight = nameFm.height();
-            int typeHeight = typeFm.height();
-            int totalTextHeight = nameHeight + typeHeight + 8; // 8px padding
-
-            // Draw semi-transparent background for text
-            QRect textBgRect(thumbRect.left(), thumbRect.bottom() - totalTextHeight, thumbRect.width(), totalTextHeight);
-            painter->fillRect(textBgRect, QColor(0, 0, 0, 180));
-
-            // Draw file name
-            QRect nameRect = textBgRect.adjusted(8, 4, -8, -typeHeight - 4);
-            painter->setPen(QColor(255, 255, 255));
             painter->setFont(nameFont);
-            painter->drawText(nameRect, Qt::AlignLeft | Qt::AlignVCenter, elidedName);
+            painter->setPen(QColor(230,230,230));
+            QRect nameRect(option.rect.x()+4, thumbRect.bottom()+4, option.rect.width()-8, option.rect.bottom()-thumbRect.bottom()-6);
+            QString elided = QFontMetrics(nameFont).elidedText(fileName, Qt::ElideRight, nameRect.width());
+            painter->drawText(nameRect, Qt::AlignHCenter | Qt::AlignTop, elided);
 
-            // Draw file type
-            QRect typeRect = textBgRect.adjusted(8, nameHeight + 4, -8, -4);
-            painter->setPen(QColor(160, 160, 160));
-            painter->setFont(typeFont);
-            painter->drawText(typeRect, Qt::AlignLeft | Qt::AlignVCenter, fileType);
 
-            // Draw sequence badge if this is a sequence
-            bool isSequence = index.data(AssetsModel::IsSequenceRole).toBool();
-            if (isSequence) {
-                int frameCount = index.data(AssetsModel::SequenceFrameCountRole).toInt();
-                int startFrame = index.data(AssetsModel::SequenceStartFrameRole).toInt();
-                int endFrame = index.data(AssetsModel::SequenceEndFrameRole).toInt();
 
-                // Draw badge in top-right corner
-                QString badgeText = QString("%1 frames").arg(frameCount);
-                QFont badgeFont("Segoe UI", 8, QFont::Bold);
-                QFontMetrics badgeFm(badgeFont);
-                int badgeWidth = badgeFm.horizontalAdvance(badgeText) + 12;
-                int badgeHeight = 18;
-                int badgeX = thumbRect.right() - badgeWidth - 4;
-                int badgeY = thumbRect.top() + 4;
-
-                QRect badgeRect(badgeX, badgeY, badgeWidth, badgeHeight);
-                painter->fillRect(badgeRect, QColor(70, 130, 180, 220)); // Steel blue
-                painter->setPen(QPen(QColor(255, 255, 255, 200), 1));
-                painter->drawRect(badgeRect);
-
-                painter->setFont(badgeFont);
-                painter->setPen(Qt::white);
-                painter->drawText(badgeRect, Qt::AlignCenter, badgeText);
-            }
-
-            // Draw rating stars (if rated)
-            if (rating > 0 && rating <= 5) {
-                QString stars;
-                for (int i = 0; i < 5; i++) {
-                    stars += (i < rating) ? "★" : "☆";
-                }
-                QRect starRect(thumbRect.left() + 4, thumbRect.top() + 4, thumbRect.width() - 8, starFm.height() + 4);
-                painter->fillRect(starRect, QColor(0, 0, 0, 180));
-                painter->setPen(QColor(255, 215, 0)); // Gold color
-                painter->setFont(starFont);
-                painter->drawText(starRect, Qt::AlignCenter, stars);
-            }
-
-            // Selection checkmark
-            if (option.state & QStyle::State_Selected) {
-                QRect checkRect(option.rect.right() - 28, option.rect.top() + 4, 24, 24);
-                painter->setBrush(QColor(88, 166, 255));
-                painter->setPen(Qt::NoPen);
-                painter->drawEllipse(checkRect);
-                painter->setPen(QColor(255, 255, 255));
-                painter->setFont(QFont("Segoe UI", 12, QFont::Bold));
-                painter->drawText(checkRect, Qt::AlignCenter, "✓");
-            }
 
             painter->restore();
         } catch (const std::exception& e) {
@@ -484,6 +506,56 @@ public:
         return QSize(m_thumbnailSize, height);
     }
 };
+
+// Minimalist delegate for File Manager grid: thumbnail + filename, no cell background
+class FmItemDelegate : public QStyledItemDelegate
+{
+public:
+    explicit FmItemDelegate(QObject *parent = nullptr) : QStyledItemDelegate(parent), m_thumbnailSize(120) {}
+    void setThumbnailSize(int s) { m_thumbnailSize = s; }
+    int thumbnailSize() const { return m_thumbnailSize; }
+
+    void paint(QPainter *painter, const QStyleOptionViewItem &option, const QModelIndex &index) const override
+    {
+        painter->save();
+
+        // Outline on hover/selection only
+        if (option.state & (QStyle::State_Selected | QStyle::State_MouseOver)) {
+            QColor c = (option.state & QStyle::State_Selected) ? QColor(88,166,255) : QColor(80,80,80);
+            painter->setPen(QPen(c, 1.5)); painter->setBrush(Qt::NoBrush);
+            painter->drawRect(option.rect.adjusted(1, 1, -1, -1));
+        }
+
+        // Icon pixmap from model (uses FmIconProvider -> Thumbnail cache)
+        QIcon icon = qvariant_cast<QIcon>(index.data(Qt::DecorationRole));
+        QPixmap pix = icon.pixmap(m_thumbnailSize, m_thumbnailSize);
+
+        const int margin = 6;
+        const int thumbSide = m_thumbnailSize;
+        QRect thumbRect(option.rect.x() + (option.rect.width()-thumbSide)/2, option.rect.y() + margin, thumbSide, thumbSide);
+        if (!pix.isNull()) {
+            QPixmap scaled = pix.scaled(thumbRect.size(), Qt::KeepAspectRatio, Qt::SmoothTransformation);
+            int x = thumbRect.x() + (thumbRect.width() - scaled.width()) / 2;
+            int y = thumbRect.y() + (thumbRect.height() - scaled.height()) / 2;
+            painter->drawPixmap(x, y, scaled);
+        }
+
+        // Filename below
+        QString name = index.data(Qt::DisplayRole).toString();
+        QFont f("Segoe UI", 9);
+        painter->setFont(f);
+        painter->setPen(QColor(230,230,230));
+        QRect nameRect(option.rect.x()+4, thumbRect.bottom()+4, option.rect.width()-8, option.rect.bottom()-thumbRect.bottom()-6);
+        QString el = QFontMetrics(f).elidedText(name, Qt::ElideRight, nameRect.width());
+        painter->drawText(nameRect, Qt::AlignHCenter | Qt::AlignTop, el);
+
+        painter->restore();
+    }
+
+private:
+    int m_thumbnailSize;
+};
+
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
@@ -712,18 +784,16 @@ void MainWindow::setupUi()
     toolbar->setStyleSheet("QWidget { background-color: #1a1a1a; border-bottom: 1px solid #333; }");
     QHBoxLayout* toolbarLayout = new QHBoxLayout(toolbar);
     toolbarLayout->setContentsMargins(8, 4, 8, 4);
-    toolbarLayout->setSpacing(8);
+    toolbarLayout->setSpacing(6);
 
     // View mode toggle button
     isGridMode = true;
-    viewModeButton = new QPushButton("⊞ Grid", toolbar);
-    viewModeButton->setFixedSize(80, 28);
-    viewModeButton->setStyleSheet(
-        "QPushButton { background-color: #2a2a2a; color: #ffffff; border: 1px solid #333; border-radius: 4px; font-size: 12px; }"
-        "QPushButton:hover { background-color: #333; }"
-    );
-    viewModeButton->setToolTip("Toggle between Grid and List view");
-    connect(viewModeButton, &QPushButton::clicked, this, &MainWindow::onViewModeChanged);
+    viewModeButton = new QToolButton(toolbar);
+    viewModeButton->setIcon(icoGrid());
+    viewModeButton->setToolTip("Toggle Grid/List");
+    viewModeButton->setAutoRaise(true);
+    viewModeButton->setIconSize(QSize(20,20));
+    connect(viewModeButton, &QToolButton::clicked, this, &MainWindow::onViewModeChanged);
     toolbarLayout->addWidget(viewModeButton);
 
     // Thumbnail size label
@@ -769,13 +839,12 @@ void MainWindow::setupUi()
     toolbarLayout->addWidget(lockCheckBox);
 
     // Refresh button
-    refreshButton = new QPushButton("🔄 Refresh", toolbar);
-    refreshButton->setFixedSize(90, 28);
-    refreshButton->setStyleSheet(
-        "QPushButton { background-color: #2a2a2a; color: #ffffff; border: 1px solid #333; border-radius: 4px; font-size: 12px; }"
-        "QPushButton:hover { background-color: #333; }"
-    );
+    refreshButton = new QPushButton(toolbar);
+    refreshButton->setIcon(icoRefresh());
     refreshButton->setToolTip("Refresh assets from project folders");
+    refreshButton->setFixedSize(28, 28);
+    refreshButton->setFlat(true);
+    refreshButton->setStyleSheet("QPushButton{background:transparent;border:none;}");
     connect(refreshButton, &QPushButton::clicked, this, &MainWindow::onRefreshAssets);
     toolbarLayout->addWidget(refreshButton);
 
@@ -793,7 +862,7 @@ void MainWindow::setupUi()
     assetGridView->setModel(assetsModel);
     assetGridView->setViewMode(QListView::IconMode);
     assetGridView->setResizeMode(QListView::Adjust);
-    assetGridView->setSpacing(8);
+    assetGridView->setSpacing(4);
     assetGridView->setUniformItemSizes(true);
     assetGridView->setSelectionMode(QAbstractItemView::ExtendedSelection);
     assetGridView->setContextMenuPolicy(Qt::CustomContextMenu);
@@ -813,8 +882,11 @@ void MainWindow::setupUi()
     assetTableView->setSelectionMode(QAbstractItemView::ExtendedSelection);
     assetTableView->setContextMenuPolicy(Qt::CustomContextMenu);
     assetTableView->setSortingEnabled(true);
-    assetTableView->setAlternatingRowColors(true);
+    assetTableView->setAlternatingRowColors(false);
+    assetTableView->setShowGrid(false);
     assetTableView->verticalHeader()->setVisible(false);
+    assetTableView->verticalHeader()->setDefaultSectionSize(22);
+    assetTableView->verticalHeader()->setMinimumSectionSize(18);
     assetTableView->horizontalHeader()->setStretchLastSection(true);
     // Persist assetTableView column widths immediately when resized
     connect(assetTableView->horizontalHeader(), &QHeaderView::sectionResized, this, [this](int logical, int /*oldSize*/, int newSize){
@@ -823,9 +895,9 @@ void MainWindow::setupUi()
     });
 
     assetTableView->setStyleSheet(
-        "QTableView { background-color: #0a0a0a; color: #ffffff; border: none; gridline-color: #1a1a1a; }"
+        "QTableView { background-color: #0a0a0a; color: #ffffff; border: none; }"
+        "QTableView::item { padding: 2px 6px; }"
         "QTableView::item:selected { background-color: #2f3a4a; }"
-        "QTableView::item:hover { background-color: #1a1a1a; }"
         "QHeaderView::section { background-color: #1a1a1a; color: #ffffff; border: none; padding: 4px; }"
     );
     // Set column widths
@@ -1225,7 +1297,7 @@ void MainWindow::setupUi()
 
             isGridMode = grid;
             viewStack->setCurrentIndex(grid ? 0 : 1);
-            viewModeButton->setText(grid ? "\u229e Grid" : "\u2630 List");
+            viewModeButton->setIcon(grid ? icoGrid() : icoList());
             thumbnailSizeSlider->setEnabled(grid);
         }
         if (assetTableView && assetTableView->model()) {
@@ -1336,35 +1408,41 @@ void MainWindow::setupFileManagerUi()
 
     QHBoxLayout *tb = new QHBoxLayout(fmToolbar);
     tb->setContentsMargins(8,4,8,4);
-    tb->setSpacing(8);
+    tb->setSpacing(6);
 
     fmIsGridMode = true;
-    fmViewModeButton = new QPushButton("⊞ Grid", fmToolbar);
-    fmViewModeButton->setFixedSize(80, 28);
-    fmViewModeButton->setStyleSheet(
-        "QPushButton { background-color: #2a2a2a; color: #ffffff; border: 1px solid #333; border-radius: 4px; font-size: 12px; }"
-        "QPushButton:hover { background-color: #333; }"
-    );
-    connect(fmViewModeButton, &QPushButton::clicked, this, &MainWindow::onFmViewModeToggled);
+
+    auto mkTb = [&](const QIcon &ic, const QString &tip) {
+        QToolButton *b = new QToolButton(fmToolbar);
+        b->setIcon(ic); b->setToolTip(tip); b->setAutoRaise(true); b->setIconSize(QSize(20,20));
+        return b;
+    };
+
+    // Left-aligned: New Folder, Copy, Cut, Paste, Delete, Rename, Add to Library, List/Grid Toggle, Grid Size bar, Group Sequences
+    QToolButton *newFolderBtn = mkTb(icoFolderNew(), "New Folder");
+    connect(newFolderBtn, &QToolButton::clicked, this, &MainWindow::onFmNewFolder);
+    tb->addWidget(newFolderBtn);
+
+    QToolButton *copyBtn = mkTb(icoCopy(), "Copy");       connect(copyBtn, &QToolButton::clicked, this, &MainWindow::onFmCopy); tb->addWidget(copyBtn);
+    QToolButton *cutBtn = mkTb(icoCut(), "Cut");          connect(cutBtn, &QToolButton::clicked, this, &MainWindow::onFmCut); tb->addWidget(cutBtn);
+    QToolButton *pasteBtn = mkTb(icoPaste(), "Paste");    connect(pasteBtn, &QToolButton::clicked, this, &MainWindow::onFmPaste); tb->addWidget(pasteBtn);
+    QToolButton *deleteBtn = mkTb(icoDelete(), "Delete"); connect(deleteBtn, &QToolButton::clicked, this, &MainWindow::onFmDelete); tb->addWidget(deleteBtn);
+    QToolButton *renameBtn = mkTb(icoRename(), "Rename"); connect(renameBtn, &QToolButton::clicked, this, &MainWindow::onFmRename); tb->addWidget(renameBtn);
+
+    QToolButton *addToLibraryBtn = mkTb(icoAdd(), "Add to Library");
+    connect(addToLibraryBtn, &QToolButton::clicked, this, &MainWindow::onAddSelectionToAssetLibrary);
+    tb->addWidget(addToLibraryBtn);
+
+    fmViewModeButton = new QToolButton(fmToolbar);
+    fmViewModeButton->setIcon(icoGrid());
+    fmViewModeButton->setToolTip("Toggle Grid/List");
+    fmViewModeButton->setAutoRaise(true);
+    fmViewModeButton->setIconSize(QSize(20,20));
+    connect(fmViewModeButton, &QToolButton::clicked, this, &MainWindow::onFmViewModeToggled);
     tb->addWidget(fmViewModeButton);
 
-    // Group sequences toggle
-    fmGroupSequencesButton = new QToolButton(fmToolbar);
-    fmGroupSequencesButton->setText("Group Sequences");
-    fmGroupSequencesButton->setCheckable(true);
-    tb->addWidget(fmGroupSequencesButton);
-    connect(fmGroupSequencesButton, &QToolButton::toggled, this, &MainWindow::onFmGroupSequencesToggled);
-
-    // Preview toggle
-    fmPreviewToggleButton = new QPushButton("Preview", fmToolbar);
-    fmPreviewToggleButton->setCheckable(true);
-    fmPreviewToggleButton->setChecked(true);
-    fmPreviewToggleButton->setToolTip("Show/Hide preview panel");
-    auto styleBtnLocal = [](QPushButton* b){ b->setStyleSheet("QPushButton{background:#2a2a2a;color:#fff;border:1px solid #333;border-radius:4px;padding:4px 8px;} QPushButton:hover{background:#333;}"); };
     // Thumbnail size slider (File Manager)
-    QLabel *fmSizeLbl = new QLabel("Size:", fmToolbar);
-    fmSizeLbl->setStyleSheet("color:#9aa0a6;");
-    tb->addWidget(fmSizeLbl);
+    QLabel *fmSizeLbl = new QLabel("Size:", fmToolbar); fmSizeLbl->setStyleSheet("color:#9aa0a6;"); tb->addWidget(fmSizeLbl);
     fmThumbnailSizeSlider = new QSlider(Qt::Horizontal, fmToolbar);
     fmThumbnailSizeSlider->setRange(64, 320);
     fmThumbnailSizeSlider->setFixedWidth(140);
@@ -1372,48 +1450,26 @@ void MainWindow::setupFileManagerUi()
     tb->addWidget(fmThumbnailSizeSlider);
     connect(fmThumbnailSizeSlider, &QSlider::valueChanged, this, &MainWindow::onFmThumbnailSizeChanged);
 
-    styleBtnLocal(fmPreviewToggleButton);
-    connect(fmPreviewToggleButton, &QPushButton::toggled, this, &MainWindow::onFmTogglePreview);
-    tb->addWidget(fmPreviewToggleButton);
+    // Group sequences toggle
+    fmGroupSequencesButton = new QToolButton(fmToolbar);
+    fmGroupSequencesButton->setIcon(icoGroup());
+    fmGroupSequencesButton->setToolTip("Group sequences");
+    fmGroupSequencesButton->setCheckable(true);
+    tb->addWidget(fmGroupSequencesButton);
+    connect(fmGroupSequencesButton, &QToolButton::toggled, this, &MainWindow::onFmGroupSequencesToggled);
 
-    QPushButton *addToLibraryBtn = new QPushButton("➕ Add to Library", fmToolbar);
-    addToLibraryBtn->setStyleSheet(
-        "QPushButton { background-color: #58a6ff; color: #ffffff; border: none; padding: 6px 12px; border-radius: 4px; }"
-        "QPushButton:hover { background-color: #4a8fd9; }"
-    );
-    connect(addToLibraryBtn, &QPushButton::clicked, this, &MainWindow::onAddSelectionToAssetLibrary);
-    tb->addWidget(addToLibraryBtn);
-
-    // File ops toolbar buttons
-
-    QPushButton *copyBtn = new QPushButton("Copy", fmToolbar);
-    QPushButton *cutBtn = new QPushButton("Cut", fmToolbar);
-    QPushButton *pasteBtn = new QPushButton("Paste", fmToolbar);
-    QPushButton *deleteBtn = new QPushButton("Delete", fmToolbar);
-    QPushButton *renameBtn = new QPushButton("Rename", fmToolbar);
-    QPushButton *newFolderBtn = new QPushButton("New Folder", fmToolbar);
-    auto styleBtn = [](QPushButton* b){ b->setStyleSheet("QPushButton{background:#2a2a2a;color:#fff;border:1px solid #333;border-radius:4px;padding:4px 8px;} QPushButton:hover{background:#333;}"); };
-    for (QPushButton* b : {copyBtn, cutBtn, pasteBtn, deleteBtn, renameBtn, newFolderBtn}) styleBtn(b);
-    connect(copyBtn, &QPushButton::clicked, this, &MainWindow::onFmCopy);
-    connect(cutBtn, &QPushButton::clicked, this, &MainWindow::onFmCut);
-    connect(pasteBtn, &QPushButton::clicked, this, &MainWindow::onFmPaste);
-    connect(deleteBtn, &QPushButton::clicked, this, &MainWindow::onFmDelete);
-    connect(renameBtn, &QPushButton::clicked, this, &MainWindow::onFmRename);
-    // Ensure all toolbar buttons are a single row height
-    for (QPushButton* b : { addToLibraryBtn, copyBtn, cutBtn, pasteBtn, deleteBtn, renameBtn, newFolderBtn, fmPreviewToggleButton, fmViewModeButton }) {
-        b->setFixedHeight(28);
-        b->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
-    }
-
-    connect(newFolderBtn, &QPushButton::clicked, this, &MainWindow::onFmNewFolder);
-    tb->addWidget(copyBtn);
-    tb->addWidget(cutBtn);
-    tb->addWidget(pasteBtn);
-    tb->addWidget(deleteBtn);
-    tb->addWidget(renameBtn);
-    tb->addWidget(newFolderBtn);
-
+    // Right-aligned: Preview toggle
     tb->addStretch();
+
+    fmPreviewToggleButton = new QToolButton(fmToolbar);
+    fmPreviewToggleButton->setIcon(icoEye());
+    fmPreviewToggleButton->setToolTip("Show/Hide preview panel");
+    fmPreviewToggleButton->setCheckable(true);
+    fmPreviewToggleButton->setChecked(true);
+    fmPreviewToggleButton->setAutoRaise(true);
+    fmPreviewToggleButton->setIconSize(QSize(20,20));
+    connect(fmPreviewToggleButton, &QToolButton::toggled, this, &MainWindow::onFmTogglePreview);
+    tb->addWidget(fmPreviewToggleButton);
     rightLayout->addWidget(fmToolbar);
 
     // Models/views
@@ -1433,16 +1489,21 @@ void MainWindow::setupFileManagerUi()
     fmGridView->setModel(fmProxyModel);
     fmGridView->setViewMode(QListView::IconMode);
     fmGridView->setResizeMode(QListView::Adjust);
-    fmGridView->setSpacing(8);
+    fmGridView->setSpacing(4);
     fmGridView->setUniformItemSizes(true);
     fmGridView->setSelectionMode(QAbstractItemView::ExtendedSelection);
     fmGridView->setContextMenuPolicy(Qt::CustomContextMenu);
-    // Restore thumbnail size from settings (default 120)
+
+    // Minimalist delegate to remove cell color separation
     {
+        auto *d = new FmItemDelegate(fmGridView);
+        fmGridView->setItemDelegate(d);
+        // Restore thumbnail size from settings (default 120)
         QSettings s("AugmentCode", "KAssetManager");
         int fmThumb = s.value("FileManager/GridThumbSize", 120).toInt();
+        d->setThumbnailSize(fmThumb);
         fmGridView->setIconSize(QSize(fmThumb, fmThumb));
-        fmGridView->setGridSize(QSize(fmThumb + 48, fmThumb + 64));
+        fmGridView->setGridSize(QSize(fmThumb + 24, fmThumb + 40));
         if (fmThumbnailSizeSlider) fmThumbnailSizeSlider->setValue(fmThumb);
     }
     fmGridView->setStyleSheet("QListView { background-color: #0a0a0a; border: none; }");
@@ -1451,6 +1512,7 @@ void MainWindow::setupFileManagerUi()
     fmGridView->setDropIndicatorShown(true);
     fmGridView->setDragDropMode(QAbstractItemView::DragDrop);
     fmGridView->setDefaultDropAction(Qt::CopyAction);
+    if (fmGridView->viewport()) fmGridView->viewport()->installEventFilter(this);
     connect(fmGridView, &QListView::doubleClicked, this, &MainWindow::onFmItemDoubleClicked);
     fmViewStack->addWidget(fmGridView); // 0
 
@@ -1466,11 +1528,16 @@ void MainWindow::setupFileManagerUi()
     fmListView->setSelectionBehavior(QAbstractItemView::SelectRows);
     fmListView->setSelectionMode(QAbstractItemView::ExtendedSelection);
     fmListView->setSortingEnabled(true);
-    fmListView->setAlternatingRowColors(true);
+    fmListView->setAlternatingRowColors(false);
+    fmListView->setShowGrid(false);
     fmListView->verticalHeader()->setVisible(false);
+    fmListView->verticalHeader()->setDefaultSectionSize(22);
+    fmListView->verticalHeader()->setMinimumSectionSize(18);
+    fmListView->setIconSize(QSize(18,18));
     fmListView->horizontalHeader()->setStretchLastSection(true);
     fmListView->setStyleSheet(
-        "QTableView { background-color: #0a0a0a; color: #ffffff; border: none; gridline-color: #1a1a1a; }"
+        "QTableView { background-color: #0a0a0a; color: #ffffff; border: none; }"
+        "QTableView::item { padding: 2px 6px; }"
         "QTableView::item:selected { background-color: #2f3a4a; }"
         "QHeaderView::section { background-color: #1a1a1a; color: #ffffff; border: none; padding: 4px; }"
     );
@@ -1479,6 +1546,7 @@ void MainWindow::setupFileManagerUi()
     fmListView->setDropIndicatorShown(true);
     fmListView->setDragDropMode(QAbstractItemView::DragDrop);
     fmListView->setDefaultDropAction(Qt::CopyAction);
+    if (fmListView->viewport()) fmListView->viewport()->installEventFilter(this);
     connect(fmListView, &QTableView::doubleClicked, this, &MainWindow::onFmItemDoubleClicked);
     fmViewStack->addWidget(fmListView); // 1
 
@@ -1892,7 +1960,7 @@ void MainWindow::setupFileManagerUi()
             bool grid = s.value("FileManager/ViewMode").toBool();
             fmIsGridMode = grid;
             fmViewStack->setCurrentIndex(grid ? 0 : 1);
-            if (fmViewModeButton) fmViewModeButton->setText(grid ? "⊞ Grid" : "☰ List");
+            if (fmViewModeButton) fmViewModeButton->setIcon(grid ? icoGrid() : icoList());
         }
         if (s.contains("FileManager/PreviewVisible")) {
             bool vis = s.value("FileManager/PreviewVisible").toBool();
@@ -2579,7 +2647,7 @@ void MainWindow::onFmViewModeToggled()
 {
     fmIsGridMode = !fmIsGridMode;
     fmViewStack->setCurrentIndex(fmIsGridMode ? 0 : 1);
-    fmViewModeButton->setText(fmIsGridMode ? "⊞ Grid" : "≣ List");
+    fmViewModeButton->setIcon(fmIsGridMode ? icoGrid() : icoList());
     // Persist immediately
     QSettings s("AugmentCode", "KAssetManager");
     s.setValue("FileManager/ViewMode", fmIsGridMode);
@@ -2590,7 +2658,9 @@ void MainWindow::onFmThumbnailSizeChanged(int size)
 {
     if (fmGridView) {
         fmGridView->setIconSize(QSize(size, size));
-        fmGridView->setGridSize(QSize(size + 48, size + 64));
+        fmGridView->setGridSize(QSize(size + 24, size + 40));
+        if (auto *d = dynamic_cast<FmItemDelegate*>(fmGridView->itemDelegate())) d->setThumbnailSize(size);
+        fmGridView->reset();
     }
     QSettings s("AugmentCode", "KAssetManager");
     s.setValue("FileManager/GridThumbSize", size);
@@ -2599,19 +2669,36 @@ void MainWindow::onFmThumbnailSizeChanged(int size)
 
 void MainWindow::onAddSelectionToAssetLibrary()
 {
-    // Collect selected file paths from active view
+    // Collect selected file paths from the active File Manager view.
+    // Important: map view indexes through the proxy to the source model before
+    // calling fmDirModel methods, otherwise we may crash.
     QStringList files;
-    if (fmViewStack->currentIndex() == 0) {
-        for (const QModelIndex &idx : fmGridView->selectionModel()->selectedIndexes()) {
-            if (fmDirModel->isDir(idx)) continue;
-            files << fmDirModel->filePath(idx);
+
+    const bool isGrid = (fmViewStack->currentIndex() == 0);
+    if (isGrid) {
+        if (!fmGridView || !fmGridView->selectionModel()) return;
+        const auto indexes = fmGridView->selectionModel()->selectedIndexes();
+        for (const QModelIndex &idx : indexes) {
+            QModelIndex srcIdx = idx;
+            if (fmProxyModel && idx.model() == fmProxyModel)
+                srcIdx = fmProxyModel->mapToSource(idx);
+            if (!srcIdx.isValid()) continue;
+            if (fmDirModel->isDir(srcIdx)) continue;
+            files << fmDirModel->filePath(srcIdx);
         }
     } else {
-        for (const QModelIndex &idx : fmListView->selectionModel()->selectedRows()) {
-            if (fmDirModel->isDir(idx)) continue;
-            files << fmDirModel->filePath(idx);
+        if (!fmListView || !fmListView->selectionModel()) return;
+        const auto rows = fmListView->selectionModel()->selectedRows();
+        for (const QModelIndex &idx : rows) {
+            QModelIndex srcIdx = idx;
+            if (fmProxyModel && idx.model() == fmProxyModel)
+                srcIdx = fmProxyModel->mapToSource(idx);
+            if (!srcIdx.isValid()) continue;
+            if (fmDirModel->isDir(srcIdx)) continue;
+            files << fmDirModel->filePath(srcIdx);
         }
     }
+
     files.removeDuplicates();
     if (!files.isEmpty()) {
         importFiles(files);
@@ -4206,13 +4293,17 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
         if (event->type() == QEvent::DragEnter) {
             QDragEnterEvent *dragEvent = static_cast<QDragEnterEvent*>(event);
             if (dragEvent->mimeData()->hasUrls() || dragEvent->mimeData()->hasFormat("application/x-kasset-asset-ids")) {
-                dragEvent->acceptProposedAction();
+                const bool shift = dragEvent->keyboardModifiers().testFlag(Qt::ShiftModifier);
+                dragEvent->setDropAction(shift ? Qt::MoveAction : Qt::CopyAction);
+                dragEvent->accept();
                 return true;
             }
         } else if (event->type() == QEvent::DragMove) {
             QDragMoveEvent *dragEvent = static_cast<QDragMoveEvent*>(event);
             if (dragEvent->mimeData()->hasUrls() || dragEvent->mimeData()->hasFormat("application/x-kasset-asset-ids")) {
-                dragEvent->acceptProposedAction();
+                const bool shift = dragEvent->keyboardModifiers().testFlag(Qt::ShiftModifier);
+                dragEvent->setDropAction(shift ? Qt::MoveAction : Qt::CopyAction);
+                dragEvent->accept();
                 return true;
             }
         } else if (event->type() == QEvent::Drop) {
@@ -4236,14 +4327,17 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
             }
 
             if (!sources.isEmpty()) {
+                const bool shift = dropEvent->keyboardModifiers().testFlag(Qt::ShiftModifier);
                 // Ensure any preview locks are released before file ops
                 if (fmMediaPlayer) { fmMediaPlayer->stop(); fmMediaPlayer->setSource(QUrl()); }
-                FileOpsQueue::instance().enqueueCopy(sources, destDir);
+                if (shift) FileOpsQueue::instance().enqueueMove(sources, destDir);
+                else FileOpsQueue::instance().enqueueCopy(sources, destDir);
                 if (!fileOpsDialog) fileOpsDialog = new FileOpsProgressDialog(this);
                 fileOpsDialog->show(); fileOpsDialog->raise(); fileOpsDialog->activateWindow();
-                statusBar()->showMessage(QString("Queued %1 item(s) for copy").arg(sources.size()), 3000);
+                statusBar()->showMessage(QString("Queued %1 item(s) for %2").arg(sources.size()).arg(shift ? "move" : "copy"), 3000);
             }
-            dropEvent->acceptProposedAction();
+            dropEvent->setDropAction(dropEvent->keyboardModifiers().testFlag(Qt::ShiftModifier) ? Qt::MoveAction : Qt::CopyAction);
+            dropEvent->accept();
             return true;
         }
     }
@@ -4252,7 +4346,9 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
         if (event->type() == QEvent::DragEnter) {
             QDragEnterEvent *dragEvent = static_cast<QDragEnterEvent*>(event);
             if (dragEvent->mimeData()->hasUrls() || dragEvent->mimeData()->hasFormat("application/x-kasset-asset-ids")) {
-                dragEvent->acceptProposedAction();
+                const bool shift = dragEvent->keyboardModifiers().testFlag(Qt::ShiftModifier);
+                dragEvent->setDropAction(shift ? Qt::MoveAction : Qt::CopyAction);
+                dragEvent->accept();
                 return true;
             }
         } else if (event->type() == QEvent::DragMove) {
@@ -4264,7 +4360,9 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
                 if (idx.isValid()) {
                     fmTree->selectionModel()->select(idx, QItemSelectionModel::ClearAndSelect);
                 }
-                dragEvent->acceptProposedAction();
+                const bool shift = dragEvent->keyboardModifiers().testFlag(Qt::ShiftModifier);
+                dragEvent->setDropAction(shift ? Qt::MoveAction : Qt::CopyAction);
+                dragEvent->accept();
                 return true;
             }
         } else if (event->type() == QEvent::Drop) {
@@ -4291,17 +4389,18 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
                 }
             }
             if (!sources.isEmpty()) {
-                const bool isMove = (dropEvent->source() == fmTree);
+                const bool shift = dropEvent->keyboardModifiers().testFlag(Qt::ShiftModifier);
                 // Ensure any preview locks are released before file ops
                 if (fmMediaPlayer) { fmMediaPlayer->stop(); fmMediaPlayer->setSource(QUrl()); }
-                if (isMove) FileOpsQueue::instance().enqueueMove(sources, destDir);
-                else FileOpsQueue::instance().enqueueCopy(sources, destDir);
+                if (shift) FileOpsQueue::instance().enqueueMove(sources, destDir);
+                else       FileOpsQueue::instance().enqueueCopy(sources, destDir);
                 if (!fileOpsDialog) fileOpsDialog = new FileOpsProgressDialog(this);
                 fileOpsDialog->show(); fileOpsDialog->raise(); fileOpsDialog->activateWindow();
-                statusBar()->showMessage(QString("Queued %1 item(s) for %2").arg(sources.size()).arg(isMove ? "move" : "copy"), 3000);
-                dropEvent->acceptProposedAction();
-                return true;
+                statusBar()->showMessage(QString("Queued %1 item(s) for %2").arg(sources.size()).arg(shift ? "move" : "copy"), 3000);
             }
+            dropEvent->setDropAction(dropEvent->keyboardModifiers().testFlag(Qt::ShiftModifier) ? Qt::MoveAction : Qt::CopyAction);
+            dropEvent->accept();
+            return true;
         }
     }
 
@@ -4687,14 +4786,14 @@ void MainWindow::onViewModeChanged()
 
     if (isGridMode) {
         // Switch to grid mode
-        viewModeButton->setText("⊞ Grid");
+        viewModeButton->setIcon(icoGrid());
         viewStack->setCurrentIndex(0); // Show grid view
         thumbnailSizeSlider->setEnabled(true);
 
         qDebug() << "Switched to Grid view";
     } else {
         // Switch to list mode (table view)
-        viewModeButton->setText("☰ List");
+        viewModeButton->setIcon(icoList());
         viewStack->setCurrentIndex(1); // Show table view
         thumbnailSizeSlider->setEnabled(false);
 
@@ -5396,7 +5495,52 @@ void MainWindow::updateFmPreviewForIndex(const QModelIndex &idx)
             if (f.open(QIODevice::ReadOnly | QIODevice::Text)) {
                 fmCurrentPreviewPath = path;
                 QByteArray data = f.read(2*1024*1024); // cap to 2MB
-                fmTextView->setPlainText(QString::fromUtf8(data));
+
+                auto decodeText = [](const QByteArray &data) -> QString {
+                    if (data.isEmpty()) return QString();
+                    const uchar *b = reinterpret_cast<const uchar*>(data.constData());
+                    const int n = data.size();
+                    // UTF-8 BOM
+                    if (n >= 3 && b[0] == 0xEF && b[1] == 0xBB && b[2] == 0xBF) {
+                        return QString::fromUtf8(reinterpret_cast<const char*>(b + 3), n - 3);
+                    }
+                    // UTF-16 LE BOM
+                    if (n >= 2 && b[0] == 0xFF && b[1] == 0xFE) {
+                        return QString::fromUtf16(reinterpret_cast<const ushort*>(b + 2), (n - 2) / 2);
+                    }
+                    // UTF-16 BE BOM
+                    if (n >= 2 && b[0] == 0xFE && b[1] == 0xFF) {
+                        const int ulen = (n - 2) / 2;
+                        QVector<ushort> buf; buf.resize(ulen);
+                        for (int i = 0; i < ulen; ++i) buf[i] = (ushort(b[2 + 2*i]) << 8) | ushort(b[2 + 2*i + 1]);
+                        return QString::fromUtf16(buf.constData(), ulen);
+                    }
+                    // Heuristic: UTF-16 without BOM (look for lots of NULs at odd/even positions)
+                    const int sample = qMin(n, 4096);
+                    int zeroEven = 0, zeroOdd = 0;
+                    for (int i = 0; i < sample; ++i) {
+                        if (b[i] == 0) { if ((i & 1) == 0) ++zeroEven; else ++zeroOdd; }
+                    }
+                    if ((zeroOdd + zeroEven) > sample / 16) {
+                        const bool le = (zeroOdd > zeroEven);
+                        const int ulen = n / 2;
+                        if (le) {
+                            return QString::fromUtf16(reinterpret_cast<const ushort*>(b), ulen);
+                        } else {
+                            QVector<ushort> buf; buf.resize(ulen);
+                            for (int i = 0; i < ulen; ++i) buf[i] = (ushort(b[2*i]) << 8) | ushort(b[2*i + 1]);
+                            return QString::fromUtf16(buf.constData(), ulen);
+                        }
+                    }
+                    // Default: UTF-8, fallback to local 8-bit if many replacement chars
+                    QString s = QString::fromUtf8(reinterpret_cast<const char*>(b), n);
+                    int bad = 0; const int check = qMin(s.size(), 4096);
+                    for (int i = 0; i < check; ++i) if (s.at(i).unicode() == 0xFFFD) ++bad;
+                    if (bad > check / 16) s = QString::fromLocal8Bit(reinterpret_cast<const char*>(b), n);
+                    return s;
+                };
+
+                fmTextView->setPlainText(decodeText(data));
                 fmTextView->show();
             } else {
                 if (fmTextView) {

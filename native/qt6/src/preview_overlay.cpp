@@ -21,6 +21,8 @@
 #include <QFontDatabase>
 #include <QTextOption>
 
+#include <QVector>
+
 #include "office_preview.h"
 
 #include <QGraphicsSvgItem>
@@ -1329,9 +1331,52 @@ void PreviewOverlay::showText(const QString &filePath)
     QFile f(filePath);
     if (f.open(QIODevice::ReadOnly | QIODevice::Text)) {
         QByteArray data = f.read(2*1024*1024); // cap to 2MB
-        textView->setPlainText(QString::fromUtf8(data));
 
+        auto decodeText = [](const QByteArray &data) -> QString {
+            if (data.isEmpty()) return QString();
+            const uchar *b = reinterpret_cast<const uchar*>(data.constData());
+            const int n = data.size();
+            // UTF-8 BOM
+            if (n >= 3 && b[0] == 0xEF && b[1] == 0xBB && b[2] == 0xBF) {
+                return QString::fromUtf8(reinterpret_cast<const char*>(b + 3), n - 3);
+            }
+            // UTF-16 LE BOM
+            if (n >= 2 && b[0] == 0xFF && b[1] == 0xFE) {
+                return QString::fromUtf16(reinterpret_cast<const ushort*>(b + 2), (n - 2) / 2);
+            }
+            // UTF-16 BE BOM
+            if (n >= 2 && b[0] == 0xFE && b[1] == 0xFF) {
+                const int ulen = (n - 2) / 2;
+                QVector<ushort> buf; buf.resize(ulen);
+                for (int i = 0; i < ulen; ++i) buf[i] = (ushort(b[2 + 2*i]) << 8) | ushort(b[2 + 2*i + 1]);
+                return QString::fromUtf16(buf.constData(), ulen);
+            }
+            // Heuristic: UTF-16 without BOM (look for lots of NULs at odd/even positions)
+            const int sample = qMin(n, 4096);
+            int zeroEven = 0, zeroOdd = 0;
+            for (int i = 0; i < sample; ++i) {
+                if (b[i] == 0) { if ((i & 1) == 0) ++zeroEven; else ++zeroOdd; }
+            }
+            if ((zeroOdd + zeroEven) > sample / 16) {
+                const bool le = (zeroOdd > zeroEven);
+                const int ulen = n / 2;
+                if (le) {
+                    return QString::fromUtf16(reinterpret_cast<const ushort*>(b), ulen);
+                } else {
+                    QVector<ushort> buf; buf.resize(ulen);
+                    for (int i = 0; i < ulen; ++i) buf[i] = (ushort(b[2*i]) << 8) | ushort(b[2*i + 1]);
+                    return QString::fromUtf16(buf.constData(), ulen);
+                }
+            }
+            // Default: UTF-8, fallback to local 8-bit if many replacement chars
+            QString s = QString::fromUtf8(reinterpret_cast<const char*>(b), n);
+            int bad = 0; const int check = qMin(s.size(), 4096);
+            for (int i = 0; i < check; ++i) if (s.at(i).unicode() == 0xFFFD) ++bad;
+            if (bad > check / 16) s = QString::fromLocal8Bit(reinterpret_cast<const char*>(b), n);
+            return s;
+        };
 
+        textView->setPlainText(decodeText(data));
     } else {
         textView->setPlainText("Preview not available");
     }
