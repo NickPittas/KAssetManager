@@ -50,6 +50,10 @@ public:
     // Asset ops
     int upsertAsset(const QString& filePath);
     int upsertSequence(const QString& sequencePattern, int startFrame, int endFrame, int frameCount, const QString& firstFramePath);
+    // Fast path for bulk imports: metadata only (no checksum, no versioning, no signals)
+    int insertAssetMetadataFast(const QString& filePath, int folderId);
+    // Fast path for image sequences during bulk import (no signals)
+    int upsertSequenceInFolderFast(const QString& sequencePattern, int startFrame, int endFrame, int frameCount, const QString& firstFramePath, int folderId);
     bool setAssetFolder(int assetId, int folderId);
     bool removeAssets(const QList<int>& assetIds);
     bool setAssetsRating(const QList<int>& assetIds, int rating); // 0-5, -1 to clear
@@ -75,6 +79,13 @@ public:
     bool exportDatabase(const QString& filePath);
     bool importDatabase(const QString& filePath);
     bool clearAllData();
+
+    // Explicit notification helpers (safe wrappers for emitting signals)
+    void notifyAssetsChanged(int folderId);
+    void notifyFoldersChanged();
+    void notifyTagsChanged();
+    void notifyProjectFoldersChanged();
+    void notifyAssetVersionsChanged(int assetId);
 
 signals:
     void foldersChanged();

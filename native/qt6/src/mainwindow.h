@@ -244,6 +244,10 @@ private:
     // Debounced updater for visible-only thumbnail progress
     QTimer visibleThumbTimer;
 
+    // Debounce for folder selection in Asset Manager
+    QTimer folderSelectTimer;
+    int pendingFolderId = -1;
+
     // Import progress dialog
     ImportProgressDialog *importProgressDialog;
 

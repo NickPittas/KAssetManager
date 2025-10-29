@@ -14,6 +14,8 @@ KAsset Manager is a native Windows desktop application built with Qt 6 that prov
 - **Drag-and-Drop Import** - Import files and folders with a simple drag
 - **Batch Operations** - Move, tag, and rate multiple assets at once
 
+- **Add to Library (Explorer-style)** - From File Manager, add files or entire folders; when folders are selected, their subfolder hierarchy is preserved and recreated in the Asset Manager
+
 #### 🏷️ **Tagging & Rating**
 - **Multi-Tag Support** - Assign multiple tags to each asset
 - **Tag Management** - Create, rename, delete, and merge tags
@@ -26,12 +28,16 @@ KAsset Manager is a native Windows desktop application built with Qt 6 that prov
 - **Sortable Views** - Sort by name, type, size, date, or rating
 - **Grid & List Views** - Switch between thumbnail grid and detailed list
 
+- **Folders-first Sorting** - In File Manager (grid and list), folders are always listed before files regardless of sort column or order
+
 #### 👁️ **Preview & Playback**
 - **Full-Screen Preview** - View images, videos, and sequences
 - **Image Zoom & Pan** - Inspect images in detail
 - **Video Playback** - Play videos with timeline and volume controls
 - **Image Sequences** - Automatic detection and playback at 24fps
 - **HDR/EXR Support** - Color space selection (Linear, sRGB, Rec.709)
+
+- **Focus Restoration** - When closing full-size preview, selection and keyboard focus return to the previously selected item so you can continue navigating with arrow keys instantly
 
 #### 🚀 **Performance**
 - **Multi-threaded Thumbnails** - Fast thumbnail generation (2-8 threads)
@@ -60,6 +66,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-windows.ps1 
 ### Using the Application
 
 1. **Import Assets** - Drag and drop files or folders onto the main window
+   - Or select files/folders in File Manager and click "Add to Library" (folders preserve their hierarchy in the Asset Manager)
+
 2. **Navigate Folders** - Click folders in the left tree to view their contents
 3. **Select Assets** - Click to select, Ctrl+Click to multi-select, Shift+Click for range
 4. **Tag Assets** - Right-click assets and choose "Assign Tag"

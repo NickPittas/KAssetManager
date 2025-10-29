@@ -321,6 +321,103 @@ int DB::upsertSequence(const QString& sequencePattern, int startFrame, int endFr
     return newId;
 }
 
+
+int DB::insertAssetMetadataFast(const QString& filePath, int folderId)
+{
+    QFileInfo fi(filePath);
+    if (!fi.exists()) {
+        qDebug() << "DB::insertAssetMetadataFast: file does not exist:" << filePath;
+        return 0;
+    }
+    const QString absPath = fi.absoluteFilePath();
+
+    // Check if already exists
+    QSqlQuery sel(m_db);
+    sel.prepare("SELECT id FROM assets WHERE file_path=?");
+    sel.addBindValue(absPath);
+    if (sel.exec() && sel.next()) {
+        int existingId = sel.value(0).toInt();
+        QSqlQuery upd(m_db);
+        upd.prepare("UPDATE assets SET file_name=?, virtual_folder_id=?, file_size=?, updated_at=CURRENT_TIMESTAMP WHERE id=?");
+        upd.addBindValue(fi.fileName());
+        upd.addBindValue(folderId<=0?m_rootId:folderId);
+        upd.addBindValue((qint64)fi.size());
+        upd.addBindValue(existingId);
+        if (!upd.exec()) {
+            qWarning() << "DB::insertAssetMetadataFast: UPDATE failed:" << upd.lastError();
+        }
+        return existingId;
+    }
+
+    // New asset: insert minimal metadata (no checksum, no versioning)
+    QSqlQuery ins(m_db);
+    ins.prepare("INSERT INTO assets(file_path,file_name,virtual_folder_id,file_size,checksum,is_sequence) VALUES(?,?,?,?,NULL,0)");
+    ins.addBindValue(absPath);
+    ins.addBindValue(fi.fileName());
+    ins.addBindValue(folderId<=0?m_rootId:folderId);
+    ins.addBindValue((qint64)fi.size());
+    if (!ins.exec()) {
+        qWarning() << "DB::insertAssetMetadataFast: INSERT failed:" << ins.lastError();
+        return 0;
+    }
+    return ins.lastInsertId().toInt();
+}
+
+int DB::upsertSequenceInFolderFast(const QString& sequencePattern, int startFrame, int endFrame, int frameCount, const QString& firstFramePath, int folderId)
+{
+    QFileInfo fi(firstFramePath);
+    if (!fi.exists()) {
+        qDebug() << "DB::upsertSequenceInFolderFast: first frame does not exist:" << firstFramePath;
+        return 0;
+    }
+
+    // Check if sequence already exists
+    QSqlQuery sel(m_db);
+    sel.prepare("SELECT id FROM assets WHERE sequence_pattern=? AND is_sequence=1");
+    sel.addBindValue(sequencePattern);
+    if (sel.exec() && sel.next()) {
+        int existingId = sel.value(0).toInt();
+        QSqlQuery upd(m_db);
+        upd.prepare("UPDATE assets SET file_path=?, file_name=?, virtual_folder_id=?, file_size=?, sequence_start_frame=?, sequence_end_frame=?, sequence_frame_count=?, updated_at=CURRENT_TIMESTAMP WHERE id=?");
+        upd.addBindValue(fi.absoluteFilePath());
+        upd.addBindValue(sequencePattern);
+        upd.addBindValue(folderId<=0?m_rootId:folderId);
+        upd.addBindValue((qint64)fi.size());
+        upd.addBindValue(startFrame);
+        upd.addBindValue(endFrame);
+        upd.addBindValue(frameCount);
+        upd.addBindValue(existingId);
+        if (!upd.exec()) {
+            qWarning() << "DB::upsertSequenceInFolderFast: UPDATE failed:" << upd.lastError();
+        }
+        return existingId;
+    }
+
+    QSqlQuery ins(m_db);
+    ins.prepare("INSERT INTO assets(file_path,file_name,virtual_folder_id,file_size,is_sequence,sequence_pattern,sequence_start_frame,sequence_end_frame,sequence_frame_count) VALUES(?,?,?,?,1,?,?,?,?)");
+    ins.addBindValue(fi.absoluteFilePath());
+    ins.addBindValue(sequencePattern);
+    ins.addBindValue(folderId<=0?m_rootId:folderId);
+    ins.addBindValue((qint64)fi.size());
+    ins.addBindValue(sequencePattern);
+    ins.addBindValue(startFrame);
+    ins.addBindValue(endFrame);
+    ins.addBindValue(frameCount);
+
+    if (!ins.exec()) {
+        qWarning() << "DB::upsertSequenceInFolderFast: INSERT failed:" << ins.lastError();
+        return 0;
+    }
+    return ins.lastInsertId().toInt();
+}
+
+void DB::notifyAssetsChanged(int folderId){ emit assetsChanged(folderId); }
+void DB::notifyFoldersChanged(){ emit foldersChanged(); }
+void DB::notifyTagsChanged(){ emit tagsChanged(); }
+void DB::notifyProjectFoldersChanged(){ emit projectFoldersChanged(); }
+void DB::notifyAssetVersionsChanged(int assetId){ emit assetVersionsChanged(assetId); }
+
+
 bool DB::setAssetFolder(int assetId, int folderId){
     // Get old folder ID first
     QSqlQuery sel(m_db);

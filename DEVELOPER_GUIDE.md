@@ -441,7 +441,7 @@ db.commit();
 
 **Paint Method:**
 ```cpp
-void paint(QPainter *painter, const QStyleOptionViewItem &option, 
+void paint(QPainter *painter, const QStyleOptionViewItem &option,
            const QModelIndex &index) const override
 {
     // 1. Load thumbnail from cache or disk
@@ -490,7 +490,7 @@ void mousePressEvent(QMouseEvent *event) {
 **Key Settings:**
 ```cmake
 cmake_minimum_required(VERSION 3.21)
-project(KAssetManagerQt VERSION 0.1.0 LANGUAGES CXX)
+project(KAssetManagerQt VERSION 0.2.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -659,7 +659,7 @@ qCritical() << "Critical error";
 
 **Display user-friendly errors:**
 ```cpp
-QMessageBox::critical(this, "Error", 
+QMessageBox::critical(this, "Error",
     "Failed to import files. Please check file permissions.");
 ```
 
@@ -682,6 +682,8 @@ QMessageBox::critical(this, "Error",
 - [ ] Rename folder
 - [ ] Delete folder
 - [ ] Move assets between folders
+
+- [ ] File Manager: Double-clicking a folder in the right pane expands/selects the same folder in the left tree; folders-first sorting keeps folders above files for all sort columns and orders
 
 **Selection:**
 - [ ] Single select
@@ -708,6 +710,8 @@ QMessageBox::critical(this, "Error",
 - [ ] Navigate with arrows
 - [ ] Zoom/pan image
 - [ ] Play/pause video
+
+- [ ] On closing full-size preview, focus/selection return to the item you opened from (Asset Manager or File Manager); arrow keys work immediately
 
 **Performance:**
 - [ ] Import 100+ files

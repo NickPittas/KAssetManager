@@ -197,7 +197,7 @@ target_compile_definitions(kassetmanagerqt PRIVATE HAVE_MINIZIP_NG)
 # Windows-specific: hide console in release
 if (WIN32)
   set_target_properties(kassetmanagerqt PROPERTIES WIN32_EXECUTABLE TRUE)
-  target_link_libraries(kassetmanagerqt PRIVATE Ole32 Shell32)
+  target_link_libraries(kassetmanagerqt PRIVATE Ole32 Shell32 DbgHelp Psapi)
 endif()
 # Install rules
 install(TARGETS kassetmanagerqt RUNTIME DESTINATION bin)

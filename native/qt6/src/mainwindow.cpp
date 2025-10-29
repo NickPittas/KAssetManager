@@ -38,6 +38,20 @@
 #include <QMimeData>
 #include <QUrl>
 #include <QProgressDialog>
+#ifdef Q_OS_WIN
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <psapi.h>
+static size_t currentWorkingSetMB() {
+    PROCESS_MEMORY_COUNTERS_EX pmc;
+    if (GetProcessMemoryInfo(GetCurrentProcess(), (PROCESS_MEMORY_COUNTERS*)&pmc, sizeof(pmc)))
+        return static_cast<size_t>(pmc.WorkingSetSize / (1024ULL * 1024ULL));
+    return 0;
+}
+#endif
+
 #include <QProgressBar>
 #include <QDirIterator>
 #include <QStatusBar>
@@ -2794,8 +2808,29 @@ void MainWindow::onAddSelectionToAssetLibrary()
 }
 
 
+
 void MainWindow::setupConnections()
 {
+    // Debounced folder selection for Asset Manager
+    folderSelectTimer.setSingleShot(true);
+    connect(&folderSelectTimer, &QTimer::timeout, this, [this]{
+        const int fid = pendingFolderId;
+        if (fid <= 0) return;
+        // Cancel any ongoing thumbnail work and stop any preview playback
+        ThumbnailGenerator::instance().beginNewSession();
+        if (previewOverlay) previewOverlay->stopPlayback();
+        // Apply folder change
+        assetsModel->setFolderId(fid);
+        // Log memory usage before/after applying folder change
+#ifdef Q_OS_WIN
+        qDebug() << "[NAV] Folder change applied to id=" << fid << ", working set (MB)=" << (qulonglong)currentWorkingSetMB();
+        QTimer::singleShot(1000, this, [](){ qDebug() << "[NAV] Post-change working set (MB)=" << (qulonglong)currentWorkingSetMB(); });
+#endif
+
+        clearSelection();
+        updateInfoPanel();
+    });
+
     connect(folderTreeView, &QTreeView::clicked, this, &MainWindow::onFolderSelected);
     connect(folderTreeView, &QTreeView::customContextMenuRequested, this, &MainWindow::onFolderContextMenu);
 
@@ -2856,43 +2891,20 @@ void MainWindow::setupConnections()
 
 void MainWindow::onFolderSelected(const QModelIndex &index)
 {
-    qDebug() << "===== MainWindow::onFolderSelected - START";
-
     if (!index.isValid()) {
         qWarning() << "MainWindow::onFolderSelected - Invalid index";
         return;
     }
 
     int folderId = index.data(VirtualFolderTreeModel::IdRole).toInt();
-    QString folderName = index.data(VirtualFolderTreeModel::NameRole).toString();
-    qDebug() << "MainWindow::onFolderSelected - Folder ID:" << folderId << "Name:" << folderName;
-
     if (folderId <= 0) {
         qWarning() << "MainWindow::onFolderSelected - Invalid folder ID:" << folderId;
         return;
     }
 
-    try {
-        qDebug() << "MainWindow::onFolderSelected - Calling assetsModel->setFolderId()...";
-        assetsModel->setFolderId(folderId);
-        qDebug() << "MainWindow::onFolderSelected - setFolderId() completed";
-
-        qDebug() << "MainWindow::onFolderSelected - Clearing selection...";
-        clearSelection();
-        qDebug() << "MainWindow::onFolderSelected - Selection cleared";
-
-        qDebug() << "MainWindow::onFolderSelected - Updating info panel...";
-        updateInfoPanel();
-        qDebug() << "MainWindow::onFolderSelected - Info panel updated";
-
-        qDebug() << "===== MainWindow::onFolderSelected - SUCCESS";
-    } catch (const std::exception& e) {
-        qCritical() << "===== MainWindow::onFolderSelected - EXCEPTION:" << e.what();
-        QMessageBox::critical(this, "Error", QString("Failed to load folder: %1").arg(e.what()));
-    } catch (...) {
-        qCritical() << "===== MainWindow::onFolderSelected - UNKNOWN EXCEPTION";
-        QMessageBox::critical(this, "Error", "Failed to load folder: Unknown error");
-    }
+    // Debounce rapid selections; actual load happens on timer to allow cleanup/cancel
+    pendingFolderId = folderId;
+    folderSelectTimer.start(150);
 }
 
 void MainWindow::onAssetSelectionChanged()
@@ -2929,29 +2941,6 @@ void MainWindow::onAssetContextMenu(const QPoint &pos)
         QAction *showInExplorerAction = menu.addAction("Show in Explorer");
         menu.addSeparator();
 
-        // Move to Folder submenu
-        QMenu *moveToMenu = menu.addMenu("Move to Folder");
-        moveToMenu->setStyleSheet(menu.styleSheet());
-
-        // Get all folders from the model
-        QList<QPair<int, QString>> folders;
-        std::function<void(const QModelIndex&, int)> collectFolders = [&](const QModelIndex& parent, int depth) {
-            int rowCount = folderModel->rowCount(parent);
-            for (int i = 0; i < rowCount; ++i) {
-                QModelIndex idx = folderModel->index(i, 0, parent);
-                int folderId = folderModel->data(idx, VirtualFolderTreeModel::IdRole).toInt();
-                QString folderName = folderModel->data(idx, Qt::DisplayRole).toString();
-                QString indent = QString("  ").repeated(depth);
-                folders.append({folderId, indent + folderName});
-                collectFolders(idx, depth + 1);
-            }
-        };
-        collectFolders(QModelIndex(), 0);
-
-        for (const auto& folder : folders) {
-            QAction *folderAction = moveToMenu->addAction(folder.second);
-            folderAction->setData(folder.first);
-        }
 
         // Assign Tag submenu
         QMenu *assignTagMenu = menu.addMenu("Assign Tag");
@@ -2999,87 +2988,6 @@ void MainWindow::onAssetContextMenu(const QPoint &pos)
             QStringList args;
             args << "/select," + QDir::toNativeSeparators(fileInfo.absoluteFilePath());
             QProcess::startDetached("explorer", args);
-        } else if (selected && moveToMenu->actions().contains(selected)) {
-            // Move to folder action
-            int targetFolderId = selected->data().toInt();
-            QSet<int> selectedIds = getSelectedAssetIds();
-
-            // Check if locked and if move is allowed
-            if (assetsLocked) {
-                // Check if all assets and target are in the same project folder
-                bool canMove = true;
-                int sourceProjectFolderId = -1;
-                int targetProjectFolderId = -1;
-
-                // Get target folder's project folder ID
-                QModelIndex targetIdx = QModelIndex();
-                for (int row = 0; row < folderModel->rowCount(QModelIndex()); ++row) {
-                    QModelIndex idx = folderModel->index(row, 0, QModelIndex());
-                    if (folderModel->data(idx, VirtualFolderTreeModel::IdRole).toInt() == targetFolderId) {
-                        targetIdx = idx;
-                        break;
-                    }
-                }
-
-                // Walk up to find if target is in a project folder
-                QModelIndex current = targetIdx;
-                while (current.isValid()) {
-                    if (folderModel->data(current, VirtualFolderTreeModel::IsProjectFolderRole).toBool()) {
-                        targetProjectFolderId = folderModel->data(current, VirtualFolderTreeModel::ProjectFolderIdRole).toInt();
-                        break;
-                    }
-                    current = folderModel->parent(current);
-                }
-
-                // Check source assets
-                for (int assetId : selectedIds) {
-                    // Get asset's current folder
-                    QSqlQuery q(DB::instance().database());
-                    q.prepare("SELECT virtual_folder_id FROM assets WHERE id=?");
-                    q.addBindValue(assetId);
-                    if (q.exec() && q.next()) {
-                        int assetFolderId = q.value(0).toInt();
-
-                        // Find if asset is in a project folder
-                        int assetProjectFolderId = -1;
-                        for (int row = 0; row < folderModel->rowCount(QModelIndex()); ++row) {
-                            QModelIndex idx = folderModel->index(row, 0, QModelIndex());
-                            if (folderModel->data(idx, VirtualFolderTreeModel::IdRole).toInt() == assetFolderId) {
-                                QModelIndex cur = idx;
-                                while (cur.isValid()) {
-                                    if (folderModel->data(cur, VirtualFolderTreeModel::IsProjectFolderRole).toBool()) {
-                                        assetProjectFolderId = folderModel->data(cur, VirtualFolderTreeModel::ProjectFolderIdRole).toInt();
-                                        break;
-                                    }
-                                    cur = folderModel->parent(cur);
-                                }
-                                break;
-                            }
-                        }
-
-                        if (sourceProjectFolderId == -1) {
-                            sourceProjectFolderId = assetProjectFolderId;
-                        } else if (sourceProjectFolderId != assetProjectFolderId) {
-                            canMove = false;
-                            break;
-                        }
-                    }
-                }
-
-                if (!canMove || (sourceProjectFolderId != -1 && sourceProjectFolderId != targetProjectFolderId)) {
-                    QMessageBox::warning(this, "Move Restricted",
-                        "Assets are locked. You can only move assets within their project folder.\n"
-                        "Uncheck the 'Lock Assets' checkbox to move assets freely.");
-                    return;
-                }
-            }
-
-            for (int assetId : selectedIds) {
-                DB::instance().setAssetFolder(assetId, targetFolderId);
-            }
-
-            assetsModel->reload();
-            statusBar()->showMessage(QString("Moved %1 asset(s) to folder").arg(selectedIds.size()), 3000);
         } else if (selected && assignTagMenu->actions().contains(selected)) {
             // Assign tag action
             int tagId = selected->data().toInt();

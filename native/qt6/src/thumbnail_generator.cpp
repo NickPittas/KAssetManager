@@ -203,6 +203,18 @@ bool VideoFFmpegTask::decodeAndSave()
         avformat_close_input(&fmt);
         return false;
     }
+    // Seek to the middle of the video before decoding to get a representative frame
+    if (fmt->duration > 0) {
+        int64_t mid = fmt->duration / 2; // in AV_TIME_BASE units
+        int64_t ts = av_rescale_q(mid, AV_TIME_BASE_Q, vs->time_base);
+        if (av_seek_frame(fmt, vIdx, ts, AVSEEK_FLAG_BACKWARD) >= 0) {
+            avcodec_flush_buffers(ctx);
+            qDebug() << "[VideoFFmpegTask] Sought to middle timestamp:" << ts;
+        } else {
+            qWarning() << "[VideoFFmpegTask] av_seek_frame to middle failed; decoding from current position";
+        }
+    }
+
 
     AVPacket* pkt = av_packet_alloc();
     AVFrame* frame = av_frame_alloc();
@@ -360,6 +372,8 @@ void VideoThumbnailGenerator::startFfmpegFallback()
 
 void VideoThumbnailGenerator::start() {
     // Fast-cancel if session changed
+    if (!m_player) { qWarning() << "[VideoThumbnailGenerator] Player null"; return; }
+
     if (m_generator->m_sessionId.load() != m_sessionId) { deleteLater(); return; }
     qDebug() << "[VideoThumbnailGenerator] Starting async video thumbnail generation for:" << m_filePath;
     // Track as active for cancellation
@@ -372,19 +386,23 @@ void VideoThumbnailGenerator::start() {
 }
 
 void VideoThumbnailGenerator::onMediaStatusChanged() {
+    if (!m_player) { qWarning() << "[VideoThumbnailGenerator] onMediaStatusChanged: Player null"; return; }
+
     QMediaPlayer::MediaStatus status = m_player->mediaStatus();
     qDebug() << "[VideoThumbnailGenerator] Media status changed:" << status;
 
     if (status == QMediaPlayer::LoadedMedia) {
         qint64 duration = m_player->duration();
-        qint64 seekPos = qMin(1000LL, duration / 10);
-        qDebug() << "[VideoThumbnailGenerator] Video loaded, duration:" << duration << "ms, seeking to:" << seekPos << "ms";
+        qint64 seekPos = duration > 0 ? (duration / 2) : 0;
+        qDebug() << "[VideoThumbnailGenerator] Video loaded, duration:" << duration << "ms, seeking to middle:" << seekPos << "ms";
         m_player->setPosition(seekPos);
         m_player->play();
     }
 }
 
 void VideoThumbnailGenerator::onVideoFrameChanged() {
+    if (!m_videoSink) { qWarning() << "[VideoThumbnailGenerator] onVideoFrameChanged: VideoSink null"; return; }
+
     if (m_frameReceived) return;
     if (m_generator->m_sessionId.load() != m_sessionId) { deleteLater(); return; }
 
