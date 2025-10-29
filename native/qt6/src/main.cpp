@@ -94,11 +94,13 @@ int main(int argc, char *argv[])
         qInstallMessageHandler(messageHandler);
     }
 
+    LogManager::instance().addLog("[MAIN] Message handler configured; app dir=" + appDir);
     // Initialize singletons
     auto& logManager = LogManager::instance();
     logManager.addLog("Application started");
     auto& progressManager = ProgressManager::instance();
     auto& thumbGen = ThumbnailGenerator::instance();
+    LogManager::instance().addLog("[MAIN] Before DB init");
 
     // Init local SQLite DB under portable data folder
     const QString dataDir = appDir + "/data";
@@ -108,12 +110,19 @@ int main(int argc, char *argv[])
         qCritical() << "Failed to initialize database at" << dbPath;
         return -1;
     }
+    LogManager::instance().addLog("[MAIN] DB init ok");
 
+    LogManager::instance().addLog("[MAIN] Creating MainWindow");
     // Create and show main window
     MainWindow mainWindow;
+    LogManager::instance().addLog("[MAIN] MainWindow constructed");
     mainWindow.show();
+    LogManager::instance().addLog("[MAIN] MainWindow shown");
+    QObject::connect(&app, &QCoreApplication::aboutToQuit, []{ LogManager::instance().addLog("[MAIN] aboutToQuit"); });
+    QTimer::singleShot(0, []{ LogManager::instance().addLog("[MAIN] Event loop entered"); });
 
     int rc = app.exec();
+    LogManager::instance().addLog(QString("[MAIN] Event loop exited with code %1").arg(rc));
 
     // Cleanup
     if (logFile) {

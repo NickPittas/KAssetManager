@@ -16,9 +16,9 @@ SettingsDialog::SettingsDialog(QWidget* parent)
 {
     setWindowTitle("Settings");
     setMinimumSize(600, 500);
-    
+
     QVBoxLayout* mainLayout = new QVBoxLayout(this);
-    
+
     tabWidget = new QTabWidget(this);
     tabWidget->setStyleSheet(
         "QTabWidget::pane { border: 1px solid #333; background-color: #1a1a1a; }"
@@ -26,19 +26,19 @@ SettingsDialog::SettingsDialog(QWidget* parent)
         "QTabBar::tab:selected { background-color: #1a1a1a; border-bottom-color: #1a1a1a; }"
         "QTabBar::tab:hover { background-color: #333; }"
     );
-    
+
     setupGeneralTab();
     setupCacheTab();
     setupViewTab();
     setupShortcutsTab();
     setupAboutTab();
-    
+
     mainLayout->addWidget(tabWidget);
-    
+
     // Buttons
     QHBoxLayout* buttonLayout = new QHBoxLayout();
     buttonLayout->addStretch();
-    
+
     QPushButton* saveBtn = new QPushButton("Save", this);
     saveBtn->setStyleSheet(
         "QPushButton { background-color: #58a6ff; color: #ffffff; border: none; padding: 8px 24px; border-radius: 4px; }"
@@ -46,7 +46,7 @@ SettingsDialog::SettingsDialog(QWidget* parent)
     );
     connect(saveBtn, &QPushButton::clicked, this, &SettingsDialog::saveSettings);
     buttonLayout->addWidget(saveBtn);
-    
+
     QPushButton* closeBtn = new QPushButton("Close", this);
     closeBtn->setStyleSheet(
         "QPushButton { background-color: #333; color: #ffffff; border: none; padding: 8px 24px; border-radius: 4px; }"
@@ -54,9 +54,9 @@ SettingsDialog::SettingsDialog(QWidget* parent)
     );
     connect(closeBtn, &QPushButton::clicked, this, &QDialog::accept);
     buttonLayout->addWidget(closeBtn);
-    
+
     mainLayout->addLayout(buttonLayout);
-    
+
     setStyleSheet("QDialog { background-color: #121212; color: #ffffff; }");
 }
 
@@ -66,16 +66,16 @@ void SettingsDialog::setupGeneralTab()
     QVBoxLayout* layout = new QVBoxLayout(generalTab);
     layout->setContentsMargins(20, 20, 20, 20);
     layout->setSpacing(15);
-    
+
     // Theme selection
     QGroupBox* themeGroup = new QGroupBox("Appearance", generalTab);
     themeGroup->setStyleSheet("QGroupBox { color: #ffffff; border: 1px solid #333; padding: 10px; margin-top: 10px; } QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; }");
     QVBoxLayout* themeLayout = new QVBoxLayout(themeGroup);
-    
+
     QLabel* themeLabel = new QLabel("Theme:", themeGroup);
     themeLabel->setStyleSheet("color: #ffffff;");
     themeLayout->addWidget(themeLabel);
-    
+
     themeCombo = new QComboBox(themeGroup);
     themeCombo->addItems({"Dark (Default)", "Light (Not Implemented)"});
     themeCombo->setCurrentIndex(0);
@@ -83,10 +83,10 @@ void SettingsDialog::setupGeneralTab()
         "QComboBox { background-color: #2a2a2a; color: #ffffff; border: 1px solid #333; padding: 6px; border-radius: 4px; }"
     );
     themeLayout->addWidget(themeCombo);
-    
+
     layout->addWidget(themeGroup);
     layout->addStretch();
-    
+
     tabWidget->addTab(generalTab, "General");
 }
 
@@ -96,12 +96,12 @@ void SettingsDialog::setupCacheTab()
     QVBoxLayout* layout = new QVBoxLayout(cacheTab);
     layout->setContentsMargins(20, 20, 20, 20);
     layout->setSpacing(15);
-    
+
     // Cache info
     QGroupBox* cacheGroup = new QGroupBox("Thumbnail Cache", cacheTab);
     cacheGroup->setStyleSheet("QGroupBox { color: #ffffff; border: 1px solid #333; padding: 10px; margin-top: 10px; } QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; }");
     QVBoxLayout* cacheLayout = new QVBoxLayout(cacheGroup);
-    
+
     // Calculate cache size
     QString cacheDir = QStandardPaths::writableLocation(QStandardPaths::CacheLocation) + "/thumbnails";
     qint64 cacheSize = 0;
@@ -111,11 +111,11 @@ void SettingsDialog::setupCacheTab()
         cacheSize += QFileInfo(it.filePath()).size();
     }
     double cacheSizeMB = cacheSize / (1024.0 * 1024.0);
-    
+
     cacheSizeLabel = new QLabel(QString("Current cache size: %1 MB").arg(cacheSizeMB, 0, 'f', 2), cacheGroup);
     cacheSizeLabel->setStyleSheet("color: #ffffff;");
     cacheLayout->addWidget(cacheSizeLabel);
-    
+
     clearCacheBtn = new QPushButton("Clear Thumbnail Cache", cacheGroup);
     clearCacheBtn->setStyleSheet(
         "QPushButton { background-color: #d73a49; color: #ffffff; border: none; padding: 8px 16px; border-radius: 4px; }"
@@ -123,14 +123,14 @@ void SettingsDialog::setupCacheTab()
     );
     connect(clearCacheBtn, &QPushButton::clicked, this, &SettingsDialog::onClearCache);
     cacheLayout->addWidget(clearCacheBtn);
-    
+
     layout->addWidget(cacheGroup);
-    
+
     // Database management
     QGroupBox* dbGroup = new QGroupBox("Database", cacheTab);
     dbGroup->setStyleSheet("QGroupBox { color: #ffffff; border: 1px solid #333; padding: 10px; margin-top: 10px; } QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; }");
     QVBoxLayout* dbLayout = new QVBoxLayout(dbGroup);
-    
+
     QPushButton* exportDbBtn = new QPushButton("Export Database", dbGroup);
     exportDbBtn->setStyleSheet(
         "QPushButton { background-color: #58a6ff; color: #ffffff; border: none; padding: 8px 16px; border-radius: 4px; }"
@@ -138,7 +138,7 @@ void SettingsDialog::setupCacheTab()
     );
     connect(exportDbBtn, &QPushButton::clicked, this, &SettingsDialog::onExportDatabase);
     dbLayout->addWidget(exportDbBtn);
-    
+
     QPushButton* importDbBtn = new QPushButton("Import Database", dbGroup);
     importDbBtn->setStyleSheet(
         "QPushButton { background-color: #58a6ff; color: #ffffff; border: none; padding: 8px 16px; border-radius: 4px; }"
@@ -146,7 +146,7 @@ void SettingsDialog::setupCacheTab()
     );
     connect(importDbBtn, &QPushButton::clicked, this, &SettingsDialog::onImportDatabase);
     dbLayout->addWidget(importDbBtn);
-    
+
     QPushButton* clearDbBtn = new QPushButton("Clear Database (Danger!)", dbGroup);
     clearDbBtn->setStyleSheet(
         "QPushButton { background-color: #d73a49; color: #ffffff; border: none; padding: 8px 16px; border-radius: 4px; }"
@@ -154,10 +154,10 @@ void SettingsDialog::setupCacheTab()
     );
     connect(clearDbBtn, &QPushButton::clicked, this, &SettingsDialog::onClearDatabase);
     dbLayout->addWidget(clearDbBtn);
-    
+
     layout->addWidget(dbGroup);
     layout->addStretch();
-    
+
     tabWidget->addTab(cacheTab, "Cache & Database");
 }
 
@@ -167,16 +167,16 @@ void SettingsDialog::setupViewTab()
     QVBoxLayout* layout = new QVBoxLayout(viewTab);
     layout->setContentsMargins(20, 20, 20, 20);
     layout->setSpacing(15);
-    
+
     // View options
     QGroupBox* viewGroup = new QGroupBox("View Options", viewTab);
     viewGroup->setStyleSheet("QGroupBox { color: #ffffff; border: 1px solid #333; padding: 10px; margin-top: 10px; } QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; }");
     QVBoxLayout* viewLayout = new QVBoxLayout(viewGroup);
-    
+
     QLabel* thumbnailLabel = new QLabel("Thumbnail Size:", viewGroup);
     thumbnailLabel->setStyleSheet("color: #ffffff;");
     viewLayout->addWidget(thumbnailLabel);
-    
+
     thumbnailSizeSpin = new QSpinBox(viewGroup);
     thumbnailSizeSpin->setRange(64, 512);
     thumbnailSizeSpin->setValue(200);
@@ -185,20 +185,20 @@ void SettingsDialog::setupViewTab()
         "QSpinBox { background-color: #2a2a2a; color: #ffffff; border: 1px solid #333; padding: 6px; border-radius: 4px; }"
     );
     viewLayout->addWidget(thumbnailSizeSpin);
-    
+
     showFileExtensionsCheck = new QCheckBox("Show file extensions", viewGroup);
     showFileExtensionsCheck->setChecked(true);
     showFileExtensionsCheck->setStyleSheet("QCheckBox { color: #ffffff; }");
     viewLayout->addWidget(showFileExtensionsCheck);
-    
+
     showSequenceOverlayCheck = new QCheckBox("Show sequence overlay badges", viewGroup);
     showSequenceOverlayCheck->setChecked(true);
     showSequenceOverlayCheck->setStyleSheet("QCheckBox { color: #ffffff; }");
     viewLayout->addWidget(showSequenceOverlayCheck);
-    
+
     layout->addWidget(viewGroup);
     layout->addStretch();
-    
+
     tabWidget->addTab(viewTab, "View");
 }
 
@@ -303,26 +303,26 @@ void SettingsDialog::setupAboutTab()
     QVBoxLayout* layout = new QVBoxLayout(aboutTab);
     layout->setContentsMargins(20, 20, 20, 20);
     layout->setSpacing(15);
-    
+
     QLabel* appName = new QLabel("KAsset Manager", aboutTab);
     appName->setStyleSheet("font-size: 18px; font-weight: bold; color: #ffffff;");
     appName->setAlignment(Qt::AlignCenter);
     layout->addWidget(appName);
-    
+
     versionLabel = new QLabel("Version 0.1.0", aboutTab);
     versionLabel->setStyleSheet("color: #999; font-size: 12px;");
     versionLabel->setAlignment(Qt::AlignCenter);
     layout->addWidget(versionLabel);
-    
+
     qtVersionLabel = new QLabel(QString("Built with Qt %1").arg(QT_VERSION_STR), aboutTab);
     qtVersionLabel->setStyleSheet("color: #999; font-size: 12px;");
     qtVersionLabel->setAlignment(Qt::AlignCenter);
     layout->addWidget(qtVersionLabel);
-    
+
     QLabel* licensesTitle = new QLabel("Third-Party Licenses", aboutTab);
     licensesTitle->setStyleSheet("font-size: 14px; font-weight: bold; color: #ffffff; margin-top: 20px;");
     layout->addWidget(licensesTitle);
-    
+
     licensesText = new QTextEdit(aboutTab);
     licensesText->setReadOnly(true);
     licensesText->setStyleSheet(
@@ -340,7 +340,7 @@ void SettingsDialog::setupAboutTab()
         "<p><a href='https://www.sqlite.org/copyright.html'>https://www.sqlite.org/copyright.html</a></p>"
     );
     layout->addWidget(licensesText);
-    
+
     tabWidget->addTab(aboutTab, "About");
 }
 
@@ -352,11 +352,11 @@ void SettingsDialog::onClearCache()
         "Are you sure you want to clear the thumbnail cache? This will delete all cached thumbnails.",
         QMessageBox::Yes | QMessageBox::No
     );
-    
+
     if (reply == QMessageBox::Yes) {
         ThumbnailGenerator::instance().clearCache();
         QMessageBox::information(this, "Cache Cleared", "Thumbnail cache has been cleared successfully.");
-        
+
         // Update cache size label
         cacheSizeLabel->setText("Current cache size: 0.00 MB");
     }
@@ -370,7 +370,7 @@ void SettingsDialog::onClearDatabase()
         "WARNING: This will delete ALL data including folders, assets, tags, and ratings!\n\nThis action cannot be undone. Are you absolutely sure?",
         QMessageBox::Yes | QMessageBox::No
     );
-    
+
     if (reply == QMessageBox::Yes) {
         DB::instance().clearAllData();
         QMessageBox::information(this, "Database Cleared", "Database has been cleared. Please restart the application.");
@@ -385,7 +385,7 @@ void SettingsDialog::onExportDatabase()
         QDir::homePath() + "/kassetmanager_backup.db",
         "SQLite Database (*.db)"
     );
-    
+
     if (!fileName.isEmpty()) {
         if (DB::instance().exportDatabase(fileName)) {
             QMessageBox::information(this, "Export Successful", "Database exported successfully.");
@@ -403,7 +403,7 @@ void SettingsDialog::onImportDatabase()
         QDir::homePath(),
         "SQLite Database (*.db)"
     );
-    
+
     if (!fileName.isEmpty()) {
         QMessageBox::StandardButton reply = QMessageBox::warning(
             this,
@@ -411,7 +411,7 @@ void SettingsDialog::onImportDatabase()
             "WARNING: This will replace your current database with the imported one!\n\nAre you sure?",
             QMessageBox::Yes | QMessageBox::No
         );
-        
+
         if (reply == QMessageBox::Yes) {
             if (DB::instance().importDatabase(fileName)) {
                 QMessageBox::information(this, "Import Successful", "Database imported successfully. Please restart the application.");
@@ -424,6 +424,7 @@ void SettingsDialog::onImportDatabase()
 
 void SettingsDialog::saveSettings()
 {
+
     // Persist File Manager shortcuts
     if (fmShortcutsTable) {
         // Detect conflicts
@@ -464,4 +465,6 @@ void SettingsDialog::saveSettings()
     QMessageBox::information(this, "Settings Saved", "Settings have been saved successfully.");
     accept();
 }
+
+
 

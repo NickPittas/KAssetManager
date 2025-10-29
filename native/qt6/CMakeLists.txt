@@ -14,8 +14,33 @@ project(KAssetManagerQt VERSION 0.1.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-find_package(QT NAMES Qt6 REQUIRED COMPONENTS Widgets Multimedia MultimediaWidgets Sql Concurrent)
-find_package(Qt6 REQUIRED COMPONENTS Widgets Multimedia MultimediaWidgets Sql Concurrent)
+find_package(QT NAMES Qt6 REQUIRED COMPONENTS Widgets Multimedia MultimediaWidgets Sql Concurrent Svg SvgWidgets)
+find_package(Qt6 REQUIRED COMPONENTS Widgets Multimedia MultimediaWidgets Sql Concurrent Svg SvgWidgets)
+# Optional: Qt PDF (viewer) if available
+find_package(Qt6 QUIET COMPONENTS Pdf PdfWidgets)
+# ActiveQt (QAxObject) for Office-to-PDF conversion on Windows (optional)
+if (WIN32)
+  # Try all known ActiveQt components; different Qt distributions export different subsets
+  # 1) Preferred: via umbrella Qt6 package
+  find_package(Qt6 QUIET COMPONENTS AxBase AxContainer AxServer)
+  # 2) Direct, in case Qt6Config.cmake doesn't advertise these components
+  if (NOT Qt6AxBase_FOUND)
+    find_package(Qt6AxBase QUIET CONFIG)
+  endif()
+  if (NOT Qt6AxContainer_FOUND)
+    find_package(Qt6AxContainer QUIET CONFIG)
+  endif()
+  if (NOT Qt6AxServer_FOUND)
+    find_package(Qt6AxServer QUIET CONFIG)
+  endif()
+  # Diagnostics to help users see what was found
+  if (Qt6AxBase_FOUND OR Qt6AxContainer_FOUND OR Qt6AxServer_FOUND)
+    message(STATUS "ActiveQt components detected:"
+      " AxBase=${Qt6AxBase_FOUND}; AxContainer=${Qt6AxContainer_FOUND}; AxServer=${Qt6AxServer_FOUND}")
+  else()
+    message(STATUS "ActiveQt not found for this kit")
+  endif()
+endif()
 
 # Find OpenImageIO (optional - will use placeholders if not found)
 find_package(OpenImageIO CONFIG QUIET)
@@ -25,6 +50,9 @@ if(OpenImageIO_FOUND)
 else()
     message(WARNING "OpenImageIO not found - will use placeholder thumbnails for EXR/PSD/HDR formats")
 endif()
+
+# OOXML ZIP reading (minizip-ng via vcpkg)
+find_package(minizip-ng CONFIG REQUIRED)
 
 # Find FFmpeg for log suppression
 find_package(PkgConfig QUIET)
@@ -96,6 +124,8 @@ qt_add_executable(kassetmanagerqt
     src/file_ops.cpp
     src/file_ops_dialog.h
     src/file_ops_dialog.cpp
+    src/office_preview.h
+    src/office_preview.cpp
     ${APP_RESOURCES}
 )
 
@@ -143,12 +173,26 @@ target_link_libraries(kassetmanagerqt PRIVATE
     Qt6::MultimediaWidgets
     Qt6::Sql
     Qt6::Concurrent
+    Qt6::Svg
+    Qt6::SvgWidgets
 )
-
+# Link Qt PDF if available (widgets optional)
+if (TARGET Qt6::Pdf)
+  target_link_libraries(kassetmanagerqt PRIVATE Qt6::Pdf)
+  target_compile_definitions(kassetmanagerqt PRIVATE HAVE_QT_PDF)
+endif()
+if (TARGET Qt6::PdfWidgets)
+  target_link_libraries(kassetmanagerqt PRIVATE Qt6::PdfWidgets)
+  target_compile_definitions(kassetmanagerqt PRIVATE HAVE_QT_PDF_WIDGETS)
+endif()
 # Link OpenImageIO if found
 if(OpenImageIO_FOUND)
     target_link_libraries(kassetmanagerqt PRIVATE OpenImageIO::OpenImageIO)
 endif()
+# Link minizip-ng (vcpkg target)
+target_link_libraries(kassetmanagerqt PRIVATE MINIZIP::minizip-ng)
+target_compile_definitions(kassetmanagerqt PRIVATE HAVE_MINIZIP_NG)
+
 
 # Windows-specific: hide console in release
 if (WIN32)

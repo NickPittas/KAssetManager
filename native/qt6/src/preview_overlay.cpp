@@ -11,6 +11,22 @@
 #include <QMouseEvent>
 #include <QDebug>
 #include <QDir>
+#include <QStandardPaths>
+#include <QUuid>
+#include <QImage>
+#ifdef HAVE_QT_PDF
+#include <QPdfDocument>
+#include <QPdfView>
+#endif
+#include <QFontDatabase>
+#include <QTextOption>
+
+#include "office_preview.h"
+
+#include <QGraphicsSvgItem>
+#if defined(Q_OS_WIN) && defined(HAVE_QT_AX)
+#include <QAxObject>
+#endif
 
 #include <atomic>
 
@@ -134,6 +150,11 @@ PreviewOverlay::PreviewOverlay(QWidget *parent)
     , videoWidget(nullptr)
     , mediaPlayer(nullptr)
     , audioOutput(nullptr)
+#ifdef HAVE_QT_PDF
+    , pdfDoc(nullptr)
+    , pdfView(nullptr)
+#endif
+    , svgItem(nullptr)
     , isVideo(false)
     , currentZoom(1.0)
     , isPanning(false)
@@ -195,6 +216,33 @@ void PreviewOverlay::setupUi()
     fileNameLabel->setStyleSheet("QLabel { color: white; font-size: 16px; padding: 10px; }");
     topLayout->addWidget(fileNameLabel);
 
+    // Alpha toggle (for images with alpha)
+    alphaCheck = new QCheckBox("Alpha", this);
+    alphaCheck->setToolTip("Show alpha channel (grayscale)");
+    alphaCheck->setStyleSheet("QCheckBox { color: white; }");
+    alphaCheck->hide();
+    connect(alphaCheck, &QCheckBox::toggled, this, [this](bool on){
+        alphaOnlyMode = on;
+        if (!imageItem || originalPixmap.isNull()) return;
+        if (alphaOnlyMode && previewHasAlpha) {
+            QImage src = originalPixmap.toImage().convertToFormat(QImage::Format_ARGB32);
+            QImage a(src.size(), QImage::Format_Grayscale8);
+            for (int y = 0; y < src.height(); ++y) {
+                const QRgb* line = reinterpret_cast<const QRgb*>(src.constScanLine(y));
+                uchar* dst = a.scanLine(y);
+                for (int x = 0; x < src.width(); ++x) {
+                    dst[x] = qAlpha(line[x]);
+                }
+            }
+            imageItem->setPixmap(QPixmap::fromImage(a));
+        } else {
+            imageItem->setPixmap(originalPixmap);
+        }
+        imageView->viewport()->update();
+    });
+    topLayout->addSpacing(12);
+    topLayout->addWidget(alphaCheck);
+
     topLayout->addStretch();
 
     closeBtn = new QPushButton("✕", this);
@@ -228,6 +276,37 @@ void PreviewOverlay::setupUi()
     imageView->viewport()->installEventFilter(this);
     imageView->hide();
     contentLayout->addWidget(imageView);
+#ifdef HAVE_QT_PDF
+    // PDF view
+    pdfDoc = new QPdfDocument(this);
+    pdfView = new QPdfView(this);
+    pdfView->setPageMode(QPdfView::PageMode::SinglePage);
+    pdfView->hide();
+    contentLayout->addWidget(pdfView);
+#endif
+    // Text view (TXT/LOG/CSV/DOCX)
+    textView = new QPlainTextEdit(this);
+    textView->setReadOnly(true);
+    textView->setWordWrapMode(QTextOption::NoWrap);
+    textView->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+    // Ensure white background and black text for readability
+    textView->setStyleSheet("QPlainTextEdit { background-color: #ffffff; color: #000000; border: none; }");
+    textView->hide();
+    contentLayout->addWidget(textView);
+
+    // Table view (XLSX)
+    tableModel = new QStandardItemModel(this);
+    tableView = new QTableView(this);
+    tableView->setModel(tableModel);
+    tableView->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    tableView->setSelectionMode(QAbstractItemView::NoSelection);
+    tableView->setAlternatingRowColors(true);
+    tableView->setStyleSheet(
+        "QTableView { background-color: #ffffff; color: #000000; gridline-color: #cccccc; border: none; }"
+        "QHeaderView::section { background-color: #f0f0f0; color: #000000; border: none; padding: 4px; }"
+    );
+    tableView->hide();
+    contentLayout->addWidget(tableView);
 
     // Video widget (for videos)
     videoWidget = new QVideoWidget(this);
@@ -342,11 +421,27 @@ void PreviewOverlay::showAsset(const QString &filePath, const QString &fileName,
         sequenceTimer->stop();
     }
 
+    // Office parse-only previews
+    if (fileType.compare("docx", Qt::CaseInsensitive) == 0) {
+        currentFilePath = filePath;
+        currentFileType = fileType.toLower();
+        fileNameLabel->setText(fileName);
+        showDocx(filePath);
+        return;
+    }
+    if (fileType.compare("xlsx", Qt::CaseInsensitive) == 0) {
+        currentFilePath = filePath;
+        currentFileType = fileType.toLower();
+        fileNameLabel->setText(fileName);
+        showXlsx(filePath);
+        return;
+    }
+
     currentFilePath = filePath;
     currentFileType = fileType.toLower();
     fileNameLabel->setText(fileName);
 
-    // Determine if it's a video or image
+    // Determine content type and route
     QStringList videoFormats = {"mp4", "avi", "mov", "mkv", "webm", "flv", "wmv", "m4v"};
     isVideo = videoFormats.contains(currentFileType);
 
@@ -357,6 +452,53 @@ void PreviewOverlay::showAsset(const QString &filePath, const QString &fileName,
 
     // Process events to ensure window is properly sized
     QApplication::processEvents();
+
+    // Simple text formats shown with a plain text viewer
+    if (currentFileType == "txt" || currentFileType == "log" || currentFileType == "csv") {
+        showText(filePath);
+        return;
+    }
+
+    // PDFs and AI (often embedded PDFs)
+#ifdef HAVE_QT_PDF
+    if (currentFileType == "pdf" || currentFileType == "ai") {
+        showPdf(filePath);
+        return;
+    }
+#else
+    if (currentFileType == "pdf" || currentFileType == "ai") {
+        // No Qt PDF available: show placeholder message
+        videoWidget->hide();
+        imageView->show();
+        imageScene->clear();
+        imageScene->addText("Preview not available", QFont("Segoe UI", 14));
+        controlsWidget->hide();
+        if (alphaCheck) alphaCheck->hide();
+        isVideo = false;
+        isHDRImage = false;
+        originalPixmap = QPixmap();
+        return;
+    }
+#endif
+    // SVG vector graphics
+    if (currentFileType == "svg" || currentFileType == "svgz") {
+        videoWidget->hide();
+#ifdef HAVE_QT_PDF
+        if (pdfView) pdfView->hide();
+#endif
+        imageView->show();
+        imageScene->clear();
+        svgItem = new QGraphicsSvgItem(filePath);
+        imageScene->addItem(svgItem);
+        imageScene->setSceneRect(svgItem->boundingRect());
+        fitImageToView();
+        controlsWidget->hide();
+        if (alphaCheck) alphaCheck->hide();
+        isVideo = false;
+        isHDRImage = false;
+        originalPixmap = QPixmap();
+        return;
+    }
 
     if (isVideo) {
         showVideo(filePath);
@@ -369,8 +511,14 @@ void PreviewOverlay::showImage(const QString &filePath)
 {
     qDebug() << "[PreviewOverlay::showImage] Loading image:" << filePath;
 
-    // CRITICAL: Hide video widget and show image view
-    videoWidget->hide();
+    // CRITICAL: Hide other widgets and show image view
+    if (videoWidget) videoWidget->hide();
+    if (textView) textView->hide();
+    if (tableView) tableView->hide();
+#ifdef HAVE_QT_PDF
+    if (pdfView) pdfView->hide();
+#endif
+    imageView->setBackgroundBrush(QColor("#0a0a0a"));
     imageView->show();
 
     // CRITICAL: Stop any video playback
@@ -412,6 +560,7 @@ void PreviewOverlay::showImage(const QString &filePath)
         isHDRImage = false; // Qt loader doesn't support HDR
     }
 
+
     if (!newPixmap.isNull()) {
         qDebug() << "[PreviewOverlay::showImage] Loaded new pixmap, size:" << newPixmap.size();
 
@@ -427,6 +576,10 @@ void PreviewOverlay::showImage(const QString &filePath)
 
         // Store the pixmap
         originalPixmap = newPixmap;
+
+        // Determine alpha availability and reset toggle
+        previewHasAlpha = (!image.isNull()) ? image.hasAlphaChannel() : newPixmap.hasAlphaChannel();
+        if (alphaCheck) { alphaCheck->setVisible(previewHasAlpha); alphaCheck->blockSignals(true); alphaCheck->setChecked(false); alphaOnlyMode = false; alphaCheck->blockSignals(false); }
 
         // Update scene rect
         imageScene->setSceneRect(newPixmap.rect());
@@ -474,10 +627,18 @@ void PreviewOverlay::showVideo(const QString &filePath)
     mediaPlayer->setSource(QUrl()); // clear previous source to avoid stray signals
     mediaPlayer->setPosition(0);
 
-    // CRITICAL: Hide image view and show video widget
-    imageView->hide();
+    // CRITICAL: Hide other content and show video widget
+    if (imageView) imageView->hide();
+    if (textView) textView->hide();
+    if (tableView) tableView->hide();
+#ifdef HAVE_QT_PDF
+    if (pdfView) pdfView->hide();
+#endif
     videoWidget->show();
     controlsWidget->show();
+
+    // Hide alpha toggle for videos
+    if (alphaCheck) alphaCheck->hide();
 
     // CRITICAL: Clear the scene to free memory
     imageScene->clear();
@@ -625,10 +786,24 @@ void PreviewOverlay::keyPressEvent(QKeyEvent *event)
             stopPlayback();
             navigateNext();
             break;
-        case Qt::Key_Space:
-            if (isVideo) {
-                onPlayPauseClicked();
+#ifdef HAVE_QT_PDF
+        case Qt::Key_Up:
+            if ((currentFileType == "pdf" || currentFileType == "ai") && pdfDoc && pdfDoc->pageCount() > 1) {
+                if (pdfCurrentPage > 0) { pdfCurrentPage--; renderPdfPageToImage(); }
+                return; // consume
             }
+            break;
+        case Qt::Key_Down:
+            if ((currentFileType == "pdf" || currentFileType == "ai") && pdfDoc && pdfDoc->pageCount() > 1) {
+                if (pdfCurrentPage + 1 < pdfDoc->pageCount()) { pdfCurrentPage++; renderPdfPageToImage(); }
+                return; // consume
+            }
+            break;
+#endif
+        case Qt::Key_Space:
+            // Space toggles overlay visibility (consistent with File/Asset Manager)
+            stopPlayback();
+            emit closed();
             break;
         default:
             QWidget::keyPressEvent(event);
@@ -843,6 +1018,11 @@ void PreviewOverlay::loadSequenceFrame(int frameIndex)
         imageScene->clear();
         imageItem = imageScene->addPixmap(originalPixmap);
         imageScene->setSceneRect(originalPixmap.rect());
+
+        // Determine alpha availability and reset toggle for new frame/sequence
+        previewHasAlpha = originalPixmap.hasAlphaChannel();
+        if (alphaCheck) { alphaCheck->setVisible(previewHasAlpha); alphaCheck->blockSignals(true); alphaCheck->setChecked(false); alphaOnlyMode = false; alphaCheck->blockSignals(false); }
+
         fitImageToView();
         qDebug() << "[PreviewOverlay::loadSequenceFrame] Frame loaded and displayed";
     } else {
@@ -1094,6 +1274,10 @@ void PreviewOverlay::onFallbackFrameReady(const QImage &image, qint64 ptsMs)
 #endif
     // Update pixmap in the image scene
     originalPixmap = QPixmap::fromImage(image);
+
+    // Determine alpha for fallback video frame display is irrelevant; hide toggle for videos
+    if (alphaCheck) alphaCheck->hide();
+
     if (!imageItem) {
         imageItem = imageScene->addPixmap(originalPixmap);
     } else {
@@ -1121,6 +1305,162 @@ void PreviewOverlay::onFallbackFinished()
     qDebug() << "[PreviewOverlay] Fallback playback finished";
     stopFallbackVideo();
 }
+
+void PreviewOverlay::showText(const QString &filePath)
+{
+    // Hide other content
+    videoWidget->hide();
+#ifdef HAVE_QT_PDF
+    if (pdfView) pdfView->hide();
+#endif
+    imageView->hide();
+    controlsWidget->hide();
+    if (alphaCheck) alphaCheck->hide();
+
+    if (!textView) return;
+
+    QFile f(filePath);
+    if (f.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        QByteArray data = f.read(2*1024*1024); // cap to 2MB
+        textView->setPlainText(QString::fromUtf8(data));
+    } else {
+        textView->setPlainText("Preview not available");
+    }
+    textView->show();
+}
+
+
+void PreviewOverlay::showDocx(const QString &filePath)
+{
+    // Hide other content
+    if (videoWidget) videoWidget->hide();
+#ifdef HAVE_QT_PDF
+    if (pdfView) pdfView->hide();
+#endif
+    if (imageView) imageView->hide();
+    if (controlsWidget) controlsWidget->hide();
+    if (alphaCheck) alphaCheck->hide();
+
+    // Ensure overlay is visible for Office previews
+    show();
+    raise();
+    setFocus();
+    QApplication::processEvents();
+
+    if (!textView) return;
+
+    const QString text = extractDocxText(filePath);
+    textView->setWordWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
+    if (!text.isEmpty()) {
+        textView->setPlainText(text);
+    } else {
+        textView->setPlainText("Preview not available");
+    }
+    textView->show();
+}
+
+void PreviewOverlay::showXlsx(const QString &filePath)
+{
+    // Hide other content
+    if (videoWidget) videoWidget->hide();
+#ifdef HAVE_QT_PDF
+    if (pdfView) pdfView->hide();
+#endif
+    if (imageView) imageView->hide();
+    if (controlsWidget) controlsWidget->hide();
+    if (alphaCheck) alphaCheck->hide();
+
+    // Ensure overlay is visible for Office previews
+    show();
+    raise();
+    setFocus();
+    QApplication::processEvents();
+
+    if (!tableView || !tableModel) return;
+
+    tableModel->clear();
+    if (!loadXlsxSheet(filePath, tableModel, 2000)) {
+        // Fallback: simple message in text view
+        if (textView) {
+            textView->setPlainText("Preview not available");
+            textView->show();
+        }
+        return;
+    }
+
+    tableView->resizeColumnsToContents();
+    tableView->show();
+}
+
+#ifdef HAVE_QT_PDF
+void PreviewOverlay::showPdf(const QString &filePath)
+{
+    // Hide other content
+    if (videoWidget) videoWidget->hide();
+    if (textView) textView->hide();
+    if (tableView) tableView->hide();
+    controlsWidget->hide();
+    if (alphaCheck) alphaCheck->hide();
+
+    // Load PDF (works for many AI files that embed PDF)
+    if (!pdfDoc) pdfDoc = new QPdfDocument(this);
+    pdfDoc->close();
+    QPdfDocument::Error err = pdfDoc->load(filePath);
+    if (err == QPdfDocument::Error::None && pdfDoc->pageCount() > 0) {
+        pdfCurrentPage = 0;
+        imageView->show();
+        // Always render into the image view for consistent zoom/pan behavior
+        renderPdfPageToImage();
+    #ifdef HAVE_QT_PDF_WIDGETS
+        if (pdfView) pdfView->hide();
+    #endif
+    } else {
+        // Fallback: show a message
+        imageView->hide();
+        if (textView) {
+            textView->setPlainText("Preview not available");
+            textView->show();
+        }
+    }
+}
+
+void PreviewOverlay::renderPdfPageToImage()
+{
+    if (!pdfDoc || pdfDoc->pageCount() <= 0) return;
+    if (pdfCurrentPage < 0) pdfCurrentPage = 0;
+    if (pdfCurrentPage >= pdfDoc->pageCount()) pdfCurrentPage = pdfDoc->pageCount() - 1;
+
+    const QSizeF pts = pdfDoc->pagePointSize(pdfCurrentPage);
+    int vw = imageView ? imageView->viewport()->width() : 800;
+    if (vw < 1) vw = 800;
+    int w = vw;
+    int h = pts.width() > 0 ? int(pts.height() * (w / pts.width())) : w;
+    QImage img = pdfDoc->render(pdfCurrentPage, QSize(w, h));
+    if (img.isNull()) return;
+
+    // Composite onto white to avoid dark theme bleeding
+    if (img.hasAlphaChannel()) {
+        QImage bg(img.size(), QImage::Format_ARGB32_Premultiplied);
+        bg.fill(Qt::white);
+        QPainter p(&bg);
+        p.drawImage(0, 0, img);
+        p.end();
+        img = bg;
+    }
+
+    originalPixmap = QPixmap::fromImage(img);
+    if (!imageItem) {
+        imageScene->clear();
+        imageItem = imageScene->addPixmap(originalPixmap);
+    } else {
+        imageItem->setPixmap(originalPixmap);
+    }
+    imageScene->setSceneRect(originalPixmap.rect());
+    imageView->setBackgroundBrush(Qt::white);
+    fitImageToView();
+    imageView->viewport()->update();
+}
+#endif
 
 
 // Required because this .cpp defines a QObject with Q_OBJECT (FallbackPngMovReader)

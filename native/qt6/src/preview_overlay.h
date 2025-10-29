@@ -14,7 +14,17 @@
 #include <QGraphicsView>
 #include <QGraphicsScene>
 #include <QGraphicsPixmapItem>
+#include <QGraphicsSvgItem>
 #include <QComboBox>
+#include <QCheckBox>
+#ifdef HAVE_QT_PDF
+#include <QPdfDocument>
+#include <QPdfView>
+#endif
+#include <QPlainTextEdit>
+#include <QTableView>
+#include <QStandardItemModel>
+
 #include "oiio_image_loader.h"
 
 class PreviewOverlay : public QWidget
@@ -30,6 +40,7 @@ public:
     void navigateNext();
     void navigatePrevious();
     void stopPlayback();
+    QString currentPath() const { return currentFilePath; }
 
 signals:
     void closed();
@@ -60,6 +71,13 @@ private:
     void setupUi();
     void showImage(const QString &filePath);
     void showVideo(const QString &filePath);
+#ifdef HAVE_QT_PDF
+    void showPdf(const QString &filePath);
+    void renderPdfPageToImage();
+#endif
+    void showDocx(const QString &filePath);
+    void showXlsx(const QString &filePath);
+    void showText(const QString &filePath);
     void updatePlayPauseButton();
     QString formatTime(qint64 milliseconds);
     void zoomImage(double factor);
@@ -76,6 +94,7 @@ private:
     QGraphicsView *imageView;
     QGraphicsScene *imageScene;
     QGraphicsPixmapItem *imageItem;
+    QGraphicsSvgItem *svgItem;
     QVideoWidget *videoWidget;
     QWidget *controlsWidget;
     QPushButton *playPauseBtn;
@@ -86,10 +105,20 @@ private:
     QLabel *fileNameLabel;
     QComboBox *colorSpaceCombo;
     QLabel *colorSpaceLabel;
+    QCheckBox *alphaCheck;
+    QPlainTextEdit *textView;
+
+    QTableView *tableView;
+    QStandardItemModel *tableModel;
 
     // Media player
     QMediaPlayer *mediaPlayer;
     QAudioOutput *audioOutput;
+#ifdef HAVE_QT_PDF
+    QPdfDocument *pdfDoc;
+    QPdfView *pdfView;
+    int pdfCurrentPage = 0;
+#endif
 
     // State
     QString currentFilePath;
@@ -124,6 +153,10 @@ private:
     // Color space for HDR/EXR images
     OIIOImageLoader::ColorSpace currentColorSpace;
     bool isHDRImage;
+
+    // Alpha channel toggle state
+    bool alphaOnlyMode = false;
+    bool previewHasAlpha = false;
 };
 
 #endif // PREVIEW_OVERLAY_H

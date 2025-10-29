@@ -13,6 +13,7 @@
 #include <QTextEdit>
 #include <QTableWidget>
 #include <QKeySequenceEdit>
+#include <QLineEdit>
 
 class SettingsDialog : public QDialog {
     Q_OBJECT
@@ -33,23 +34,23 @@ private:
     void setupViewTab();
     void setupShortcutsTab();
     void setupAboutTab();
-    
+
     QTabWidget* tabWidget;
-    
+
     // General tab
     QComboBox* themeCombo;
-    
+
     // Cache tab
     QLabel* cacheSizeLabel;
     QPushButton* clearCacheBtn;
     QSpinBox* maxCacheSizeSpin;
-    
+
     // View tab
     QComboBox* viewModeCombo;
     QSpinBox* thumbnailSizeSpin;
     QCheckBox* showFileExtensionsCheck;
     QCheckBox* showSequenceOverlayCheck;
-    
+
     // Shortcuts tab (editable)
     QTableWidget* fmShortcutsTable;
     QPushButton* fmResetAllBtn;

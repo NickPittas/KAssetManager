@@ -123,16 +123,20 @@ private slots:
     // File Manager preview
     void onFmSelectionChanged();
     void onFmTogglePreview(); // toolbar toggle
-    void onFmOpenOverlay();   // Space: open full-screen overlay
+    void onFmOpenOverlay();   // Space: toggle full-screen overlay
+    void changeFmPreview(int delta); // Navigate in File Manager overlay
 private:
     QString fmPathForIndex(const QModelIndex& idx) const;
     void setFmRootPath(const QString& path);
+    void releaseAnyPreviewLocksForPaths(const QStringList& paths);
 
 
 protected:
     void closeEvent(QCloseEvent* event) override;
 
 private:
+    bool m_initializing = false; // guard for eventFilter during UI construction
+
     void setupUi();
     void setupConnections();
     void setupFileManagerUi();
@@ -281,12 +285,25 @@ private:
     void saveFmFavorites();
 
     // Preview panel (embedded, right side)
-    QWidget *fmPreviewPanel;
-    class QGraphicsView *fmImageView;
-    class QGraphicsScene *fmImageScene;
-    class QGraphicsPixmapItem *fmImageItem;
-    class QVideoWidget *fmVideoWidget;
+    QWidget *fmPreviewPanel = nullptr;
+    class QGraphicsView *fmImageView = nullptr;
+    class QGraphicsScene *fmImageScene = nullptr;
+    class QGraphicsPixmapItem *fmImageItem = nullptr;
+    class QVideoWidget *fmVideoWidget = nullptr;
+    // Additional preview widgets
+    class QPlainTextEdit *fmTextView = nullptr;           // TXT/LOG
+    class QTableView *fmCsvView = nullptr;                // CSV table
+    class QStandardItemModel *fmCsvModel = nullptr;
+    class QPdfDocument *fmPdfDoc = nullptr;               // PDF (core)
+    class QPdfView *fmPdfView = nullptr;                 // Optional (QtPdfWidgets)
+    int fmPdfCurrentPage = 0;                            // Fallback navigation when PdfWidgets missing
+    class QToolButton *fmPdfPrevBtn = nullptr; class QToolButton *fmPdfNextBtn = nullptr; QLabel *fmPdfPageLabel = nullptr;
+    class QGraphicsView *fmSvgView = nullptr; class QGraphicsScene *fmSvgScene = nullptr; class QGraphicsItem *fmSvgItem = nullptr;
+    QCheckBox *fmAlphaCheck = nullptr;          // Alpha toggle for images
+    // State for image/alpha
     bool fmImageFitToView = true; // auto fit image to view and refit on resize until user zooms manually
+    QImage fmOriginalImage; QString fmCurrentPreviewPath; bool fmPreviewHasAlpha = false; bool fmAlphaOnlyMode = false;
+    // Media
     class QMediaPlayer *fmMediaPlayer;
     class QAudioOutput *fmAudioOutput;
     QPushButton *fmPlayPauseBtn;
@@ -308,6 +325,9 @@ private:
     QStringList fmClipboard;
     bool fmClipboardCutMode = false;
     class FileOpsProgressDialog *fileOpsDialog;
+
+    // Overlay navigation context for File Manager
+    QPersistentModelIndex fmOverlayCurrentIndex; QAbstractItemView* fmOverlaySourceView = nullptr; // grid or list
 
     // Helpers
     void updateFmPreviewForIndex(const QModelIndex &idx);

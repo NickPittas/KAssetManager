@@ -17,6 +17,9 @@
 #include "file_ops.h"
 #include "file_ops_dialog.h"
 
+#include "office_preview.h"
+
+
 #include <QHeaderView>
 #include <QStyledItemDelegate>
 #include <QPainter>
@@ -51,6 +54,22 @@
 #include <QSortFilterProxyModel>
 #include <QRegularExpression>
 #include <QToolButton>
+
+#include <QStandardPaths>
+#include <QTextOption>
+
+
+#include <QPlainTextEdit>
+#include <QStandardItemModel>
+#include <QDebug>
+#ifdef HAVE_QT_PDF
+#include <QPdfDocument>
+#endif
+#ifdef HAVE_QT_PDF_WIDGETS
+#include <QPdfView>
+#endif
+#include <QSvgRenderer>
+#include <QGraphicsSvgItem>
 
 #include <QImageReader>
 
@@ -477,9 +496,24 @@ MainWindow::MainWindow(QWidget *parent)
     , assetsLocked(true) // Locked by default
 {
     fileOpsDialog = nullptr;
+    qDebug() << "[INIT] MainWindow ctor begin";
 
+    m_initializing = true;
     setupUi();
+    qDebug() << "[INIT] MainWindow setupUi finished";
     setupConnections();
+    qDebug() << "[INIT] MainWindow setupConnections finished";
+    m_initializing = false;
+#ifdef HAVE_QT_PDF
+    qDebug() << "[INIT] [PREVIEW_CAPS] QtPdf=ON";
+#else
+    qDebug() << "[INIT] [PREVIEW_CAPS] QtPdf=OFF";
+#endif
+#ifdef HAVE_QT_AX
+    qDebug() << "[INIT] [PREVIEW_CAPS] ActiveQt=ON";
+#else
+    qDebug() << "[INIT] [PREVIEW_CAPS] ActiveQt=OFF";
+#endif
 
     setWindowTitle("KAsset Manager");
     resize(1400, 900);
@@ -558,6 +592,7 @@ MainWindow::MainWindow(QWidget *parent)
             qCritical() << "[MainWindow] Unknown exception loading thumbnail";
         }
     });
+    qDebug() << "[INIT] MainWindow ctor end";
 }
 
 MainWindow::~MainWindow()
@@ -629,6 +664,7 @@ void MainWindow::setupUi()
     folderTreeView = new QTreeView(leftPanel);
     folderModel = new VirtualFolderTreeModel(leftPanel);
     folderTreeView->setModel(folderModel);
+    qDebug() << "[INIT] Folder model set on tree";
     folderTreeView->setHeaderHidden(true);
     folderTreeView->setContextMenuPolicy(Qt::CustomContextMenu);
 
@@ -662,6 +698,7 @@ void MainWindow::setupUi()
     connect(recursiveCheckBox, &QCheckBox::toggled, this, [this](bool checked) {
         assetsModel->setRecursiveMode(checked);
     });
+    qDebug() << "[INIT] Recursive checkbox added";
     leftLayout->addWidget(recursiveCheckBox);
 
     // Center panel: Asset grid with toolbar
@@ -742,14 +779,17 @@ void MainWindow::setupUi()
     connect(refreshButton, &QPushButton::clicked, this, &MainWindow::onRefreshAssets);
     toolbarLayout->addWidget(refreshButton);
 
+    qDebug() << "[INIT] Center toolbar added";
     centerLayout->addWidget(toolbar);
 
+    qDebug() << "[INIT] ViewStack created";
     // Stacked widget to switch between grid and table views
     viewStack = new QStackedWidget(centerPanel);
 
     // Asset grid view (using custom AssetGridView with compact drag pixmap)
     assetGridView = new AssetGridView(viewStack);
     assetsModel = new AssetsModel(viewStack);
+    qDebug() << "[INIT] AssetsModel created";
     assetGridView->setModel(assetsModel);
     assetGridView->setViewMode(QListView::IconMode);
     assetGridView->setResizeMode(QListView::Adjust);
@@ -758,6 +798,7 @@ void MainWindow::setupUi()
     assetGridView->setSelectionMode(QAbstractItemView::ExtendedSelection);
     assetGridView->setContextMenuPolicy(Qt::CustomContextMenu);
     assetGridView->setItemDelegate(new AssetItemDelegate(viewStack));
+    qDebug() << "[INIT] Asset grid view added to stack";
     assetGridView->setIconSize(QSize(180, 180));
     assetGridView->setStyleSheet(
         "QListView { background-color: #0a0a0a; border: none; }"
@@ -791,9 +832,12 @@ void MainWindow::setupUi()
     assetTableView->setColumnWidth(AssetsTableModel::NameColumn, 300);
     assetTableView->setColumnWidth(AssetsTableModel::ExtensionColumn, 80);
     assetTableView->setColumnWidth(AssetsTableModel::SizeColumn, 100);
+    qDebug() << "[INIT] ViewStack index set";
     assetTableView->setColumnWidth(AssetsTableModel::DateColumn, 150);
+    qDebug() << "[INIT] Center viewStack added to layout";
     assetTableView->setColumnWidth(AssetsTableModel::RatingColumn, 100);
     viewStack->addWidget(assetTableView); // Index 1
+    qDebug() << "[INIT] Asset table view added to stack";
 
     // Set grid view as default
     viewStack->setCurrentIndex(0);
@@ -813,6 +857,7 @@ void MainWindow::setupUi()
     folderTreeView->setDropIndicatorShown(true);
     folderTreeView->setDragDropMode(QAbstractItemView::DragDrop);
     folderTreeView->setDefaultDropAction(Qt::MoveAction);
+    qDebug() << "[INIT] Event filters installed on asset views";
     folderTreeView->viewport()->installEventFilter(this);
 
     // Install event filter on asset views to handle Space key for preview
@@ -821,10 +866,12 @@ void MainWindow::setupUi()
     // Also monitor viewport resize to update visible-only progress
     assetGridView->viewport()->installEventFilter(this);
     assetTableView->viewport()->installEventFilter(this);
+    qDebug() << "[INIT] After installing event filters on views";
 
     // Right panel: Filters + Info
     rightPanel = new QWidget(this);
     QVBoxLayout *rightLayout = new QVBoxLayout(rightPanel);
+    qDebug() << "[INIT] Right panel created";
     rightLayout->setContentsMargins(0, 0, 0, 0);
     rightLayout->setSpacing(0);
 
@@ -832,6 +879,7 @@ void MainWindow::setupUi()
     filtersPanel = new QWidget(this);
     QVBoxLayout *filtersLayout = new QVBoxLayout(filtersPanel);
     filtersLayout->setContentsMargins(8, 8, 8, 8);
+    qDebug() << "[INIT] Filters panel created";
 
     QLabel *filtersTitle = new QLabel("Filters", this);
     filtersTitle->setStyleSheet("font-size: 14px; font-weight: bold; color: #ffffff;");
@@ -867,6 +915,8 @@ void MainWindow::setupUi()
 
     QPushButton *addTagBtn = new QPushButton("+", this);
     addTagBtn->setFixedSize(24, 24);
+    qDebug() << "[INIT] TagsModel created and set on list";
+    qDebug() << "[INIT] Tags list created";
     addTagBtn->setStyleSheet(
         "QPushButton { background-color: #58a6ff; color: #ffffff; border: none; border-radius: 12px; font-size: 16px; font-weight: bold; }"
         "QPushButton:hover { background-color: #4a8fd9; }"
@@ -877,28 +927,27 @@ void MainWindow::setupUi()
 
     filtersLayout->addLayout(tagsHeaderLayout);
 
-    tagsListView = new QListView(this);
+    tagsListView = new QListView(filtersPanel);
+    qDebug() << "[INIT] Creating tagsListView";
+    qDebug() << "[INIT] Before TagsModel ctor";
     tagsModel = new TagsModel(this);
+    qDebug() << "[INIT] After TagsModel ctor";
     tagsListView->setModel(tagsModel);
+    qDebug() << "[INIT] tagsListView setModel ok";
     tagsListView->setSelectionMode(QAbstractItemView::MultiSelection);
+    qDebug() << "[INIT] tagsListView selection configured";
     tagsListView->setContextMenuPolicy(Qt::CustomContextMenu);
-    tagsListView->setStyleSheet(
-        "QListView { background-color: #1a1a1a; color: #ffffff; border: 1px solid #333; }"
-        "QListView::item:selected { background-color: #2f3a4a; }"
-        "QListView::item:hover { background-color: #202020; }"
-    );
+    tagsListView->setStyleSheet("");
     tagsListView->setMaximumHeight(150);
 
     // Enable drops on tags list for assigning tags to assets
     tagsListView->setAcceptDrops(true);
     tagsListView->setDropIndicatorShown(true);
     tagsListView->setDragDropMode(QAbstractItemView::DropOnly);
-    tagsListView->viewport()->installEventFilter(this);
-
-    filtersLayout->addWidget(tagsListView);
-
+    qDebug() << "[INIT] tagsListView drag-drop configured";
     // Tag action buttons
     QHBoxLayout *tagButtonsLayout = new QHBoxLayout();
+    qDebug() << "[INIT] Before creating tagButtonsLayout";
 
     applyTagsBtn = new QPushButton("Apply", this);
     applyTagsBtn->setStyleSheet(
@@ -929,6 +978,7 @@ void MainWindow::setupUi()
     tagFilterModeCombo->setStyleSheet(
         "QComboBox { background-color: #1a1a1a; color: #ffffff; border: 1px solid #333; padding: 4px 8px; border-radius: 4px; }"
     );
+    qDebug() << "[INIT] Tag buttons and mode added";
     tagFilterModeCombo->setToolTip("AND: Assets must have ALL selected tags\nOR: Assets must have ANY selected tag");
     tagButtonsLayout->addWidget(tagFilterModeCombo);
 
@@ -953,6 +1003,7 @@ void MainWindow::setupUi()
     filtersLayout->addStretch();
     filtersPanel->setStyleSheet("background-color: #121212;");
 
+    qDebug() << "[INIT] Creating infoPanel";
     // Info panel with scrollable area for all metadata
     infoPanel = new QWidget(this);
     QVBoxLayout *infoPanelLayout = new QVBoxLayout(infoPanel);
@@ -1095,6 +1146,7 @@ void MainWindow::setupUi()
     connect(revertVersionButton, &QPushButton::clicked, this, &MainWindow::onRevertSelectedVersion);
     connect(versionTable->selectionModel(), &QItemSelectionModel::selectionChanged, this, [this](const QItemSelection&, const QItemSelection&){
         revertVersionButton->setEnabled(versionTable->currentRow() >= 0);
+    qDebug() << "[INIT] Filters & Info panels added to right panel";
     });
     versionButtonsLayout->addWidget(backupVersionCheck);
     versionButtonsLayout->addStretch();
@@ -1106,6 +1158,7 @@ void MainWindow::setupUi()
     infoScrollArea->setWidget(infoScrollWidget);
     infoPanelLayout->addWidget(infoScrollArea);
     infoPanel->setStyleSheet("background-color: #121212;");
+    qDebug() << "[INIT] Asset Manager tab added";
 
     rightLayout->addWidget(filtersPanel, 1);
     rightLayout->addWidget(infoPanel, 1);
@@ -1123,8 +1176,11 @@ void MainWindow::setupUi()
 
     // File Manager page
     fileManagerPage = new QWidget(this);
+    qDebug() << "[INIT] About to call setupFileManagerUi";
     setupFileManagerUi();
+    qDebug() << "[INIT] setupFileManagerUi returned";
     mainTabs->addTab(fileManagerPage, "File Manager");
+    qDebug() << "[INIT] File Manager tab added";
 
     // Log viewer as dock widget at bottom (hidden by default)
     QDockWidget* logDock = new QDockWidget("Application Log", this);
@@ -1460,12 +1516,168 @@ void MainWindow::setupFileManagerUi()
     fmImageView->setResizeAnchor(QGraphicsView::AnchorUnderMouse);
     fmImageView->setAlignment(Qt::AlignCenter);
     fmImageView->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    // Additional preview widgets (hidden by default)
+    fmTextView = new QPlainTextEdit(fmPreviewPanel);
+    fmTextView->setReadOnly(true);
+    fmTextView->setWordWrapMode(QTextOption::NoWrap);
+    fmTextView->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+    // Ensure white background and black text for text/DOCX previews
+    fmTextView->setStyleSheet("QPlainTextEdit { background-color: #ffffff; color: #000000; border: none; }");
+    fmTextView->hide();
+
+    fmCsvModel = new QStandardItemModel(fmPreviewPanel);
+    fmCsvView = new QTableView(fmPreviewPanel);
+    fmCsvView->setModel(fmCsvModel);
+    fmCsvView->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    fmCsvView->setSelectionMode(QAbstractItemView::NoSelection);
+    fmCsvView->setAlternatingRowColors(true);
+    // Ensure white background and black text for CSV/XLSX previews
+    fmCsvView->setStyleSheet(
+        "QTableView { background-color: #ffffff; color: #000000; gridline-color: #cccccc; border: none; }"
+        "QHeaderView::section { background-color: #f0f0f0; color: #000000; border: none; padding: 4px; }"
+    );
+    fmCsvView->hide();
+
+#ifdef HAVE_QT_PDF
+    fmPdfDoc = new QPdfDocument(fmPreviewPanel);
+#endif
+#ifdef HAVE_QT_PDF_WIDGETS
+    fmPdfView = new QPdfView(fmPreviewPanel);
+    fmPdfView->setPageMode(QPdfView::PageMode::SinglePage);
+    fmPdfView->setDocument(fmPdfDoc);
+    fmPdfView->hide();
+#endif
+
+    fmSvgScene = new QGraphicsScene(fmPreviewPanel);
+    fmSvgItem = nullptr;
+    fmSvgView = new QGraphicsView(fmSvgScene, fmPreviewPanel);
+    fmSvgView->setRenderHints(QPainter::Antialiasing | QPainter::SmoothPixmapTransform);
+    fmSvgView->setAlignment(Qt::AlignCenter);
+    fmSvgView->hide();
+
     fmImageView->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
 
     fmImageView->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     fmImageView->viewport()->installEventFilter(this);
     fmImageView->installEventFilter(this);
 
+
+
+    // Alpha toggle row (for images with alpha)
+    QHBoxLayout* alphaRow = new QHBoxLayout();
+    fmAlphaCheck = new QCheckBox("Alpha", fmPreviewPanel);
+    fmAlphaCheck->setToolTip("Show alpha channel (grayscale)");
+    fmAlphaCheck->hide();
+    connect(fmAlphaCheck, &QCheckBox::toggled, this, [this](bool on){
+        fmAlphaOnlyMode = on;
+        if (!fmOriginalImage.isNull() && fmImageItem) {
+            QImage disp = fmOriginalImage;
+            if (fmAlphaOnlyMode && disp.hasAlphaChannel()) {
+                QImage a(disp.size(), QImage::Format_Grayscale8);
+                for (int y=0;y<disp.height();++y){
+                    const uchar* al = disp.constScanLine(y);
+                    // convert alpha channel quickly by reading from pixel's alpha
+                    for (int x=0;x<disp.width();++x){
+                        uchar alpha = qAlpha(reinterpret_cast<const QRgb*>(disp.constScanLine(y))[x]);
+                        a.scanLine(y)[x] = alpha;
+                    }
+                }
+                disp = a.convertToFormat(QImage::Format_Grayscale8);
+            }
+            fmImageItem->setPixmap(QPixmap::fromImage(disp));
+            if (fmImageFitToView) fmImageView->fitInView(fmImageItem, Qt::KeepAspectRatio);
+        }
+    });
+    alphaRow->addWidget(fmAlphaCheck);
+    alphaRow->addStretch();
+
+    // PDF page controls (hidden by default)
+    QHBoxLayout* docc = new QHBoxLayout();
+    fmPdfPrevBtn = new QToolButton(fmPreviewPanel);
+    fmPdfPrevBtn->setText("◀");
+    fmPdfNextBtn = new QToolButton(fmPreviewPanel);
+    fmPdfNextBtn->setText("▶");
+    fmPdfPageLabel = new QLabel("--/--", fmPreviewPanel);
+    docc->addWidget(fmPdfPrevBtn);
+    docc->addWidget(fmPdfPageLabel);
+    docc->addWidget(fmPdfNextBtn);
+    docc->addStretch();
+    fmPdfPrevBtn->hide(); fmPdfNextBtn->hide(); fmPdfPageLabel->hide();
+#if defined(HAVE_QT_PDF)
+    connect(fmPdfPrevBtn, &QToolButton::clicked, this, [this]{
+        bool handled = false;
+        #ifdef HAVE_QT_PDF
+        if (fmPdfDoc && fmPdfDoc->pageCount() > 0) {
+            handled = true;
+            if (fmPdfCurrentPage > 0) fmPdfCurrentPage--;
+            const QSizeF pts = fmPdfDoc->pagePointSize(fmPdfCurrentPage);
+            int vw = fmImageView ? fmImageView->viewport()->width() : 800;
+            if (vw < 1) vw = 800;
+            int w = vw;
+            int h = pts.width() > 0 ? int(pts.height() * (w / pts.width())) : w;
+            QImage img = fmPdfDoc->render(fmPdfCurrentPage, QSize(w, h));
+            if (!img.isNull() && fmImageItem) {
+                // Composite onto white to avoid dark theme bleeding through
+                if (img.hasAlphaChannel()) {
+                    QImage bg(img.size(), QImage::Format_ARGB32_Premultiplied);
+                    bg.fill(Qt::white);
+                    QPainter p(&bg);
+                    p.drawImage(0, 0, img);
+                    p.end();
+                    img = bg;
+                }
+                fmImageItem->setPixmap(QPixmap::fromImage(img));
+                if (fmImageScene) fmImageScene->setSceneRect(fmImageItem->boundingRect());
+                if (fmImageView) {
+                    fmImageView->resetTransform();
+                    fmImageView->fitInView(fmImageItem, Qt::KeepAspectRatio);
+                    fmImageFitToView = true;
+                    fmImageView->setBackgroundBrush(Qt::white);
+                    fmImageView->show();
+                }
+            }
+            if (fmPdfPageLabel) fmPdfPageLabel->setText(QString("%1/%2").arg(fmPdfCurrentPage+1).arg(fmPdfDoc->pageCount()));
+        }
+        #endif
+    });
+    connect(fmPdfNextBtn, &QToolButton::clicked, this, [this]{
+        bool handled = false;
+        #ifdef HAVE_QT_PDF
+        if (fmPdfDoc && fmPdfDoc->pageCount() > 0) {
+            handled = true;
+            if (fmPdfCurrentPage + 1 < fmPdfDoc->pageCount()) fmPdfCurrentPage++;
+            const QSizeF pts = fmPdfDoc->pagePointSize(fmPdfCurrentPage);
+            int vw = fmImageView ? fmImageView->viewport()->width() : 800;
+            if (vw < 1) vw = 800;
+            int w = vw;
+            int h = pts.width() > 0 ? int(pts.height() * (w / pts.width())) : w;
+            QImage img = fmPdfDoc->render(fmPdfCurrentPage, QSize(w, h));
+            if (!img.isNull() && fmImageItem) {
+                if (img.hasAlphaChannel()) {
+                    QImage bg(img.size(), QImage::Format_ARGB32_Premultiplied);
+                    bg.fill(Qt::white);
+                    QPainter p(&bg);
+                    p.drawImage(0, 0, img);
+                    p.end();
+                    img = bg;
+                }
+                fmImageItem->setPixmap(QPixmap::fromImage(img));
+                if (fmImageScene) fmImageScene->setSceneRect(fmImageItem->boundingRect());
+                if (fmImageView) {
+                    fmImageView->resetTransform();
+                    fmImageView->fitInView(fmImageItem, Qt::KeepAspectRatio);
+                    fmImageFitToView = true;
+                    fmImageView->setBackgroundBrush(Qt::white);
+                    fmImageView->show();
+                }
+            }
+            if (fmPdfPageLabel) fmPdfPageLabel->setText(QString("%1/%2").arg(fmPdfCurrentPage+1).arg(fmPdfDoc->pageCount()));
+        }
+        #endif
+    });
+#endif
+
+    pv->addLayout(alphaRow);
 
     fmVideoWidget = new QVideoWidget(fmPreviewPanel);
     fmVideoWidget->setMinimumHeight(160);
@@ -1507,6 +1719,15 @@ void MainWindow::setupFileManagerUi()
     fmPlayPauseBtn->hide();
     fmPositionSlider->hide();
     fmTimeLabel->hide();
+    pc->addWidget(fmTextView, 1);
+    pv->addLayout(docc);
+
+    pc->addWidget(fmCsvView, 1);
+#ifdef HAVE_QT_PDF_WIDGETS
+    pc->addWidget(fmPdfView, 1);
+#endif
+    pc->addWidget(fmSvgView, 1);
+
     fmVolumeSlider->hide();
 
 
@@ -1571,6 +1792,7 @@ void MainWindow::setupFileManagerUi()
         connect(sc, &QShortcut::activated, this, &MainWindow::onFmBackToParent);
         fmShortcutObjs.insert("BackToParent", sc);
     }
+
 
     // Apply custom shortcuts from settings (overrides defaults)
     applyFmShortcuts();
@@ -1915,6 +2137,8 @@ void MainWindow::onFmPaste()
 
     // Ensure any preview locks are released before file ops
     if (fmMediaPlayer) { fmMediaPlayer->stop(); fmMediaPlayer->setSource(QUrl()); }
+    // Release any locks held by previews
+    releaseAnyPreviewLocksForPaths(fmClipboard);
     // Enqueue async operation
     auto &q = FileOpsQueue::instance();
     if (fmClipboardCutMode) q.enqueueMove(fmClipboard, destDir);
@@ -1939,7 +2163,7 @@ void MainWindow::onFmDelete()
     if (ret != QMessageBox::Yes) return;
 
     // Ensure any preview locks are released before file ops
-    if (fmMediaPlayer) { fmMediaPlayer->stop(); fmMediaPlayer->setSource(QUrl()); }
+    releaseAnyPreviewLocksForPaths(paths);
     // Enqueue async delete
     auto &q = FileOpsQueue::instance();
     q.enqueueDelete(paths);
@@ -1962,7 +2186,7 @@ void MainWindow::onFmDeletePermanent()
     if (ret != QMessageBox::Yes) return;
 
     // Ensure any preview locks are released before file ops
-    if (fmMediaPlayer) { fmMediaPlayer->stop(); fmMediaPlayer->setSource(QUrl()); }
+    releaseAnyPreviewLocksForPaths(paths);
     auto &q = FileOpsQueue::instance();
     q.enqueueDeletePermanent(paths);
     if (!fileOpsDialog) fileOpsDialog = new FileOpsProgressDialog(this);
@@ -2012,6 +2236,7 @@ void MainWindow::onFmRename()
     QStringList paths = getSelectedFileManagerPaths(fmDirModel, fmGridView, fmListView, fmViewStack);
     if (paths.size() != 1) return;
     QString p = paths.first();
+    releaseAnyPreviewLocksForPaths(QStringList{p});
     QFileInfo fi(p);
     bool ok = false;
     QString newName = QInputDialog::getText(this, "Rename", "New name:", QLineEdit::Normal, fi.fileName(), &ok);
@@ -2204,11 +2429,13 @@ void MainWindow::onFmTreeContextMenu(const QPoint &pos)
         auto ret = QMessageBox::question(this, "Move to Recycle Bin",
             QString("Delete %1 item(s)? They will be moved to Recycle Bin.").arg(paths.size()));
         if (ret != QMessageBox::Yes) return;
+        releaseAnyPreviewLocksForPaths(paths);
         FileOpsQueue::instance().enqueueDelete(paths);
         if (!fileOpsDialog) fileOpsDialog = new FileOpsProgressDialog(this);
         fileOpsDialog->show(); fileOpsDialog->raise(); fileOpsDialog->activateWindow();
     } else if (chosen == permDelA) {
         QStringList paths = getSelectedFmTreePaths();
+        releaseAnyPreviewLocksForPaths(paths);
         doPermanentDelete(paths);
     } else if (chosen == renameA) {
         QStringList paths = getSelectedFmTreePaths();
@@ -2242,6 +2469,7 @@ void MainWindow::onFmTreeContextMenu(const QPoint &pos)
             QMessageBox::warning(this, "Error", QString("Failed to create folder: %1").arg(folderPath));
             return;
         }
+        releaseAnyPreviewLocksForPaths(files);
         FileOpsQueue::instance().enqueueMove(files, folderPath);
         if (!fileOpsDialog) fileOpsDialog = new FileOpsProgressDialog(this);
         fileOpsDialog->show(); fileOpsDialog->raise(); fileOpsDialog->activateWindow();
@@ -2266,7 +2494,7 @@ void MainWindow::onFmPasteInto(const QString& destDir)
 {
     if (fmClipboard.isEmpty()) return;
     // Ensure any preview locks are released before file ops
-    if (fmMediaPlayer) { fmMediaPlayer->stop(); fmMediaPlayer->setSource(QUrl()); }
+    releaseAnyPreviewLocksForPaths(fmClipboard);
     auto &q = FileOpsQueue::instance();
     if (fmClipboardCutMode) q.enqueueMove(fmClipboard, destDir);
     else q.enqueueCopy(fmClipboard, destDir);
@@ -2284,12 +2512,35 @@ void MainWindow::doPermanentDelete(const QStringList& paths)
         QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
     if (ret != QMessageBox::Yes) return;
     // Ensure any preview locks are released before file ops
-    if (fmMediaPlayer) { fmMediaPlayer->stop(); fmMediaPlayer->setSource(QUrl()); }
+    releaseAnyPreviewLocksForPaths(paths);
     FileOpsQueue::instance().enqueueDeletePermanent(paths);
     if (!fileOpsDialog) fileOpsDialog = new FileOpsProgressDialog(this);
     fileOpsDialog->show(); fileOpsDialog->raise(); fileOpsDialog->activateWindow();
 }
 
+
+void MainWindow::releaseAnyPreviewLocksForPaths(const QStringList& paths)
+{
+    QSet<QString> s; for (const QString &p : paths) s.insert(QFileInfo(p).absoluteFilePath());
+    // Embedded FM preview: stop media and clear if current preview is among paths
+    if (fmMediaPlayer) { fmMediaPlayer->stop(); fmMediaPlayer->setSource(QUrl()); }
+    if (!fmCurrentPreviewPath.isEmpty()) {
+        QString abs = QFileInfo(fmCurrentPreviewPath).absoluteFilePath();
+        if (s.contains(abs)) {
+            clearFmPreview();
+        }
+    }
+    // Overlay: if showing one of these files, close it to fully release handles
+    if (previewOverlay) {
+        QString cur = previewOverlay->currentPath();
+        if (s.contains(QFileInfo(cur).absoluteFilePath())) {
+            closePreview();
+        } else {
+            // still release any handles
+            previewOverlay->stopPlayback();
+        }
+    }
+}
 
 
 void MainWindow::onFmCreateFolderWithSelected()
@@ -2393,6 +2644,12 @@ void MainWindow::setupConnections()
 
     // Tag context menu
     connect(tagsListView, &QListView::customContextMenuRequested, this, &MainWindow::onTagContextMenu);
+
+    // Install event filter on tags viewport after UI is fully built
+    if (tagsListView && tagsListView->viewport()) {
+        tagsListView->viewport()->installEventFilter(this);
+        qDebug() << "[INIT] tagsListView viewport event filter installed (late)";
+    }
 
 
     // Connect search box for real-time filtering
@@ -2949,6 +3206,63 @@ void MainWindow::changePreview(int delta)
 }
 
 
+void MainWindow::changeFmPreview(int delta)
+{
+    if (!previewOverlay) return;
+    QModelIndex cur = fmOverlayCurrentIndex;
+    if (!cur.isValid()) {
+        // fallback: try current selection from focused view
+        if (fmGridView && fmGridView->hasFocus()) cur = fmGridView->currentIndex();
+        else if (fmListView && fmListView->hasFocus()) cur = fmListView->currentIndex();
+        if (!cur.isValid()) return;
+        cur = cur.sibling(cur.row(), 0);
+        fmOverlayCurrentIndex = QPersistentModelIndex(cur);
+        fmOverlaySourceView = (fmGridView && fmGridView->hasFocus()) ? static_cast<QAbstractItemView*>(fmGridView) : static_cast<QAbstractItemView*>(fmListView);
+    }
+    QAbstractItemModel* model = const_cast<QAbstractItemModel*>(cur.model());
+    if (!model) return;
+    int newRow = cur.row() + delta;
+    if (newRow < 0) return;
+    if (newRow >= model->rowCount(cur.parent())) return;
+    QModelIndex next = model->index(newRow, 0, cur.parent());
+    if (!next.isValid()) return;
+
+    // Update context
+    fmOverlayCurrentIndex = QPersistentModelIndex(next);
+    if (fmOverlaySourceView) {
+        fmOverlaySourceView->setCurrentIndex(next);
+        fmOverlaySourceView->scrollTo(next, QAbstractItemView::PositionAtCenter);
+    }
+
+    // Handle grouping representative
+    if (fmProxyModel && fmGroupSequences && next.model() == fmProxyModel && fmProxyModel->isRepresentativeProxyIndex(next)) {
+        auto info = fmProxyModel->infoForProxyIndex(next);
+        QStringList frames = reconstructSequenceFramePaths(info.reprPath, info.start, info.end);
+        if (!frames.isEmpty()) {
+            previewOverlay->stopPlayback();
+            int pad = 0; QRegularExpression re("^(.*?)([._]?)(()(\\d{2,}))\\.([A-Za-z0-9]+)$");
+            auto m = re.match(QFileInfo(info.reprPath).fileName());
+            if (m.hasMatch()) pad = m.captured(3).length(); else pad = QString::number(info.start).length();
+            QString s0 = QString("%1").arg(info.start, pad, 10, QLatin1Char('0'));
+            QString s1 = QString("%1").arg(info.end, pad, 10, QLatin1Char('0'));
+            QString seqName = QString("%1.[%2-%3].%4").arg(info.base, s0, s1, info.ext);
+            previewOverlay->showSequence(frames, seqName, info.start, info.end);
+            return;
+        }
+    }
+
+    // Map to source if needed and show asset
+    QModelIndex srcIdx = next;
+    if (fmProxyModel && next.model() == fmProxyModel)
+        srcIdx = fmProxyModel->mapToSource(next);
+    QString path = fmDirModel ? fmDirModel->filePath(srcIdx) : QString();
+    if (path.isEmpty()) return;
+    QFileInfo fi(path);
+    if (!fi.exists()) return;
+    previewOverlay->stopPlayback();
+    previewOverlay->showAsset(path, fi.fileName(), fi.suffix());
+}
+
 
 QItemSelectionModel* MainWindow::getCurrentSelectionModel()
 {
@@ -3031,6 +3345,7 @@ void MainWindow::updateInfoPanel()
             QStringList imageExts = {"jpg", "jpeg", "png", "gif", "bmp", "tiff", "tif", "webp",
                                      "exr", "hdr", "psd", "psb", "tga", "dng", "cr2", "cr3",
                                      "nef", "arw", "orf", "rw2", "pef", "srw", "raf", "raw"};
+
             if (imageExts.contains(fileType.toLower())) {
                 QImageReader reader(filePath);
                 if (reader.canRead()) {
@@ -3840,19 +4155,26 @@ void MainWindow::onImportComplete()
 
 bool MainWindow::eventFilter(QObject *watched, QEvent *event)
 {
+    // During UI construction, ignore heavy logic in event filter
+    if (m_initializing) {
+        return false; // do not intercept; let normal processing continue
+    }
     // Update visible-only progress when asset viewports resize
     if ((watched == assetGridView->viewport() || watched == assetTableView->viewport()) && event->type() == QEvent::Resize) {
         scheduleVisibleThumbProgressUpdate();
     }
 
-    // Handle Space key on asset views to open preview
+    // Handle Space key on asset views to toggle preview (open/close)
     if ((watched == assetGridView || watched == assetTableView) && event->type() == QEvent::KeyPress) {
         QKeyEvent *keyEvent = static_cast<QKeyEvent*>(event);
         if (keyEvent->key() == Qt::Key_Space && !keyEvent->isAutoRepeat()) {
+            if (previewOverlay && previewOverlay->isVisible()) {
+                closePreview();
+                return true;
+            }
             // Get the current selection
             QItemSelectionModel *selectionModel = isGridMode ? assetGridView->selectionModel() : assetTableView->selectionModel();
             QModelIndexList selected = selectionModel->selectedIndexes();
-
             if (!selected.isEmpty()) {
                 // Open preview for the first selected item
                 QModelIndex index = selected.first();
@@ -4406,6 +4728,7 @@ void MainWindow::onThumbnailProgress(int current, int total)
 
 void MainWindow::scheduleVisibleThumbProgressUpdate()
 {
+    if (m_initializing) return;
     // Do not show our visible-only progress while a global/import progress is active
     if (ProgressManager::instance().isActive()) {
         return;
@@ -4416,18 +4739,19 @@ void MainWindow::scheduleVisibleThumbProgressUpdate()
 
 void MainWindow::updateVisibleThumbProgress()
 {
+    if (m_initializing) return;
     // If an import/global progress is active, hide ours and bail
     if (ProgressManager::instance().isActive()) {
-        thumbnailProgressLabel->setVisible(false);
-        thumbnailProgressBar->setVisible(false);
+        if (thumbnailProgressLabel) thumbnailProgressLabel->setVisible(false);
+        if (thumbnailProgressBar) thumbnailProgressBar->setVisible(false);
         return;
     }
 
     QAbstractItemView* view = isGridMode ? static_cast<QAbstractItemView*>(assetGridView)
                                          : static_cast<QAbstractItemView*>(assetTableView);
-    if (!view || !view->isVisible()) {
-        thumbnailProgressLabel->setVisible(false);
-        thumbnailProgressBar->setVisible(false);
+    if (!view || !view->isVisible() || !view->viewport() || !assetsModel || !thumbnailProgressLabel || !thumbnailProgressBar) {
+        if (thumbnailProgressLabel) thumbnailProgressLabel->setVisible(false);
+        if (thumbnailProgressBar) thumbnailProgressBar->setVisible(false);
         return;
     }
 
@@ -4789,9 +5113,30 @@ void MainWindow::clearFmPreview()
 {
     if (fmMediaPlayer) { fmMediaPlayer->stop(); fmMediaPlayer->setSource(QUrl()); }
     if (fmVideoWidget) fmVideoWidget->hide();
+    if (fmPlayPauseBtn) fmPlayPauseBtn->hide();
+    if (fmPositionSlider) fmPositionSlider->hide();
+    if (fmTimeLabel) fmTimeLabel->hide();
+    if (fmVolumeSlider) fmVolumeSlider->hide();
+
+    if (fmTextView) { fmTextView->clear(); fmTextView->hide(); }
+    if (fmCsvView) fmCsvView->hide();
+    if (fmCsvModel) fmCsvModel->clear();
+#ifdef HAVE_QT_PDF_WIDGETS
+    if (fmPdfView) fmPdfView->hide();
+#endif
+#ifdef HAVE_QT_PDF
+    if (fmPdfDoc) fmPdfDoc->close();
+#endif
+    if (fmPdfPrevBtn) fmPdfPrevBtn->hide();
+    if (fmPdfNextBtn) fmPdfNextBtn->hide();
+    if (fmPdfPageLabel) fmPdfPageLabel->hide();
+    if (fmSvgItem) { fmSvgScene->removeItem(fmSvgItem); delete fmSvgItem; fmSvgItem = nullptr; }
+    if (fmSvgView) fmSvgView->hide();
+
     if (fmImageItem) {
         fmImageItem->setPixmap(QPixmap());
     }
+    if (fmAlphaCheck) fmAlphaCheck->hide();
     if (fmImageView) fmImageView->show();
 }
 
@@ -4810,6 +5155,48 @@ static inline bool isAudioFile(const QString &ext)
     static const QSet<QString> exts = {"mp3","wav","aac","flac","ogg","m4a"};
     return exts.contains(ext.toLower());
 }
+static inline bool isPdfFile(const QString &ext)
+{
+    return ext.compare("pdf", Qt::CaseInsensitive) == 0;
+}
+static inline bool isSvgFile(const QString &ext)
+{
+    static const QSet<QString> exts = {"svg","svgz"};
+    return exts.contains(ext.toLower());
+}
+static inline bool isTextFile(const QString &ext)
+{
+    static const QSet<QString> exts = {"txt","log"};
+    return exts.contains(ext.toLower());
+}
+static inline bool isCsvFile(const QString &ext)
+{
+    return ext.compare("csv", Qt::CaseInsensitive) == 0;
+}
+static inline bool isExcelFile(const QString &ext)
+{
+    static const QSet<QString> exts = {"xls","xlsx"};
+    return exts.contains(ext.toLower());
+}
+static inline bool isDocxFile(const QString &ext)
+{
+    // Treat both .docx and legacy .doc as Word documents for preview handling
+    return ext.compare("docx", Qt::CaseInsensitive) == 0 || ext.compare("doc", Qt::CaseInsensitive) == 0;
+}
+static inline bool isAiFile(const QString &ext)
+{
+    return ext.compare("ai", Qt::CaseInsensitive) == 0;
+}
+static inline bool isPptxFile(const QString &ext)
+{
+    // Treat both .pptx and legacy .ppt as PowerPoint documents for preview handling
+    return ext.compare("pptx", Qt::CaseInsensitive) == 0 || ext.compare("ppt", Qt::CaseInsensitive) == 0;
+}
+
+
+
+
+
 
 void MainWindow::updateFmPreviewForIndex(const QModelIndex &idx)
 {
@@ -4819,6 +5206,7 @@ void MainWindow::updateFmPreviewForIndex(const QModelIndex &idx)
     QModelIndex viewIdx = idx.sibling(idx.row(), 0);
 
     // If this is a representative sequence item, show first frame
+
     if (fmProxyModel && fmGroupSequences && viewIdx.model() == fmProxyModel && fmProxyModel->isRepresentativeProxyIndex(viewIdx)) {
         auto info = fmProxyModel->infoForProxyIndex(viewIdx);
         QString path = info.reprPath;
@@ -4844,11 +5232,13 @@ void MainWindow::updateFmPreviewForIndex(const QModelIndex &idx)
         if (fmPositionSlider) fmPositionSlider->hide();
         if (fmTimeLabel) fmTimeLabel->hide();
         if (fmVolumeSlider) fmVolumeSlider->hide();
+        fmCurrentPreviewPath = path;
         fmImageItem->setPixmap(px);
         fmImageItem->setTransformationMode(Qt::SmoothTransformation);
         fmImageView->resetTransform();
         fmImageView->fitInView(fmImageItem, Qt::KeepAspectRatio);
         fmImageFitToView = true;
+        fmImageView->setBackgroundBrush(QColor("#0a0a0a"));
         fmImageView->show();
         return;
     }
@@ -4862,58 +5252,241 @@ void MainWindow::updateFmPreviewForIndex(const QModelIndex &idx)
     if (!info.exists() || info.isDir()) { clearFmPreview(); return; }
 
     const QString ext = info.suffix();
-    if (isImageFile(ext)) {
-        // Stop any media playback and hide media-specific widgets/controls
-        if (fmMediaPlayer) { fmMediaPlayer->stop(); fmMediaPlayer->setSource(QUrl()); }
+
+    auto hideNonImageWidgets = [this]{
+        if (fmTextView) fmTextView->hide();
+        if (fmCsvView) fmCsvView->hide();
+#ifdef HAVE_QT_PDF_WIDGETS
+        if (fmPdfView) fmPdfView->hide();
+#endif
+        if (fmPdfPrevBtn) fmPdfPrevBtn->hide();
+        if (fmPdfNextBtn) fmPdfNextBtn->hide();
+        if (fmPdfPageLabel) fmPdfPageLabel->hide();
+        if (fmSvgView) fmSvgView->hide();
         if (fmVideoWidget) fmVideoWidget->hide();
         if (fmPlayPauseBtn) fmPlayPauseBtn->hide();
         if (fmPositionSlider) fmPositionSlider->hide();
         if (fmTimeLabel) fmTimeLabel->hide();
         if (fmVolumeSlider) fmVolumeSlider->hide();
+        if (fmImageView) fmImageView->hide();
+        if (fmAlphaCheck) fmAlphaCheck->hide();
+    };
+
+    if (isImageFile(ext)) {
+        // Stop any media playback and hide media-specific widgets/controls
+        if (fmMediaPlayer) { fmMediaPlayer->stop(); fmMediaPlayer->setSource(QUrl()); }
+        hideNonImageWidgets();
 
         // Try OpenImageIO first for advanced formats (PSD/EXR/TIFF/etc.)
-        QPixmap px;
+        QImage img;
         if (OIIOImageLoader::isOIIOSupported(path)) {
-            QImage img = OIIOImageLoader::loadImage(path, 0, 0, OIIOImageLoader::ColorSpace::sRGB);
-            if (!img.isNull()) px = QPixmap::fromImage(img);
+            img = OIIOImageLoader::loadImage(path, 0, 0, OIIOImageLoader::ColorSpace::sRGB);
         }
-        // Fallback to Qt
-        if (px.isNull()) {
+        if (img.isNull()) {
             QImageReader reader(path);
             reader.setAutoTransform(true);
-            QImage img = reader.read();
-            if (!img.isNull()) px = QPixmap::fromImage(img);
+            img = reader.read();
         }
-        if (px.isNull()) { clearFmPreview(); return; }
+        if (img.isNull()) { clearFmPreview(); return; }
 
-        fmImageItem->setPixmap(px);
+        fmCurrentPreviewPath = path;
+        fmOriginalImage = img;
+        fmPreviewHasAlpha = img.hasAlphaChannel();
+        if (fmAlphaCheck) { fmAlphaCheck->setVisible(fmPreviewHasAlpha); fmAlphaCheck->setChecked(false); }
+        QImage disp = fmOriginalImage;
+        if (fmAlphaOnlyMode && disp.hasAlphaChannel()) {
+            QImage a(disp.size(), QImage::Format_Grayscale8);
+            for (int y=0;y<disp.height();++y){
+                for (int x=0;x<disp.width();++x){
+                    uchar alpha = qAlpha(reinterpret_cast<const QRgb*>(disp.constScanLine(y))[x]);
+                    a.scanLine(y)[x] = alpha;
+                }
+            }
+            disp = a;
+        }
+        fmImageItem->setPixmap(QPixmap::fromImage(disp));
         fmImageItem->setTransformationMode(Qt::SmoothTransformation);
         fmImageView->resetTransform();
         fmImageView->fitInView(fmImageItem, Qt::KeepAspectRatio);
         fmImageFitToView = true;
+        fmImageView->setBackgroundBrush(QColor("#0a0a0a"));
         fmImageView->show();
         return;
     }
 
-    if (isVideoFile(ext)) {
-        QUrl url = QUrl::fromLocalFile(path);
-        if (fmVideoWidget) fmVideoWidget->show();
-        if (fmImageView) fmImageView->hide();
-        if (fmPlayPauseBtn) fmPlayPauseBtn->show();
-        if (fmPositionSlider) fmPositionSlider->show();
-        if (fmTimeLabel) fmTimeLabel->show();
-        if (fmVolumeSlider) fmVolumeSlider->show();
-        if (fmMediaPlayer) {
-            fmMediaPlayer->setSource(url);
-            fmMediaPlayer->pause();
-            if (fmPlayPauseBtn) fmPlayPauseBtn->setText("Play");
+#ifdef HAVE_QT_PDF
+    if (isPdfFile(ext)) {
+        hideNonImageWidgets();
+        if (fmPdfDoc) {
+            fmCurrentPreviewPath = path;
+            auto err = fmPdfDoc->load(path);
+            if (err == QPdfDocument::Error::None && fmPdfDoc->pageCount() > 0) {
+            // Always render PDF pages into the image view for consistent zoom/pan
+                fmPdfCurrentPage = 0;
+                const QSizeF pts = fmPdfDoc->pagePointSize(fmPdfCurrentPage);
+                int vw = fmImageView ? fmImageView->viewport()->width() : 800;
+                if (vw < 1) vw = 800;
+                int w = vw;
+                int h = pts.width() > 0 ? int(pts.height() * (w / pts.width())) : w;
+                QImage img = fmPdfDoc->render(fmPdfCurrentPage, QSize(w, h));
+                if (!img.isNull() && fmImageItem) {
+                    if (img.hasAlphaChannel()) {
+                        QImage bg(img.size(), QImage::Format_ARGB32_Premultiplied);
+                        bg.fill(Qt::white);
+                        QPainter p(&bg);
+                        p.drawImage(0, 0, img);
+                        p.end();
+                        img = bg;
+                    }
+                    fmImageItem->setPixmap(QPixmap::fromImage(img));
+                    if (fmImageScene) fmImageScene->setSceneRect(fmImageItem->boundingRect());
+                    if (fmImageView) {
+                        fmImageView->resetTransform();
+                        fmImageView->fitInView(fmImageItem, Qt::KeepAspectRatio);
+                        fmImageFitToView = true;
+                        fmImageView->setBackgroundBrush(Qt::white);
+                        fmImageView->show();
+                    }
+                }
+                if (fmPdfPrevBtn) fmPdfPrevBtn->show();
+                if (fmPdfNextBtn) fmPdfNextBtn->show();
+                if (fmPdfPageLabel) { fmPdfPageLabel->show(); fmPdfPageLabel->setText(QString("%1/%2").arg(1).arg(fmPdfDoc->pageCount())); }
+                #ifdef HAVE_QT_PDF_WIDGETS
+                if (fmPdfView) fmPdfView->hide();
+                #endif
+            } else {
+                qWarning() << "[PREVIEW] PDF load failed" << int(err) << "pages=" << (fmPdfDoc ? fmPdfDoc->pageCount() : -1) << path;
+                // Fallback: show not available message in text view
+                if (fmTextView) { fmTextView->setPlainText("Preview not available"); fmTextView->show(); }
+            }
+        }
+        return;
+    }
+#else
+    if (isPdfFile(ext)) {
+        hideNonImageWidgets();
+        if (fmTextView) { fmTextView->setPlainText("Preview not available"); fmTextView->show(); }
+        return;
+    }
+#endif
+
+    if (isSvgFile(ext)) {
+        hideNonImageWidgets();
+        if (fmSvgScene && fmSvgView) {
+            // Remove previous item
+            if (fmSvgItem) { fmSvgScene->removeItem(fmSvgItem); delete fmSvgItem; fmSvgItem = nullptr; }
+            fmCurrentPreviewPath = path;
+            auto *item = new QGraphicsSvgItem(path);
+            item->setFlags(QGraphicsItem::ItemIsMovable | QGraphicsItem::ItemIsSelectable);
+            fmSvgItem = item;
+            fmSvgScene->addItem(fmSvgItem);
+            fmSvgView->fitInView(fmSvgItem, Qt::KeepAspectRatio);
+            fmSvgView->show();
         }
         return;
     }
 
-    if (isAudioFile(ext)) {
-        if (fmVideoWidget) fmVideoWidget->hide();
-        if (fmImageView) fmImageView->hide();
+    if (isTextFile(ext)) {
+        hideNonImageWidgets();
+        if (fmTextView) {
+            QFile f(path);
+            if (f.open(QIODevice::ReadOnly | QIODevice::Text)) {
+                fmCurrentPreviewPath = path;
+                QByteArray data = f.read(2*1024*1024); // cap to 2MB
+                fmTextView->setPlainText(QString::fromUtf8(data));
+                fmTextView->show();
+            } else {
+                if (fmTextView) {
+                    fmTextView->setPlainText("Preview not available");
+                    fmTextView->show();
+                }
+            }
+        }
+        return;
+    }
+
+// Office formats (DOCX/XLSX): lightweight, parse-only previews (no WYSIWYG)
+if (isDocxFile(ext)) {
+    hideNonImageWidgets();
+    fmCurrentPreviewPath = path;
+    if (fmTextView) {
+        const QString text = extractDocxText(path);
+        if (!text.isEmpty()) {
+            fmTextView->setWordWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
+            fmTextView->setPlainText(text);
+        } else {
+            fmTextView->setPlainText("Preview not available");
+        }
+        fmTextView->show();
+    }
+    return;
+}
+
+if (isExcelFile(ext)) {
+    hideNonImageWidgets();
+    fmCurrentPreviewPath = path;
+    if (fmCsvModel && fmCsvView) {
+        fmCsvModel->clear();
+        if (loadXlsxSheet(path, fmCsvModel, 2000)) {
+            fmCsvView->resizeColumnsToContents();
+            fmCsvView->show();
+        } else if (fmTextView) {
+            fmTextView->setPlainText("Preview not available");
+            fmTextView->show();
+        }
+    }
+    return;
+}
+
+    if (isCsvFile(ext)) {
+        hideNonImageWidgets();
+        if (fmCsvModel && fmCsvView) {
+            fmCsvModel->clear();
+            fmCurrentPreviewPath = path;
+            QFile f(path);
+            if (f.open(QIODevice::ReadOnly | QIODevice::Text)) {
+                QTextStream ts(&f);
+                int row=0; QChar delim = ',';
+                while (!ts.atEnd() && row<2000) {
+                    const QString line = ts.readLine();
+                    if (row == 0) {
+                        // Auto-detect delimiter: ',', ';', or tab
+                        int cComma = line.count(',');
+                        int cSemi  = line.count(';');
+                        int cTab   = line.count('\t');
+                        if (cSemi > cComma && cSemi >= cTab) delim = ';';
+                        else if (cTab > cComma && cTab >= cSemi) delim = '\t';
+                    }
+                    const QStringList cols = line.split(delim);
+                    if (row==0) fmCsvModel->setColumnCount(cols.size());
+                    QList<QStandardItem*> items; items.reserve(cols.size());
+                    for (const QString &c : cols) items << new QStandardItem(c.trimmed());
+                    fmCsvModel->appendRow(items);
+                    ++row;
+                }
+                fmCsvView->resizeColumnsToContents();
+                fmCsvView->show();
+            } else {
+                if (fmTextView) {
+                    fmTextView->setPlainText("Preview not available");
+                    fmTextView->show();
+                }
+            }
+        }
+        return;
+    }
+
+    if (isAudioFile(ext) || isVideoFile(ext)) {
+        // Media branch: audio/video
+        if (isVideoFile(ext)) {
+            fmCurrentPreviewPath = path;
+            if (fmVideoWidget) fmVideoWidget->show();
+            if (fmImageView) fmImageView->hide();
+        } else {
+            fmCurrentPreviewPath = path;
+            if (fmVideoWidget) fmVideoWidget->hide();
+            if (fmImageView) fmImageView->hide();
+        }
         if (fmPlayPauseBtn) fmPlayPauseBtn->show();
         if (fmPositionSlider) fmPositionSlider->show();
         if (fmTimeLabel) fmTimeLabel->show();
@@ -4925,6 +5498,69 @@ void MainWindow::updateFmPreviewForIndex(const QModelIndex &idx)
         }
         return;
     }
+
+    if (isExcelFile(ext) || isDocxFile(ext)) {
+        hideNonImageWidgets();
+        if (fmTextView) {
+            fmTextView->setPlainText("Preview not available");
+            fmTextView->show();
+        }
+        return;
+    }
+
+#ifdef HAVE_QT_PDF
+    if (isAiFile(ext)) {
+        // Many .ai files embed PDF — try to render with PDF engine
+        auto err = fmPdfDoc ? fmPdfDoc->load(path) : QPdfDocument::Error::Unknown;
+        if (fmPdfDoc && err == QPdfDocument::Error::None && fmPdfDoc->pageCount()>0) {
+            hideNonImageWidgets();
+        // Always render PDF pages into the image view for consistent zoom/pan
+            fmPdfCurrentPage = 0;
+            const QSizeF pts = fmPdfDoc->pagePointSize(fmPdfCurrentPage);
+            int vw = fmImageView ? fmImageView->viewport()->width() : 800;
+            if (vw < 1) vw = 800;
+            int w = vw;
+            int h = pts.width() > 0 ? int(pts.height() * (w / pts.width())) : w;
+            QImage img = fmPdfDoc->render(fmPdfCurrentPage, QSize(w, h));
+            if (!img.isNull() && fmImageItem) {
+                // Composite onto white to avoid dark theme bleeding through
+                if (img.hasAlphaChannel()) {
+                    QImage bg(img.size(), QImage::Format_ARGB32_Premultiplied);
+                    bg.fill(Qt::white);
+                    QPainter p(&bg);
+                    p.drawImage(0, 0, img);
+                    p.end();
+                    img = bg;
+                }
+                fmImageItem->setPixmap(QPixmap::fromImage(img));
+                if (fmImageScene) fmImageScene->setSceneRect(fmImageItem->boundingRect());
+                if (fmImageView) {
+                    fmImageView->resetTransform();
+                    fmImageView->fitInView(fmImageItem, Qt::KeepAspectRatio);
+                    fmImageFitToView = true;
+                    fmImageView->setBackgroundBrush(Qt::white);
+                    fmImageView->show();
+                }
+            }
+            if (fmPdfPrevBtn) fmPdfPrevBtn->show(); if (fmPdfNextBtn) fmPdfNextBtn->show(); if (fmPdfPageLabel) { fmPdfPageLabel->show(); fmPdfPageLabel->setText(QString("%1/%2").arg(1).arg(fmPdfDoc->pageCount())); }
+            #ifdef HAVE_QT_PDF_WIDGETS
+            if (fmPdfView) fmPdfView->hide();
+            #endif
+            return;
+        } else {
+            qWarning() << "[PREVIEW] AI (PDF-embedded) load failed or no pages" << path;
+        }
+        hideNonImageWidgets();
+        if (fmTextView) { fmTextView->setPlainText("Preview not available"); fmTextView->show(); }
+        return;
+    }
+#else
+    if (isAiFile(ext)) {
+        hideNonImageWidgets();
+        if (fmTextView) { fmTextView->setPlainText("Preview not available"); fmTextView->show(); }
+        return;
+    }
+#endif
 
     clearFmPreview();
 }
@@ -4965,12 +5601,19 @@ void MainWindow::onFmTogglePreview()
 
 void MainWindow::onFmOpenOverlay()
 {
+    // Toggle: if overlay is visible, close it
+    if (previewOverlay && previewOverlay->isVisible()) { closePreview(); return; }
+
     // Determine current selection in FM and open full-screen overlay
     QModelIndex idx;
     if (fmGridView && fmGridView->hasFocus()) idx = fmGridView->currentIndex();
     else if (fmListView && fmListView->hasFocus()) idx = fmListView->currentIndex();
     if (!idx.isValid()) return;
     idx = idx.sibling(idx.row(), 0);
+
+    // Record overlay navigation context
+    fmOverlayCurrentIndex = QPersistentModelIndex(idx);
+    fmOverlaySourceView = (fmGridView && fmGridView->hasFocus()) ? static_cast<QAbstractItemView*>(fmGridView) : static_cast<QAbstractItemView*>(fmListView);
 
     // If sequence grouping is enabled and the selection is a representative, open as sequence
     if (fmProxyModel && fmGroupSequences && idx.model() == fmProxyModel && fmProxyModel->isRepresentativeProxyIndex(idx)) {
@@ -4979,10 +5622,9 @@ void MainWindow::onFmOpenOverlay()
         if (!frames.isEmpty()) {
             if (!previewOverlay) {
                 previewOverlay = new PreviewOverlay(this);
-
                 previewOverlay->setGeometry(rect());
                 connect(previewOverlay, &PreviewOverlay::closed, this, &MainWindow::closePreview);
-                connect(previewOverlay, &PreviewOverlay::navigateRequested, this, &MainWindow::changePreview);
+                connect(previewOverlay, &PreviewOverlay::navigateRequested, this, &MainWindow::changeFmPreview);
             } else {
                 previewOverlay->stopPlayback();
             }
@@ -5009,7 +5651,7 @@ void MainWindow::onFmOpenOverlay()
         previewOverlay = new PreviewOverlay(this);
         previewOverlay->setGeometry(rect());
         connect(previewOverlay, &PreviewOverlay::closed, this, &MainWindow::closePreview);
-        connect(previewOverlay, &PreviewOverlay::navigateRequested, this, &MainWindow::changePreview);
+        connect(previewOverlay, &PreviewOverlay::navigateRequested, this, &MainWindow::changeFmPreview);
     } else {
         previewOverlay->stopPlayback();
     }
