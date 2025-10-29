@@ -288,11 +288,31 @@ protected:
         return QString("%1.[%2-%3].%4").arg(info.base, startStr, endStr, info.ext);
     }
 
+    // Always place folders before files regardless of sort order
+    bool lessThan(const QModelIndex &source_left, const QModelIndex &source_right) const override {
+        auto *fs = qobject_cast<QFileSystemModel*>(sourceModel());
+        if (!fs) return QSortFilterProxyModel::lessThan(source_left, source_right);
+        const bool leftIsDir = fs->isDir(source_left);
+        const bool rightIsDir = fs->isDir(source_right);
+        if (leftIsDir != rightIsDir) {
+            // Folders-first invariant
+            return leftIsDir; // true when left is a dir
+        }
+        // Same type: defer to default comparison (respects column and sort role)
+        return QSortFilterProxyModel::lessThan(source_left, source_right);
+    }
+
+    void sort(int column, Qt::SortOrder order = Qt::AscendingOrder) override {
+        m_sortOrder = order;
+        QSortFilterProxyModel::sort(column, order);
+    }
+
 private:
     bool m_enabled = true;
     QSet<QString> m_hidden; // absolute file paths to hide
     QHash<QString, Info> m_infoByRepr; // reprPath -> info
     QHash<QString, QString> m_keyByRepr; // reprPath -> grouping key
+    Qt::SortOrder m_sortOrder = Qt::AscendingOrder;
 };
 
 #include <QMediaPlayer>
@@ -2049,6 +2069,17 @@ void MainWindow::onFmTreeActivated(const QModelIndex &index)
         fmListView->setRootIndex(srcRoot);
     }
 
+    // Sync folder tree selection/expansion
+    if (fmTree && fmTreeModel) {
+        QModelIndex treeIdx = fmTreeModel->index(path);
+        if (treeIdx.isValid()) {
+            QModelIndex p = treeIdx;
+            while (p.isValid()) { fmTree->expand(p); p = p.parent(); }
+            fmTree->setCurrentIndex(treeIdx);
+            fmTree->scrollTo(treeIdx, QAbstractItemView::PositionAtCenter);
+        }
+    }
+
     // Persist current path
     QSettings s("AugmentCode", "KAssetManager");
     s.setValue("FileManager/CurrentPath", path);
@@ -2082,6 +2113,10 @@ void MainWindow::onFmItemDoubleClicked(const QModelIndex &index)
             } else {
                 previewOverlay->stopPlayback();
             }
+            // Remember source view/index for focus restoration on close
+            QAbstractItemView* srcView = (fmGridView && fmGridView->isVisible() && fmGridView->hasFocus()) ? static_cast<QAbstractItemView*>(fmGridView) : static_cast<QAbstractItemView*>(fmListView);
+            fmOverlayCurrentIndex = QPersistentModelIndex(idx);
+            fmOverlaySourceView = srcView;
             // Build display name
             int pad = 0; QRegularExpression re("^(.*?)([._]?)((\\d{2,}))\\.([A-Za-z0-9]+)$");
             auto m = re.match(QFileInfo(info.reprPath).fileName());
@@ -2108,6 +2143,16 @@ void MainWindow::onFmItemDoubleClicked(const QModelIndex &index)
             fmGridView->setRootIndex(srcRoot);
             fmListView->setRootIndex(srcRoot);
         }
+        // Sync folder tree selection/expansion
+        if (fmTree && fmTreeModel) {
+            QModelIndex treeIdx = fmTreeModel->index(path);
+            if (treeIdx.isValid()) {
+                QModelIndex p = treeIdx;
+                while (p.isValid()) { fmTree->expand(p); p = p.parent(); }
+                fmTree->setCurrentIndex(treeIdx);
+                fmTree->scrollTo(treeIdx, QAbstractItemView::PositionAtCenter);
+            }
+        }
         QSettings s("AugmentCode", "KAssetManager");
         s.setValue("FileManager/CurrentPath", path);
         return;
@@ -2123,6 +2168,10 @@ void MainWindow::onFmItemDoubleClicked(const QModelIndex &index)
         } else {
             previewOverlay->stopPlayback();
         }
+        // Remember source view/index for focus restoration on close
+        QAbstractItemView* srcView = (fmGridView && fmGridView->isVisible() && fmGridView->hasFocus()) ? static_cast<QAbstractItemView*>(fmGridView) : static_cast<QAbstractItemView*>(fmListView);
+        fmOverlayCurrentIndex = QPersistentModelIndex(idx);
+        fmOverlaySourceView = srcView;
         previewOverlay->showAsset(path, fi.fileName(), fi.suffix());
     } else {
         QDesktopServices::openUrl(QUrl::fromLocalFile(path));
@@ -2669,10 +2718,10 @@ void MainWindow::onFmThumbnailSizeChanged(int size)
 
 void MainWindow::onAddSelectionToAssetLibrary()
 {
-    // Collect selected file paths from the active File Manager view.
-    // Important: map view indexes through the proxy to the source model before
-    // calling fmDirModel methods, otherwise we may crash.
-    QStringList files;
+    // Collect selected paths (files and folders) from the active File Manager view.
+    // Map proxy indexes to source before using fmDirModel APIs.
+    QStringList filePaths;
+    QStringList folderPaths;
 
     const bool isGrid = (fmViewStack->currentIndex() == 0);
     if (isGrid) {
@@ -2683,8 +2732,9 @@ void MainWindow::onAddSelectionToAssetLibrary()
             if (fmProxyModel && idx.model() == fmProxyModel)
                 srcIdx = fmProxyModel->mapToSource(idx);
             if (!srcIdx.isValid()) continue;
-            if (fmDirModel->isDir(srcIdx)) continue;
-            files << fmDirModel->filePath(srcIdx);
+            const QString path = fmDirModel->filePath(srcIdx);
+            if (path.isEmpty()) continue;
+            if (fmDirModel->isDir(srcIdx)) folderPaths << path; else filePaths << path;
         }
     } else {
         if (!fmListView || !fmListView->selectionModel()) return;
@@ -2694,14 +2744,52 @@ void MainWindow::onAddSelectionToAssetLibrary()
             if (fmProxyModel && idx.model() == fmProxyModel)
                 srcIdx = fmProxyModel->mapToSource(idx);
             if (!srcIdx.isValid()) continue;
-            if (fmDirModel->isDir(srcIdx)) continue;
-            files << fmDirModel->filePath(srcIdx);
+            const QString path = fmDirModel->filePath(srcIdx);
+            if (path.isEmpty()) continue;
+            if (fmDirModel->isDir(srcIdx)) folderPaths << path; else filePaths << path;
         }
     }
 
-    files.removeDuplicates();
-    if (!files.isEmpty()) {
-        importFiles(files);
+    filePaths.removeDuplicates();
+    folderPaths.removeDuplicates();
+
+    if (filePaths.isEmpty() && folderPaths.isEmpty()) return;
+
+    // Ensure a destination asset folder is selected
+    if (!folderTreeView || !folderTreeView->currentIndex().isValid()) {
+        QMessageBox::warning(this, "No Folder Selected", "Please select a folder in the Asset Library before importing.");
+        return;
+    }
+    const int targetFolderId = folderTreeView->currentIndex().data(VirtualFolderTreeModel::IdRole).toInt();
+
+    // Show progress dialog
+    if (!importProgressDialog) importProgressDialog = new ImportProgressDialog(this);
+    importProgressDialog->show();
+    importProgressDialog->raise();
+    importProgressDialog->activateWindow();
+
+    // Prevent the dialog from closing between multiple import calls
+    disconnect(importer, &Importer::importFinished, this, &MainWindow::onImportComplete);
+
+    int totalImported = 0;
+
+    // Import folders preserving subfolder structure
+    for (const QString &dir : folderPaths) {
+        if (importer->importFolder(dir, targetFolderId)) totalImported++;
+    }
+
+    // Import individual files
+    if (!filePaths.isEmpty()) {
+        importer->importFiles(filePaths, targetFolderId); // emits importFinished
+        totalImported += filePaths.size();
+    }
+
+    // Reconnect and close dialog
+    connect(importer, &Importer::importFinished, this, &MainWindow::onImportComplete);
+    onImportComplete();
+
+    if (totalImported > 0) {
+        statusBar()->showMessage(QString("Imported %1 item(s)").arg(totalImported), 3000);
     }
 }
 
@@ -3272,13 +3360,44 @@ void MainWindow::showPreview(int index)
 
 void MainWindow::closePreview()
 {
+    // Preserve the last asset index for restoring Asset Manager focus
+    const int lastAssetIndex = previewIndex;
     previewIndex = -1;
+
     if (previewOverlay) {
         // Stop any playback (video, fallback, sequence) before hiding/deleting
         previewOverlay->stopPlayback();
         previewOverlay->hide();
         previewOverlay->deleteLater();
         previewOverlay = nullptr;
+    }
+
+    // 1) If preview was opened from File Manager, restore focus/selection there
+    if (fmOverlaySourceView && fmOverlayCurrentIndex.isValid()) {
+        if (QItemSelectionModel *sel = fmOverlaySourceView->selectionModel()) {
+            sel->setCurrentIndex(fmOverlayCurrentIndex, QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+        } else {
+            fmOverlaySourceView->setCurrentIndex(fmOverlayCurrentIndex);
+        }
+        fmOverlaySourceView->setFocus();
+        return; // Done
+    }
+
+    // 2) Otherwise, restore focus/selection to Asset Manager
+    if (lastAssetIndex >= 0) {
+        if (isGridMode && assetGridView && assetsModel) {
+            QModelIndex idx = assetsModel->index(lastAssetIndex, 0);
+            if (idx.isValid()) {
+                assetGridView->setCurrentIndex(idx);
+                assetGridView->setFocus();
+            }
+        } else if (assetTableView && assetTableView->model()) {
+            QModelIndex idx = assetTableView->model()->index(lastAssetIndex, 0);
+            if (idx.isValid()) {
+                assetTableView->setCurrentIndex(idx);
+                assetTableView->setFocus();
+            }
+        }
     }
 }
 
@@ -4450,16 +4569,34 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
 
                 // Handle file URL drops (import into target folder)
                 if (mimeData->hasUrls()) {
-                    QStringList files;
+                    QStringList filePaths;
+                    QStringList folderPaths;
                     for (const QUrl &url : mimeData->urls()) {
-                        if (url.isLocalFile()) files << url.toLocalFile();
+                        if (!url.isLocalFile()) continue;
+                        const QString path = url.toLocalFile();
+                        QFileInfo info(path);
+                        if (info.isDir()) folderPaths << path; else if (info.isFile()) filePaths << path;
                     }
-                    if (!files.isEmpty()) {
+                    if (!filePaths.isEmpty() || !folderPaths.isEmpty()) {
                         if (!importProgressDialog) importProgressDialog = new ImportProgressDialog(this);
                         importProgressDialog->show();
                         importProgressDialog->raise();
                         importProgressDialog->activateWindow();
-                        importer->importFiles(files, targetFolderId);
+
+                        // Avoid premature dialog closure when importing folders then files
+                        disconnect(importer, &Importer::importFinished, this, &MainWindow::onImportComplete);
+
+                        for (const QString &dir : folderPaths) {
+                            importer->importFolder(dir, targetFolderId);
+                        }
+                        if (!filePaths.isEmpty()) {
+                            importer->importFiles(filePaths, targetFolderId);
+                        }
+
+                        // Reconnect and finalize
+                        connect(importer, &Importer::importFinished, this, &MainWindow::onImportComplete);
+                        onImportComplete();
+
                         dropEvent->acceptProposedAction();
                         return true;
                     }
