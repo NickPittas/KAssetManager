@@ -8,6 +8,8 @@
 #include <QMap>
 #include <QFileInfo>
 #include <QDebug>
+#include <QFile>
+
 
 extern "C" {
 #include <mz.h>
@@ -147,8 +149,112 @@ QString extractDocxText(const QString& filePath)
         }
         if (out.size() > 2 * 1024 * 1024) break; // 2MB cap
     }
+
     return out;
 }
+
+
+static inline bool isUtf16TextChar(quint16 c)
+{
+    if (c == 0x0009 || c == 0x000A || c == 0x000D) return true; // tab, LF, CR
+    if (c >= 0x0020 && c < 0xD800) return true;                 // BMP before surrogates
+    if (c >= 0xE000 && c <= 0xFFFD) return true;                // BMP after surrogates (skip non-chars)
+    return false;
+}
+
+QString extractDocBinaryText(const QString& filePath, int maxChars)
+{
+    QFile f(filePath);
+    if (!f.open(QIODevice::ReadOnly)) return QString();
+
+    const qint64 kMaxRead = 32ll * 1024 * 1024; // read up to 32 MB
+    QByteArray data = f.read(kMaxRead);
+    f.close();
+    if (data.isEmpty()) return QString();
+
+    QString out;
+    out.reserve(64 * 1024);
+
+    auto appendSeg = [&](QString seg) {
+        seg.replace("\r\n", "\n");
+        seg.replace('\r', '\n');
+        while (seg.contains("\n\n\n")) seg.replace("\n\n\n", "\n\n");
+        seg = seg.trimmed();
+        if (seg.size() < 20) return; // ignore very short/noisy chunks
+        if (!out.isEmpty() && !out.endsWith('\n')) out += '\n';
+        out += seg;
+        out += '\n';
+    };
+
+    // First, try to extract UTF-16LE runs (common for .doc text storage)
+    for (int offset = 0; offset < 2 && out.size() < maxChars; ++offset) {
+        const int n = data.size() - offset;
+        int i = 0;
+        while (i + 1 < n && out.size() < maxChars) {
+            // Advance to start of a likely text char
+            while (i + 1 < n) {
+                quint16 c = (quint16)(uchar)data[offset + i] | ((quint16)(uchar)data[offset + i + 1] << 8);
+                if (isUtf16TextChar(c)) break;
+                i += 2;
+            }
+            if (i + 1 >= n) break;
+
+            QVector<quint16> buf;
+            int bad = 0;
+            while (i + 1 < n) {
+                quint16 c = (quint16)(uchar)data[offset + i] | ((quint16)(uchar)data[offset + i + 1] << 8);
+                if (isUtf16TextChar(c)) {
+                    buf.push_back(c);
+                    bad = 0;
+                } else {
+                    // allow brief noise within a run; insert space once
+                    if (!buf.isEmpty()) buf.push_back((quint16)' ');
+                    if (++bad >= 2) { i += 2; break; }
+                }
+                i += 2;
+                if (buf.size() >= 8192) break; // cap individual run
+            }
+            if (buf.size() >= 16) {
+                QString seg = QString::fromUtf16(reinterpret_cast<const char16_t*>(buf.constData()), buf.size());
+                appendSeg(seg);
+            }
+        }
+    }
+
+    // If nothing substantial extracted, scan for long ASCII/ANSI runs
+    if (out.size() < 256) {
+        const int n = data.size();
+        int i = 0;
+        while (i < n && out.size() < maxChars) {
+            // advance to likely text byte
+            while (i < n) {
+                uchar b = (uchar)data[i];
+                if (b == 0x09 || b == 0x0A || b == 0x0D || (b >= 0x20 && b <= 0x7E)) break;
+                ++i;
+            }
+            if (i >= n) break;
+            const int start = i;
+            int count = 0;
+            while (i < n) {
+                uchar b = (uchar)data[i];
+                if (b == 0x09 || b == 0x0A || b == 0x0D || (b >= 0x20 && b <= 0x7E)) {
+                    ++count; ++i;
+                    if (count >= 16384) break;
+                } else {
+                    break;
+                }
+            }
+            if (count >= 32) {
+                QString seg = QString::fromLatin1(data.constData() + start, count);
+                appendSeg(seg);
+            }
+        }
+    }
+
+    if (out.size() > maxChars) out.truncate(maxChars);
+    return out.trimmed();
+}
+
 
 bool loadXlsxSheet(const QString& filePath, QStandardItemModel* model, int maxRows)
 {

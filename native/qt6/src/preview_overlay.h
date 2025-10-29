@@ -75,6 +75,7 @@ private:
     void showPdf(const QString &filePath);
     void renderPdfPageToImage();
 #endif
+    void showDoc(const QString &filePath);
     void showDocx(const QString &filePath);
     void showXlsx(const QString &filePath);
     void showText(const QString &filePath);

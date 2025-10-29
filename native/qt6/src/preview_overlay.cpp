@@ -422,6 +422,13 @@ void PreviewOverlay::showAsset(const QString &filePath, const QString &fileName,
     }
 
     // Office parse-only previews
+    if (fileType.compare("doc", Qt::CaseInsensitive) == 0) {
+        currentFilePath = filePath;
+        currentFileType = fileType.toLower();
+        fileNameLabel->setText(fileName);
+        showDoc(filePath);
+        return;
+    }
     if (fileType.compare("docx", Qt::CaseInsensitive) == 0) {
         currentFilePath = filePath;
         currentFileType = fileType.toLower();
@@ -1323,6 +1330,8 @@ void PreviewOverlay::showText(const QString &filePath)
     if (f.open(QIODevice::ReadOnly | QIODevice::Text)) {
         QByteArray data = f.read(2*1024*1024); // cap to 2MB
         textView->setPlainText(QString::fromUtf8(data));
+
+
     } else {
         textView->setPlainText("Preview not available");
     }
@@ -1349,6 +1358,9 @@ void PreviewOverlay::showDocx(const QString &filePath)
 
     if (!textView) return;
 
+    // Use proportional UI font for Word documents
+    textView->setFont(QFontDatabase::systemFont(QFontDatabase::GeneralFont));
+
     const QString text = extractDocxText(filePath);
     textView->setWordWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
     if (!text.isEmpty()) {
@@ -1358,6 +1370,39 @@ void PreviewOverlay::showDocx(const QString &filePath)
     }
     textView->show();
 }
+
+void PreviewOverlay::showDoc(const QString &filePath)
+{
+    // Hide other content
+    if (videoWidget) videoWidget->hide();
+#ifdef HAVE_QT_PDF
+    if (pdfView) pdfView->hide();
+#endif
+    if (imageView) imageView->hide();
+    if (controlsWidget) controlsWidget->hide();
+    if (alphaCheck) alphaCheck->hide();
+
+    // Ensure overlay is visible for Office previews
+    show();
+    raise();
+    setFocus();
+    QApplication::processEvents();
+
+    if (!textView) return;
+
+    // Use proportional UI font for Word documents
+    textView->setFont(QFontDatabase::systemFont(QFontDatabase::GeneralFont));
+
+    const QString text = extractDocBinaryText(filePath, 2 * 1024 * 1024);
+    textView->setWordWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
+    if (!text.isEmpty()) {
+        textView->setPlainText(text);
+    } else {
+        textView->setPlainText("Preview not available");
+    }
+    textView->show();
+}
+
 
 void PreviewOverlay::showXlsx(const QString &filePath)
 {

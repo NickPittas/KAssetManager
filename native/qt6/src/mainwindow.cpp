@@ -5180,8 +5180,11 @@ static inline bool isExcelFile(const QString &ext)
 }
 static inline bool isDocxFile(const QString &ext)
 {
-    // Treat both .docx and legacy .doc as Word documents for preview handling
-    return ext.compare("docx", Qt::CaseInsensitive) == 0 || ext.compare("doc", Qt::CaseInsensitive) == 0;
+    return ext.compare("docx", Qt::CaseInsensitive) == 0;
+}
+static inline bool isDocFile(const QString &ext)
+{
+    return ext.compare("doc", Qt::CaseInsensitive) == 0;
 }
 static inline bool isAiFile(const QString &ext)
 {
@@ -5405,16 +5408,35 @@ void MainWindow::updateFmPreviewForIndex(const QModelIndex &idx)
         return;
     }
 
-// Office formats (DOCX/XLSX): lightweight, parse-only previews (no WYSIWYG)
+// Office formats (DOC/DOCX/XLSX): lightweight, parse-only previews (no WYSIWYG)
 if (isDocxFile(ext)) {
     hideNonImageWidgets();
     fmCurrentPreviewPath = path;
     if (fmTextView) {
         const QString text = extractDocxText(path);
         if (!text.isEmpty()) {
+            fmTextView->setFont(QFontDatabase::systemFont(QFontDatabase::GeneralFont));
             fmTextView->setWordWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
             fmTextView->setPlainText(text);
         } else {
+            fmTextView->setFont(QFontDatabase::systemFont(QFontDatabase::GeneralFont));
+            fmTextView->setPlainText("Preview not available");
+        }
+        fmTextView->show();
+    }
+    return;
+}
+if (isDocFile(ext)) {
+    hideNonImageWidgets();
+    fmCurrentPreviewPath = path;
+    if (fmTextView) {
+        const QString text = extractDocBinaryText(path, 2 * 1024 * 1024);
+        if (!text.isEmpty()) {
+            fmTextView->setFont(QFontDatabase::systemFont(QFontDatabase::GeneralFont));
+            fmTextView->setWordWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
+            fmTextView->setPlainText(text);
+        } else {
+            fmTextView->setFont(QFontDatabase::systemFont(QFontDatabase::GeneralFont));
             fmTextView->setPlainText("Preview not available");
         }
         fmTextView->show();
@@ -5499,7 +5521,7 @@ if (isExcelFile(ext)) {
         return;
     }
 
-    if (isExcelFile(ext) || isDocxFile(ext)) {
+    if (isExcelFile(ext) || isDocxFile(ext) || isDocFile(ext)) {
         hideNonImageWidgets();
         if (fmTextView) {
             fmTextView->setPlainText("Preview not available");
