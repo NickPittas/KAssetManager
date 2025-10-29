@@ -2,8 +2,26 @@
 #include <QDir>
 #include <QDateTime>
 #include <QDebug>
+#include <QFile>
+#include <QCryptographicHash>
 
 static QString lastErrorToString(const QSqlQuery& q){ return q.lastError().text(); }
+
+static QString computeFileSha256(const QString& path)
+{
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly)) return QString();
+    QCryptographicHash hasher(QCryptographicHash::Sha256);
+    const qint64 bufSize = 1 << 20; // 1MB
+    QByteArray buf;
+    buf.resize((int)bufSize);
+    while (true) {
+        qint64 n = f.read(buf.data(), buf.size());
+        if (n <= 0) break;
+        hasher.addData(buf.constData(), (int)n);
+    }
+    return hasher.result().toHex();
+}
 
 DB& DB::instance(){ static DB s; return s; }
 
@@ -17,6 +35,11 @@ bool DB::init(const QString& dbFilePath){
         qWarning() << "DB open failed:" << m_db.lastError();
         return false;
     }
+    // Derive data dir from DB file path for storing versions
+    QFileInfo dbFi(dbFilePath);
+    m_dataDir = dbFi.absolutePath();
+    QDir().mkpath(m_dataDir + "/versions");
+
     if (!migrate()) return false;
     m_rootId = ensureRootFolder();
     return m_rootId > 0;
@@ -89,6 +112,28 @@ bool DB::migrate(){
     if (!hasColumn("assets", "sequence_frame_count")) {
         exec("ALTER TABLE assets ADD COLUMN sequence_frame_count INTEGER NULL");
     }
+
+    // Ensure checksum column exists for change detection
+    if (!hasColumn("assets", "checksum")) {
+        exec("ALTER TABLE assets ADD COLUMN checksum TEXT NULL");
+    }
+
+    // Version history table
+    exec(
+        "CREATE TABLE IF NOT EXISTS asset_versions (\n"
+        "  id INTEGER PRIMARY KEY AUTOINCREMENT,\n"
+        "  asset_id INTEGER NOT NULL REFERENCES assets(id) ON DELETE CASCADE,\n"
+        "  version_number INTEGER NOT NULL,\n"
+        "  version_name TEXT NOT NULL,\n"
+        "  file_path TEXT NOT NULL,\n"
+        "  file_size INTEGER NOT NULL,\n"
+        "  checksum TEXT NOT NULL,\n"
+        "  created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n"
+        "  notes TEXT NULL,\n"
+        "  UNIQUE(asset_id, version_number)\n"
+        ");"
+    );
+    exec("CREATE INDEX IF NOT EXISTS idx_asset_versions_asset_id ON asset_versions(asset_id);");
 
     // PERFORMANCE: Add indexes for frequently queried columns
     exec("CREATE INDEX IF NOT EXISTS idx_assets_file_name ON assets(file_name);");
@@ -166,26 +211,62 @@ int DB::upsertAsset(const QString& filePath){
         qDebug() << "DB::upsertAsset: file does not exist:" << filePath;
         return 0;
     }
+    const QString absPath = fi.absoluteFilePath();
+
+    // Check if already exists
     QSqlQuery sel(m_db);
-    sel.prepare("SELECT id FROM assets WHERE file_path=?");
-    sel.addBindValue(fi.absoluteFilePath());
+    sel.prepare("SELECT id, COALESCE(file_size,0), COALESCE(checksum,'') FROM assets WHERE file_path=?");
+    sel.addBindValue(absPath);
     if (sel.exec() && sel.next()) {
         int existingId = sel.value(0).toInt();
-        qDebug() << "DB::upsertAsset: asset already exists, id=" << existingId << "path=" << filePath;
+        qint64 oldSize = sel.value(1).toLongLong();
+        QString oldChecksum = sel.value(2).toString();
+
+        // Compare size first; compute checksum only if size differs or checksum missing
+        qint64 newSize = fi.size();
+        bool changed = (newSize != oldSize) || oldChecksum.isEmpty();
+        QString newChecksum;
+        if (changed) {
+            newChecksum = computeFileSha256(absPath);
+            changed = (oldChecksum.isEmpty() || newChecksum != oldChecksum);
+        }
+
+        if (changed) {
+            // Create a new version snapshot and update metadata
+            createAssetVersion(existingId, absPath, QStringLiteral("Auto-sync: detected change on disk"));
+            QSqlQuery upd(m_db);
+            upd.prepare("UPDATE assets SET file_size=?, checksum=?, updated_at=CURRENT_TIMESTAMP WHERE id=?");
+            upd.addBindValue(newSize);
+            upd.addBindValue(newChecksum);
+            upd.addBindValue(existingId);
+            if (!upd.exec()) {
+                qWarning() << "DB::upsertAsset: UPDATE failed:" << upd.lastError();
+            }
+            emit assetsChanged(m_rootId);
+        } else {
+            qDebug() << "DB::upsertAsset: unchanged asset, id=" << existingId;
+        }
         return existingId;
     }
 
+    // New asset: insert row
     QSqlQuery ins(m_db);
-    ins.prepare("INSERT INTO assets(file_path,file_name,virtual_folder_id,file_size) VALUES(?,?,?,?)");
-    ins.addBindValue(fi.absoluteFilePath());
+    ins.prepare("INSERT INTO assets(file_path,file_name,virtual_folder_id,file_size,checksum) VALUES(?,?,?,?,?)");
+    ins.addBindValue(absPath);
     ins.addBindValue(fi.fileName());
     ins.addBindValue(m_rootId);
     ins.addBindValue((qint64)fi.size());
+    const QString checksum = computeFileSha256(absPath);
+    ins.addBindValue(checksum);
     if (!ins.exec()) {
         qWarning() << "DB::upsertAsset: INSERT failed:" << ins.lastError();
         return 0;
     }
     int newId = ins.lastInsertId().toInt();
+
+    // Create initial version v1
+    createAssetVersion(newId, absPath, QStringLiteral("Initial import"));
+
     qDebug() << "DB::upsertAsset: created new asset, id=" << newId << "path=" << filePath;
     emit assetsChanged(m_rootId);
     return newId;
@@ -239,6 +320,103 @@ int DB::upsertSequence(const QString& sequencePattern, int startFrame, int endFr
     emit assetsChanged(m_rootId);
     return newId;
 }
+
+
+int DB::insertAssetMetadataFast(const QString& filePath, int folderId)
+{
+    QFileInfo fi(filePath);
+    if (!fi.exists()) {
+        qDebug() << "DB::insertAssetMetadataFast: file does not exist:" << filePath;
+        return 0;
+    }
+    const QString absPath = fi.absoluteFilePath();
+
+    // Check if already exists
+    QSqlQuery sel(m_db);
+    sel.prepare("SELECT id FROM assets WHERE file_path=?");
+    sel.addBindValue(absPath);
+    if (sel.exec() && sel.next()) {
+        int existingId = sel.value(0).toInt();
+        QSqlQuery upd(m_db);
+        upd.prepare("UPDATE assets SET file_name=?, virtual_folder_id=?, file_size=?, updated_at=CURRENT_TIMESTAMP WHERE id=?");
+        upd.addBindValue(fi.fileName());
+        upd.addBindValue(folderId<=0?m_rootId:folderId);
+        upd.addBindValue((qint64)fi.size());
+        upd.addBindValue(existingId);
+        if (!upd.exec()) {
+            qWarning() << "DB::insertAssetMetadataFast: UPDATE failed:" << upd.lastError();
+        }
+        return existingId;
+    }
+
+    // New asset: insert minimal metadata (no checksum, no versioning)
+    QSqlQuery ins(m_db);
+    ins.prepare("INSERT INTO assets(file_path,file_name,virtual_folder_id,file_size,checksum,is_sequence) VALUES(?,?,?,?,NULL,0)");
+    ins.addBindValue(absPath);
+    ins.addBindValue(fi.fileName());
+    ins.addBindValue(folderId<=0?m_rootId:folderId);
+    ins.addBindValue((qint64)fi.size());
+    if (!ins.exec()) {
+        qWarning() << "DB::insertAssetMetadataFast: INSERT failed:" << ins.lastError();
+        return 0;
+    }
+    return ins.lastInsertId().toInt();
+}
+
+int DB::upsertSequenceInFolderFast(const QString& sequencePattern, int startFrame, int endFrame, int frameCount, const QString& firstFramePath, int folderId)
+{
+    QFileInfo fi(firstFramePath);
+    if (!fi.exists()) {
+        qDebug() << "DB::upsertSequenceInFolderFast: first frame does not exist:" << firstFramePath;
+        return 0;
+    }
+
+    // Check if sequence already exists
+    QSqlQuery sel(m_db);
+    sel.prepare("SELECT id FROM assets WHERE sequence_pattern=? AND is_sequence=1");
+    sel.addBindValue(sequencePattern);
+    if (sel.exec() && sel.next()) {
+        int existingId = sel.value(0).toInt();
+        QSqlQuery upd(m_db);
+        upd.prepare("UPDATE assets SET file_path=?, file_name=?, virtual_folder_id=?, file_size=?, sequence_start_frame=?, sequence_end_frame=?, sequence_frame_count=?, updated_at=CURRENT_TIMESTAMP WHERE id=?");
+        upd.addBindValue(fi.absoluteFilePath());
+        upd.addBindValue(sequencePattern);
+        upd.addBindValue(folderId<=0?m_rootId:folderId);
+        upd.addBindValue((qint64)fi.size());
+        upd.addBindValue(startFrame);
+        upd.addBindValue(endFrame);
+        upd.addBindValue(frameCount);
+        upd.addBindValue(existingId);
+        if (!upd.exec()) {
+            qWarning() << "DB::upsertSequenceInFolderFast: UPDATE failed:" << upd.lastError();
+        }
+        return existingId;
+    }
+
+    QSqlQuery ins(m_db);
+    ins.prepare("INSERT INTO assets(file_path,file_name,virtual_folder_id,file_size,is_sequence,sequence_pattern,sequence_start_frame,sequence_end_frame,sequence_frame_count) VALUES(?,?,?,?,1,?,?,?,?)");
+    ins.addBindValue(fi.absoluteFilePath());
+    ins.addBindValue(sequencePattern);
+    ins.addBindValue(folderId<=0?m_rootId:folderId);
+    ins.addBindValue((qint64)fi.size());
+    ins.addBindValue(sequencePattern);
+    ins.addBindValue(startFrame);
+    ins.addBindValue(endFrame);
+    ins.addBindValue(frameCount);
+
+    if (!ins.exec()) {
+        qWarning() << "DB::upsertSequenceInFolderFast: INSERT failed:" << ins.lastError();
+        return 0;
+    }
+    return ins.lastInsertId().toInt();
+}
+
+void DB::notifyAssetsChanged(int folderId){ emit assetsChanged(folderId); }
+void DB::notifyFoldersChanged(){ emit foldersChanged(); }
+void DB::notifyTagsChanged(){ emit tagsChanged(); }
+void DB::notifyProjectFoldersChanged(){ emit projectFoldersChanged(); }
+void DB::notifyAssetVersionsChanged(int assetId){ emit assetVersionsChanged(assetId); }
+
 
 bool DB::setAssetFolder(int assetId, int folderId){
     // Get old folder ID first
@@ -402,6 +580,138 @@ bool DB::assignTagsToAssets(const QList<int>& assetIds, const QList<int>& tagIds
     if (!ok) qWarning() << "DB::assignTagsToAssets failed" << q.lastError();
     emit assetsChanged(m_rootId);
     return ok;
+}
+
+
+int DB::getAssetIdByPath(const QString& filePath) const
+{
+    QSqlQuery q(m_db);
+    QFileInfo fi(filePath);
+    q.prepare("SELECT id FROM assets WHERE file_path=?");
+    q.addBindValue(fi.absoluteFilePath());
+    if (q.exec() && q.next()) return q.value(0).toInt();
+    return 0;
+}
+
+QVector<AssetVersionRow> DB::listAssetVersions(int assetId) const
+{
+    QVector<AssetVersionRow> rows;
+    QSqlQuery q(m_db);
+    q.prepare("SELECT id, asset_id, version_number, version_name, file_path, file_size, checksum, created_at, COALESCE(notes,'') FROM asset_versions WHERE asset_id=? ORDER BY version_number ASC");
+    q.addBindValue(assetId);
+    if (q.exec()) {
+        while (q.next()) {
+            AssetVersionRow r;
+            r.id = q.value(0).toInt();
+            r.assetId = q.value(1).toInt();
+            r.versionNumber = q.value(2).toInt();
+            r.versionName = q.value(3).toString();
+            r.filePath = q.value(4).toString();
+            r.fileSize = q.value(5).toLongLong();
+            r.checksum = q.value(6).toString();
+            r.createdAt = q.value(7).toString();
+            r.notes = q.value(8).toString();
+            rows.append(r);
+        }
+    }
+    return rows;
+}
+
+int DB::createAssetVersion(int assetId, const QString& srcFilePath, const QString& notes)
+{
+    QFileInfo sfi(srcFilePath);
+    if (!sfi.exists()) return 0;
+
+    // Determine next version number
+    QSqlQuery q(m_db);
+    q.prepare("SELECT COALESCE(MAX(version_number),0)+1 FROM asset_versions WHERE asset_id=?");
+    q.addBindValue(assetId);
+    int nextVersion = 1;
+    if (q.exec() && q.next()) nextVersion = q.value(0).toInt();
+    const QString versionName = QStringLiteral("v%1").arg(nextVersion);
+
+    // Prepare destination path
+    const QString versionsDir = m_dataDir + "/versions/" + QString::number(assetId);
+    QDir().mkpath(versionsDir);
+    const QString destFileName = versionName + "_" + sfi.fileName();
+    const QString destPath = versionsDir + "/" + destFileName;
+
+    // Copy file
+    if (QFile::exists(destPath)) QFile::remove(destPath);
+    if (!QFile::copy(sfi.absoluteFilePath(), destPath)) {
+        qWarning() << "createAssetVersion: failed to copy" << sfi.absoluteFilePath() << "to" << destPath;
+        return 0;
+    }
+
+    const qint64 fsize = sfi.size();
+    const QString sha256 = computeFileSha256(sfi.absoluteFilePath());
+
+    QSqlQuery ins(m_db);
+    ins.prepare("INSERT INTO asset_versions(asset_id, version_number, version_name, file_path, file_size, checksum, notes) VALUES(?,?,?,?,?,?,?)");
+    ins.addBindValue(assetId);
+    ins.addBindValue(nextVersion);
+    ins.addBindValue(versionName);
+    ins.addBindValue(destPath);
+    ins.addBindValue(fsize);
+    ins.addBindValue(sha256);
+    ins.addBindValue(notes);
+    if (!ins.exec()) {
+        qWarning() << "createAssetVersion: INSERT failed" << ins.lastError();
+        return 0;
+    }
+
+    emit assetVersionsChanged(assetId);
+    return ins.lastInsertId().toInt();
+}
+
+bool DB::revertAssetToVersion(int assetId, int versionId, bool createBackupVersion)
+{
+    // Get target version row
+    QSqlQuery vs(m_db);
+    vs.prepare("SELECT version_number, version_name, file_path, file_size, checksum FROM asset_versions WHERE id=? AND asset_id=?");
+    vs.addBindValue(versionId);
+    vs.addBindValue(assetId);
+    if (!vs.exec() || !vs.next()) {
+        qWarning() << "revertAssetToVersion: version not found" << versionId << "asset" << assetId;
+        return false;
+    }
+    const QString verName = vs.value(1).toString();
+    const QString srcPath = vs.value(2).toString();
+
+    // Current asset path and folder id
+    QSqlQuery a(m_db);
+    a.prepare("SELECT file_path, virtual_folder_id FROM assets WHERE id=?");
+    a.addBindValue(assetId);
+    if (!a.exec() || !a.next()) return false;
+    const QString destPath = a.value(0).toString();
+    const int folderId = a.value(1).toInt();
+
+    // Optionally backup current file as a new version
+    if (createBackupVersion) {
+        createAssetVersion(assetId, destPath, QStringLiteral("Backup before revert to %1").arg(verName));
+    }
+
+    // Overwrite asset file with version file
+    if (QFile::exists(destPath)) QFile::remove(destPath);
+    if (!QFile::copy(srcPath, destPath)) {
+        qWarning() << "revertAssetToVersion: failed to copy" << srcPath << "to" << destPath;
+        return false;
+    }
+
+    // Update asset metadata
+    QFileInfo dfi(destPath);
+    const qint64 newSize = dfi.size();
+    const QString newChecksum = computeFileSha256(destPath);
+    QSqlQuery upd(m_db);
+    upd.prepare("UPDATE assets SET file_size=?, checksum=?, updated_at=CURRENT_TIMESTAMP WHERE id=?");
+    upd.addBindValue(newSize);
+    upd.addBindValue(newChecksum);
+    upd.addBindValue(assetId);
+    upd.exec();
+
+    emit assetsChanged(folderId);
+    emit assetVersionsChanged(assetId);
+    return true;
 }
 
 QList<int> DB::getAssetIdsInFolder(int folderId, bool recursive) const
