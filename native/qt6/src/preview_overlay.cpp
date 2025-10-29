@@ -1359,7 +1359,7 @@ void PreviewOverlay::showDocx(const QString &filePath)
     if (!textView) return;
 
     // Use proportional UI font for Word documents
-    textView->setFont(QFontDatabase::systemFont(QFontDatabase::GeneralFont));
+    textView->setFont(QFont("Segoe UI"));
 
     const QString text = extractDocxText(filePath);
     textView->setWordWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
@@ -1391,7 +1391,7 @@ void PreviewOverlay::showDoc(const QString &filePath)
     if (!textView) return;
 
     // Use proportional UI font for Word documents
-    textView->setFont(QFontDatabase::systemFont(QFontDatabase::GeneralFont));
+    textView->setFont(QFont("Segoe UI"));
 
     const QString text = extractDocBinaryText(filePath, 2 * 1024 * 1024);
     textView->setWordWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);

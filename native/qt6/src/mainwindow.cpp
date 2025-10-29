@@ -5415,11 +5415,11 @@ if (isDocxFile(ext)) {
     if (fmTextView) {
         const QString text = extractDocxText(path);
         if (!text.isEmpty()) {
-            fmTextView->setFont(QFontDatabase::systemFont(QFontDatabase::GeneralFont));
+            fmTextView->setFont(QFont("Segoe UI"));
             fmTextView->setWordWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
             fmTextView->setPlainText(text);
         } else {
-            fmTextView->setFont(QFontDatabase::systemFont(QFontDatabase::GeneralFont));
+            fmTextView->setFont(QFont("Segoe UI"));
             fmTextView->setPlainText("Preview not available");
         }
         fmTextView->show();
@@ -5432,11 +5432,11 @@ if (isDocFile(ext)) {
     if (fmTextView) {
         const QString text = extractDocBinaryText(path, 2 * 1024 * 1024);
         if (!text.isEmpty()) {
-            fmTextView->setFont(QFontDatabase::systemFont(QFontDatabase::GeneralFont));
+            fmTextView->setFont(QFont("Segoe UI"));
             fmTextView->setWordWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
             fmTextView->setPlainText(text);
         } else {
-            fmTextView->setFont(QFontDatabase::systemFont(QFontDatabase::GeneralFont));
+            fmTextView->setFont(QFont("Segoe UI"));
             fmTextView->setPlainText("Preview not available");
         }
         fmTextView->show();

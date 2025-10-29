@@ -11,6 +11,15 @@
 #include <QFile>
 
 
+#ifdef _WIN32
+#  define NOMINMAX
+#  include <windows.h>
+#  include <objbase.h>
+#  include <ole2.h>
+#  include <combaseapi.h>
+#endif
+
+
 extern "C" {
 #include <mz.h>
 #include <mz_strm.h>
@@ -45,6 +54,50 @@ static QByteArray readZipEntry(const QString& zipPath, const QString& entryPath)
     }
     char buf[8192];
     int32_t read = 0;
+
+#ifdef _WIN32
+static QByteArray readOleStream(const QString &filePath, const wchar_t *name)
+{
+    QByteArray result;
+
+    HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    bool didInit = SUCCEEDED(hr);
+
+    IStorage *storage = nullptr;
+    hr = StgOpenStorageEx(reinterpret_cast<LPCWSTR>(filePath.utf16()),
+                          STGM_READ | STGM_SHARE_DENY_WRITE,
+                          STGFMT_DOCFILE,
+                          0, nullptr, nullptr,
+                          IID_IStorage,
+                          reinterpret_cast<void **>(&storage));
+    if (FAILED(hr) || !storage) {
+        if (didInit) CoUninitialize();
+        return result;
+    }
+
+    IStream *stream = nullptr;
+    hr = storage->OpenStream(name, nullptr,
+                             STGM_READ | STGM_SHARE_EXCLUSIVE, 0, &stream);
+    if (SUCCEEDED(hr) && stream) {
+        STATSTG st = {};
+        if (SUCCEEDED(stream->Stat(&st, STATFLAG_NONAME))) {
+            ULONGLONG size = st.cbSize.QuadPart;
+            if (size > (ULONGLONG) (64ull * 1024ull * 1024ull)) size = 64ull * 1024ull * 1024ull;
+            result.resize((int)size);
+            LARGE_INTEGER li; li.QuadPart = 0;
+            stream->Seek(li, STREAM_SEEK_SET, nullptr);
+            ULONG read = 0;
+            stream->Read(result.data(), (ULONG)result.size(), &read);
+            result.resize((int)read);
+        }
+        stream->Release();
+    }
+    storage->Release();
+    if (didInit) CoUninitialize();
+    return result;
+}
+#endif
+
     while ((read = mz_zip_reader_entry_read(reader, buf, (int32_t)sizeof(buf))) > 0) {
         out.append(buf, read);
         if (out.size() > 10 * 1024 * 1024) { // safety cap 10MB
@@ -162,25 +215,76 @@ static inline bool isUtf16TextChar(quint16 c)
     return false;
 }
 
+static inline bool isCjkChar(uint u)
+{
+    if ((u >= 0x4E00 && u <= 0x9FFF) || // CJK Unified Ideographs
+        (u >= 0x3400 && u <= 0x4DBF) || // CJK Ext A
+        (u >= 0x3040 && u <= 0x30FF) || // Hiragana/Katakana
+        (u >= 0x31A0 && u <= 0x31FF) || // Bopomofo/Katakana Phonetic Ext
+        (u >= 0xAC00 && u <= 0xD7AF) || // Hangul Syllables
+        (u >= 0xF900 && u <= 0xFAFF) || // CJK Compatibility Ideographs
+        (u >= 0x2E80 && u <= 0x2EFF) || // CJK Radicals
+        (u >= 0x3000 && u <= 0x303F))   // CJK punctuation
+        return true;
+    return false;
+}
+
+static inline bool isWesternishChar(uint u)
+{
+    if (u == 0x0009 || u == 0x000A || u == 0x000D) return true; // whitespace
+    if (u >= 0x0020 && u <= 0x007E) return true;                 // ASCII
+    if (u >= 0x00A0 && u <= 0x00FF) return true;                 // Latin-1 supplement
+    if (u >= 0x0100 && u <= 0x024F) return true;                 // Latin Extended A/B
+    if ((u >= 0x2010 && u <= 0x2015) ||                          // dashes
+        (u >= 0x2018 && u <= 0x201F) ||                          // curly quotes
+        u == 0x2026)                                             // ellipsis
+        return true;
+    return false;
+}
+
+static bool looksWestern(const QString &s, double minRatio)
+{
+    int western = 0, cjk = 0, total = 0;
+    for (QChar ch : s) {
+        const uint u = ch.unicode();
+        if (u == 0x0009 || u == 0x000A || u == 0x000D || u >= 0x0020) ++total;
+        if (isWesternishChar(u)) ++western;
+        if (isCjkChar(u)) ++cjk;
+    }
+    if (total == 0) return false;
+    // Reject if overwhelmingly CJK-like
+    if (cjk > western * 2) return false;
+    const double ratio = (double)western / (double)total;
+    return ratio >= minRatio;
+}
+
+
 QString extractDocBinaryText(const QString& filePath, int maxChars)
 {
-    QFile f(filePath);
-    if (!f.open(QIODevice::ReadOnly)) return QString();
-
-    const qint64 kMaxRead = 32ll * 1024 * 1024; // read up to 32 MB
-    QByteArray data = f.read(kMaxRead);
-    f.close();
-    if (data.isEmpty()) return QString();
+    QByteArray data;
+#ifdef _WIN32
+    data = readOleStream(filePath, L"WordDocument");
+#endif
+    if (data.isEmpty()) {
+        QFile f(filePath);
+        if (!f.open(QIODevice::ReadOnly)) return QString();
+        const qint64 kMaxRead = 32ll * 1024 * 1024; // read up to 32 MB
+        data = f.read(kMaxRead);
+        f.close();
+        if (data.isEmpty()) return QString();
+    }
 
     QString out;
     out.reserve(64 * 1024);
 
+    bool useFilter = false; // do not filter when reading WordDocument stream
     auto appendSeg = [&](QString seg) {
         seg.replace("\r\n", "\n");
         seg.replace('\r', '\n');
         while (seg.contains("\n\n\n")) seg.replace("\n\n\n", "\n\n");
         seg = seg.trimmed();
         if (seg.size() < 20) return; // ignore very short/noisy chunks
+        if (useFilter && !looksWestern(seg, 0.55)) return; // optional filter for full-file fallback
         if (!out.isEmpty() && !out.endsWith('\n')) out += '\n';
         out += seg;
         out += '\n';
