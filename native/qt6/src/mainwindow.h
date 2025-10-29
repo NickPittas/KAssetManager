@@ -17,11 +17,20 @@
 #include <QAction>
 #include <QSet>
 #include <QTimer>
+#include <QTableWidget>
+#include <QCheckBox>
+#include <QTabWidget>
+#include <QFileSystemModel>
+#include <QListWidget>
+
+#include <QToolButton>
 
 class VirtualFolderTreeModel;
 class AssetsModel;
 class TagsModel;
 class PreviewOverlay;
+class SequenceGroupingProxyModel;
+
 class ImportProgressDialog;
 class ProjectFolderWatcher;
 
@@ -79,14 +88,61 @@ private slots:
     void onLockToggled(bool checked);
     void onProjectFolderChanged(int projectFolderId, const QString& path);
 
+    // Versioning
+    void onRevertSelectedVersion();
+    void onAssetVersionsChanged(int assetId);
+
     // Log viewer
     void onToggleLogViewer();
 
+    // File Manager slots
+    void onFmTreeActivated(const QModelIndex &index);
+    void onFmTreeContextMenu(const QPoint &pos);
+    void onFmItemDoubleClicked(const QModelIndex &index);
+    void onFmViewModeToggled();
+    void onFmThumbnailSizeChanged(int size);
+    void onAddSelectionToAssetLibrary();
+    void onFmAddToFavorites();
+    void onFmRemoveFavorite();
+    void onFmFavoriteActivated(QListWidgetItem* item);
+
+    // File operations
+    void onFmCopy();
+    void onFmCut();
+    void onFmPaste();
+    void onFmDelete();
+    void onFmDeletePermanent();
+    void onFmRename();
+    void onFmNewFolder();
+    void onFmCreateFolderWithSelected();
+    void onFmShowContextMenu(const QPoint &pos);
+    void onFmBackToParent();
+    void onFmGroupSequencesToggled(bool checked);
+
+
+    // File Manager preview
+    void onFmSelectionChanged();
+    void onFmTogglePreview(); // toolbar toggle
+    void onFmOpenOverlay();   // Space: toggle full-screen overlay
+    void changeFmPreview(int delta); // Navigate in File Manager overlay
 private:
+    QString fmPathForIndex(const QModelIndex& idx) const;
+    void setFmRootPath(const QString& path);
+    void releaseAnyPreviewLocksForPaths(const QStringList& paths);
+
+
+protected:
+    void closeEvent(QCloseEvent* event) override;
+
+private:
+    bool m_initializing = false; // guard for eventFilter during UI construction
+
     void setupUi();
     void setupConnections();
+    void setupFileManagerUi();
     void updateInfoPanel();
     void updateSelectionInfo();
+    void reloadVersionHistory();
 
     // Visible-only thumbnail progress (Option B)
     void scheduleVisibleThumbProgressUpdate();
@@ -108,21 +164,26 @@ private:
 
     // Sequence helper
     QStringList reconstructSequenceFramePaths(const QString& firstFramePath, int startFrame, int endFrame);
-    
+
+    // Tabs
+    QTabWidget *mainTabs;
+    QWidget *assetManagerPage;
+    QWidget *fileManagerPage;
+
     // UI Components
     QSplitter *mainSplitter;
     QSplitter *rightSplitter;
-    
-    // Left panel: Folder tree
+
+    // Left panel: Folder tree (Asset Manager)
     QTreeView *folderTreeView;
     VirtualFolderTreeModel *folderModel;
-    
+
     // Center panel: Asset grid and table
     class QStackedWidget *viewStack;
     QListView *assetGridView;
     class QTableView *assetTableView;
     AssetsModel *assetsModel;
-    
+
     // Right panel: Filters + Info
     QWidget *rightPanel;
     QWidget *filtersPanel;
@@ -130,7 +191,7 @@ private:
 
     // Importer
     class Importer *importer;
-    
+
     // Filters
     QLineEdit *searchBox;
     QComboBox *ratingFilter;
@@ -142,12 +203,12 @@ private:
 
     // View controls
     QSlider *thumbnailSizeSlider;
-    QPushButton *viewModeButton;
+    QToolButton *viewModeButton;
     bool isGridMode;
     class QCheckBox *lockCheckBox;
     class QCheckBox *recursiveCheckBox;
     QPushButton *refreshButton;
-    
+
     // Info panel labels
     QLabel *infoFileName;
     QLabel *infoFilePath;
@@ -160,13 +221,19 @@ private:
     QLabel *infoRatingLabel;
     class StarRatingWidget *infoRatingWidget;
     QLabel *infoTags;
-    
+
+    // Version history UI
+    QLabel *versionsTitleLabel;
+    QTableWidget *versionTable;
+    QPushButton *revertVersionButton;
+    QCheckBox *backupVersionCheck;
+
     // Selection state
     QSet<int> selectedAssetIds;
     int anchorIndex;
     int currentAssetId;
     int previewIndex;
-    
+
     // Preview overlay
     PreviewOverlay *previewOverlay;
 
@@ -176,6 +243,10 @@ private:
 
     // Debounced updater for visible-only thumbnail progress
     QTimer visibleThumbTimer;
+
+    // Debounce for folder selection in Asset Manager
+    QTimer folderSelectTimer;
+    int pendingFolderId = -1;
 
     // Import progress dialog
     ImportProgressDialog *importProgressDialog;
@@ -187,6 +258,84 @@ private:
     // Log viewer
     class LogViewerWidget *logViewerWidget;
     QAction *toggleLogViewerAction;
+
+    // File Manager members
+    QSplitter *fmSplitter;
+    // Sequence grouping
+    SequenceGroupingProxyModel *fmProxyModel = nullptr;
+    QToolButton *fmGroupSequencesButton = nullptr;
+    bool fmGroupSequences = true;
+
+    QSplitter *fmLeftSplitter;   // Favorites | Folder tree
+    QSplitter *fmRightSplitter;  // Views | Preview panel
+    // Left pane
+    QListWidget *fmFavoritesList;
+    QTreeView *fmTree;
+    QFileSystemModel *fmTreeModel;
+    // Right pane
+    QFileSystemModel *fmDirModel;
+    QWidget *fmToolbar;
+    QToolButton *fmViewModeButton;
+    class QSlider *fmThumbnailSizeSlider;
+    QToolButton *fmPreviewToggleButton;
+    class QStackedWidget *fmViewStack;
+    QListView *fmGridView;
+    class QTableView *fmListView;
+    bool fmIsGridMode;
+
+    // Favorites persistence
+    QStringList fmFavorites;
+    void loadFmFavorites();
+    void saveFmFavorites();
+
+    // Preview panel (embedded, right side)
+    QWidget *fmPreviewPanel = nullptr;
+    class QGraphicsView *fmImageView = nullptr;
+    class QGraphicsScene *fmImageScene = nullptr;
+    class QGraphicsPixmapItem *fmImageItem = nullptr;
+    class QVideoWidget *fmVideoWidget = nullptr;
+    // Additional preview widgets
+    class QPlainTextEdit *fmTextView = nullptr;           // TXT/LOG
+    class QTableView *fmCsvView = nullptr;                // CSV table
+    class QStandardItemModel *fmCsvModel = nullptr;
+    class QPdfDocument *fmPdfDoc = nullptr;               // PDF (core)
+    class QPdfView *fmPdfView = nullptr;                 // Optional (QtPdfWidgets)
+    int fmPdfCurrentPage = 0;                            // Fallback navigation when PdfWidgets missing
+    class QToolButton *fmPdfPrevBtn = nullptr; class QToolButton *fmPdfNextBtn = nullptr; QLabel *fmPdfPageLabel = nullptr;
+    class QGraphicsView *fmSvgView = nullptr; class QGraphicsScene *fmSvgScene = nullptr; class QGraphicsItem *fmSvgItem = nullptr;
+    QCheckBox *fmAlphaCheck = nullptr;          // Alpha toggle for images
+    // State for image/alpha
+    bool fmImageFitToView = true; // auto fit image to view and refit on resize until user zooms manually
+    QImage fmOriginalImage; QString fmCurrentPreviewPath; bool fmPreviewHasAlpha = false; bool fmAlphaOnlyMode = false;
+    // Media
+    class QMediaPlayer *fmMediaPlayer;
+    class QAudioOutput *fmAudioOutput;
+    QPushButton *fmPlayPauseBtn;
+    // Shortcuts management for File Manager
+    QHash<QString, class QShortcut*> fmShortcutObjs;
+    void applyFmShortcuts();
+    static QKeySequence fmShortcutFor(const QString& actionName, const QKeySequence& def);
+
+    // Helpers for tree/context operations
+    QStringList getSelectedFmTreePaths() const;
+    void onFmPasteInto(const QString& destDir);
+    void doPermanentDelete(const QStringList& paths);
+
+    QSlider *fmPositionSlider;
+    QLabel *fmTimeLabel;
+    QSlider *fmVolumeSlider;
+
+    // File operations state
+    QStringList fmClipboard;
+    bool fmClipboardCutMode = false;
+    class FileOpsProgressDialog *fileOpsDialog;
+
+    // Overlay navigation context for File Manager
+    QPersistentModelIndex fmOverlayCurrentIndex; QAbstractItemView* fmOverlaySourceView = nullptr; // grid or list
+
+    // Helpers
+    void updateFmPreviewForIndex(const QModelIndex &idx);
+    void clearFmPreview();
 };
 
 #endif // MAINWINDOW_H

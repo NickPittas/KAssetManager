@@ -16,6 +16,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Undo/redo system
 - Crash reporting
 
+## [0.2.0] - 2025-10-29
+
+### Added
+- File Manager: “Add to Library” now supports selected folders in addition to files; when folders are selected, their subfolder hierarchy is preserved and recreated in the Asset Manager (matches drag-and-drop behavior)
+- File Manager: Folders-first sorting in both Grid and List views (folders always listed above files regardless of sort column or order)
+- File Manager: Folder tree now stays in sync when navigating via the right-pane file view (double-clicking a folder expands/selects it in the left tree)
+
+### Fixed
+- Crash when using “Add to Library” due to passing proxy indexes to the source `QFileSystemModel`. Selection indexes are now mapped correctly, preventing hard crashes
+
+### Improved
+- Preview overlay: When closing full-size preview (Esc or close button), focus and selection return to the previously selected item (Asset Manager or File Manager) so arrow-key navigation continues immediately
+- Installer/Build: Release outputs `dist/KAssetManager-Setup-0.2.0.exe` and a `.sha256` hash file
+
+### Notes
+- Scrubbable video thumbnails on hover are feasible with the current Qt/FFmpeg stack; to be implemented in a future release after perf tuning
+
+
 ## [0.1.0] - 2024-01-XX
 
 ### Added
@@ -82,6 +100,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Thumbnail generation cannot be cancelled mid-import
 - No keyboard shortcuts for rating and selection
 - No undo/redo functionality
+
+
 - Preview navigation wraps around (no boundary check)
 - Large folders (1000+ assets) may have initial load delay
 
@@ -100,6 +120,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 | Version | Date | Description |
 |---------|------|-------------|
+| 0.2.0 | 2025-10-29 | Folder-preserving Add to Library; folders-first sorting; preview focus restore; tree sync; crash fix |
+
 | 0.1.0 | 2024-01-XX | Initial Qt Widgets release with full feature set |
 | 0.0.x | 2023-12-XX | QML prototype (deprecated) |
 
@@ -236,5 +258,5 @@ Special thanks to:
 
 ---
 
-*Last updated: 2024-01-XX*
+*Last updated: 2025-10-29*
 

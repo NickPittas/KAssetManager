@@ -148,7 +148,7 @@ try {
         Write-Host ""
         
         # Save hash to file
-        $HashFile = Join-Path $DistDir "KAssetManager-Setup-0.1.0.exe.sha256"
+        $HashFile = Join-Path $DistDir "KAssetManager-Setup-0.2.0.exe.sha256"
         $Hash.Hash | Out-File -FilePath $HashFile -Encoding ASCII
         Write-Host "Hash saved to: $HashFile" -ForegroundColor Green
         Write-Host ""

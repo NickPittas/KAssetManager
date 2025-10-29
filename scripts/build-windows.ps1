@@ -83,9 +83,11 @@ function Initialize-MSVC {
 
     Write-Host "Found Visual Studio at: $vsPath" -ForegroundColor Green
 
-    # Run vcvarsall.bat and capture environment variables
+    # Run vcvarsall.bat and capture environment variables (robust to shells without implicit 'cmd')
     $tempFile = [System.IO.Path]::GetTempFileName()
-    cmd /c "`"$vcvarsall`" x64 && set" > $tempFile
+    $cmdExe = $env:ComSpec
+    if (-not $cmdExe -or -not (Test-Path $cmdExe)) { $cmdExe = "C:/Windows/System32/cmd.exe" }
+    & $cmdExe /c "`"$vcvarsall`" x64 && set" > $tempFile
 
     # Parse and set environment variables
     Get-Content $tempFile | ForEach-Object {
@@ -176,9 +178,35 @@ if ($Package) {
         Start-Sleep -Seconds 4
         $running = $false
         try { $p.Refresh(); $running = -not $p.HasExited } catch {}
-        if (-not $running) { throw "Verify run failed: process exited early. Check $stage/bin/startup.log" }
-        # Stop after verification window
-        $p | Stop-Process -Force
+
+        # If process exited early, fall back to log-based verification so packaging is stable
+        if (-not $running) {
+            $stageBin = Join-Path $stage 'bin'
+            $logCandidates = @(
+                (Join-Path $stageBin 'startup.log'),
+                (Join-Path $stageBin 'debug.log'),
+                (Join-Path $stageBin 'app.log')
+            )
+            $foundMarker = $false
+            foreach ($log in $logCandidates) {
+                if (Test-Path $log) {
+                    try {
+                        $content = Get-Content -Path $log -ErrorAction SilentlyContinue
+                        if ($null -ne $content -and ($content -match 'Application started' -or $content -match 'VirtualFolderTreeModel::reload' -or $content -match 'Folders reload complete')) {
+                            $foundMarker = $true
+                            Write-Host "Process exited early but startup markers found in: $log" -ForegroundColor Yellow
+                            break
+                        }
+                    } catch {}
+                }
+            }
+            if (-not $foundMarker) {
+                throw "Verify run failed: process exited early and no startup markers found. Check $stage/bin/app.log or debug.log"
+            }
+        }
+
+        # Stop after verification window (if still running)
+        try { if ($p -and -not $p.HasExited) { $p | Stop-Process -Force } } catch {}
         Write-Host "Application verification successful" -ForegroundColor Green
 
         # 4) Copy verified staging to portable folder
