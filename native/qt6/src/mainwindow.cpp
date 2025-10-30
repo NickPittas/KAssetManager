@@ -2711,6 +2711,24 @@ void MainWindow::onFmViewModeToggled()
     fmIsGridMode = !fmIsGridMode;
     fmViewStack->setCurrentIndex(fmIsGridMode ? 0 : 1);
     fmViewModeButton->setIcon(fmIsGridMode ? icoGrid() : icoList());
+
+    // Keep the current folder when switching views
+    if (fmDirModel) {
+        const QString path = fmDirModel->rootPath();
+        if (!path.isEmpty()) {
+            QModelIndex srcRoot = fmDirModel->index(path);
+            if (fmProxyModel) {
+                fmProxyModel->rebuildForRoot(path);
+                QModelIndex proxyRoot = fmProxyModel->mapFromSource(srcRoot);
+                if (fmGridView) fmGridView->setRootIndex(proxyRoot);
+                if (fmListView) fmListView->setRootIndex(proxyRoot);
+            } else {
+                if (fmGridView) fmGridView->setRootIndex(srcRoot);
+                if (fmListView) fmListView->setRootIndex(srcRoot);
+            }
+        }
+    }
+
     // Persist immediately
     QSettings s("AugmentCode", "KAssetManager");
     s.setValue("FileManager/ViewMode", fmIsGridMode);
@@ -2821,6 +2839,13 @@ void MainWindow::setupConnections()
         if (previewOverlay) previewOverlay->stopPlayback();
         // Apply folder change
         assetsModel->setFolderId(fid);
+
+        // Ensure the asset views start at the top for every new folder
+        QTimer::singleShot(0, this, [this](){
+            if (assetGridView) assetGridView->scrollToTop();
+            if (assetTableView) assetTableView->scrollToTop();
+        });
+
         // Log memory usage before/after applying folder change
 #ifdef Q_OS_WIN
         qDebug() << "[NAV] Folder change applied to id=" << fid << ", working set (MB)=" << (qulonglong)currentWorkingSetMB();

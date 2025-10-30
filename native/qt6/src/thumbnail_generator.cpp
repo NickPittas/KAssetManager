@@ -22,6 +22,10 @@
 #include <QTimer>
 #include <QRegularExpression>
 
+#ifdef _MSC_VER
+#include <windows.h>
+#endif
+
 
 #ifdef HAVE_FFMPEG
 extern "C" {
@@ -312,7 +316,17 @@ bool VideoFFmpegTask::decodeAndSave()
 void VideoFFmpegTask::run()
 {
     qDebug() << "[VideoFFmpegTask] Fallback decoding for" << m_filePath;
-    const bool success = decodeAndSave();
+    bool success = false;
+#ifdef _MSC_VER
+    __try {
+        success = decodeAndSave();
+    } __except(EXCEPTION_EXECUTE_HANDLER) {
+        qCritical() << "[VideoFFmpegTask] SEH exception during FFmpeg decode for" << m_filePath;
+        success = false;
+    }
+#else
+    success = decodeAndSave();
+#endif
     const QString filePath = m_filePath;
     const QString cachePath = m_cachePath;
     ThumbnailGenerator* generator = m_generator;
@@ -409,72 +423,91 @@ void VideoThumbnailGenerator::onVideoFrameChanged() {
     QVideoFrame frame = m_videoSink->videoFrame();
     if (!frame.isValid()) return;
 
-    if (frame.map(QVideoFrame::ReadOnly)) {
-        m_capturedFrame = frame.toImage();
-        frame.unmap();
-
-        if (!m_capturedFrame.isNull()) {
-            m_frameReceived = true;
-            m_timeout->stop();
-            m_player->stop();
-            m_player->setSource(QUrl());
-
-            qDebug() << "[VideoThumbnailGenerator] Captured video frame, size:" << m_capturedFrame.size()
-                     << "format:" << m_capturedFrame.format();
-
-            // Handle alpha channel premultiplication for videos with transparency
-            // QVideoFrame often provides unpremultiplied alpha, but Qt expects premultiplied for proper display
-            if (m_capturedFrame.hasAlphaChannel()) {
-                QImage::Format format = m_capturedFrame.format();
-
-                // Convert to premultiplied alpha if needed
-                if (format == QImage::Format_ARGB32 || format == QImage::Format_RGBA8888) {
-                    qDebug() << "[VideoThumbnailGenerator] Converting to premultiplied alpha";
-                    m_capturedFrame = m_capturedFrame.convertToFormat(QImage::Format_ARGB32_Premultiplied);
-                } else if (format != QImage::Format_ARGB32_Premultiplied &&
-                           format != QImage::Format_RGBA8888_Premultiplied) {
-                    // For other formats with alpha, convert to premultiplied
-                    m_capturedFrame = m_capturedFrame.convertToFormat(QImage::Format_ARGB32_Premultiplied);
-                }
-            }
-
-            QImage thumbnail = m_capturedFrame.scaled(256, 256, Qt::KeepAspectRatio, Qt::SmoothTransformation);
-
-            // For images with alpha, save as PNG to preserve transparency
-            // Otherwise use JPEG for smaller file size
-            QString cachePath = m_cachePath;
-            if (thumbnail.hasAlphaChannel()) {
-                // Replace .jpg extension with .png for alpha videos
-                cachePath.replace(QRegularExpression("\\.jpg$", QRegularExpression::CaseInsensitiveOption), ".png");
-            }
-
-            QString format = thumbnail.hasAlphaChannel() ? "PNG" : "JPEG";
-            int quality = thumbnail.hasAlphaChannel() ? 100 : 85;
-
-            if (thumbnail.save(cachePath, format.toUtf8().constData(), quality)) {
-                qDebug() << "[VideoThumbnailGenerator] Saved video thumbnail:" << cachePath;
-
-                QMutexLocker locker(&m_generator->m_mutex);
-                m_generator->m_pendingThumbnails.remove(m_filePath);
-
-                // Update progress
-                m_generator->updateProgress();
-
-                emit m_generator->thumbnailGenerated(m_filePath, cachePath);
-            } else {
-                qWarning() << "[VideoThumbnailGenerator] Failed to save video thumbnail:" << m_cachePath;
-
-                QMutexLocker locker(&m_generator->m_mutex);
-                m_generator->m_pendingThumbnails.remove(m_filePath);
-
-                // Update progress
-                m_generator->updateProgress();
-
-                emit m_generator->thumbnailFailed(m_filePath);
-            }
-
-            deleteLater();
+    // Map and extract frame image with SEH protection on MSVC
+#ifdef _MSC_VER
+    bool ok = false;
+    QImage captured;
+    __try {
+        if (frame.map(QVideoFrame::ReadOnly)) {
+            captured = frame.toImage();
+            frame.unmap();
+            ok = true;
         }
+    } __except(EXCEPTION_EXECUTE_HANDLER) {
+        qCritical() << "[VideoThumbnailGenerator] SEH exception while accessing video frame for" << m_filePath;
+    }
+#else
+    bool ok = false;
+    QImage captured;
+    if (frame.map(QVideoFrame::ReadOnly)) {
+        captured = frame.toImage();
+        frame.unmap();
+        ok = true;
+    }
+#endif
+
+    if (ok && !captured.isNull()) {
+        m_capturedFrame = captured;
+        m_frameReceived = true;
+        m_timeout->stop();
+        m_player->stop();
+        m_player->setSource(QUrl());
+
+        qDebug() << "[VideoThumbnailGenerator] Captured video frame, size:" << m_capturedFrame.size()
+                 << "format:" << m_capturedFrame.format();
+
+        // Handle alpha channel premultiplication for videos with transparency
+        // QVideoFrame often provides unpremultiplied alpha, but Qt expects premultiplied for proper display
+        if (m_capturedFrame.hasAlphaChannel()) {
+            QImage::Format format = m_capturedFrame.format();
+
+            // Convert to premultiplied alpha if needed
+            if (format == QImage::Format_ARGB32 || format == QImage::Format_RGBA8888) {
+                qDebug() << "[VideoThumbnailGenerator] Converting to premultiplied alpha";
+                m_capturedFrame = m_capturedFrame.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+            } else if (format != QImage::Format_ARGB32_Premultiplied &&
+                       format != QImage::Format_RGBA8888_Premultiplied) {
+                // For other formats with alpha, convert to premultiplied
+                m_capturedFrame = m_capturedFrame.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+            }
+        }
+
+        QImage thumbnail = m_capturedFrame.scaled(256, 256, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+
+        // For images with alpha, save as PNG to preserve transparency
+        // Otherwise use JPEG for smaller file size
+        QString cachePath = m_cachePath;
+        if (thumbnail.hasAlphaChannel()) {
+            // Replace .jpg extension with .png for alpha videos
+            cachePath.replace(QRegularExpression("\\.jpg$", QRegularExpression::CaseInsensitiveOption), ".png");
+        }
+
+        QString format = thumbnail.hasAlphaChannel() ? "PNG" : "JPEG";
+        int quality = thumbnail.hasAlphaChannel() ? 100 : 85;
+
+        if (thumbnail.save(cachePath, format.toUtf8().constData(), quality)) {
+            qDebug() << "[VideoThumbnailGenerator] Saved video thumbnail:" << cachePath;
+
+            QMutexLocker locker(&m_generator->m_mutex);
+            m_generator->m_pendingThumbnails.remove(m_filePath);
+
+            // Update progress
+            m_generator->updateProgress();
+
+            emit m_generator->thumbnailGenerated(m_filePath, cachePath);
+        } else {
+            qWarning() << "[VideoThumbnailGenerator] Failed to save video thumbnail:" << m_cachePath;
+
+            QMutexLocker locker(&m_generator->m_mutex);
+            m_generator->m_pendingThumbnails.remove(m_filePath);
+
+            // Update progress
+            m_generator->updateProgress();
+
+            emit m_generator->thumbnailFailed(m_filePath);
+        }
+
+        deleteLater();
     }
 }
 

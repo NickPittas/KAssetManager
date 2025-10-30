@@ -1,6 +1,10 @@
 #include "oiio_image_loader.h"
 #include <QFileInfo>
 #include <cmath>
+#ifdef _MSC_VER
+#include <windows.h>
+#endif
+
 
 #ifdef HAVE_OPENIMAGEIO
 #include <OpenImageIO/imageio.h>
@@ -19,9 +23,6 @@ bool OIIOImageLoader::isOIIOSupported(const QString& filePath) {
         "exr", "hdr", "pic",           // HDR formats
         "psd", "psb",                  // Adobe formats
         "tif", "tiff",                 // TIFF (for 16/32-bit)
-        "cr2", "cr3", "nef", "arw",    // RAW formats
-        "dng", "orf", "rw2", "pef",
-        "srw", "raf", "raw",
         "dpx", "cin",                  // Film formats
         "iff", "sgi", "pic", "pnm",    // Other formats
         "tga", "bmp", "ico"            // Basic formats OIIO can handle
@@ -38,11 +39,23 @@ QImage OIIOImageLoader::loadImage(const QString& filePath, int maxWidth, int max
 #ifdef HAVE_OPENIMAGEIO
     qDebug() << "[OIIOImageLoader] Loading image:" << filePath;
 
+    // Guard OIIO calls with Windows SEH when using MSVC to prevent process crashes on malformed files
+    #ifdef _MSC_VER
+    __try {
+    #endif
+
     // Open the image
     auto inp = ImageInput::open(filePath.toStdString());
     if (!inp) {
         qWarning() << "[OIIOImageLoader] Failed to open:" << filePath;
         qWarning() << "[OIIOImageLoader] Error:" << QString::fromStdString(OIIO::geterror());
+        #ifdef _MSC_VER
+        }
+        __except(EXCEPTION_EXECUTE_HANDLER) {
+            qCritical() << "[OIIOImageLoader] SEH exception while loading:" << filePath;
+            return QImage();
+        }
+        #endif
         return QImage();
     }
 
@@ -74,6 +87,13 @@ QImage OIIOImageLoader::loadImage(const QString& filePath, int maxWidth, int max
     if (!buf.read(0, 0, true, TypeDesc::FLOAT)) {
         qWarning() << "[OIIOImageLoader] Failed to read image data";
         inp->close();
+        #ifdef _MSC_VER
+        }
+        __except(EXCEPTION_EXECUTE_HANDLER) {
+            qCritical() << "[OIIOImageLoader] SEH exception while reading/resizing image:" << filePath;
+            return QImage();
+        }
+        #endif
         return QImage();
     }
 
@@ -101,11 +121,11 @@ QImage OIIOImageLoader::loadImage(const QString& filePath, int maxWidth, int max
         }
         buf = std::move(converted);
     }
-    
+
     // Check if this is an HDR image (float format)
-    bool isHDR = (spec.format == TypeDesc::FLOAT || spec.format == TypeDesc::HALF || 
+    bool isHDR = (spec.format == TypeDesc::FLOAT || spec.format == TypeDesc::HALF ||
                   spec.format == TypeDesc::DOUBLE);
-    
+
     if (isHDR) {
         qDebug() << "[OIIOImageLoader] HDR image detected, applying tone mapping with color space";
 
@@ -117,27 +137,41 @@ QImage OIIOImageLoader::loadImage(const QString& filePath, int maxWidth, int max
         }
 
         // Apply tone mapping with color space transform
+        #ifdef _MSC_VER
+        }
+        __except(EXCEPTION_EXECUTE_HANDLER) {
+            qCritical() << "[OIIOImageLoader] SEH exception while processing image:" << filePath;
+            return QImage();
+        }
+        #endif
         return toneMapHDR(pixels.data(), width, height, targetChannels, colorSpace);
     } else {
         // Convert to 8-bit directly
         qDebug() << "[OIIOImageLoader] LDR image, converting to 8-bit";
-        
+
         std::vector<uint8_t> pixels(width * height * targetChannels);
         if (!buf.get_pixels(ROI(0, width, 0, height), TypeDesc::UINT8, pixels.data())) {
             qWarning() << "[OIIOImageLoader] Failed to get pixel data";
             return QImage();
         }
-        
+
         // Create QImage
         QImage::Format format = (targetChannels == 4) ? QImage::Format_RGBA8888 : QImage::Format_RGB888;
         QImage image(width, height, format);
-        
+
         for (int y = 0; y < height; ++y) {
             uint8_t* scanline = image.scanLine(y);
             memcpy(scanline, &pixels[y * width * targetChannels], width * targetChannels);
         }
-        
+
         qDebug() << "[OIIOImageLoader] Successfully loaded image";
+        #ifdef _MSC_VER
+        }
+        __except(EXCEPTION_EXECUTE_HANDLER) {
+            qCritical() << "[OIIOImageLoader] SEH exception while processing LDR image:" << filePath;
+            return QImage();
+        }
+        #endif
         return image;
     }
 #else
