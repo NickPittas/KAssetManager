@@ -82,6 +82,12 @@ private slots:
     void onThumbnailProgress(int current, int total);
     void onRatingChanged(int rating);
 
+    // Thumbnail generation (manual)
+    void onGenerateThumbnailsForFolder();
+    void onRegenerateThumbnailsForFolder();
+    void onGenerateThumbnailsRecursive();
+    void onRegenerateThumbnailsRecursive();
+
     // Project folder operations
     void onAddProjectFolder();
     void onRefreshAssets();
@@ -199,6 +205,8 @@ private:
     TagsModel *tagsModel;
     QPushButton *applyTagsBtn;
     QPushButton *filterByTagsBtn;
+    QToolButton *thumbGenButton; // Toolbar button: Generate thumbnails
+
     QComboBox *tagFilterModeCombo;
 
     // View controls
@@ -243,6 +251,10 @@ private:
 
     // Debounced updater for visible-only thumbnail progress
     QTimer visibleThumbTimer;
+
+    // Background image-to-pixmap loading coordination for thumbnails
+    QSet<QString> pendingPixmapLoads; // keys: thumbnail cache file paths
+
 
     // Debounce for folder selection in Asset Manager
     QTimer folderSelectTimer;

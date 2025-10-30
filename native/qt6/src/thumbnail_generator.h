@@ -7,6 +7,7 @@
 #include <QRunnable>
 #include <QMutex>
 #include <QSet>
+#include <QQueue>
 #include <QMediaPlayer>
 #include <QVideoSink>
 #include <QTimer>
@@ -86,6 +87,8 @@ public:
     Q_INVOKABLE bool isVideoFile(const QString& filePath);
     Q_INVOKABLE bool isQtSupportedFormat(const QString& filePath);
     Q_INVOKABLE void clearCache();
+    Q_INVOKABLE void requestThumbnailForce(const QString& filePath);
+
     Q_INVOKABLE QString createSampleImage(const QString& directory = QString());
 
     // Session control: cancel previous generation and only allow current-folder work
@@ -105,18 +108,22 @@ private:
     explicit ThumbnailGenerator(QObject* parent = nullptr);
 
     QString generateImageThumbnail(const QString& filePath);
-    void startVideoThumbnailGeneration(const QString& filePath);
     QString getThumbnailCachePath(const QString& filePath);
     QString getFileHash(const QString& filePath);
     void ensureThumbnailDir();
     bool isThumbnailCached(const QString& filePath);
     QString createUnsupportedThumbnail(const QString& filePath);
 
+    // Video concurrency control
+    void startNextVideoIfPossible();
+
     QDir m_thumbnailDir;
     QThreadPool* m_threadPool;
     QMutex m_mutex;
     QSet<QString> m_pendingThumbnails;
     QSet<class VideoThumbnailGenerator*> m_activeVideoGenerators;
+    QQueue<QPair<QString, QString>> m_videoQueue; // (filePath, cachePath)
+    int m_maxActiveVideos = 2;
 
     int m_totalThumbnails;
     int m_completedThumbnails;

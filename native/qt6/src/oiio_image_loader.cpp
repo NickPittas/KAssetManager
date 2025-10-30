@@ -1,9 +1,7 @@
 #include "oiio_image_loader.h"
 #include <QFileInfo>
 #include <cmath>
-#ifdef _MSC_VER
-#include <windows.h>
-#endif
+
 
 
 #ifdef HAVE_OPENIMAGEIO
@@ -39,23 +37,11 @@ QImage OIIOImageLoader::loadImage(const QString& filePath, int maxWidth, int max
 #ifdef HAVE_OPENIMAGEIO
     qDebug() << "[OIIOImageLoader] Loading image:" << filePath;
 
-    // Guard OIIO calls with Windows SEH when using MSVC to prevent process crashes on malformed files
-    #ifdef _MSC_VER
-    __try {
-    #endif
-
     // Open the image
     auto inp = ImageInput::open(filePath.toStdString());
     if (!inp) {
         qWarning() << "[OIIOImageLoader] Failed to open:" << filePath;
         qWarning() << "[OIIOImageLoader] Error:" << QString::fromStdString(OIIO::geterror());
-        #ifdef _MSC_VER
-        }
-        __except(EXCEPTION_EXECUTE_HANDLER) {
-            qCritical() << "[OIIOImageLoader] SEH exception while loading:" << filePath;
-            return QImage();
-        }
-        #endif
         return QImage();
     }
 
@@ -87,13 +73,6 @@ QImage OIIOImageLoader::loadImage(const QString& filePath, int maxWidth, int max
     if (!buf.read(0, 0, true, TypeDesc::FLOAT)) {
         qWarning() << "[OIIOImageLoader] Failed to read image data";
         inp->close();
-        #ifdef _MSC_VER
-        }
-        __except(EXCEPTION_EXECUTE_HANDLER) {
-            qCritical() << "[OIIOImageLoader] SEH exception while reading/resizing image:" << filePath;
-            return QImage();
-        }
-        #endif
         return QImage();
     }
 
@@ -137,13 +116,6 @@ QImage OIIOImageLoader::loadImage(const QString& filePath, int maxWidth, int max
         }
 
         // Apply tone mapping with color space transform
-        #ifdef _MSC_VER
-        }
-        __except(EXCEPTION_EXECUTE_HANDLER) {
-            qCritical() << "[OIIOImageLoader] SEH exception while processing image:" << filePath;
-            return QImage();
-        }
-        #endif
         return toneMapHDR(pixels.data(), width, height, targetChannels, colorSpace);
     } else {
         // Convert to 8-bit directly
@@ -165,13 +137,6 @@ QImage OIIOImageLoader::loadImage(const QString& filePath, int maxWidth, int max
         }
 
         qDebug() << "[OIIOImageLoader] Successfully loaded image";
-        #ifdef _MSC_VER
-        }
-        __except(EXCEPTION_EXECUTE_HANDLER) {
-            qCritical() << "[OIIOImageLoader] SEH exception while processing LDR image:" << filePath;
-            return QImage();
-        }
-        #endif
         return image;
     }
 #else
