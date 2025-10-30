@@ -207,15 +207,15 @@ bool VideoFFmpegTask::decodeAndSave()
         avformat_close_input(&fmt);
         return false;
     }
-    // Seek to the middle of the video before decoding to get a representative frame
+    // Seek near the start (faster). Use min(1s, 10% of duration) if available.
     if (fmt->duration > 0) {
-        int64_t mid = fmt->duration / 2; // in AV_TIME_BASE units
-        int64_t ts = av_rescale_q(mid, AV_TIME_BASE_Q, vs->time_base);
+        int64_t target = std::min<int64_t>(AV_TIME_BASE, fmt->duration / 10);
+        int64_t ts = av_rescale_q(target, AV_TIME_BASE_Q, vs->time_base);
         if (av_seek_frame(fmt, vIdx, ts, AVSEEK_FLAG_BACKWARD) >= 0) {
             avcodec_flush_buffers(ctx);
-            qDebug() << "[VideoFFmpegTask] Sought to middle timestamp:" << ts;
+            qDebug() << "[VideoFFmpegTask] Sought to timestamp:" << ts;
         } else {
-            qWarning() << "[VideoFFmpegTask] av_seek_frame to middle failed; decoding from current position";
+            qWarning() << "[VideoFFmpegTask] av_seek_frame near start failed; decoding from current position";
         }
     }
 
@@ -317,16 +317,7 @@ void VideoFFmpegTask::run()
 {
     qDebug() << "[VideoFFmpegTask] Fallback decoding for" << m_filePath;
     bool success = false;
-#ifdef _MSC_VER
-    __try {
-        success = decodeAndSave();
-    } __except(EXCEPTION_EXECUTE_HANDLER) {
-        qCritical() << "[VideoFFmpegTask] SEH exception during FFmpeg decode for" << m_filePath;
-        success = false;
-    }
-#else
     success = decodeAndSave();
-#endif
     const QString filePath = m_filePath;
     const QString cachePath = m_cachePath;
     ThumbnailGenerator* generator = m_generator;
@@ -354,7 +345,7 @@ VideoThumbnailGenerator::VideoThumbnailGenerator(const QString& filePath, const 
 
     m_timeout = new QTimer(this);
     m_timeout->setSingleShot(true);
-    m_timeout->setInterval(3000);
+    m_timeout->setInterval(2000);
 
     connect(m_player, &QMediaPlayer::mediaStatusChanged, this, &VideoThumbnailGenerator::onMediaStatusChanged);
     connect(m_player, &QMediaPlayer::errorOccurred, this, &VideoThumbnailGenerator::onError);
@@ -407,8 +398,9 @@ void VideoThumbnailGenerator::onMediaStatusChanged() {
 
     if (status == QMediaPlayer::LoadedMedia) {
         qint64 duration = m_player->duration();
-        qint64 seekPos = duration > 0 ? (duration / 2) : 0;
-        qDebug() << "[VideoThumbnailGenerator] Video loaded, duration:" << duration << "ms, seeking to middle:" << seekPos << "ms";
+        // Favor an early keyframe (faster). Use min(1s, 10% of duration).
+        qint64 seekPos = duration > 0 ? qMin<qint64>(1000, duration / 10) : 0;
+        qDebug() << "[VideoThumbnailGenerator] Video loaded, duration:" << duration << "ms, seeking to:" << seekPos << "ms";
         m_player->setPosition(seekPos);
         m_player->play();
     }
@@ -424,19 +416,6 @@ void VideoThumbnailGenerator::onVideoFrameChanged() {
     if (!frame.isValid()) return;
 
     // Map and extract frame image with SEH protection on MSVC
-#ifdef _MSC_VER
-    bool ok = false;
-    QImage captured;
-    __try {
-        if (frame.map(QVideoFrame::ReadOnly)) {
-            captured = frame.toImage();
-            frame.unmap();
-            ok = true;
-        }
-    } __except(EXCEPTION_EXECUTE_HANDLER) {
-        qCritical() << "[VideoThumbnailGenerator] SEH exception while accessing video frame for" << m_filePath;
-    }
-#else
     bool ok = false;
     QImage captured;
     if (frame.map(QVideoFrame::ReadOnly)) {
@@ -444,7 +423,6 @@ void VideoThumbnailGenerator::onVideoFrameChanged() {
         frame.unmap();
         ok = true;
     }
-#endif
 
     if (ok && !captured.isNull()) {
         m_capturedFrame = captured;
@@ -507,6 +485,11 @@ void VideoThumbnailGenerator::onVideoFrameChanged() {
             emit m_generator->thumbnailFailed(m_filePath);
         }
 
+        // Start next queued video (if any)
+        QMetaObject::invokeMethod(m_generator, [g = m_generator]() {
+            g->startNextVideoIfPossible();
+        }, Qt::QueuedConnection);
+
         deleteLater();
     }
 }
@@ -519,6 +502,10 @@ void VideoThumbnailGenerator::onTimeout() {
 #ifdef HAVE_FFMPEG
     // Try FFmpeg fallback asynchronously
     startFfmpegFallback();
+    // Allow another video to start
+    QMetaObject::invokeMethod(m_generator, [g = m_generator]() {
+        g->startNextVideoIfPossible();
+    }, Qt::QueuedConnection);
     deleteLater();
     return;
 #endif
@@ -526,6 +513,10 @@ void VideoThumbnailGenerator::onTimeout() {
     m_generator->m_pendingThumbnails.remove(m_filePath);
     m_generator->updateProgress();
     emit m_generator->thumbnailFailed(m_filePath);
+    // Allow another video to start
+    QMetaObject::invokeMethod(m_generator, [g = m_generator]() {
+        g->startNextVideoIfPossible();
+    }, Qt::QueuedConnection);
     deleteLater();
 }
 
@@ -539,6 +530,10 @@ void VideoThumbnailGenerator::onError(QMediaPlayer::Error error, const QString &
 #ifdef HAVE_FFMPEG
     // Try FFmpeg fallback asynchronously
     startFfmpegFallback();
+    // Allow another video to start
+    QMetaObject::invokeMethod(m_generator, [g = m_generator]() {
+        g->startNextVideoIfPossible();
+    }, Qt::QueuedConnection);
     deleteLater();
     return;
 #endif
@@ -546,6 +541,10 @@ void VideoThumbnailGenerator::onError(QMediaPlayer::Error error, const QString &
     m_generator->m_pendingThumbnails.remove(m_filePath);
     m_generator->updateProgress();
     emit m_generator->thumbnailFailed(m_filePath);
+    // Allow another video to start
+    QMetaObject::invokeMethod(m_generator, [g = m_generator]() {
+        g->startNextVideoIfPossible();
+    }, Qt::QueuedConnection);
     deleteLater();
 }
 
@@ -721,7 +720,10 @@ void ThumbnailGenerator::requestThumbnail(const QString& filePath) {
     if (isThumbnailCached(filePath)) {
         QString cachePath = getThumbnailCachePath(filePath);
         qDebug() << "[ThumbnailGenerator] Using cached thumbnail:" << cachePath;
-        emit thumbnailGenerated(filePath, cachePath);
+        // Always deliver on UI event loop to avoid re-entrancy from data()/paint()
+        QMetaObject::invokeMethod(this, [this, filePath, cachePath]() {
+            emit thumbnailGenerated(filePath, cachePath);
+        }, Qt::QueuedConnection);
         return;
     }
 
@@ -741,19 +743,35 @@ void ThumbnailGenerator::requestThumbnail(const QString& filePath) {
     if (!isVideo && !isImage) {
         qWarning() << "[ThumbnailGenerator] Unsupported file type, creating placeholder:" << filePath;
         QString unsupportedThumb = createUnsupportedThumbnail(filePath);
-        QMutexLocker locker(&m_mutex);
-        m_pendingThumbnails.remove(filePath);
-        if (!unsupportedThumb.isEmpty()) {
-            emit thumbnailGenerated(filePath, unsupportedThumb);
-        } else {
-            emit thumbnailFailed(filePath);
+        {
+            QMutexLocker locker(&m_mutex);
+            m_pendingThumbnails.remove(filePath);
         }
         updateProgress();
+        if (!unsupportedThumb.isEmpty()) {
+            QMetaObject::invokeMethod(this, [this, filePath, unsupportedThumb]() {
+                emit thumbnailGenerated(filePath, unsupportedThumb);
+            }, Qt::QueuedConnection);
+        } else {
+            QMetaObject::invokeMethod(this, [this, filePath]() {
+                emit thumbnailFailed(filePath);
+            }, Qt::QueuedConnection);
+        }
         return;
     }
 
     if (isVideo) {
         QString cachePath = getThumbnailCachePath(filePath);
+        // Throttle video generation: queue if too many active
+        {
+            QMutexLocker locker(&m_mutex);
+            if (m_activeVideoGenerators.size() >= m_maxActiveVideos) {
+                m_videoQueue.enqueue(qMakePair(filePath, cachePath));
+                qDebug() << "[ThumbnailGenerator] Queued video thumbnail (throttled):" << filePath;
+                return;
+            }
+        }
+        // Start immediately if slot available
         VideoThumbnailGenerator* videoGen = new VideoThumbnailGenerator(filePath, cachePath, this, session);
         videoGen->start();
         qDebug() << "[ThumbnailGenerator] Started async video thumbnail generation for:" << filePath;
@@ -764,6 +782,22 @@ void ThumbnailGenerator::requestThumbnail(const QString& filePath) {
                  << "(active threads:" << m_threadPool->activeThreadCount() << ")";
     }
 }
+
+void ThumbnailGenerator::requestThumbnailForce(const QString& filePath) {
+    if (filePath.isEmpty()) return;
+    QFileInfo fi(filePath);
+    if (!fi.exists()) return;
+    QString cachePath = getThumbnailCachePath(filePath);
+    if (!cachePath.isEmpty()) {
+        QFile::remove(cachePath);
+    }
+    {
+        QMutexLocker locker(&m_mutex);
+        m_pendingThumbnails.remove(filePath);
+    }
+    requestThumbnail(filePath);
+}
+
 
 QString ThumbnailGenerator::generateImageThumbnail(const QString& filePath) {
     qDebug() << "[ThumbnailGenerator] ===== START Generating image thumbnail for:" << filePath;
@@ -1023,7 +1057,27 @@ void ThumbnailGenerator::beginNewSession() {
         QMetaObject::invokeMethod(v, "deleteLater", Qt::QueuedConnection);
     }
     m_activeVideoGenerators.clear();
+    // Clear queued videos as they belong to the previous session
+    m_videoQueue.clear();
 }
+
+void ThumbnailGenerator::startNextVideoIfPossible() {
+    QString nextPath;
+    QString nextCache;
+    {
+        QMutexLocker locker(&m_mutex);
+        if (m_activeVideoGenerators.size() >= m_maxActiveVideos) return;
+        if (m_videoQueue.isEmpty()) return;
+        auto pair = m_videoQueue.dequeue();
+        nextPath = pair.first;
+        nextCache = pair.second;
+    }
+    int session = m_sessionId.load();
+    VideoThumbnailGenerator* videoGen = new VideoThumbnailGenerator(nextPath, nextCache, this, session);
+    videoGen->start();
+    qDebug() << "[ThumbnailGenerator] Started queued video thumbnail generation for:" << nextPath;
+}
+
 
 QString ThumbnailGenerator::createUnsupportedThumbnail(const QString& filePath) {
     qDebug() << "[ThumbnailGenerator] Creating unsupported format thumbnail for:" << filePath;

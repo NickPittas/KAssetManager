@@ -58,6 +58,9 @@ static size_t currentWorkingSetMB() {
 #include <QDrag>
 #include <QMouseEvent>
 #include <QFuture>
+#include <QMenu>
+#include <QAction>
+
 #include <QFutureWatcher>
 #include <QTimer>
 #include <QScrollBar>
@@ -88,6 +91,11 @@ static size_t currentWorkingSetMB() {
 #include <QGraphicsSvgItem>
 
 #include <QImageReader>
+#include <QThreadPool>
+#include <QRunnable>
+
+#include <QPointer>
+
 
 // Forward declare helper
 // Lightweight icon painters (no external resources) for toolbar buttons
@@ -461,26 +469,42 @@ private:
                 return; // Don't draw anything yet - thumbnail is being generated
             }
 
-            // CRITICAL FIX: If thumbnail exists on disk but not in cache, load it now
+            // If not in cache yet, synchronously load the small on-disk thumbnail (fast) on the GUI thread.
             if (!pixmapCache.contains(thumbnailPath)) {
-                QFileInfo thumbInfo(thumbnailPath);
-                if (thumbInfo.exists() && thumbInfo.size() > 0) {
-                    QPixmap pixmap(thumbnailPath);
-                    if (!pixmap.isNull()) {
-                        // PERFORMANCE: Increased cache size from 200 to 1000 for better performance
-                        // At 256x256 thumbnails, this is ~250MB of memory which is reasonable
-                        if (pixmapCache.size() > 1000) {
-                            pixmapCache.clear();
-                        }
-                        pixmapCache.insert(thumbnailPath, pixmap);
-                    }
+                QPixmap px;
+                if (QFileInfo::exists(thumbnailPath)) {
+                    px.load(thumbnailPath);
                 }
-            }
-
-            // If thumbnail is still not in cache, don't draw anything
-            if (!pixmapCache.contains(thumbnailPath)) {
-                painter->restore();
-                return; // Don't draw anything - not even the card background
+                if (!px.isNull()) {
+                    pixmapCache.insert(thumbnailPath, px);
+                } else {
+                    // Lightweight placeholder (type label + filename) until thumb exists
+                    if (option.state & (QStyle::State_Selected | QStyle::State_MouseOver)) {
+                        QColor c = (option.state & QStyle::State_Selected) ? QColor(88,166,255) : QColor(80,80,80);
+                        painter->setPen(QPen(c, 1.5)); painter->setBrush(Qt::NoBrush);
+                        painter->drawRect(option.rect.adjusted(1, 1, -1, -1));
+                    }
+                    const int margin = 6;
+                    const int thumbSide = m_thumbnailSize;
+                    QRect thumbRect(option.rect.x() + (option.rect.width()-thumbSide)/2, option.rect.y() + margin, thumbSide, thumbSide);
+                    painter->setPen(QPen(QColor(120,120,120), 1)); painter->setBrush(Qt::NoBrush);
+                    painter->drawRoundedRect(thumbRect.adjusted(8,8,-8,-8), 6, 6);
+                    const QString ft = index.data(AssetsModel::FileTypeRole).toString().toUpper();
+                    QString label = ft; if (label.isEmpty()) label = QFileInfo(index.data(AssetsModel::FilePathRole).toString()).suffix().toUpper();
+                    if (label.isEmpty()) label = "FILE";
+                    QFont nameFont("Segoe UI", 9);
+                    painter->setFont(nameFont);
+                    painter->setPen(QColor(180,180,180));
+                    painter->drawText(thumbRect.adjusted(10,10,-10,-10), Qt::AlignCenter | Qt::TextWordWrap, label.left(6));
+                    // Name label below
+                    QString fileName = index.data(AssetsModel::FileNameRole).toString();
+                    painter->setPen(QColor(230,230,230));
+                    QRect nameRect(option.rect.x()+4, thumbRect.bottom()+4, option.rect.width()-8, option.rect.bottom()-thumbRect.bottom()-6);
+                    QString elided = QFontMetrics(nameFont).elidedText(fileName, Qt::ElideRight, nameRect.width());
+                    painter->drawText(nameRect, Qt::AlignHCenter | Qt::AlignTop, elided);
+                    painter->restore();
+                    return;
+                }
             }
 
             QPixmap pixmap = pixmapCache.value(thumbnailPath);
@@ -672,26 +696,15 @@ MainWindow::MainWindow(QWidget *parent)
     connect(&ThumbnailGenerator::instance(), &ThumbnailGenerator::thumbnailGenerated,
             this, [this](const QString& filePath, const QString& thumbnailPath) {
         try {
-            // Load thumbnail into delegate cache
-            AssetItemDelegate *delegate = static_cast<AssetItemDelegate*>(assetGridView->itemDelegate());
-
-            if (delegate && !thumbnailPath.isEmpty()) {
-                QFileInfo thumbInfo(thumbnailPath);
-
-                if (thumbInfo.exists() && thumbInfo.size() > 0) {
-                    QPixmap pixmap(thumbnailPath);
-
-                    if (!pixmap.isNull()) {
-                        // PERFORMANCE: Increased cache size from 200 to 1000 for better performance
-                        if (delegate->pixmapCache.size() > 1000) {
-                            delegate->pixmapCache.clear();
-                        }
-                        delegate->pixmapCache.insert(thumbnailPath, pixmap);
-                    }
-                }
+            Q_UNUSED(filePath);
+            Q_UNUSED(thumbnailPath);
+            // Do not load QPixmaps on the GUI thread here. The delegate will paint
+            // placeholders until background loaders populate the cache.
+            if (assetGridView && assetGridView->viewport()) {
+                assetGridView->viewport()->update();
             }
-            // Refresh view to show the new thumbnail
-            assetGridView->viewport()->update();
+            // Also update visible-only progress meters soon
+            visibleThumbTimer.start(50);
         } catch (const std::exception& e) {
             qCritical() << "[MainWindow] Exception loading thumbnail:" << e.what();
         } catch (...) {
@@ -853,6 +866,7 @@ void MainWindow::setupUi()
     QLabel* sizeValueLabel = new QLabel("180px", toolbar);
     sizeValueLabel->setStyleSheet("color: #999; font-size: 11px; min-width: 45px;");
     connect(thumbnailSizeSlider, &QSlider::valueChanged, [sizeValueLabel](int value) {
+
         sizeValueLabel->setText(QString("%1px").arg(value));
     });
     toolbarLayout->addWidget(sizeValueLabel);
@@ -875,6 +889,26 @@ void MainWindow::setupUi()
     // Refresh button
     refreshButton = new QPushButton(toolbar);
     refreshButton->setIcon(icoRefresh());
+    // Generate thumbnails button (with menu)
+    thumbGenButton = new QToolButton(toolbar);
+    thumbGenButton->setIcon(icoRefresh());
+    thumbGenButton->setToolTip("Generate thumbnails");
+    thumbGenButton->setAutoRaise(true);
+    thumbGenButton->setIconSize(QSize(20,20));
+    QMenu *genMenu = new QMenu(thumbGenButton);
+    QAction *actGen = genMenu->addAction("Generate for this folder");
+    QAction *actRegen = genMenu->addAction("Regenerate for this folder");
+    genMenu->addSeparator();
+    QAction *actGenRec = genMenu->addAction("Generate recursive");
+    QAction *actRegenRec = genMenu->addAction("Regenerate recursive");
+    connect(actGen, &QAction::triggered, this, &MainWindow::onGenerateThumbnailsForFolder);
+    connect(actRegen, &QAction::triggered, this, &MainWindow::onRegenerateThumbnailsForFolder);
+    connect(actGenRec, &QAction::triggered, this, &MainWindow::onGenerateThumbnailsRecursive);
+    connect(actRegenRec, &QAction::triggered, this, &MainWindow::onRegenerateThumbnailsRecursive);
+    thumbGenButton->setMenu(genMenu);
+    thumbGenButton->setPopupMode(QToolButton::MenuButtonPopup);
+    toolbarLayout->addWidget(thumbGenButton);
+
     refreshButton->setToolTip("Refresh assets from project folders");
     refreshButton->setFixedSize(28, 28);
     refreshButton->setFlat(true);
@@ -2834,8 +2868,7 @@ void MainWindow::setupConnections()
     connect(&folderSelectTimer, &QTimer::timeout, this, [this]{
         const int fid = pendingFolderId;
         if (fid <= 0) return;
-        // Cancel any ongoing thumbnail work and stop any preview playback
-        ThumbnailGenerator::instance().beginNewSession();
+        // Stop any preview playback but do NOT cancel thumbnail generation; allow it to continue in background
         if (previewOverlay) previewOverlay->stopPlayback();
         // Apply folder change
         assetsModel->setFolderId(fid);
@@ -4874,6 +4907,76 @@ void MainWindow::onViewModeChanged()
     scheduleVisibleThumbProgressUpdate();
 }
 
+
+void MainWindow::onGenerateThumbnailsForFolder()
+{
+    if (!assetsModel) return;
+    // Current folder only, generate missing thumbnails
+    QVector<QString> paths;
+    const int rows = assetsModel->rowCount(QModelIndex());
+    paths.reserve(rows);
+    for (int r = 0; r < rows; ++r) {
+        QModelIndex idx = assetsModel->index(r, 0);
+        const QString fp = assetsModel->data(idx, AssetsModel::FilePathRole).toString();
+        if (!fp.isEmpty()) paths.push_back(fp);
+    }
+    // Filter to those missing thumbnails
+    QVector<QString> todo; todo.reserve(paths.size());
+    for (const QString &fp : paths) {
+        if (ThumbnailGenerator::instance().getThumbnailPath(fp).isEmpty()) todo.push_back(fp);
+    }
+    if (todo.isEmpty()) return;
+    ThumbnailGenerator::instance().startProgress(todo.size());
+    for (const QString &fp : todo) ThumbnailGenerator::instance().requestThumbnail(fp);
+}
+
+void MainWindow::onRegenerateThumbnailsForFolder()
+{
+    if (!assetsModel) return;
+    QVector<QString> paths;
+    const int rows = assetsModel->rowCount(QModelIndex());
+    paths.reserve(rows);
+    for (int r = 0; r < rows; ++r) {
+        QModelIndex idx = assetsModel->index(r, 0);
+        const QString fp = assetsModel->data(idx, AssetsModel::FilePathRole).toString();
+        if (!fp.isEmpty()) paths.push_back(fp);
+    }
+    if (paths.isEmpty()) return;
+    ThumbnailGenerator::instance().startProgress(paths.size());
+    for (const QString &fp : paths) ThumbnailGenerator::instance().requestThumbnailForce(fp);
+}
+
+void MainWindow::onGenerateThumbnailsRecursive()
+{
+    if (!assetsModel) return;
+    int fid = assetsModel->folderId();
+    if (fid <= 0) return;
+    QList<int> ids = DB::instance().getAssetIdsInFolder(fid, /*recursive*/true);
+    if (ids.isEmpty()) return;
+    QVector<QString> todo; todo.reserve(ids.size());
+    for (int id : ids) {
+        const QString fp = DB::instance().getAssetFilePath(id);
+        if (!fp.isEmpty() && ThumbnailGenerator::instance().getThumbnailPath(fp).isEmpty()) todo.push_back(fp);
+    }
+    if (todo.isEmpty()) return;
+    ThumbnailGenerator::instance().startProgress(todo.size());
+    for (const QString &fp : todo) ThumbnailGenerator::instance().requestThumbnail(fp);
+}
+
+void MainWindow::onRegenerateThumbnailsRecursive()
+{
+    if (!assetsModel) return;
+    int fid = assetsModel->folderId();
+    if (fid <= 0) return;
+    QList<int> ids = DB::instance().getAssetIdsInFolder(fid, /*recursive*/true);
+    if (ids.isEmpty()) return;
+    ThumbnailGenerator::instance().startProgress(ids.size());
+    for (int id : ids) {
+        const QString fp = DB::instance().getAssetFilePath(id);
+        if (!fp.isEmpty()) ThumbnailGenerator::instance().requestThumbnailForce(fp);
+    }
+}
+
 // Called when thumbnail generation progress updates
 void MainWindow::onThumbnailProgress(int current, int total)
 {
@@ -4921,8 +5024,16 @@ void MainWindow::updateVisibleThumbProgress()
     if (!view || !view->isVisible() || !view->viewport() || !assetsModel || !thumbnailProgressLabel || !thumbnailProgressBar) {
         if (thumbnailProgressLabel) thumbnailProgressLabel->setVisible(false);
         if (thumbnailProgressBar) thumbnailProgressBar->setVisible(false);
+
         return;
     }
+
+
+    // Proactively ensure visible items have their pixmaps; we now load synchronously in paint(), so disable background loader
+    AssetItemDelegate* gridDelegate = assetGridView ? static_cast<AssetItemDelegate*>(assetGridView->itemDelegate()) : nullptr;
+    auto enqueueLoad = [](const QString&) {
+        // Background pixmap loading disabled; thumbnails are small and are loaded on-demand in paint()
+    };
 
     const QRect viewportRect = view->viewport()->rect();
     const int totalRows = assetsModel ? assetsModel->rowCount(QModelIndex()) : 0;
@@ -4946,6 +5057,11 @@ void MainWindow::updateVisibleThumbProgress()
                 const QString thumbPath = ThumbnailGenerator::instance().getThumbnailPath(filePath);
                 if (!thumbPath.isEmpty()) {
                     ++readyCount;
+                    if (gridDelegate) {
+                        if (!gridDelegate->pixmapCache.contains(thumbPath)) {
+                            enqueueLoad(thumbPath);
+                        }
+                    }
                 }
             }
         }
@@ -4960,7 +5076,13 @@ void MainWindow::updateVisibleThumbProgress()
                 const QString filePath = assetsModel->data(srcIdx, AssetsModel::FilePathRole).toString();
                 const QString thumbPath = ThumbnailGenerator::instance().getThumbnailPath(filePath);
                 if (!thumbPath.isEmpty()) {
+
                     ++readyCount;
+                    if (gridDelegate) {
+                        if (!gridDelegate->pixmapCache.contains(thumbPath)) {
+                            enqueueLoad(thumbPath);
+                        }
+                    }
                 }
             }
         }

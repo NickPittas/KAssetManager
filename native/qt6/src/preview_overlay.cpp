@@ -739,9 +739,10 @@ void PreviewOverlay::onVolumeChanged(int value)
 
 void PreviewOverlay::hideControls()
 {
-    if (isVideo && mediaPlayer->playbackState() == QMediaPlayer::PlayingState) {
-        controlsWidget->hide();
-    }
+    // Never hide playback controls in full-screen previews
+    // Requirement: playback buttons must remain visible at all times
+    Q_UNUSED(this);
+    return; // no-op
 }
 
 void PreviewOverlay::updatePlayPauseButton()

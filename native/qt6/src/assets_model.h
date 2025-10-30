@@ -126,6 +126,9 @@ private:
     bool m_recursiveMode = false;
     QVector<int> m_filteredRowIndexes;
 
+    // Guard to avoid emitting dataChanged while the model is resetting
+    bool m_isResetting = false;
+
     QTimer m_reloadTimer;
     bool m_reloadScheduled = false;
 };

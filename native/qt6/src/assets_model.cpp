@@ -21,9 +21,9 @@ AssetsModel::AssetsModel(QObject* parent): QAbstractListModel(parent){
 
     connect(&DB::instance(), &DB::assetsChanged, this, &AssetsModel::onAssetsChangedForFolder);
 
-    // Connect to thumbnail generator signals
+    // Connect to thumbnail generator signals (queued to avoid re-entrancy during data()/resets)
     connect(&ThumbnailGenerator::instance(), &ThumbnailGenerator::thumbnailGenerated,
-            this, &AssetsModel::onThumbnailGenerated);
+            this, &AssetsModel::onThumbnailGenerated, Qt::QueuedConnection);
 
     rebuildFilter();
 }
@@ -158,36 +158,44 @@ void AssetsModel::setSearchQuery(const QString& query) {
 void AssetsModel::setTypeFilter(int f) {
     if (m_typeFilter == f) return;
     m_typeFilter = f;
+    m_isResetting = true;
     beginResetModel();
     rebuildFilter();
     endResetModel();
+    m_isResetting = false;
     emit typeFilterChanged();
 }
 
 void AssetsModel::setRatingFilter(int f) {
     if (m_ratingFilter == f) return;
     m_ratingFilter = f;
+    m_isResetting = true;
     beginResetModel();
     rebuildFilter();
     endResetModel();
+    m_isResetting = false;
 }
 
 void AssetsModel::setSelectedTagNames(const QStringList& tags) {
     if (m_selectedTagNames == tags) return;
     m_selectedTagNames = tags;
     // Changing tag selection may require loading assets across folders
+    m_isResetting = true;
     beginResetModel();
     rebuildFilter();
     endResetModel();
+    m_isResetting = false;
     emit selectedTagNamesChanged();
 }
 
 void AssetsModel::setTagFilterMode(int mode) {
     if (m_tagFilterMode == mode) return;
     m_tagFilterMode = mode;
+    m_isResetting = true;
     beginResetModel();
     rebuildFilter();
     endResetModel();
+    m_isResetting = false;
     emit tagFilterModeChanged();
 }
 
@@ -204,6 +212,7 @@ void AssetsModel::reload(){
     QElapsedTimer t; t.start();
 
     qDebug() << "AssetsModel::reload() - Calling beginResetModel()...";
+    m_isResetting = true;
     beginResetModel();
 
     qDebug() << "AssetsModel::reload() - Calling query()...";
@@ -216,6 +225,7 @@ void AssetsModel::reload(){
 
     qDebug() << "AssetsModel::reload() - Calling endResetModel()...";
     endResetModel();
+    m_isResetting = false;
 
     qDebug() << "===== AssetsModel::reload() SUCCESS - loaded" << m_rows.size() << "assets in" << t.elapsed() << "ms";
     LogManager::instance().addLog(QString("AssetsModel reload: %1 assets in %2 ms").arg(m_rows.size()).arg(t.elapsed()), "DEBUG");
@@ -298,6 +308,13 @@ void AssetsModel::onThumbnailGenerated(const QString& filePath, const QString& t
     QFile logFile("assets_model_crash.log");
     logFile.open(QIODevice::Append | QIODevice::Text);
     QTextStream log(&logFile);
+
+    // Guard: ignore updates while the model is resetting to avoid dataChanged during reset
+    if (m_isResetting) {
+        log << "[ASSETS MODEL] Skipping thumbnail update during model reset for: " << filePath << "\n";
+        log.flush();
+        return;
+    }
 
     try {
         log << "[ASSETS MODEL START] filePath: " << filePath << ", thumbnailPath: " << thumbnailPath << "\n";
