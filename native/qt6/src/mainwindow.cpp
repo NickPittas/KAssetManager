@@ -1311,6 +1311,8 @@ void MainWindow::setupUi()
     mainSplitter->setStretchFactor(1, 3);
     mainSplitter->setStretchFactor(2, 1);
 
+    // File Manager page
+    fileManagerPage = new QWidget(this);
     qDebug() << "[INIT] About to call setupFileManagerUi";
     setupFileManagerUi();
     qDebug() << "[INIT] setupFileManagerUi returned";

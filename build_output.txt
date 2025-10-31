@@ -1,0 +1,70 @@
+Found Qt with MSVC 2022
+Using Qt prefix: C:\Qt\6.9.3\msvc2022_64
+Setting up MSVC environment for Ninja...
+Found Visual Studio at: C:\Program Files\Microsoft Visual Studio\2022\Community
+MSVC environment initialized for x64
+Added Qt bin to PATH
+Added Ninja to PATH
+-- Using vcpkg toolchain: C:/vcpkg/scripts/buildsystems/vcpkg.cmake
+-- Using vcpkg triplet: x64-windows
+-- The CXX compiler identification is MSVC 19.44.35219.0
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/cl.exe - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD - Failed
+-- Looking for pthread_create in pthreads
+-- Looking for pthread_create in pthreads - not found
+-- Looking for pthread_create in pthread
+-- Looking for pthread_create in pthread - not found
+-- Found Threads: TRUE
+-- Performing Test HAVE_STDATOMIC
+-- Performing Test HAVE_STDATOMIC - Success
+-- Found WrapAtomic: TRUE
+-- Could NOT find WrapVulkanHeaders (missing: Vulkan_INCLUDE_DIR) 
+-- ActiveQt components detected: AxBase=0; AxContainer=1; AxServer=1
+-- Found PkgConfig: C:/vcpkg/installed/x64-windows/tools/pkgconf/pkgconf.exe (found version "2.5.1")
+-- Checking for module 'libraw'
+--   Found libraw, version 0.21.4
+-- Checking for module 'libraw_r'
+--   Found libraw_r, version 0.21.4
+-- OpenImageIO found - advanced format support enabled
+-- Found ZLIB: optimized;C:/vcpkg/installed/x64-windows/lib/zlib.lib;debug;C:/vcpkg/installed/x64-windows/debug/lib/zlibd.lib (found version "1.3.1")
+-- Found BZip2: optimized;C:/vcpkg/installed/x64-windows/lib/bz2.lib;debug;C:/vcpkg/installed/x64-windows/debug/lib/bz2d.lib (found version "1.0.8")
+-- Looking for BZ2_bzCompressInit
+-- Looking for BZ2_bzCompressInit - found
+-- Found LibLZMA: optimized;C:/vcpkg/installed/x64-windows/lib/lzma.lib;debug;C:/vcpkg/installed/x64-windows/debug/lib/lzma.lib (found version "5.8.1")
+-- FFmpeg swscale linked: C:/vcpkg/installed/x64-windows/lib/swscale.lib
+-- FFmpeg libraries linked: C:/vcpkg/installed/x64-windows/lib/avformat.lib; C:/vcpkg/installed/x64-windows/lib/avcodec.lib; C:/vcpkg/installed/x64-windows/lib/avutil.lib
+-- Configuring done (5.2s)
+-- Generating done (0.1s)
+-- Build files have been written to: E:/KAssetManager/native/qt6/build/ninja
+[1/27] Automatic MOC and UIC for target kassetmanagerqt
+[2/27] Building RC object CMakeFiles\kassetmanagerqt.dir\src\app.rc.res
+[3/27] Building CXX object CMakeFiles\kassetmanagerqt.dir\src\video_metadata.cpp.obj
+[4/27] Building CXX object CMakeFiles\kassetmanagerqt.dir\src\progress_manager.cpp.obj
+[5/27] Building CXX object CMakeFiles\kassetmanagerqt.dir\src\star_rating_widget.cpp.obj
+[6/27] Building CXX object CMakeFiles\kassetmanagerqt.dir\src\log_manager.cpp.obj
+[7/27] Building CXX object CMakeFiles\kassetmanagerqt.dir\src\import_progress_dialog.cpp.obj
+[8/27] Building CXX object CMakeFiles\kassetmanagerqt.dir\src\project_folder_watcher.cpp.obj
+[9/27] Building CXX object CMakeFiles\kassetmanagerqt.dir\src\sequence_detector.cpp.obj
+[10/27] Building CXX object CMakeFiles\kassetmanagerqt.dir\src\db.cpp.obj
+[11/27] Building CXX object CMakeFiles\kassetmanagerqt.dir\src\log_viewer_widget.cpp.obj
+[12/27] Building CXX object CMakeFiles\kassetmanagerqt.dir\src\virtual_folders.cpp.obj
+[13/27] Building CXX object CMakeFiles\kassetmanagerqt.dir\src\drag_utils.cpp.obj
+[14/27] Building CXX object CMakeFiles\kassetmanagerqt.dir\src\virtual_drag.cpp.obj
+[15/27] Building CXX object CMakeFiles\kassetmanagerqt.dir\src\importer.cpp.obj
+[16/27] Building CXX object CMakeFiles\kassetmanagerqt.dir\src\file_ops_dialog.cpp.obj
+[17/27] Building CXX object CMakeFiles\kassetmanagerqt.dir\src\office_preview.cpp.obj
+[18/27] Building CXX object CMakeFiles\kassetmanagerqt.dir\src\assets_model.cpp.obj
+[19/27] Building CXX object CMakeFiles\kassetmanagerqt.dir\src\settings_dialog.cpp.obj
+[20/27] Building CXX object CMakeFiles\kassetmanagerqt.dir\src\oiio_image_loader.cpp.obj
+[21/27] Building CXX object CMakeFiles\kassetmanagerqt.dir\src\main.cpp.obj
+[22/27] Building CXX object CMakeFiles\kassetmanagerqt.dir\src\thumbnail_generator.cpp.obj
+[23/27] Building CXX object CMakeFiles\kassetmanagerqt.dir\src\preview_overlay.cpp.obj
+[24/27] Building CXX object CMakeFiles\kassetmanagerqt.dir\src\file_ops.cpp.obj
+[25/27] Building CXX object CMakeFiles\kassetmanagerqt.dir\kassetmanagerqt_autogen\mocs_compilation.cpp.obj
+[26/27] Building CXX object CMakeFiles\kassetmanagerqt.dir\src\mainwindow.cpp.obj
+[27/27] Linking CXX executable kassetmanagerqt.exe
