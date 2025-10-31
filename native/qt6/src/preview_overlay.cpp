@@ -799,10 +799,9 @@ void PreviewOverlay::onPlayPauseClicked()
 #ifdef HAVE_FFMPEG
         if (usingFallbackVideo) {
             fallbackPaused = !fallbackPaused;
-            qDebug() << "[PreviewOverlay] Toggling fallback pause to:" << fallbackPaused << "reader:" << (void*)fallbackReader;
+            qDebug() << "[PreviewOverlay] Toggling fallback pause to:" << fallbackPaused;
             if (fallbackReader) {
-                bool invoked = QMetaObject::invokeMethod(fallbackReader, "setPaused", Qt::QueuedConnection, Q_ARG(bool, fallbackPaused));
-                qDebug() << "[PreviewOverlay] invokeMethod result:" << invoked;
+                fallbackReader->setPaused(fallbackPaused);
             }
             updatePlayPauseButton();
         } else
@@ -853,11 +852,12 @@ void PreviewOverlay::onSliderMoved(int position)
         }
         // Live scrubbing: issue seeks as the slider moves
         if (liveScrubEnabled && fallbackReader) {
-            QMetaObject::invokeMethod(fallbackReader, "seekToMs", Qt::QueuedConnection, Q_ARG(qint64, static_cast<qint64>(position)));
-            QMetaObject::invokeMethod(fallbackReader, "stepOnce", Qt::QueuedConnection);
+            fallbackReader->seekToMs(static_cast<qint64>(position));
+            fallbackReader->stepOnce();
         }
         controlsTimer->start();
         return;
+
     }
 #endif
     // QMediaPlayer path
@@ -893,10 +893,11 @@ void PreviewOverlay::onSliderPressed()
         wasPlayingBeforeSeek = !fallbackPaused;
         fallbackPaused = true;
         if (fallbackReader) {
-            QMetaObject::invokeMethod(fallbackReader, "setPaused", Qt::QueuedConnection, Q_ARG(bool, true));
+            fallbackReader->setPaused(true);
         }
         return;
     }
+
 #endif
     wasPlayingBeforeSeek = (mediaPlayer->playbackState() == QMediaPlayer::PlayingState);
     mediaPlayer->pause();
@@ -916,13 +917,13 @@ void PreviewOverlay::onSliderReleased()
 #ifdef HAVE_FFMPEG
     if (usingFallbackVideo) {
         if (fallbackReader) {
-            QMetaObject::invokeMethod(fallbackReader, "seekToMs", Qt::QueuedConnection, Q_ARG(qint64, static_cast<qint64>(pos)));
-            QMetaObject::invokeMethod(fallbackReader, "stepOnce", Qt::QueuedConnection);
+            fallbackReader->seekToMs(static_cast<qint64>(pos));
+            fallbackReader->stepOnce();
         }
         if (wasPlayingBeforeSeek) {
             fallbackPaused = false;
             if (fallbackReader) {
-                QMetaObject::invokeMethod(fallbackReader, "setPaused", Qt::QueuedConnection, Q_ARG(bool, false));
+                fallbackReader->setPaused(false);
             }
         }
         userSeeking = false;
@@ -930,6 +931,7 @@ void PreviewOverlay::onSliderReleased()
         controlsTimer->start();
         return;
     }
+
 #endif
     mediaPlayer->setPosition(pos);
     if (wasPlayingBeforeSeek) mediaPlayer->play();
@@ -953,16 +955,17 @@ void PreviewOverlay::onStepNextFrame()
         // Pause and single-step forward
         fallbackPaused = true;
         if (fallbackReader) {
-            QMetaObject::invokeMethod(fallbackReader, "setPaused", Qt::QueuedConnection, Q_ARG(bool, true));
+            fallbackReader->setPaused(true);
             qint64 pos = positionSlider->value();
             qint64 dt = static_cast<qint64>(qRound64(frameDurationMs()));
             qint64 target = qMin(pos + dt, static_cast<qint64>(positionSlider->maximum()));
-            QMetaObject::invokeMethod(fallbackReader, "seekToMs", Qt::QueuedConnection, Q_ARG(qint64, target));
-            QMetaObject::invokeMethod(fallbackReader, "stepOnce", Qt::QueuedConnection);
+            fallbackReader->seekToMs(target);
+            fallbackReader->stepOnce();
         }
         updatePlayPauseButton();
         return;
     }
+
 #endif
     // QMediaPlayer path
     bool wasPlaying = (mediaPlayer->playbackState() == QMediaPlayer::PlayingState);
@@ -997,16 +1000,17 @@ void PreviewOverlay::onStepPrevFrame()
     if (usingFallbackVideo) {
         fallbackPaused = true;
         if (fallbackReader) {
-            QMetaObject::invokeMethod(fallbackReader, "setPaused", Qt::QueuedConnection, Q_ARG(bool, true));
+            fallbackReader->setPaused(true);
             qint64 pos = positionSlider->value();
             qint64 dt = static_cast<qint64>(qRound64(frameDurationMs()));
             qint64 target = pos - dt; if (target < 0) target = 0;
-            QMetaObject::invokeMethod(fallbackReader, "seekToMs", Qt::QueuedConnection, Q_ARG(qint64, target));
-            QMetaObject::invokeMethod(fallbackReader, "stepOnce", Qt::QueuedConnection);
+            fallbackReader->seekToMs(target);
+            fallbackReader->stepOnce();
         }
         updatePlayPauseButton();
         return;
     }
+
 #endif
     bool wasPlaying = (mediaPlayer->playbackState() == QMediaPlayer::PlayingState);
     mediaPlayer->pause();
