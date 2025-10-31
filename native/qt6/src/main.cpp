@@ -71,15 +71,6 @@ static void messageHandler(QtMsgType type, const QMessageLogContext &context, co
 
 int main(int argc, char *argv[])
 {
-#ifdef Q_OS_WIN
-    // Allocate console on Windows
-    if (AttachConsole(ATTACH_PARENT_PROCESS) || AllocConsole()) {
-        freopen("CONOUT$", "w", stdout);
-        freopen("CONOUT$", "w", stderr);
-        std::cout.clear();
-        std::cerr.clear();
-    }
-#endif
 
     // Suppress FFmpeg error messages to prevent console spam
 #ifdef HAVE_FFMPEG_LOG
