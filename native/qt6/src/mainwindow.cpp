@@ -1311,16 +1311,17 @@ void MainWindow::setupUi()
     mainSplitter->setStretchFactor(1, 3);
     mainSplitter->setStretchFactor(2, 1);
 
-    // Add Asset Manager page to tabs
-    mainTabs->addTab(assetManagerPage, "Asset Manager");
-
-    // File Manager page
-    fileManagerPage = new QWidget(this);
     qDebug() << "[INIT] About to call setupFileManagerUi";
     setupFileManagerUi();
     qDebug() << "[INIT] setupFileManagerUi returned";
+    // Add File Manager page first
     mainTabs->addTab(fileManagerPage, "File Manager");
     qDebug() << "[INIT] File Manager tab added";
+
+    // Add Asset Manager page second
+    mainTabs->addTab(assetManagerPage, "Asset Manager");
+    qDebug() << "[INIT] Asset Manager tab added";
+
 
     // Log viewer as dock widget at bottom (hidden by default)
     QDockWidget* logDock = new QDockWidget("Application Log", this);
@@ -1587,6 +1588,7 @@ void MainWindow::setupFileManagerUi()
     // List view
     fmListView = new QTableView(fmViewStack);
     fmListView->setModel(fmProxyModel);
+    fmProxyModel->sort(0, Qt::AscendingOrder); // Default: sort by name A-Z
     // Persist fmListView column widths immediately when resized
     connect(fmListView->horizontalHeader(), &QHeaderView::sectionResized, this, [this](int logical, int /*oldSize*/, int newSize){
         QSettings s("AugmentCode", "KAssetManager");
@@ -1596,6 +1598,7 @@ void MainWindow::setupFileManagerUi()
     fmListView->setSelectionBehavior(QAbstractItemView::SelectRows);
     fmListView->setSelectionMode(QAbstractItemView::ExtendedSelection);
     fmListView->setSortingEnabled(true);
+    fmListView->sortByColumn(0, Qt::AscendingOrder); // Sort by name, A-Z
     fmListView->setAlternatingRowColors(false);
     fmListView->setShowGrid(false);
     fmListView->verticalHeader()->setVisible(false);
