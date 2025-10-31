@@ -385,7 +385,9 @@ void PreviewOverlay::setupUi()
         "QPushButton:hover { background-color: #4a90e2; }"
     );
     connect(playPauseBtn, &QPushButton::clicked, this, &PreviewOverlay::onPlayPauseClicked);
+    connect(playPauseBtn, &QPushButton::clicked, []() { qDebug() << "[Lambda] Play/Pause button clicked!"; });
     buttonsLayout->addWidget(playPauseBtn);
+    qDebug() << "[PreviewOverlay] Play/pause button created and connected";
     // Frame step buttons
     prevFrameBtn = new QPushButton("‹", controlsWidget);
     prevFrameBtn->setFixedSize(36, 36);
@@ -742,6 +744,8 @@ void PreviewOverlay::showVideo(const QString &filePath)
     // Anchor nav arrows to the video widget when showing video (handles native window stacking)
     positionNavButtons(videoWidget);
     controlsWidget->show();
+    controlsWidget->raise();
+    qDebug() << "[PreviewOverlay] Controls geometry:" << controlsWidget->geometry() << "visible:" << controlsWidget->isVisible();
 
     // Hide alpha toggle for videos
     if (alphaCheck) alphaCheck->hide();
@@ -768,6 +772,7 @@ void PreviewOverlay::showVideo(const QString &filePath)
 
 void PreviewOverlay::onPlayPauseClicked()
 {
+    qDebug() << "[PreviewOverlay::onPlayPauseClicked] Button clicked!";
     if (isSequence) {
         // Handle sequence playback
         if (sequencePlaying) {
