@@ -1588,7 +1588,6 @@ void MainWindow::setupFileManagerUi()
     // List view
     fmListView = new QTableView(fmViewStack);
     fmListView->setModel(fmProxyModel);
-    fmProxyModel->sort(0, Qt::AscendingOrder); // Default: sort by name A-Z
     // Persist fmListView column widths immediately when resized
     connect(fmListView->horizontalHeader(), &QHeaderView::sectionResized, this, [this](int logical, int /*oldSize*/, int newSize){
         QSettings s("AugmentCode", "KAssetManager");

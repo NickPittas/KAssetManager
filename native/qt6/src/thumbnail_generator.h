@@ -70,7 +70,9 @@ private:
     bool m_frameReceived;
     QImage m_capturedFrame;
     int m_sessionId = 0;
+    qint64 m_seekTime = 1000; // Seek to 1 second for thumbnail
 };
+
 
 class ThumbnailGenerator : public QObject {
     Q_OBJECT

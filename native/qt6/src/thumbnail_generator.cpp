@@ -850,8 +850,9 @@ void ThumbnailGenerator::requestThumbnailForce(const QString& filePath) {
 QString ThumbnailGenerator::generateImageThumbnail(const QString& filePath) {
 #ifdef _MSC_VER
     __try {
-#endif
+#else
     try {
+#endif
         // Validate file exists and is readable
         QFileInfo fileInfo(filePath);
 
@@ -951,18 +952,18 @@ QString ThumbnailGenerator::generateImageThumbnail(const QString& filePath) {
         }
         return cachePath;
 
-
+#ifdef _MSC_VER
+    } __except(EXCEPTION_EXECUTE_HANDLER) {
+        qCritical() << "[ThumbnailGenerator] SEH exception (access violation) for" << filePath 
+                    << "code:" << Qt::hex << GetExceptionCode();
+        return QString();
+    }
+#else
     } catch (const std::exception& e) {
         qCritical() << "[ThumbnailGenerator] Exception generating thumbnail for" << filePath << ":" << e.what();
         return QString();
     } catch (...) {
         qCritical() << "[ThumbnailGenerator] Unknown exception generating thumbnail for" << filePath;
-        return QString();
-    }
-#ifdef _MSC_VER
-    } __except(EXCEPTION_EXECUTE_HANDLER) {
-        qCritical() << "[ThumbnailGenerator] SEH exception (access violation) for" << filePath 
-                    << "code:" << Qt::hex << GetExceptionCode();
         return QString();
     }
 #endif
