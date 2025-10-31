@@ -69,8 +69,10 @@ private slots:
     void onColorSpaceChanged(int index);
     void onPlayerError(QMediaPlayer::Error error, const QString &errorString);
     void onMediaStatusChanged(QMediaPlayer::MediaStatus status);
+    void onPlaybackStateChanged(QMediaPlayer::PlaybackState state);
     void onFallbackFrameReady(const QImage &image, qint64 ptsMs);
     void onFallbackFinished();
+
 
 private:
     void setupUi();

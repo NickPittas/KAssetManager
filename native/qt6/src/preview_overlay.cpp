@@ -495,14 +495,14 @@ void PreviewOverlay::setupUi()
     mediaPlayer->setVideoOutput(videoWidget);
 
     connect(mediaPlayer, &QMediaPlayer::positionChanged, this, &PreviewOverlay::onPositionChanged);
-    // Initial positioning
-    if (navPrevBtn && navNextBtn) {
-        int y = height() / 2 - navPrevBtn->height() / 2;
-        navPrevBtn->move(20, y);
-        navNextBtn->move(width() - 20 - navNextBtn->width(), y);
-        navPrevBtn->show();
-        navNextBtn->show();
-    }
+    connect(mediaPlayer, &QMediaPlayer::durationChanged, this, &PreviewOverlay::onDurationChanged);
+    connect(mediaPlayer, &QMediaPlayer::errorOccurred, this, &PreviewOverlay::onPlayerError);
+    connect(mediaPlayer, &QMediaPlayer::mediaStatusChanged, this, &PreviewOverlay::onMediaStatusChanged);
+    connect(mediaPlayer, &QMediaPlayer::playbackStateChanged, this, &PreviewOverlay::onPlaybackStateChanged);
+
+    audioOutput->setVolume(0.5);
+}
+
 
     connect(mediaPlayer, &QMediaPlayer::durationChanged, this, &PreviewOverlay::onDurationChanged);
     connect(mediaPlayer, &QMediaPlayer::errorOccurred, this, &PreviewOverlay::onPlayerError);
@@ -800,11 +800,12 @@ void PreviewOverlay::onPlayPauseClicked()
             } else {
                 mediaPlayer->play();
             }
-            updatePlayPauseButton();
+            // updatePlayPauseButton() will be called by onPlaybackStateChanged signal
         }
     }
     controlsTimer->start();
 }
+
 
 void PreviewOverlay::onPositionChanged(qint64 position)
 {
@@ -951,20 +952,23 @@ void PreviewOverlay::onStepNextFrame()
     }
 #endif
     // QMediaPlayer path
-    bool was = (mediaPlayer->playbackState() == QMediaPlayer::PlayingState);
+    bool wasPlaying = (mediaPlayer->playbackState() == QMediaPlayer::PlayingState);
     mediaPlayer->pause();
     qint64 pos = mediaPlayer->position();
     qint64 dt = static_cast<qint64>(qRound64(frameDurationMs()));
     qint64 target = qMin(pos + dt, mediaPlayer->duration());
     mediaPlayer->setPosition(target);
-    if (!was) {
-        mediaPlayer->play();
-        QTimer::singleShot(30, this, [this]() { mediaPlayer->pause(); updatePlayPauseButton(); });
-    } else {
-        mediaPlayer->play();
+    
+    // If it was playing, resume after a short delay to ensure frame is rendered
+    if (wasPlaying) {
+        QTimer::singleShot(50, this, [this, wasPlaying]() {
+            if (wasPlaying) {
+                mediaPlayer->play();
+            }
+        });
     }
-    updatePlayPauseButton();
 }
+
 
 void PreviewOverlay::onStepPrevFrame()
 {
@@ -991,20 +995,23 @@ void PreviewOverlay::onStepPrevFrame()
         return;
     }
 #endif
-    bool was = (mediaPlayer->playbackState() == QMediaPlayer::PlayingState);
+    bool wasPlaying = (mediaPlayer->playbackState() == QMediaPlayer::PlayingState);
     mediaPlayer->pause();
     qint64 pos = mediaPlayer->position();
     qint64 dt = static_cast<qint64>(qRound64(frameDurationMs()));
     qint64 target = pos - dt; if (target < 0) target = 0;
     mediaPlayer->setPosition(target);
-    if (!was) {
-        mediaPlayer->play();
-        QTimer::singleShot(30, this, [this]() { mediaPlayer->pause(); updatePlayPauseButton(); });
-    } else {
-        mediaPlayer->play();
+    
+    // If it was playing, resume after a short delay to ensure frame is rendered
+    if (wasPlaying) {
+        QTimer::singleShot(50, this, [this, wasPlaying]() {
+            if (wasPlaying) {
+                mediaPlayer->play();
+            }
+        });
     }
-    updatePlayPauseButton();
 }
+
 
 double PreviewOverlay::frameDurationMs() const
 {
@@ -1647,7 +1654,14 @@ void PreviewOverlay::onMediaStatusChanged(QMediaPlayer::MediaStatus status)
     updateDetectedFps();
 }
 
+void PreviewOverlay::onPlaybackStateChanged(QMediaPlayer::PlaybackState state)
+{
+    Q_UNUSED(state);
+    updatePlayPauseButton();
+}
+
 void PreviewOverlay::onFallbackFrameReady(const QImage &image, qint64 ptsMs)
+
 {
 #ifdef HAVE_FFMPEG
     // Ignore frames from stale fallback readers
