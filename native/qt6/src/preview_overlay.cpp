@@ -52,7 +52,26 @@ public:
         : m_path(path) {}
 
 public slots:
+    void setPaused(bool p) { 
+        qDebug() << "[FallbackPngMovReader::setPaused]" << p;
+        m_paused = p; 
+    }
+    void stepOnce() { 
+        qDebug() << "[FallbackPngMovReader::stepOnce]";
+        m_singleStep = true; 
+    }
+    void seekToMs(qint64 ms) { 
+        qDebug() << "[FallbackPngMovReader::seekToMs]" << ms;
+        m_seekTargetMs = ms; 
+        m_seekRequested = true; 
+    }
+    void stop() { 
+        qDebug() << "[FallbackPngMovReader::stop]";
+        m_stop = true; 
+    }
+    
     void start() {
+        qDebug() << "[FallbackPngMovReader::start]";
         if (!open()) { emit finished(); return; }
         const double intervalMs = m_fps > 0.0 ? (1000.0 / m_fps) : (1000.0 / 24.0);
         AVPacket pkt; av_init_packet(&pkt);
@@ -108,11 +127,6 @@ public slots:
         avformat_close_input(&m_fmt);
         emit finished();
     }
-    void stop() { m_stop = true; }
-    void setPaused(bool p) { m_paused = p; }
-
-    void stepOnce() { m_singleStep = true; }
-    void seekToMs(qint64 ms) { m_seekTargetMs = ms; m_seekRequested = true; }
 
 signals:
     void frameReady(const QImage& image, qint64 ptsMs);
