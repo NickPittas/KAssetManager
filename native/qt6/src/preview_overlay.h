@@ -49,6 +49,7 @@ signals:
 protected:
     void keyPressEvent(QKeyEvent *event) override;
     void resizeEvent(QResizeEvent *event) override;
+    void moveEvent(QMoveEvent *event) override;
     void mousePressEvent(QMouseEvent *event) override;
     void wheelEvent(QWheelEvent *event) override;
     bool eventFilter(QObject* watched, QEvent* event) override;
@@ -58,6 +59,10 @@ private slots:
     void onPositionChanged(qint64 position);
     void onDurationChanged(qint64 duration);
     void onSliderMoved(int position);
+    void onSliderPressed();
+    void onSliderReleased();
+    void onStepPrevFrame();
+    void onStepNextFrame();
     void onVolumeChanged(int value);
     void hideControls();
     void onSequenceTimerTick();
@@ -85,11 +90,15 @@ private:
     void fitImageToView();
     void resetImageZoom();
     void loadSequenceFrame(int frameIndex);
+    void positionNavButtons(QWidget* container);
     void playSequence();
     void pauseSequence();
     void stopSequence();
     void startFallbackVideo(const QString &filePath);
     void stopFallbackVideo();
+    // Seeking helpers
+    double frameDurationMs() const; // based on detectedFps (from metadata) or fallbackFps
+    void updateDetectedFps();
 
     // UI Components
     QGraphicsView *imageView;
@@ -99,9 +108,12 @@ private:
     QVideoWidget *videoWidget;
     QWidget *controlsWidget;
     QPushButton *playPauseBtn;
+    QPushButton *prevFrameBtn;
+    QPushButton *nextFrameBtn;
     QSlider *positionSlider;
     QLabel *timeLabel;
     QSlider *volumeSlider;
+    QCheckBox *liveScrubCheck;
     QPushButton *closeBtn;
     QLabel *fileNameLabel;
     QComboBox *colorSpaceCombo;
@@ -121,11 +133,22 @@ private:
     int pdfCurrentPage = 0;
 #endif
 
+    // Overlay navigation arrows
+    QPushButton *navPrevBtn;
+    QPushButton *navNextBtn;
+    QWidget *navContainer = nullptr; // parent we attach nav buttons to (video widget, image viewport, etc.)
+
     // State
     QString currentFilePath;
     QString currentFileType;
     bool isVideo;
     QTimer *controlsTimer;
+
+    // Seek/step state
+    bool userSeeking = false;
+    bool wasPlayingBeforeSeek = false;
+    double detectedFps = 0.0;
+    bool liveScrubEnabled = false;
 
     // Image zoom/pan state
     double currentZoom;

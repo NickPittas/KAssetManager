@@ -78,7 +78,7 @@ if(WIN32)
     set(APP_RESOURCES src/app.rc)
 endif()
 
-qt_add_executable(kassetmanagerqt
+qt_add_executable(kassetmanagerqt WIN32
     src/main.cpp
     src/mainwindow.h
     src/mainwindow.cpp

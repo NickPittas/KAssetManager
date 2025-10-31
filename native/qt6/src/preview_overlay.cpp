@@ -31,6 +31,10 @@
 #endif
 
 #include <atomic>
+#include <QMediaMetaData>
+
+#include <QSettings>
+
 
 #ifdef HAVE_FFMPEG
 extern "C" {
@@ -55,7 +59,17 @@ public slots:
         const uint8_t sig[8] = {0x89, 'P','N','G', 0x0D, 0x0A, 0x1A, 0x0A};
         qint64 lastPtsMs = 0;
         while (!m_stop) {
-            if (m_paused) { QThread::msleep(10); continue; }
+            if (m_seekRequested.load()) {
+                qint64 targetMs = m_seekTargetMs.load();
+                AVRational ms = {1, 1000};
+                int64_t ts = av_rescale_q(targetMs, ms, m_stream->time_base);
+                av_seek_frame(m_fmt, m_vIdx, ts, AVSEEK_FLAG_BACKWARD);
+                m_seekRequested = false;
+                lastPtsMs = targetMs;
+            }
+            // Single-step: allow exactly one frame to pass while paused
+            bool doSingleStep = m_singleStep.exchange(false);
+            if (m_paused && !doSingleStep) { QThread::msleep(10); continue; }
             if (av_read_frame(m_fmt, &pkt) < 0) {
                 break; // EOF
             }
@@ -97,8 +111,12 @@ public slots:
     void stop() { m_stop = true; }
     void setPaused(bool p) { m_paused = p; }
 
+    void stepOnce() { m_singleStep = true; }
+    void seekToMs(qint64 ms) { m_seekTargetMs = ms; m_seekRequested = true; }
+
 signals:
     void frameReady(const QImage& image, qint64 ptsMs);
+
     void finished();
 
 public:
@@ -141,6 +159,10 @@ private:
     qint64 m_durationMs = 0;
     std::atomic<bool> m_stop{false};
     std::atomic<bool> m_paused{false};
+    std::atomic<bool> m_singleStep{false};
+    std::atomic<bool> m_seekRequested{false};
+    std::atomic<qint64> m_seekTargetMs{0};
+
 };
 #endif // HAVE_FFMPEG
 
@@ -170,6 +192,20 @@ PreviewOverlay::PreviewOverlay(QWidget *parent)
 {
     setupUi();
     setFocusPolicy(Qt::StrongFocus);
+
+    // Load persisted settings
+    {
+        QSettings s("AugmentCode", "KAssetManager");
+        liveScrubEnabled = s.value("Preview/LiveScrub", false).toBool();
+        if (liveScrubCheck) liveScrubCheck->setChecked(liveScrubEnabled);
+        if (liveScrubCheck) {
+            connect(liveScrubCheck, &QCheckBox::toggled, this, [this](bool on){
+                liveScrubEnabled = on;
+                QSettings s("AugmentCode", "KAssetManager");
+                s.setValue("Preview/LiveScrub", on);
+            });
+        }
+    }
 
     // Auto-hide controls timer
     controlsTimer = new QTimer(this);
@@ -333,6 +369,8 @@ void PreviewOverlay::setupUi()
         "QSlider::handle:horizontal { background: #58a6ff; width: 12px; margin: -4px 0; border-radius: 6px; }"
     );
     connect(positionSlider, &QSlider::sliderMoved, this, &PreviewOverlay::onSliderMoved);
+    connect(positionSlider, &QSlider::sliderPressed, this, &PreviewOverlay::onSliderPressed);
+    connect(positionSlider, &QSlider::sliderReleased, this, &PreviewOverlay::onSliderReleased);
     controlsLayout->addWidget(positionSlider);
 
     // Control buttons row
@@ -347,6 +385,27 @@ void PreviewOverlay::setupUi()
     );
     connect(playPauseBtn, &QPushButton::clicked, this, &PreviewOverlay::onPlayPauseClicked);
     buttonsLayout->addWidget(playPauseBtn);
+    // Frame step buttons
+    prevFrameBtn = new QPushButton("‹", this);
+    prevFrameBtn->setFixedSize(36, 36);
+    prevFrameBtn->setToolTip("Previous frame (,)");
+    prevFrameBtn->setStyleSheet(
+        "QPushButton { background-color: #444; color: white; font-size: 16px; border-radius: 18px; border: none; }"
+        "QPushButton:hover { background-color: #555; }"
+    );
+    connect(prevFrameBtn, &QPushButton::clicked, this, &PreviewOverlay::onStepPrevFrame);
+    buttonsLayout->addWidget(prevFrameBtn);
+
+    nextFrameBtn = new QPushButton("›", this);
+    nextFrameBtn->setFixedSize(36, 36);
+    nextFrameBtn->setToolTip("Next frame (.)");
+    nextFrameBtn->setStyleSheet(
+        "QPushButton { background-color: #444; color: white; font-size: 16px; border-radius: 18px; border: none; }"
+        "QPushButton:hover { background-color: #555; }"
+    );
+    connect(nextFrameBtn, &QPushButton::clicked, this, &PreviewOverlay::onStepNextFrame);
+    buttonsLayout->addWidget(nextFrameBtn);
+
 
     timeLabel = new QLabel("0:00 / 0:00", this);
     timeLabel->setStyleSheet("QLabel { color: white; font-size: 14px; padding: 0 10px; }");
@@ -393,9 +452,41 @@ void PreviewOverlay::setupUi()
     connect(volumeSlider, &QSlider::valueChanged, this, &PreviewOverlay::onVolumeChanged);
     buttonsLayout->addWidget(volumeSlider);
 
+    // Live scrubbing toggle
+    liveScrubCheck = new QCheckBox("Live Scrub", this);
+    liveScrubCheck->setToolTip("Seek continuously while dragging the timeline slider");
+    buttonsLayout->addWidget(liveScrubCheck);
+
     controlsLayout->addLayout(buttonsLayout);
 
     mainLayout->addWidget(controlsWidget);
+    // Overlay side navigation arrows
+    navPrevBtn = new QPushButton("\u25C0", this); // ◀
+    navPrevBtn->setFixedSize(64, 64);
+    navPrevBtn->setFlat(true);
+    navPrevBtn->setAutoFillBackground(false);
+    navPrevBtn->setStyleSheet(
+        "QPushButton { background: transparent; background-color: transparent; color: white; font-size: 28px; border: none; }"
+        "QPushButton:hover { background: transparent; background-color: transparent; color: white; }"
+        "QPushButton:pressed { background: transparent; background-color: transparent; color: white; }"
+    );
+    navPrevBtn->setFocusPolicy(Qt::NoFocus);
+    connect(navPrevBtn, &QPushButton::clicked, this, &PreviewOverlay::navigatePrevious);
+    navPrevBtn->raise();
+
+    navNextBtn = new QPushButton("\u25B6", this); // ▶
+    navNextBtn->setFixedSize(64, 64);
+    navNextBtn->setFlat(true);
+    navNextBtn->setAutoFillBackground(false);
+    navNextBtn->setStyleSheet(
+        "QPushButton { background: transparent; background-color: transparent; color: white; font-size: 28px; border: none; }"
+        "QPushButton:hover { background: transparent; background-color: transparent; color: white; }"
+        "QPushButton:pressed { background: transparent; background-color: transparent; color: white; }"
+    );
+    navNextBtn->setFocusPolicy(Qt::NoFocus);
+    connect(navNextBtn, &QPushButton::clicked, this, &PreviewOverlay::navigateNext);
+    navNextBtn->raise();
+
 
     // Initialize media player
     mediaPlayer = new QMediaPlayer(this);
@@ -404,6 +495,15 @@ void PreviewOverlay::setupUi()
     mediaPlayer->setVideoOutput(videoWidget);
 
     connect(mediaPlayer, &QMediaPlayer::positionChanged, this, &PreviewOverlay::onPositionChanged);
+    // Initial positioning
+    if (navPrevBtn && navNextBtn) {
+        int y = height() / 2 - navPrevBtn->height() / 2;
+        navPrevBtn->move(20, y);
+        navNextBtn->move(width() - 20 - navNextBtn->width(), y);
+        navPrevBtn->show();
+        navNextBtn->show();
+    }
+
     connect(mediaPlayer, &QMediaPlayer::durationChanged, this, &PreviewOverlay::onDurationChanged);
     connect(mediaPlayer, &QMediaPlayer::errorOccurred, this, &PreviewOverlay::onPlayerError);
     connect(mediaPlayer, &QMediaPlayer::mediaStatusChanged, this, &PreviewOverlay::onMediaStatusChanged);
@@ -530,6 +630,9 @@ void PreviewOverlay::showImage(const QString &filePath)
     imageView->setBackgroundBrush(QColor("#0a0a0a"));
     imageView->show();
 
+    // Anchor nav arrows to the image viewport when showing images
+    positionNavButtons(imageView->viewport());
+
     // CRITICAL: Stop any video playback
     if (mediaPlayer->playbackState() != QMediaPlayer::StoppedState) {
         qDebug() << "[PreviewOverlay::showImage] Stopping video playback";
@@ -644,6 +747,8 @@ void PreviewOverlay::showVideo(const QString &filePath)
     if (pdfView) pdfView->hide();
 #endif
     videoWidget->show();
+    // Anchor nav arrows to the video widget when showing video (handles native window stacking)
+    positionNavButtons(videoWidget);
     controlsWidget->show();
 
     // Hide alpha toggle for videos
@@ -662,6 +767,9 @@ void PreviewOverlay::showVideo(const QString &filePath)
 
     qDebug() << "[PreviewOverlay::showVideo] Starting playback";
     mediaPlayer->play();
+
+    // Try to detect FPS from metadata early (may be updated later)
+    updateDetectedFps();
 
     controlsTimer->start();
 }
@@ -718,14 +826,36 @@ void PreviewOverlay::onSliderMoved(int position)
     if (isSequence) {
         // Seek to specific frame in sequence
         loadSequenceFrame(position);
-    } else {
+        controlsTimer->start();
+        return;
+    }
 #ifdef HAVE_FFMPEG
-        if (usingFallbackVideo) {
-            // Seeking not supported in fallback mode yet
-            return;
+    if (usingFallbackVideo) {
+        // Update time label while dragging
+        if (fallbackDurationMs > 0) {
+            timeLabel->setText(QString("%1 / %2").arg(formatTime(position)).arg(formatTime(fallbackDurationMs)));
+        } else {
+            timeLabel->setText(QString("%1 / --:--").arg(formatTime(position)));
         }
+        // Live scrubbing: issue seeks as the slider moves
+        if (liveScrubEnabled && fallbackReader) {
+            QMetaObject::invokeMethod(fallbackReader, "seekToMs", Qt::QueuedConnection, Q_ARG(qint64, static_cast<qint64>(position)));
+            QMetaObject::invokeMethod(fallbackReader, "stepOnce", Qt::QueuedConnection);
+        }
+        controlsTimer->start();
+        return;
+    }
 #endif
-        // Seek in video
+    // QMediaPlayer path
+    if (liveScrubEnabled) {
+        mediaPlayer->setPosition(position);
+        qint64 duration = mediaPlayer->duration();
+        timeLabel->setText(QString("%1 / %2").arg(formatTime(position)).arg(formatTime(duration)));
+    } else if (userSeeking) {
+        // Update label only; we'll seek on release to avoid choppy updates
+        qint64 duration = mediaPlayer->duration();
+        timeLabel->setText(QString("%1 / %2").arg(formatTime(position)).arg(formatTime(duration)));
+    } else {
         mediaPlayer->setPosition(position);
     }
     controlsTimer->start();
@@ -736,6 +866,174 @@ void PreviewOverlay::onVolumeChanged(int value)
     audioOutput->setVolume(value / 100.0);
     controlsTimer->start();
 }
+void PreviewOverlay::onSliderPressed()
+{
+    userSeeking = true;
+    if (isSequence) {
+        wasPlayingBeforeSeek = sequencePlaying;
+        if (sequencePlaying) pauseSequence();
+        return;
+    }
+#ifdef HAVE_FFMPEG
+    if (usingFallbackVideo) {
+        wasPlayingBeforeSeek = !fallbackPaused;
+        fallbackPaused = true;
+        if (fallbackReader) {
+            QMetaObject::invokeMethod(fallbackReader, "setPaused", Qt::QueuedConnection, Q_ARG(bool, true));
+        }
+        return;
+    }
+#endif
+    wasPlayingBeforeSeek = (mediaPlayer->playbackState() == QMediaPlayer::PlayingState);
+    mediaPlayer->pause();
+}
+
+void PreviewOverlay::onSliderReleased()
+{
+    const int pos = positionSlider->value();
+    if (isSequence) {
+        loadSequenceFrame(pos);
+        if (wasPlayingBeforeSeek) playSequence();
+        userSeeking = false;
+        updatePlayPauseButton();
+        controlsTimer->start();
+        return;
+    }
+#ifdef HAVE_FFMPEG
+    if (usingFallbackVideo) {
+        if (fallbackReader) {
+            QMetaObject::invokeMethod(fallbackReader, "seekToMs", Qt::QueuedConnection, Q_ARG(qint64, static_cast<qint64>(pos)));
+            QMetaObject::invokeMethod(fallbackReader, "stepOnce", Qt::QueuedConnection);
+        }
+        if (wasPlayingBeforeSeek) {
+            fallbackPaused = false;
+            if (fallbackReader) {
+                QMetaObject::invokeMethod(fallbackReader, "setPaused", Qt::QueuedConnection, Q_ARG(bool, false));
+            }
+        }
+        userSeeking = false;
+        updatePlayPauseButton();
+        controlsTimer->start();
+        return;
+    }
+#endif
+    mediaPlayer->setPosition(pos);
+    if (wasPlayingBeforeSeek) mediaPlayer->play();
+    userSeeking = false;
+    updatePlayPauseButton();
+    controlsTimer->start();
+}
+
+void PreviewOverlay::onStepNextFrame()
+{
+    if (isSequence) {
+        bool was = sequencePlaying;
+        if (was) pauseSequence();
+        int nextIdx = qMin(positionSlider->value() + 1, positionSlider->maximum());
+        loadSequenceFrame(nextIdx);
+        if (was) playSequence();
+        return;
+    }
+#ifdef HAVE_FFMPEG
+    if (usingFallbackVideo) {
+        // Pause and single-step forward
+        fallbackPaused = true;
+        if (fallbackReader) {
+            QMetaObject::invokeMethod(fallbackReader, "setPaused", Qt::QueuedConnection, Q_ARG(bool, true));
+            qint64 pos = positionSlider->value();
+            qint64 dt = static_cast<qint64>(qRound64(frameDurationMs()));
+            qint64 target = qMin(pos + dt, static_cast<qint64>(positionSlider->maximum()));
+            QMetaObject::invokeMethod(fallbackReader, "seekToMs", Qt::QueuedConnection, Q_ARG(qint64, target));
+            QMetaObject::invokeMethod(fallbackReader, "stepOnce", Qt::QueuedConnection);
+        }
+        updatePlayPauseButton();
+        return;
+    }
+#endif
+    // QMediaPlayer path
+    bool was = (mediaPlayer->playbackState() == QMediaPlayer::PlayingState);
+    mediaPlayer->pause();
+    qint64 pos = mediaPlayer->position();
+    qint64 dt = static_cast<qint64>(qRound64(frameDurationMs()));
+    qint64 target = qMin(pos + dt, mediaPlayer->duration());
+    mediaPlayer->setPosition(target);
+    if (!was) {
+        mediaPlayer->play();
+        QTimer::singleShot(30, this, [this]() { mediaPlayer->pause(); updatePlayPauseButton(); });
+    } else {
+        mediaPlayer->play();
+    }
+    updatePlayPauseButton();
+}
+
+void PreviewOverlay::onStepPrevFrame()
+{
+    if (isSequence) {
+        bool was = sequencePlaying;
+        if (was) pauseSequence();
+        int prevIdx = qMax(positionSlider->value() - 1, positionSlider->minimum());
+        loadSequenceFrame(prevIdx);
+        if (was) playSequence();
+        return;
+    }
+#ifdef HAVE_FFMPEG
+    if (usingFallbackVideo) {
+        fallbackPaused = true;
+        if (fallbackReader) {
+            QMetaObject::invokeMethod(fallbackReader, "setPaused", Qt::QueuedConnection, Q_ARG(bool, true));
+            qint64 pos = positionSlider->value();
+            qint64 dt = static_cast<qint64>(qRound64(frameDurationMs()));
+            qint64 target = pos - dt; if (target < 0) target = 0;
+            QMetaObject::invokeMethod(fallbackReader, "seekToMs", Qt::QueuedConnection, Q_ARG(qint64, target));
+            QMetaObject::invokeMethod(fallbackReader, "stepOnce", Qt::QueuedConnection);
+        }
+        updatePlayPauseButton();
+        return;
+    }
+#endif
+    bool was = (mediaPlayer->playbackState() == QMediaPlayer::PlayingState);
+    mediaPlayer->pause();
+    qint64 pos = mediaPlayer->position();
+    qint64 dt = static_cast<qint64>(qRound64(frameDurationMs()));
+    qint64 target = pos - dt; if (target < 0) target = 0;
+    mediaPlayer->setPosition(target);
+    if (!was) {
+        mediaPlayer->play();
+        QTimer::singleShot(30, this, [this]() { mediaPlayer->pause(); updatePlayPauseButton(); });
+    } else {
+        mediaPlayer->play();
+    }
+    updatePlayPauseButton();
+}
+
+double PreviewOverlay::frameDurationMs() const
+{
+#ifdef HAVE_FFMPEG
+    if (usingFallbackVideo && fallbackFps > 0.0) {
+        return 1000.0 / fallbackFps;
+    }
+#endif
+    double fps = detectedFps;
+    if (fps <= 0.0) fps = 24.0;
+    return 1000.0 / fps;
+}
+
+void PreviewOverlay::updateDetectedFps()
+{
+    detectedFps = 0.0;
+    if (!isVideo) return;
+#ifdef HAVE_FFMPEG
+    if (usingFallbackVideo && fallbackFps > 0.0) { detectedFps = fallbackFps; return; }
+#endif
+    if (mediaPlayer) {
+        QVariant v = mediaPlayer->metaData().value(QMediaMetaData::VideoFrameRate);
+        if (v.isValid()) {
+            detectedFps = v.toDouble();
+        }
+    }
+    if (detectedFps <= 0.0) detectedFps = 24.0;
+}
+
 
 void PreviewOverlay::hideControls()
 {
@@ -759,6 +1057,61 @@ void PreviewOverlay::updatePlayPauseButton()
         playPauseBtn->setText("▶");
     }
 }
+void PreviewOverlay::positionNavButtons(QWidget* container)
+{
+    if (!navPrevBtn || !navNextBtn || !container) return;
+
+    navContainer = container;
+
+    const int margin = 16;
+
+    // Compute vertical center based on the overlay (this window), not the content widget
+    const int overlayCenterY = height() / 2 - navPrevBtn->height() / 2;
+
+    const bool videoCase = (container == videoWidget);
+
+    auto setupTopLevel = [this](QPushButton* b){
+        // Convert to a small top-level tool window that can float above native video
+        if (b->parentWidget() != this || !(b->windowFlags() & Qt::Tool)) {
+            b->setParent(this, Qt::FramelessWindowHint | Qt::Tool | Qt::WindowStaysOnTopHint);
+            b->setAttribute(Qt::WA_TranslucentBackground, true);
+            b->setFocusPolicy(Qt::NoFocus);
+            b->show();
+        }
+    };
+    auto setupChild = [container](QPushButton* b){
+        if (b->parentWidget() != container || (b->windowFlags() & Qt::Window)) {
+            b->setParent(container);
+            b->setWindowFlags(Qt::Widget);
+            b->show();
+        }
+    };
+
+    if (videoCase) {
+        // Top-level tool windows: use global coordinates for Y from the overlay center
+        setupTopLevel(navPrevBtn);
+        setupTopLevel(navNextBtn);
+        const int yGlobal = mapToGlobal(QPoint(0, qMax(0, overlayCenterY))).y();
+        const int leftX  = container->mapToGlobal(QPoint(margin, 0)).x();
+        const int rightX = container->mapToGlobal(QPoint(qMax(0, container->width() - margin - navNextBtn->width()), 0)).x();
+        navPrevBtn->move(QPoint(leftX, yGlobal));
+        navNextBtn->move(QPoint(rightX, yGlobal));
+        navPrevBtn->raise();
+        navNextBtn->raise();
+    } else {
+        // Child widgets: map overlay center Y into container coordinates and clamp
+        setupChild(navPrevBtn);
+        setupChild(navNextBtn);
+        const int yInContainer = qBound(0,
+            container->mapFromGlobal(mapToGlobal(QPoint(0, overlayCenterY))).y(),
+            qMax(0, container->height() - navPrevBtn->height()));
+        navPrevBtn->move(margin, yInContainer);
+        navNextBtn->move(qMax(0, container->width() - margin - navNextBtn->width()), yInContainer);
+        navPrevBtn->raise();
+        navNextBtn->raise();
+    }
+}
+
 
 QString PreviewOverlay::formatTime(qint64 milliseconds)
 {
@@ -796,6 +1149,12 @@ void PreviewOverlay::keyPressEvent(QKeyEvent *event)
             stopPlayback();
             navigateNext();
             break;
+        case Qt::Key_Period: // '.' next frame
+            if (isVideo || isSequence) { onStepNextFrame(); return; }
+            break;
+        case Qt::Key_Comma: // ',' previous frame
+            if (isVideo || isSequence) { onStepPrevFrame(); return; }
+            break;
 #ifdef HAVE_QT_PDF
         case Qt::Key_Up:
             if ((currentFileType == "pdf" || currentFileType == "ai") && pdfDoc && pdfDoc->pageCount() > 1) {
@@ -828,6 +1187,11 @@ void PreviewOverlay::resizeEvent(QResizeEvent *event)
     if (!isVideo && !originalPixmap.isNull()) {
         fitImageToView();
     }
+
+    // Reposition nav arrows within their container on overlay resize
+    if (navContainer) {
+        positionNavButtons(navContainer);
+    }
 }
 
 void PreviewOverlay::mousePressEvent(QMouseEvent *event)
@@ -835,6 +1199,7 @@ void PreviewOverlay::mousePressEvent(QMouseEvent *event)
     if (isVideo) {
         // Show controls on click
         controlsWidget->show();
+
         controlsTimer->start();
     } else if (event->button() == Qt::MiddleButton) {
         // Start panning for images
@@ -850,6 +1215,8 @@ void PreviewOverlay::wheelEvent(QWheelEvent *event)
     if (!isVideo && !originalPixmap.isNull()) {
         // Zoom with mouse wheel (fallback if event reached overlay)
         double factor = event->angleDelta().y() > 0 ? 1.15 : 0.85;
+
+
         zoomImage(factor);
         event->accept();
         return;
@@ -860,6 +1227,7 @@ void PreviewOverlay::wheelEvent(QWheelEvent *event)
 bool PreviewOverlay::eventFilter(QObject* watched, QEvent* event)
 {
     if ((watched == imageView || (imageView && watched == imageView->viewport())) && event->type() == QEvent::Wheel) {
+
         if (!isVideo && !originalPixmap.isNull()) {
             QWheelEvent* wheel = static_cast<QWheelEvent*>(event);
             double factor = wheel->angleDelta().y() > 0 ? 1.15 : 0.85;
@@ -933,6 +1301,9 @@ void PreviewOverlay::showSequence(const QStringList &framePaths, const QString &
     show();
     raise();
     setFocus();
+
+    // Anchor nav arrows to the image viewport for sequences
+    positionNavButtons(imageView->viewport());
 
     // Process events to ensure window is properly sized
     QApplication::processEvents();
@@ -1172,6 +1543,7 @@ void PreviewOverlay::startFallbackVideo(const QString &filePath)
     videoWidget->hide();
     imageView->show();
     controlsWidget->show();
+    positionNavButtons(imageView->viewport());
 
     // Clear scene and reset pixmap
     imageScene->clear();
@@ -1270,8 +1642,9 @@ void PreviewOverlay::onPlayerError(QMediaPlayer::Error error, const QString &err
 
 void PreviewOverlay::onMediaStatusChanged(QMediaPlayer::MediaStatus status)
 {
-    // If media loads but never produces frames (black screen), we could add a timeout-based fallback here.
     Q_UNUSED(status);
+    // Update FPS when metadata becomes available
+    updateDetectedFps();
 }
 
 void PreviewOverlay::onFallbackFrameReady(const QImage &image, qint64 ptsMs)
@@ -1382,9 +1755,8 @@ void PreviewOverlay::showText(const QString &filePath)
         textView->setPlainText("Preview not available");
     }
     textView->show();
+    positionNavButtons(textView);
 }
-
-
 void PreviewOverlay::showDocx(const QString &filePath)
 {
     // Hide other content
@@ -1415,6 +1787,7 @@ void PreviewOverlay::showDocx(const QString &filePath)
         textView->setPlainText("Preview not available");
     }
     textView->show();
+    positionNavButtons(textView);
 }
 
 void PreviewOverlay::showDoc(const QString &filePath)
@@ -1447,6 +1820,7 @@ void PreviewOverlay::showDoc(const QString &filePath)
         textView->setPlainText("Preview not available");
     }
     textView->show();
+    positionNavButtons(textView);
 }
 
 
@@ -1481,6 +1855,7 @@ void PreviewOverlay::showXlsx(const QString &filePath)
 
     tableView->resizeColumnsToContents();
     tableView->show();
+    positionNavButtons(tableView);
 }
 
 #ifdef HAVE_QT_PDF
@@ -1500,6 +1875,7 @@ void PreviewOverlay::showPdf(const QString &filePath)
     if (err == QPdfDocument::Error::None && pdfDoc->pageCount() > 0) {
         pdfCurrentPage = 0;
         imageView->show();
+        positionNavButtons(imageView->viewport());
         // Always render into the image view for consistent zoom/pan behavior
         renderPdfPageToImage();
     #ifdef HAVE_QT_PDF_WIDGETS
@@ -1511,6 +1887,7 @@ void PreviewOverlay::showPdf(const QString &filePath)
         if (textView) {
             textView->setPlainText("Preview not available");
             textView->show();
+            positionNavButtons(textView);
         }
     }
 }
@@ -1552,6 +1929,13 @@ void PreviewOverlay::renderPdfPageToImage()
     imageView->viewport()->update();
 }
 #endif
+
+
+void PreviewOverlay::moveEvent(QMoveEvent *event)
+{
+    QWidget::moveEvent(event);
+    if (navContainer) positionNavButtons(navContainer);
+}
 
 
 // Required because this .cpp defines a QObject with Q_OBJECT (FallbackPngMovReader)
