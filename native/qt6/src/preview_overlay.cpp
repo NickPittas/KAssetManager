@@ -504,13 +504,6 @@ void PreviewOverlay::setupUi()
 }
 
 
-    connect(mediaPlayer, &QMediaPlayer::durationChanged, this, &PreviewOverlay::onDurationChanged);
-    connect(mediaPlayer, &QMediaPlayer::errorOccurred, this, &PreviewOverlay::onPlayerError);
-    connect(mediaPlayer, &QMediaPlayer::mediaStatusChanged, this, &PreviewOverlay::onMediaStatusChanged);
-
-    audioOutput->setVolume(0.5);
-}
-
 void PreviewOverlay::showAsset(const QString &filePath, const QString &fileName, const QString &fileType)
 {
     // First, stop any ongoing playback (video, fallback, or sequence)
