@@ -72,8 +72,11 @@ bool Importer::importFolder(const QString& dirPath, int parentFolderId){
     QDir dir(dirPath); if (!dir.exists()) return false;
     if (parentFolderId<=0) parentFolderId = DB::instance().ensureRootFolder();
     QString topName = QFileInfo(dirPath).fileName(); if (topName.isEmpty()) topName = dir.dirName();
-    int topId = DB::instance().createFolder(topName, parentFolderId);
-    if (topId<=0) return false;
+    int topId = DB::instance().ensureFolder(topName, parentFolderId);
+    if (topId<=0) {
+        qWarning() << "Importer::importFolder: failed to ensure top folder" << topName;
+        return false;
+    }
 
     // Emit folder name for progress dialog
     emit currentFolderChanged(topName);
@@ -84,16 +87,26 @@ bool Importer::importFolder(const QString& dirPath, int parentFolderId){
     QHash<QString,int> folderIds; folderIds.insert(dirPath, topId);
     QList<QString> pending; pending.push_back(dirPath);
     while(!pending.isEmpty()){
-        QString cur = pending.front(); pending.pop_front(); int curId = folderIds.value(cur);
+        QString cur = pending.front(); pending.pop_front();
+        const int curId = folderIds.value(cur, 0);
+        if (curId <= 0) {
+            qWarning() << "Importer::importFolder: missing folder id mapping for" << cur;
+            return false;
+        }
         QDir d(cur);
         auto folders = d.entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
         for (const auto& f: folders){
             QString sub = QDir(cur).filePath(f);
-            int id = DB::instance().createFolder(f, curId);
+            int id = DB::instance().ensureFolder(f, curId);
+            if (id <= 0) {
+                qWarning() << "Importer::importFolder: failed to ensure subfolder" << sub;
+                return false;
+            }
             folderIds.insert(sub, id);
             pending.push_back(sub);
         }
     }
+
 
     // Count total files first for progress reporting
     QDirIterator countIt(dirPath, QDir::Files, QDirIterator::Subdirectories);
@@ -166,9 +179,17 @@ bool Importer::importFolder(const QString& dirPath, int parentFolderId){
         }
     }
 
-    bool commitOk = inTx ? sdb.commit() : true;
+    bool commitOk = true;
+    if (inTx) {
+        commitOk = sdb.commit();
+    }
     if (!commitOk) {
         qWarning() << "Importer::importFolder: commit failed";
+        if (inTx) {
+            sdb.rollback();
+        }
+        LogManager::instance().addLog(QString("Import failed for folder %1 (database commit)").arg(topName), "ERROR");
+        return false;
     }
 
     // Emit a single assetsChanged per touched folder
@@ -180,6 +201,7 @@ bool Importer::importFolder(const QString& dirPath, int parentFolderId){
     return true;
 }
 
+
 int Importer::purgeMissingAssets() {
     QSqlDatabase db = DB::instance().database();
     QSqlQuery select(db);
@@ -188,6 +210,7 @@ int Importer::purgeMissingAssets() {
         return 0;
     }
     int removed = 0;
+    bool hadFailure = false;
     while (select.next()) {
         int id = select.value(0).toInt();
         QString path = select.value(1).toString();
@@ -199,12 +222,21 @@ int Importer::purgeMissingAssets() {
             if (del.exec()) {
                 ++removed;
                 emit DB::instance().assetsChanged(folderId);
+            } else {
+                qWarning() << "Importer::purgeMissingAssets delete failed" << del.lastError() << "assetId" << id;
+                hadFailure = true;
+                break;
             }
         }
     }
-    LogManager::instance().addLog(QString("Purged %1 missing asset(s)").arg(removed));
+    if (hadFailure) {
+        LogManager::instance().addLog("Purge missing assets aborted due to database error", "ERROR");
+    } else {
+        LogManager::instance().addLog(QString("Purged %1 missing asset(s)").arg(removed));
+    }
     return removed;
 }
+
 
 int Importer::purgeAutotestAssets() {
     QSqlDatabase db = DB::instance().database();
@@ -253,8 +285,22 @@ void Importer::importFiles(const QStringList& filePaths, int parentFolderId)
         }
     }
 
-    bool commitOk = inTx ? sdb.commit() : true;
-    if (!commitOk) qWarning() << "Importer::importFiles: commit failed";
+    bool commitOk = true;
+    if (inTx) {
+        commitOk = sdb.commit();
+    }
+    if (!commitOk) {
+        qWarning() << "Importer::importFiles: commit failed";
+        if (inTx) {
+            sdb.rollback();
+        }
+        LogManager::instance().addLog(QString("Import failed: %1 file%2 (database commit)")
+                                          .arg(total)
+                                          .arg(total==1?"":"s"), "ERROR");
+        emit importFinished();
+        emit importCompleted(0);
+        return;
+    }
 
     // Notify view once for the target folder
     DB::instance().notifyAssetsChanged(parentFolderId);
@@ -266,3 +312,4 @@ void Importer::importFiles(const QStringList& filePaths, int parentFolderId)
     emit importFinished();
     emit importCompleted(imported);
 }
+

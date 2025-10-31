@@ -141,9 +141,11 @@ bool DB::migrate(){
     exec("CREATE INDEX IF NOT EXISTS idx_assets_updated_at ON assets(updated_at);");
     exec("CREATE INDEX IF NOT EXISTS idx_asset_tags_tag_id ON asset_tags(tag_id);");
     exec("CREATE INDEX IF NOT EXISTS idx_asset_tags_asset_id ON asset_tags(asset_id);");
+    exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_assets_sequence_folder_pattern ON assets(virtual_folder_id, sequence_pattern) WHERE is_sequence=1;");
 
     return true;
 }
+
 
 bool DB::exec(const QString& sql){ QSqlQuery q(m_db); if (!q.exec(sql)) { qWarning() << "SQL failed:" << sql << q.lastError(); return false; } return true; }
 
@@ -172,10 +174,39 @@ int DB::createFolder(const QString& name, int parentId){
     ins.prepare("INSERT INTO virtual_folders(name,parent_id) VALUES(?,?)");
     ins.addBindValue(name);
     if (parentId<=0) parentId = m_rootId; ins.addBindValue(parentId);
-    if (!ins.exec()) { qWarning() << ins.lastError(); return 0; }
+    if (!ins.exec()) {
+        qWarning() << ins.lastError();
+        return 0;
+    }
     emit foldersChanged();
     return ins.lastInsertId().toInt();
 }
+
+int DB::getFolderId(int parentId, const QString& name) const {
+    int parentKey = parentId <= 0 ? m_rootId : parentId;
+    QSqlQuery q(m_db);
+    q.prepare("SELECT id FROM virtual_folders WHERE parent_id=? AND name=? LIMIT 1");
+    q.addBindValue(parentKey);
+    q.addBindValue(name);
+    if (!q.exec()) {
+        qWarning() << "DB::getFolderId: query failed" << q.lastError();
+        return 0;
+    }
+    if (q.next()) {
+        return q.value(0).toInt();
+    }
+    return 0;
+}
+
+int DB::ensureFolder(const QString& name, int parentId){
+    int parentKey = parentId <= 0 ? m_rootId : parentId;
+    int existing = getFolderId(parentKey, name);
+    if (existing > 0) {
+        return existing;
+    }
+    return createFolder(name, parentKey);
+}
+
 
 bool DB::renameFolder(int id, const QString& name){
     QSqlQuery q(m_db);
@@ -272,20 +303,23 @@ int DB::upsertAsset(const QString& filePath){
     return newId;
 }
 
-int DB::upsertSequence(const QString& sequencePattern, int startFrame, int endFrame, int frameCount, const QString& firstFramePath){
+int DB::upsertSequence(const QString& sequencePattern, int startFrame, int endFrame, int frameCount, const QString& firstFramePath, int folderId){
     QFileInfo fi(firstFramePath);
     if (!fi.exists()) {
         qDebug() << "DB::upsertSequence: first frame does not exist:" << firstFramePath;
         return 0;
     }
 
-    // Check if sequence already exists
+    int targetFolderId = folderId <= 0 ? m_rootId : folderId;
+
+    // Check if sequence already exists in the target folder
     QSqlQuery sel(m_db);
-    sel.prepare("SELECT id FROM assets WHERE sequence_pattern=? AND is_sequence=1");
+    sel.prepare("SELECT id FROM assets WHERE sequence_pattern=? AND is_sequence=1 AND virtual_folder_id=?");
     sel.addBindValue(sequencePattern);
+    sel.addBindValue(targetFolderId);
     if (sel.exec() && sel.next()) {
         int existingId = sel.value(0).toInt();
-        qDebug() << "DB::upsertSequence: sequence already exists, id=" << existingId << "pattern=" << sequencePattern;
+        qDebug() << "DB::upsertSequence: sequence already exists, id=" << existingId << "pattern=" << sequencePattern << "folder" << targetFolderId;
 
         // Update frame range if changed
         QSqlQuery upd(m_db);
@@ -294,7 +328,9 @@ int DB::upsertSequence(const QString& sequencePattern, int startFrame, int endFr
         upd.addBindValue(endFrame);
         upd.addBindValue(frameCount);
         upd.addBindValue(existingId);
-        upd.exec();
+        if (!upd.exec()) {
+            qWarning() << "DB::upsertSequence: UPDATE failed:" << upd.lastError();
+        }
 
         return existingId;
     }
@@ -304,7 +340,7 @@ int DB::upsertSequence(const QString& sequencePattern, int startFrame, int endFr
     ins.prepare("INSERT INTO assets(file_path,file_name,virtual_folder_id,file_size,is_sequence,sequence_pattern,sequence_start_frame,sequence_end_frame,sequence_frame_count) VALUES(?,?,?,?,1,?,?,?,?)");
     ins.addBindValue(fi.absoluteFilePath()); // Store first frame path
     ins.addBindValue(sequencePattern); // Display name is the pattern
-    ins.addBindValue(m_rootId);
+    ins.addBindValue(targetFolderId);
     ins.addBindValue((qint64)fi.size());
     ins.addBindValue(sequencePattern);
     ins.addBindValue(startFrame);
@@ -316,10 +352,11 @@ int DB::upsertSequence(const QString& sequencePattern, int startFrame, int endFr
         return 0;
     }
     int newId = ins.lastInsertId().toInt();
-    qDebug() << "DB::upsertSequence: created new sequence, id=" << newId << "pattern=" << sequencePattern << "frames=" << startFrame << "-" << endFrame;
-    emit assetsChanged(m_rootId);
+    qDebug() << "DB::upsertSequence: created new sequence, id=" << newId << "pattern=" << sequencePattern << "frames=" << startFrame << "-" << endFrame << "folder" << targetFolderId;
+    emit assetsChanged(targetFolderId);
     return newId;
 }
+
 
 
 int DB::insertAssetMetadataFast(const QString& filePath, int folderId)
@@ -371,17 +408,20 @@ int DB::upsertSequenceInFolderFast(const QString& sequencePattern, int startFram
         return 0;
     }
 
-    // Check if sequence already exists
+    int targetFolderId = folderId <= 0 ? m_rootId : folderId;
+
+    // Check if sequence already exists in this folder
     QSqlQuery sel(m_db);
-    sel.prepare("SELECT id FROM assets WHERE sequence_pattern=? AND is_sequence=1");
+    sel.prepare("SELECT id FROM assets WHERE sequence_pattern=? AND is_sequence=1 AND virtual_folder_id=?");
     sel.addBindValue(sequencePattern);
+    sel.addBindValue(targetFolderId);
     if (sel.exec() && sel.next()) {
         int existingId = sel.value(0).toInt();
         QSqlQuery upd(m_db);
         upd.prepare("UPDATE assets SET file_path=?, file_name=?, virtual_folder_id=?, file_size=?, sequence_start_frame=?, sequence_end_frame=?, sequence_frame_count=?, updated_at=CURRENT_TIMESTAMP WHERE id=?");
         upd.addBindValue(fi.absoluteFilePath());
         upd.addBindValue(sequencePattern);
-        upd.addBindValue(folderId<=0?m_rootId:folderId);
+        upd.addBindValue(targetFolderId);
         upd.addBindValue((qint64)fi.size());
         upd.addBindValue(startFrame);
         upd.addBindValue(endFrame);
@@ -397,7 +437,7 @@ int DB::upsertSequenceInFolderFast(const QString& sequencePattern, int startFram
     ins.prepare("INSERT INTO assets(file_path,file_name,virtual_folder_id,file_size,is_sequence,sequence_pattern,sequence_start_frame,sequence_end_frame,sequence_frame_count) VALUES(?,?,?,?,1,?,?,?,?)");
     ins.addBindValue(fi.absoluteFilePath());
     ins.addBindValue(sequencePattern);
-    ins.addBindValue(folderId<=0?m_rootId:folderId);
+    ins.addBindValue(targetFolderId);
     ins.addBindValue((qint64)fi.size());
     ins.addBindValue(sequencePattern);
     ins.addBindValue(startFrame);
@@ -410,6 +450,7 @@ int DB::upsertSequenceInFolderFast(const QString& sequencePattern, int startFram
     }
     return ins.lastInsertId().toInt();
 }
+
 
 void DB::notifyAssetsChanged(int folderId){ emit assetsChanged(folderId); }
 void DB::notifyFoldersChanged(){ emit foldersChanged(); }
@@ -448,31 +489,94 @@ return ok;
 
 bool DB::removeAssets(const QList<int>& assetIds){
     if (assetIds.isEmpty()) return true;
+
     QSqlQuery q(m_db);
+    if (!q.prepare("DELETE FROM assets WHERE id=?")) {
+        qWarning() << "DB::removeAssets: failed to prepare delete" << q.lastError();
+        return false;
+    }
+
+    const bool inTx = m_db.transaction();
+    if (!inTx) {
+        qWarning() << "DB::removeAssets: failed to start transaction" << m_db.lastError();
+    }
+
     bool ok = true;
     for (int id : assetIds) {
-        q.prepare("DELETE FROM assets WHERE id=?");
-        q.addBindValue(id);
-        ok &= q.exec();
+        q.bindValue(0, id);
+        if (!q.exec()) {
+            qWarning() << "DB::removeAssets: delete failed" << q.lastError() << "assetId" << id;
+            ok = false;
+            break;
+        }
     }
-    if (!ok) qWarning() << "DB::removeAssets: delete failed" << q.lastError();
-    emit assetsChanged(m_rootId);
+
+    if (inTx) {
+        if (ok) {
+            if (!m_db.commit()) {
+                qWarning() << "DB::removeAssets: commit failed" << m_db.lastError();
+                ok = false;
+            }
+        } else {
+            m_db.rollback();
+        }
+    }
+
+    if (ok) {
+        emit assetsChanged(m_rootId);
+    }
+
     return ok;
 }
 
+
 bool DB::setAssetsRating(const QList<int>& assetIds, int rating){
+    if (assetIds.isEmpty()) return true;
+
     QSqlQuery q(m_db);
+    if (!q.prepare("UPDATE assets SET rating=?, updated_at=CURRENT_TIMESTAMP WHERE id=?")) {
+        qWarning() << "DB::setAssetsRating: failed to prepare update" << q.lastError();
+        return false;
+    }
+
+    const bool inTx = m_db.transaction();
+    if (!inTx) {
+        qWarning() << "DB::setAssetsRating: failed to start transaction" << m_db.lastError();
+    }
+
     bool ok = true;
     for (int id : assetIds) {
-        q.prepare("UPDATE assets SET rating=?, updated_at=CURRENT_TIMESTAMP WHERE id=?");
-        if (rating < 0) q.addBindValue(QVariant(QVariant::Int)); else q.addBindValue(rating);
-        q.addBindValue(id);
-        ok &= q.exec();
+        if (rating < 0) {
+            q.bindValue(0, QVariant(QVariant::Int));
+        } else {
+            q.bindValue(0, rating);
+        }
+        q.bindValue(1, id);
+        if (!q.exec()) {
+            qWarning() << "DB::setAssetsRating: update failed" << q.lastError() << "assetId" << id;
+            ok = false;
+            break;
+        }
     }
-    if (!ok) qWarning() << "DB::setAssetsRating failed" << q.lastError();
-    emit assetsChanged(m_rootId);
+
+    if (inTx) {
+        if (ok) {
+            if (!m_db.commit()) {
+                qWarning() << "DB::setAssetsRating: commit failed" << m_db.lastError();
+                ok = false;
+            }
+        } else {
+            m_db.rollback();
+        }
+    }
+
+    if (ok) {
+        emit assetsChanged(m_rootId);
+    }
+
     return ok;
 }
+
 
 int DB::createTag(const QString& name){
     QSqlQuery q(m_db);
@@ -566,21 +670,93 @@ QStringList DB::tagsForAsset(int assetId) const {
     return names;
 }
 
-bool DB::assignTagsToAssets(const QList<int>& assetIds, const QList<int>& tagIds){
-    if (assetIds.isEmpty() || tagIds.isEmpty()) return true;
+QHash<int, QStringList> DB::tagsForAssets(const QList<int>& assetIds) const {
+    QHash<int, QStringList> result;
+    if (assetIds.isEmpty()) {
+        return result;
+    }
+
+    QStringList placeholders;
+    placeholders.reserve(assetIds.size());
+    for (int i = 0; i < assetIds.size(); ++i) {
+        placeholders.append("?");
+    }
+
     QSqlQuery q(m_db);
+    q.prepare(QStringLiteral("SELECT at.asset_id, t.name FROM asset_tags at JOIN tags t ON t.id = at.tag_id WHERE at.asset_id IN (%1) ORDER BY at.asset_id, t.name")
+                  .arg(placeholders.join(',')));
+    for (int id : assetIds) {
+        q.addBindValue(id);
+    }
+
+    if (!q.exec()) {
+        qWarning() << "DB::tagsForAssets: query failed" << q.lastError();
+        return result;
+    }
+
+    while (q.next()) {
+        int assetId = q.value(0).toInt();
+        QString tagName = q.value(1).toString();
+        result[assetId].append(tagName);
+    }
+
+    // Ensure entries exist for assets with no tags
+    for (int id : assetIds) {
+        if (!result.contains(id)) {
+            result.insert(id, {});
+        }
+    }
+
+    return result;
+}
+
+bool DB::assignTagsToAssets(const QList<int>& assetIds, const QList<int>& tagIds){
+
+    if (assetIds.isEmpty() || tagIds.isEmpty()) return true;
+
+    QSqlQuery q(m_db);
+    if (!q.prepare("INSERT OR IGNORE INTO asset_tags(asset_id, tag_id) VALUES(?,?)")) {
+        qWarning() << "DB::assignTagsToAssets: failed to prepare insert" << q.lastError();
+        return false;
+    }
+
+    const bool inTx = m_db.transaction();
+    if (!inTx) {
+        qWarning() << "DB::assignTagsToAssets: failed to start transaction" << m_db.lastError();
+    }
+
     bool ok = true;
     for (int aid : assetIds) {
         for (int tid : tagIds) {
-            q.prepare("INSERT OR IGNORE INTO asset_tags(asset_id, tag_id) VALUES(?,?)");
-            q.addBindValue(aid); q.addBindValue(tid);
-            ok &= q.exec();
+            q.bindValue(0, aid);
+            q.bindValue(1, tid);
+            if (!q.exec()) {
+                qWarning() << "DB::assignTagsToAssets: insert failed" << q.lastError() << "assetId" << aid << "tagId" << tid;
+                ok = false;
+                break;
+            }
+        }
+        if (!ok) break;
+    }
+
+    if (inTx) {
+        if (ok) {
+            if (!m_db.commit()) {
+                qWarning() << "DB::assignTagsToAssets: commit failed" << m_db.lastError();
+                ok = false;
+            }
+        } else {
+            m_db.rollback();
         }
     }
-    if (!ok) qWarning() << "DB::assignTagsToAssets failed" << q.lastError();
-    emit assetsChanged(m_rootId);
+
+    if (ok) {
+        emit assetsChanged(m_rootId);
+    }
+
     return ok;
 }
+
 
 
 int DB::getAssetIdByPath(const QString& filePath) const
@@ -796,22 +972,58 @@ QString DB::getAssetFilePath(int assetId) const
 
 bool DB::exportDatabase(const QString& filePath)
 {
-    // Close current connection
-    QString dbName = m_db.databaseName();
-    m_db.close();
-
-    // Copy database file
-    bool success = QFile::copy(dbName, filePath);
-
-    // Reopen connection
-    m_db.open();
-
-    if (!success) {
-        qWarning() << "DB::exportDatabase: Failed to copy database to" << filePath;
+    const QString dbName = m_db.databaseName();
+    if (dbName.isEmpty()) {
+        qWarning() << "DB::exportDatabase: database name is empty";
+        return false;
     }
 
-    return success;
+    QFileInfo destInfo(filePath);
+    if (!destInfo.absolutePath().isEmpty()) {
+        QDir().mkpath(destInfo.absolutePath());
+    }
+    const QString tempPath = destInfo.dir().filePath(destInfo.fileName() + QStringLiteral(".tmp"));
+
+    m_db.close();
+
+    if (QFile::exists(tempPath) && !QFile::remove(tempPath)) {
+        qWarning() << "DB::exportDatabase: Failed to remove stale temp file" << tempPath;
+        m_db.open();
+        return false;
+    }
+
+    bool copied = QFile::copy(dbName, tempPath);
+    bool reopenOk = m_db.open();
+    if (!copied) {
+        qWarning() << "DB::exportDatabase: Failed to copy database to temp" << tempPath;
+        QFile::remove(tempPath);
+        return false;
+    }
+    if (!reopenOk) {
+        qWarning() << "DB::exportDatabase: Failed to reopen database after copy";
+        QFile::remove(tempPath);
+        return false;
+    }
+
+    if (QFile::exists(filePath) && !QFile::remove(filePath)) {
+        qWarning() << "DB::exportDatabase: Failed to remove existing destination" << filePath;
+        QFile::remove(tempPath);
+        return false;
+    }
+
+    if (!QFile::rename(tempPath, filePath)) {
+        // Fallback: copy then clean up
+        if (!QFile::copy(tempPath, filePath)) {
+            qWarning() << "DB::exportDatabase: Failed to finalize export to" << filePath;
+            QFile::remove(tempPath);
+            return false;
+        }
+        QFile::remove(tempPath);
+    }
+
+    return true;
 }
+
 
 bool DB::importDatabase(const QString& filePath)
 {
@@ -820,31 +1032,85 @@ bool DB::importDatabase(const QString& filePath)
         return false;
     }
 
-    // Close current connection
-    QString dbName = m_db.databaseName();
-    m_db.close();
-
-    // Remove old database
-    QFile::remove(dbName);
-
-    // Copy new database
-    bool success = QFile::copy(filePath, dbName);
-
-    // Reopen connection
-    m_db.open();
-
-    if (!success) {
-        qWarning() << "DB::importDatabase: Failed to copy database from" << filePath;
-    } else {
-        // Reload root folder ID
-        m_rootId = ensureRootFolder();
-        emit foldersChanged();
-        emit assetsChanged(m_rootId);
-        emit tagsChanged();
+    const QString dbName = m_db.databaseName();
+    if (dbName.isEmpty()) {
+        qWarning() << "DB::importDatabase: database name is empty";
+        return false;
     }
 
-    return success;
+    QFileInfo dbInfo(dbName);
+    const QString tempPath = dbInfo.dir().filePath(dbInfo.fileName() + QStringLiteral(".tmp"));
+    const QString backupPath = dbInfo.dir().filePath(dbInfo.fileName() + QStringLiteral(".bak"));
+
+    if (QFile::exists(tempPath) && !QFile::remove(tempPath)) {
+        qWarning() << "DB::importDatabase: Failed to remove stale temp file" << tempPath;
+        return false;
+    }
+
+    m_db.close();
+
+    if (!QFile::copy(filePath, tempPath)) {
+        qWarning() << "DB::importDatabase: Failed to copy source to temp" << tempPath;
+        m_db.open();
+        return false;
+    }
+
+    bool backupMade = false;
+    if (QFile::exists(dbName)) {
+        if (QFile::exists(backupPath) && !QFile::remove(backupPath)) {
+            qWarning() << "DB::importDatabase: Failed to clear old backup" << backupPath;
+            QFile::remove(tempPath);
+            m_db.open();
+            return false;
+        }
+        if (!QFile::rename(dbName, backupPath)) {
+            qWarning() << "DB::importDatabase: Failed to backup existing database to" << backupPath;
+            QFile::remove(tempPath);
+            m_db.open();
+            return false;
+        }
+        backupMade = true;
+    }
+
+    if (!QFile::rename(tempPath, dbName)) {
+        // Attempt to restore backup and clean up
+        qWarning() << "DB::importDatabase: Failed to move temp database into place" << dbName;
+        QFile::remove(dbName);
+        QFile::remove(tempPath);
+        if (backupMade) {
+            QFile::rename(backupPath, dbName);
+        }
+        m_db.open();
+        return false;
+    }
+
+    bool openOk = m_db.open();
+    if (!openOk) {
+        qWarning() << "DB::importDatabase: Failed to reopen database";
+        QFile::remove(dbName);
+        if (backupMade) {
+            if (QFile::rename(backupPath, dbName)) {
+                m_db.open();
+            }
+        }
+        return false;
+    }
+
+    if (backupMade) {
+        QFile::remove(backupPath);
+    }
+
+    if (!migrate()) {
+        qWarning() << "DB::importDatabase: Migration failed after import";
+    }
+    m_rootId = ensureRootFolder();
+    emit foldersChanged();
+    emit assetsChanged(m_rootId);
+    emit tagsChanged();
+
+    return true;
 }
+
 
 bool DB::clearAllData()
 {

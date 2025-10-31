@@ -27,5 +27,7 @@ private:
     QPushButton* cancelAllBtn;
     QPushButton* closeBtn;
     QTimer refreshTimer;
+    bool m_cancelling = false;
 };
+
 

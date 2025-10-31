@@ -7,6 +7,7 @@
 #include <QDateTime>
 #include <QtQml/qqml.h>
 #include <QTimer>
+#include <QHash>
 
 struct AssetRow {
     int id = 0;
@@ -131,4 +132,5 @@ private:
 
     QTimer m_reloadTimer;
     bool m_reloadScheduled = false;
+    QHash<int, QStringList> m_tagCache;
 };

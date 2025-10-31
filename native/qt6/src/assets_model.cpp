@@ -10,10 +10,16 @@
 #include <QThread>
 #include <QElapsedTimer>
 #include <QMimeData>
-#include <QFile>
-#include <QTextStream>
+
+namespace {
+inline bool assetsDiagEnabled() {
+    static const bool enabled = !qEnvironmentVariableIsEmpty("KASSET_DIAGNOSTICS");
+    return enabled;
+}
+}
 
 AssetsModel::AssetsModel(QObject* parent): QAbstractListModel(parent){
+
     // Debounce DB-driven reloads to avoid re-entrancy and view churn during batch imports
     m_reloadTimer.setSingleShot(true);
     m_reloadTimer.setInterval(100);
@@ -126,11 +132,14 @@ QMimeData *AssetsModel::mimeData(const QModelIndexList &indexes) const
         mimeData->setUrls(urls);
     }
 
-    qDebug() << "AssetsModel::mimeData() - Dragging" << assetIds.size() << "assets:" << assetIds;
-    qDebug() << "  File URLs:" << urls;
+    if (assetsDiagEnabled()) {
+        qDebug() << "AssetsModel::mimeData() - Dragging" << assetIds.size() << "assets:" << assetIds;
+        qDebug() << "  File URLs:" << urls;
+    }
 
     return mimeData;
 }
+
 
 Qt::DropActions AssetsModel::supportedDragActions() const
 {
@@ -140,10 +149,13 @@ Qt::DropActions AssetsModel::supportedDragActions() const
 void AssetsModel::setFolderId(int id){
     if (m_folderId==id) return;
     m_folderId=id;
-    qDebug() << "AssetsModel::setFolderId" << id;
+    if (assetsDiagEnabled()) {
+        qDebug() << "AssetsModel::setFolderId" << id;
+    }
     scheduleReload();
     emit folderIdChanged();
 }
+
 
 void AssetsModel::setSearchQuery(const QString& query) {
     QString normalized = query;
@@ -202,47 +214,75 @@ void AssetsModel::setTagFilterMode(int mode) {
 void AssetsModel::setRecursiveMode(bool recursive) {
     if (m_recursiveMode == recursive) return;
     m_recursiveMode = recursive;
-    qDebug() << "AssetsModel::setRecursiveMode" << recursive;
+    if (assetsDiagEnabled()) {
+        qDebug() << "AssetsModel::setRecursiveMode" << recursive;
+    }
     scheduleReload();
     emit recursiveModeChanged();
 }
 
+
 void AssetsModel::reload(){
-    qDebug() << "===== AssetsModel::reload() START for folderId" << m_folderId << "on thread" << QThread::currentThread();
+    const bool diagEnabled = assetsDiagEnabled();
+    if (diagEnabled) {
+        qDebug() << "===== AssetsModel::reload() START for folderId" << m_folderId << "on thread" << QThread::currentThread();
+    }
     QElapsedTimer t; t.start();
 
-    qDebug() << "AssetsModel::reload() - Calling beginResetModel()...";
+    if (diagEnabled) {
+        qDebug() << "AssetsModel::reload() - Calling beginResetModel()...";
+    }
     m_isResetting = true;
     beginResetModel();
 
-    qDebug() << "AssetsModel::reload() - Calling query()...";
+    if (diagEnabled) {
+        qDebug() << "AssetsModel::reload() - Calling query()...";
+    }
     query();
-    qDebug() << "AssetsModel::reload() - query() returned" << m_rows.size() << "rows";
+    if (diagEnabled) {
+        qDebug() << "AssetsModel::reload() - query() returned" << m_rows.size() << "rows";
+    }
 
-    qDebug() << "AssetsModel::reload() - Calling rebuildFilter()...";
+    if (diagEnabled) {
+        qDebug() << "AssetsModel::reload() - Calling rebuildFilter()...";
+    }
     rebuildFilter();
-    qDebug() << "AssetsModel::reload() - rebuildFilter() returned" << m_filteredRowIndexes.size() << "filtered rows";
+    if (diagEnabled) {
+        qDebug() << "AssetsModel::reload() - rebuildFilter() returned" << m_filteredRowIndexes.size() << "filtered rows";
+    }
 
-    qDebug() << "AssetsModel::reload() - Calling endResetModel()...";
+    if (diagEnabled) {
+        qDebug() << "AssetsModel::reload() - Calling endResetModel()...";
+    }
     endResetModel();
     m_isResetting = false;
 
-    qDebug() << "===== AssetsModel::reload() SUCCESS - loaded" << m_rows.size() << "assets in" << t.elapsed() << "ms";
-    LogManager::instance().addLog(QString("AssetsModel reload: %1 assets in %2 ms").arg(m_rows.size()).arg(t.elapsed()), "DEBUG");
+    if (diagEnabled) {
+        qDebug() << "===== AssetsModel::reload() SUCCESS - loaded" << m_rows.size() << "assets in" << t.elapsed() << "ms";
+    }
+    if (diagEnabled) {
+        LogManager::instance().addLog(QString("AssetsModel reload: %1 assets in %2 ms").arg(m_rows.size()).arg(t.elapsed()), "DEBUG");
+    }
 }
+
 
 void AssetsModel::query(){
     m_rows.clear();
 
     const bool globalScope = !m_selectedTagNames.isEmpty() || !m_searchQuery.trimmed().isEmpty();
+    const bool diagEnabled = assetsDiagEnabled();
 
     QSqlQuery q(DB::instance().database());
     if (globalScope) {
-        LogManager::instance().addLog("DB query (all assets) started", "DEBUG");
+        if (diagEnabled) {
+            LogManager::instance().addLog("DB query (all assets) started", "DEBUG");
+        }
         q.prepare("SELECT id,file_name,file_path,file_size,COALESCE(rating,-1),virtual_folder_id,COALESCE(is_sequence,0),sequence_pattern,sequence_start_frame,sequence_end_frame,sequence_frame_count FROM assets ORDER BY file_name");
     } else {
         if (m_folderId<=0) {
-            qDebug() << "AssetsModel::query() skipped - invalid folderId" << m_folderId;
+            if (diagEnabled) {
+                qDebug() << "AssetsModel::query() skipped - invalid folderId" << m_folderId;
+            }
             m_filteredRowIndexes.clear();
             return;
         }
@@ -251,7 +291,9 @@ void AssetsModel::query(){
         if (m_recursiveMode) {
             QList<int> assetIds = DB::instance().getAssetIdsInFolder(m_folderId, true);
             if (assetIds.isEmpty()) {
-                qDebug() << "AssetsModel::query() - No assets found in folder" << m_folderId << "(recursive)";
+                if (diagEnabled) {
+                    qDebug() << "AssetsModel::query() - No assets found in folder" << m_folderId << "(recursive)";
+                }
                 m_filteredRowIndexes.clear();
                 return;
             }
@@ -263,14 +305,18 @@ void AssetsModel::query(){
             }
 
             q.prepare(QString("SELECT id,file_name,file_path,file_size,COALESCE(rating,-1),virtual_folder_id,COALESCE(is_sequence,0),sequence_pattern,sequence_start_frame,sequence_end_frame,sequence_frame_count FROM assets WHERE id IN (%1) ORDER BY file_name").arg(placeholders));
-            LogManager::instance().addLog(QString("DB query (assets by folder %1, recursive) started - %2 assets").arg(m_folderId).arg(assetIds.size()), "DEBUG");
+            if (diagEnabled) {
+                LogManager::instance().addLog(QString("DB query (assets by folder %1, recursive) started - %2 assets").arg(m_folderId).arg(assetIds.size()), "DEBUG");
+            }
             for (int assetId : assetIds) {
                 q.addBindValue(assetId);
             }
         } else {
             // Non-recursive: just get assets in this folder
             q.prepare("SELECT id,file_name,file_path,file_size,COALESCE(rating,-1),virtual_folder_id,COALESCE(is_sequence,0),sequence_pattern,sequence_start_frame,sequence_end_frame,sequence_frame_count FROM assets WHERE virtual_folder_id=? ORDER BY file_name");
-            LogManager::instance().addLog(QString("DB query (assets by folder %1) started").arg(m_folderId), "DEBUG");
+            if (diagEnabled) {
+                LogManager::instance().addLog(QString("DB query (assets by folder %1) started").arg(m_folderId), "DEBUG");
+            }
             q.addBindValue(m_folderId);
         }
     }
@@ -299,76 +345,46 @@ void AssetsModel::query(){
         m_rows.push_back(r);
         ++rows;
     }
-    LogManager::instance().addLog(QString("DB query complete: %1 rows").arg(rows), "DEBUG");
-    qDebug() << "AssetsModel::query() found" << m_rows.size() << "assets for folderId" << m_folderId;
+    if (diagEnabled) {
+        LogManager::instance().addLog(QString("DB query complete: %1 rows").arg(rows), "DEBUG");
+        qDebug() << "AssetsModel::query() found" << m_rows.size() << "assets for folderId" << m_folderId;
+    }
 }
 
+
 void AssetsModel::onThumbnailGenerated(const QString& filePath, const QString& thumbnailPath) {
-    // Open crash log
-    QFile logFile("assets_model_crash.log");
-    logFile.open(QIODevice::Append | QIODevice::Text);
-    QTextStream log(&logFile);
+    const bool diagEnabled = !qEnvironmentVariableIsEmpty("KASSET_DIAGNOSTICS");
 
     // Guard: ignore updates while the model is resetting to avoid dataChanged during reset
     if (m_isResetting) {
-        log << "[ASSETS MODEL] Skipping thumbnail update during model reset for: " << filePath << "\n";
-        log.flush();
+        if (diagEnabled) {
+            qDebug() << "[AssetsModel] Skip thumbnail update during reset for" << filePath;
+        }
         return;
     }
 
-    try {
-        log << "[ASSETS MODEL START] filePath: " << filePath << ", thumbnailPath: " << thumbnailPath << "\n";
-        log.flush();
+    if (diagEnabled) {
+        qDebug() << "[AssetsModel] thumbnailGenerated" << filePath << "->" << thumbnailPath;
+    }
 
-        // Find the row with this file path and update it
-        log << "[ASSETS MODEL] m_rows.size(): " << m_rows.size() << "\n";
-        log.flush();
+    // Find the row with this file path and update it
+    for (int i = 0; i < m_rows.size(); ++i) {
+        if (m_rows[i].filePath == filePath) {
+            m_rows[i].thumbnailPath = thumbnailPath;
 
-        for (int i = 0; i < m_rows.size(); ++i) {
-            log << "[ASSETS MODEL] Checking row " << i << ", filePath: " << m_rows[i].filePath << "\n";
-            log.flush();
-
-            if (m_rows[i].filePath == filePath) {
-                log << "[ASSETS MODEL] Found matching row " << i << "\n";
-                log.flush();
-
-                // CRITICAL: Update the thumbnail path in the row data
-                log << "[ASSETS MODEL] Updating thumbnailPath\n";
-                log.flush();
-                m_rows[i].thumbnailPath = thumbnailPath;
-                log << "[ASSETS MODEL] thumbnailPath updated\n";
-                log.flush();
-
-                log << "[ASSETS MODEL] Getting filtered row index\n";
-                log.flush();
-                int filteredRow = m_filteredRowIndexes.indexOf(i);
-                log << "[ASSETS MODEL] filteredRow: " << filteredRow << "\n";
-                log.flush();
-
-                if (filteredRow >= 0) {
-                    qDebug() << "AssetsModel::onThumbnailGenerated updating row" << filteredRow << "for" << filePath << "-> thumbnail:" << thumbnailPath;
-                    log << "[ASSETS MODEL] Creating QModelIndex\n";
-                    log.flush();
-                    QModelIndex idx = index(filteredRow, 0);
-                    log << "[ASSETS MODEL] Emitting dataChanged\n";
-                    log.flush();
-                    emit dataChanged(idx, idx, {ThumbnailPathRole});
-                    log << "[ASSETS MODEL] dataChanged emitted\n";
-                    log.flush();
+            int filteredRow = m_filteredRowIndexes.indexOf(i);
+            if (filteredRow >= 0) {
+                if (diagEnabled) {
+                    qDebug() << "[AssetsModel] updating row" << filteredRow << "for" << filePath;
                 }
-                break;
+                QModelIndex idx = index(filteredRow, 0);
+                emit dataChanged(idx, idx, {ThumbnailPathRole});
             }
+            break;
         }
-        log << "[ASSETS MODEL END] Success\n\n";
-        log.flush();
-    } catch (const std::exception& e) {
-        log << "[ASSETS MODEL CRASH] Exception: " << e.what() << "\n\n";
-        log.flush();
-    } catch (...) {
-        log << "[ASSETS MODEL CRASH] Unknown exception\n\n";
-        log.flush();
     }
 }
+
 
 bool AssetsModel::moveAssetToFolder(int assetId, int folderId){ bool ok=DB::instance().setAssetFolder(assetId,folderId); if (ok) scheduleReload(); return ok; }
 
@@ -393,6 +409,16 @@ void AssetsModel::rebuildFilter() {
     m_filteredRowIndexes.clear();
     m_filteredRowIndexes.reserve(m_rows.size());
 
+    m_tagCache.clear();
+    if (!m_selectedTagNames.isEmpty() && !m_rows.isEmpty()) {
+        QList<int> assetIds;
+        assetIds.reserve(m_rows.size());
+        for (const auto& row : m_rows) {
+            assetIds.append(row.id);
+        }
+        m_tagCache = DB::instance().tagsForAssets(assetIds);
+    }
+
     for (int i = 0; i < m_rows.size(); ++i) {
         if (matchesFilter(m_rows[i])) {
             m_filteredRowIndexes.append(i);
@@ -401,6 +427,7 @@ void AssetsModel::rebuildFilter() {
 }
 
 bool AssetsModel::matchesFilter(const AssetRow& row) const {
+
     // Apply type filter
     if (m_typeFilter == Images) {
         if (!ThumbnailGenerator::instance().isImageFile(row.filePath)) return false;
@@ -421,7 +448,13 @@ bool AssetsModel::matchesFilter(const AssetRow& row) const {
 
     // Apply tag filter
     if (!m_selectedTagNames.isEmpty()) {
-        QStringList assetTags = DB::instance().tagsForAsset(row.id);
+        QStringList assetTags;
+        if (!m_tagCache.isEmpty()) {
+            assetTags = m_tagCache.value(row.id);
+        } else {
+            assetTags = DB::instance().tagsForAsset(row.id);
+        }
+
         bool hasAnyTag = false;
         bool hasAllTags = true;
 
@@ -440,6 +473,7 @@ bool AssetsModel::matchesFilter(const AssetRow& row) const {
             if (!hasAnyTag) return false;
         }
     }
+
 
     const QString needle = m_searchQuery.trimmed();
     if (needle.isEmpty())

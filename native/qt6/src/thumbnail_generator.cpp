@@ -1,4 +1,4 @@
-﻿#include "thumbnail_generator.h"
+#include "thumbnail_generator.h"
 #include "progress_manager.h"
 #include "log_manager.h"
 #include "oiio_image_loader.h"
@@ -52,10 +52,13 @@ void ThumbnailTask::run() {
         QMetaObject::invokeMethod(generator, [generator, filePath]() {
             QMutexLocker locker(&generator->m_mutex);
             generator->m_pendingThumbnails.remove(filePath);
+            generator->m_pendingImageTasks--;
+            generator->updateThreadPoolLimit();
             generator->updateProgress();
         }, Qt::QueuedConnection);
         return;
     }
+
     qDebug() << "[ThumbnailTask] Generating image thumbnail for:" << m_filePath;
 
     QString thumbnailPath;
@@ -82,6 +85,8 @@ void ThumbnailTask::run() {
     QMetaObject::invokeMethod(generator, [generator, filePath, thumbnailPath, success]() {
         QMutexLocker locker(&generator->m_mutex);
         generator->m_pendingThumbnails.remove(filePath);
+        generator->m_pendingImageTasks--;
+        generator->updateThreadPoolLimit();
         // Update progress
         generator->updateProgress();
         if (success) {
@@ -92,6 +97,7 @@ void ThumbnailTask::run() {
     }, Qt::QueuedConnection);
 
 }
+
 
 // VideoFFmpegTask implementation (fallback path)
 VideoFFmpegTask::VideoFFmpegTask(const QString& filePath, const QString& cachePath, ThumbnailGenerator* generator)
@@ -566,9 +572,12 @@ ThumbnailGenerator::ThumbnailGenerator(QObject* parent)
     // Minimum 2 threads, maximum 8 threads for best balance
     int idealThreads = QThread::idealThreadCount();
     int optimalThreads = qBound(2, idealThreads / 2, 8);
-    m_threadPool->setMaxThreadCount(optimalThreads);
+    m_baseThreadCount = optimalThreads;
+    m_currentThreadLimit = optimalThreads;
+    m_threadPool->setMaxThreadCount(m_currentThreadLimit);
 
     qDebug() << "[ThumbnailGenerator] Initialized with" << m_threadPool->maxThreadCount()
+
              << "threads (ideal:" << idealThreads << ")";
 }
 
@@ -611,7 +620,34 @@ QString ThumbnailGenerator::getThumbnailCachePath(const QString& filePath) {
     return m_thumbnailDir.absoluteFilePath(hash + ".jpg");
 }
 
+QString ThumbnailGenerator::writeThumbnailImage(const QString& sourcePath, const QImage& image) {
+    if (image.isNull()) {
+        return QString();
+    }
+
+    const QString hash = getFileHash(sourcePath);
+    const bool hasAlpha = image.hasAlphaChannel();
+    const QString targetExt = hasAlpha ? ".png" : ".jpg";
+    const QString staleExt = hasAlpha ? ".jpg" : ".png";
+
+    QString targetPath = m_thumbnailDir.absoluteFilePath(hash + targetExt);
+    QString stalePath = m_thumbnailDir.absoluteFilePath(hash + staleExt);
+    if (stalePath != targetPath && QFile::exists(stalePath)) {
+        QFile::remove(stalePath);
+    }
+
+    const char* format = hasAlpha ? "PNG" : "JPEG";
+    const int quality = hasAlpha ? 100 : 85;
+    if (!image.save(targetPath, format, quality)) {
+        qWarning() << "[ThumbnailGenerator] Failed to save thumbnail:" << targetPath;
+        return QString();
+    }
+
+    return targetPath;
+}
+
 bool ThumbnailGenerator::isImageFile(const QString& filePath) {
+
     QFileInfo fi(filePath);
     QString ext = fi.suffix().toLower();
 
@@ -776,12 +812,34 @@ void ThumbnailGenerator::requestThumbnail(const QString& filePath) {
         videoGen->start();
         qDebug() << "[ThumbnailGenerator] Started async video thumbnail generation for:" << filePath;
     } else {
+        {
+            QMutexLocker locker(&m_mutex);
+            m_pendingImageTasks++;
+            updateThreadPoolLimit();
+        }
         ThumbnailTask* task = new ThumbnailTask(filePath, this, session);
         m_threadPool->start(task);
         qDebug() << "[ThumbnailGenerator] Queued image thumbnail generation for:" << filePath
                  << "(active threads:" << m_threadPool->activeThreadCount() << ")";
     }
 }
+
+void ThumbnailGenerator::updateThreadPoolLimit() {
+    if (m_pendingImageTasks < 10) {
+        m_currentThreadLimit = m_baseThreadCount;
+    } else if (m_pendingImageTasks < 50) {
+        m_currentThreadLimit = qMin(m_baseThreadCount + 2, 12);
+    } else {
+        m_currentThreadLimit = qMin(m_baseThreadCount + 4, 16);
+    }
+    
+    if (m_threadPool->maxThreadCount() != m_currentThreadLimit) {
+        m_threadPool->setMaxThreadCount(m_currentThreadLimit);
+        qDebug() << "[ThumbnailGenerator] Adjusted thread limit to" << m_currentThreadLimit 
+                 << "pending tasks:" << m_pendingImageTasks;
+    }
+}
+
 
 void ThumbnailGenerator::requestThumbnailForce(const QString& filePath) {
     if (filePath.isEmpty()) return;
@@ -816,20 +874,21 @@ QString ThumbnailGenerator::generateImageThumbnail(const QString& filePath) {
         if (OIIOImageLoader::isOIIOSupported(filePath)) {
             qDebug() << "[ThumbnailGenerator] Using OpenImageIO for:" << filePath;
 
-            QImage image = OIIOImageLoader::loadImage(filePath, THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT);
-            if (!image.isNull()) {
-                QString cachePath = getThumbnailCachePath(filePath);
-                if (image.save(cachePath, "JPEG", 85)) {
-                    qDebug() << "[ThumbnailGenerator] OIIO thumbnail saved:" << cachePath;
-                    return cachePath;
-                } else {
-                    qWarning() << "[ThumbnailGenerator] Failed to save OIIO thumbnail";
-                    return QString();
-                }
+        QImage image = OIIOImageLoader::loadImage(filePath, THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT);
+        if (!image.isNull()) {
+            QString cachePath = writeThumbnailImage(filePath, image);
+            if (!cachePath.isEmpty()) {
+                qDebug() << "[ThumbnailGenerator] OIIO thumbnail saved:" << cachePath;
+                return cachePath;
             } else {
-                qWarning() << "[ThumbnailGenerator] OIIO failed to load image, falling back to placeholder";
-                // Fall through to placeholder generation
+                qWarning() << "[ThumbnailGenerator] Failed to save OIIO thumbnail";
+                return QString();
             }
+        } else {
+            qWarning() << "[ThumbnailGenerator] OIIO failed to load image, falling back to placeholder";
+            // Fall through to placeholder generation
+        }
+
         }
 
         // Check if this is a Qt-supported format
@@ -863,14 +922,15 @@ QString ThumbnailGenerator::generateImageThumbnail(const QString& filePath) {
             QRect textRect(20, 150, THUMBNAIL_WIDTH - 40, 60);
             painter.drawText(textRect, Qt::AlignCenter | Qt::TextWordWrap, "Preview Not Available\n(Format not supported)");
 
-            QString cachePath = getThumbnailCachePath(filePath);
-            if (placeholder.save(cachePath, "JPEG", 85)) {
+            QString cachePath = writeThumbnailImage(filePath, placeholder);
+            if (!cachePath.isEmpty()) {
                 qDebug() << "[ThumbnailGenerator] Created placeholder thumbnail:" << cachePath;
                 return cachePath;
             } else {
                 qWarning() << "[ThumbnailGenerator] Failed to save placeholder thumbnail";
                 return QString();
             }
+
         }
 
         qDebug() << "[ThumbnailGenerator] Creating QImageReader...";
@@ -927,13 +987,10 @@ QString ThumbnailGenerator::generateImageThumbnail(const QString& filePath) {
 
         qDebug() << "[ThumbnailGenerator] Image read successfully, actual size:" << image.size();
 
-        QString cachePath = getThumbnailCachePath(filePath);
-        qDebug() << "[ThumbnailGenerator] Saving thumbnail to:" << cachePath;
-
-        if (!image.save(cachePath, "JPEG", 85)) {
-            qWarning() << "[ThumbnailGenerator] Failed to save thumbnail:" << cachePath;
+        QString cachePath = writeThumbnailImage(filePath, image);
+        if (cachePath.isEmpty()) {
             if (!qEnvironmentVariableIsEmpty("KASSET_VERBOSE")) {
-                LogManager::instance().addLog(QString("Thumbnail save failure: %1").arg(QFileInfo(cachePath).fileName()), "WARN");
+                LogManager::instance().addLog(QString("Thumbnail save failure: %1").arg(QFileInfo(filePath).fileName()), "WARN");
             }
             return QString();
         }
@@ -943,6 +1000,7 @@ QString ThumbnailGenerator::generateImageThumbnail(const QString& filePath) {
             LogManager::instance().addLog(QString("Thumbnail generated: %1").arg(QFileInfo(cachePath).fileName()), "DEBUG");
         }
         return cachePath;
+
     } catch (const std::exception& e) {
         qCritical() << "[ThumbnailGenerator] ===== EXCEPTION generating thumbnail for" << filePath << ":" << e.what();
         return QString();
@@ -1117,14 +1175,15 @@ QString ThumbnailGenerator::createUnsupportedThumbnail(const QString& filePath) 
         painter.end();
 
         // Save to cache
-        QString cachePath = getThumbnailCachePath(filePath);
-        if (image.save(cachePath, "JPEG", 85)) {
+        QString cachePath = writeThumbnailImage(filePath, image);
+        if (!cachePath.isEmpty()) {
             qDebug() << "[ThumbnailGenerator] Created unsupported thumbnail:" << cachePath;
             return cachePath;
         } else {
-            qWarning() << "[ThumbnailGenerator] Failed to save unsupported thumbnail:" << cachePath;
+            qWarning() << "[ThumbnailGenerator] Failed to save unsupported thumbnail";
             return QString();
         }
+
     } catch (const std::exception& e) {
         qCritical() << "[ThumbnailGenerator] Exception creating unsupported thumbnail:" << e.what();
         return QString();

@@ -8,6 +8,8 @@
 #include <QVector>
 #include <QPair>
 #include <QStringList>
+#include <QHash>
+
 
 // Version history row for an asset
 struct AssetVersionRow {
@@ -35,9 +37,12 @@ public:
     // Folder ops
     int ensureRootFolder();
     int createFolder(const QString& name, int parentId);
+    int ensureFolder(const QString& name, int parentId);
+    int getFolderId(int parentId, const QString& name) const;
     bool renameFolder(int id, const QString& name);
     bool deleteFolder(int id);
     bool moveFolder(int id, int newParentId);
+
 
     // Project folder ops (watched folders)
     int createProjectFolder(const QString& name, const QString& path);
@@ -49,11 +54,12 @@ public:
 
     // Asset ops
     int upsertAsset(const QString& filePath);
-    int upsertSequence(const QString& sequencePattern, int startFrame, int endFrame, int frameCount, const QString& firstFramePath);
+    int upsertSequence(const QString& sequencePattern, int startFrame, int endFrame, int frameCount, const QString& firstFramePath, int folderId = 0);
     // Fast path for bulk imports: metadata only (no checksum, no versioning, no signals)
     int insertAssetMetadataFast(const QString& filePath, int folderId);
     // Fast path for image sequences during bulk import (no signals)
     int upsertSequenceInFolderFast(const QString& sequencePattern, int startFrame, int endFrame, int frameCount, const QString& firstFramePath, int folderId);
+
     bool setAssetFolder(int assetId, int folderId);
     bool removeAssets(const QList<int>& assetIds);
     bool setAssetsRating(const QList<int>& assetIds, int rating); // 0-5, -1 to clear
@@ -74,8 +80,10 @@ public:
     QVector<QPair<int, QString>> listTags() const;
     bool assignTagsToAssets(const QList<int>& assetIds, const QList<int>& tagIds);
     QStringList tagsForAsset(int assetId) const;
+    QHash<int, QStringList> tagsForAssets(const QList<int>& assetIds) const;
 
     // Database management
+
     bool exportDatabase(const QString& filePath);
     bool importDatabase(const QString& filePath);
     bool clearAllData();

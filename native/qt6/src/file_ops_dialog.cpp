@@ -49,8 +49,17 @@ FileOpsProgressDialog::FileOpsProgressDialog(QWidget* parent) : QDialog(parent)
     connect(&q, &FileOpsQueue::currentItemChanged, this, &FileOpsProgressDialog::onCurrentChanged);
     connect(&q, &FileOpsQueue::itemFinished, this, &FileOpsProgressDialog::onItemFinished);
 
-    connect(cancelCurrentBtn, &QPushButton::clicked, &q, &FileOpsQueue::cancelCurrent);
-    connect(cancelAllBtn, &QPushButton::clicked, &q, &FileOpsQueue::cancelAll);
+    connect(cancelCurrentBtn, &QPushButton::clicked, this, [this]{
+        m_cancelling = true;
+        FileOpsQueue::instance().cancelCurrent();
+        label->setText(tr("Cancelling current operation..."));
+    });
+    connect(cancelAllBtn, &QPushButton::clicked, this, [this]{
+        m_cancelling = true;
+        FileOpsQueue::instance().cancelAll();
+        label->setText(tr("Cancelling all operations..."));
+    });
+
     connect(closeBtn, &QPushButton::clicked, this, &QDialog::close);
 
     refreshList();
@@ -62,9 +71,10 @@ void FileOpsProgressDialog::refreshList()
     list->clear();
     bool anyActive = false;
     for (const auto &it : items) {
-        if (it.status == "Queued" || it.status == "In Progress") {
+        if (it.status == "Queued" || it.status == "In Progress" || it.status == "Cancelling") {
             anyActive = true;
             QString text = QString("#%1  %2  (%3/%4)  %5")
+
                                .arg(it.id)
                                .arg(it.type == FileOpsQueue::Type::Copy ? "Copy" : it.type == FileOpsQueue::Type::Move ? "Move" : "Delete")
                                .arg(it.completedFiles)
@@ -76,12 +86,22 @@ void FileOpsProgressDialog::refreshList()
     }
     if (!anyActive) {
         // Auto-close when nothing is active
+        m_cancelling = false;
         close();
     }
 }
 
+
 void FileOpsProgressDialog::onProgress(int current, int total, const QString& currentFile)
 {
+    if (m_cancelling) {
+        bar->setRange(0, 0);
+        bar->setValue(0);
+        label->setText(tr("Cancelling current operation..."));
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
+        return;
+    }
+
     if (total <= 0) { bar->setRange(0,0); return; }
     bar->setRange(0, 1000);
     int v = int(double(current) / double(total) * 1000.0);
@@ -92,8 +112,18 @@ void FileOpsProgressDialog::onProgress(int current, int total, const QString& cu
     QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
 }
 
+
 void FileOpsProgressDialog::onCurrentChanged(const FileOpsQueue::Item& item)
 {
+    if (item.status == "Cancelling") {
+        m_cancelling = true;
+        label->setText(tr("Cancelling current operation..."));
+        bar->setRange(0, 0);
+        bar->setValue(0);
+        return;
+    }
+
+    m_cancelling = false;
     label->setText(QString("%1: %2 item(s) -> %3").arg(
         item.type == FileOpsQueue::Type::Copy ? "Copy" : item.type == FileOpsQueue::Type::Move ? "Move" : "Delete",
         QString::number(item.totalFiles),
@@ -103,9 +133,12 @@ void FileOpsProgressDialog::onCurrentChanged(const FileOpsQueue::Item& item)
     bar->setValue(0);
 }
 
+
 void FileOpsProgressDialog::onItemFinished(int, bool success, const QString& error)
 {
+    m_cancelling = false;
     if (!success) {
+
         const QString msg = error.isEmpty() ? QString("The file operation failed.") : error;
         label->setText(QString("Error: %1").arg(msg));
         // Surface the error prominently to the user

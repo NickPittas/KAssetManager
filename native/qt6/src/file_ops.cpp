@@ -106,17 +106,54 @@ void FileOpsQueue::enqueueDeletePermanent(const QStringList& sources)
 void FileOpsQueue::cancelCurrent()
 {
     m_cancel.store(true);
+    Item currentCopy;
+    bool hasCurrent = false;
+    {
+        QMutexLocker lk(&m_mutex);
+        for (auto &it : m_queue) {
+            if (it.status == "In Progress" || it.status == "Cancelling") {
+                if (it.status != "Cancelling") {
+                    it.status = "Cancelling";
+                }
+                currentCopy = it;
+                hasCurrent = true;
+                break;
+            }
+        }
+    }
+    if (hasCurrent) {
+        emit currentItemChanged(currentCopy);
+        emit queueChanged();
+    }
 }
 
 void FileOpsQueue::cancelAll()
 {
     m_cancel.store(true);
-    QMutexLocker lk(&m_mutex);
-    for (auto &it : m_queue) {
-        if (it.status == "Queued") it.status = "Cancelled";
+    Item currentCopy;
+    bool hasCurrent = false;
+    {
+        QMutexLocker lk(&m_mutex);
+        for (auto &it : m_queue) {
+            if (it.status == "Queued") {
+                it.status = "Cancelled";
+            } else if (it.status == "In Progress" || it.status == "Cancelling") {
+                if (it.status != "Cancelling") {
+                    it.status = "Cancelling";
+                }
+                if (!hasCurrent) {
+                    currentCopy = it;
+                    hasCurrent = true;
+                }
+            }
+        }
     }
     emit queueChanged();
+    if (hasCurrent) {
+        emit currentItemChanged(currentCopy);
+    }
 }
+
 
 void FileOpsQueue::startNext()
 {

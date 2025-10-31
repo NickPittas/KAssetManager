@@ -4,6 +4,10 @@
 #include <QCoreApplication>
 
 LogManager::LogManager(QObject* parent) : QObject(parent) {
+    m_flushTimer.setSingleShot(true);
+    m_flushTimer.setInterval(FLUSH_INTERVAL_MS);
+    connect(&m_flushTimer, &QTimer::timeout, this, &LogManager::flushPending);
+
     // Open persistent app log next to the executable
     QString path = QCoreApplication::applicationDirPath() + "/app.log";
     m_file.setFileName(path);
@@ -14,6 +18,13 @@ LogManager::LogManager(QObject* parent) : QObject(parent) {
     }
     // Install custom message handler to capture qDebug/qWarning/qCritical
     qInstallMessageHandler(customMessageHandler);
+}
+
+LogManager::~LogManager() {
+    flushPending();
+    if (m_ts.device()) {
+        m_ts.flush();
+    }
 }
 
 void LogManager::addLog(const QString& message, const QString& level) {
@@ -31,11 +42,46 @@ void LogManager::addLog(const QString& message, const QString& level) {
     emit logsChanged();
     emit logAdded(logEntry);
 
-    // Write-through to disk log
+    // Write-through to disk log with buffered flushing
     if (m_ts.device()) {
         m_ts << logEntry << '\n';
-        m_ts.flush();
+        scheduleFlush(level);
     }
+}
+
+void LogManager::flushPending() {
+    if (!m_ts.device()) {
+        m_pendingFlush = false;
+        return;
+    }
+    if (m_pendingFlush) {
+        m_ts.flush();
+        m_pendingFlush = false;
+    }
+    if (m_flushTimer.isActive()) {
+        m_flushTimer.stop();
+    }
+}
+
+bool LogManager::shouldFlushImmediately(const QString& level) const {
+    const QString upper = level.toUpper();
+    return upper == "WARN" || upper == "ERROR" || upper == "FATAL";
+}
+
+void LogManager::scheduleFlush(const QString& level) {
+    if (!m_ts.device()) {
+        return;
+    }
+
+    m_pendingFlush = true;
+
+    if (shouldFlushImmediately(level)) {
+        m_flushTimer.stop();
+        flushPending();
+        return;
+    }
+
+    m_flushTimer.start(FLUSH_INTERVAL_MS);
 }
 
 void LogManager::clear() {

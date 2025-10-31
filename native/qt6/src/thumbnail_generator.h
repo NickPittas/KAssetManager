@@ -109,10 +109,12 @@ private:
 
     QString generateImageThumbnail(const QString& filePath);
     QString getThumbnailCachePath(const QString& filePath);
+    QString writeThumbnailImage(const QString& sourcePath, const QImage& image);
     QString getFileHash(const QString& filePath);
     void ensureThumbnailDir();
     bool isThumbnailCached(const QString& filePath);
     QString createUnsupportedThumbnail(const QString& filePath);
+    void updateThreadPoolLimit();
 
     // Video concurrency control
     void startNextVideoIfPossible();
@@ -127,9 +129,13 @@ private:
 
     int m_totalThumbnails;
     int m_completedThumbnails;
+    int m_baseThreadCount = 2;
+    int m_currentThreadLimit = 2;
+    int m_pendingImageTasks = 0;
 
     std::atomic<int> m_sessionId{0};
 
     static constexpr int THUMBNAIL_WIDTH = 256;
     static constexpr int THUMBNAIL_HEIGHT = 256;
 };
+
