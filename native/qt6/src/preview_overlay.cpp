@@ -363,7 +363,7 @@ void PreviewOverlay::setupUi()
     controlsLayout->setContentsMargins(20, 10, 20, 10);
 
     // Position slider
-    positionSlider = new QSlider(Qt::Horizontal, this);
+    positionSlider = new QSlider(Qt::Horizontal, controlsWidget);
     positionSlider->setStyleSheet(
         "QSlider::groove:horizontal { background: #555; height: 4px; }"
         "QSlider::handle:horizontal { background: #58a6ff; width: 12px; margin: -4px 0; border-radius: 6px; }"
@@ -376,7 +376,8 @@ void PreviewOverlay::setupUi()
     // Control buttons row
     QHBoxLayout *buttonsLayout = new QHBoxLayout();
 
-    playPauseBtn = new QPushButton("▶", this);
+    playPauseBtn = new QPushButton("▶", controlsWidget);
+
     playPauseBtn->setFixedSize(40, 40);
     playPauseBtn->setStyleSheet(
         "QPushButton { background-color: #58a6ff; color: white; font-size: 18px; "
@@ -386,7 +387,7 @@ void PreviewOverlay::setupUi()
     connect(playPauseBtn, &QPushButton::clicked, this, &PreviewOverlay::onPlayPauseClicked);
     buttonsLayout->addWidget(playPauseBtn);
     // Frame step buttons
-    prevFrameBtn = new QPushButton("‹", this);
+    prevFrameBtn = new QPushButton("‹", controlsWidget);
     prevFrameBtn->setFixedSize(36, 36);
     prevFrameBtn->setToolTip("Previous frame (,)");
     prevFrameBtn->setStyleSheet(
@@ -396,7 +397,8 @@ void PreviewOverlay::setupUi()
     connect(prevFrameBtn, &QPushButton::clicked, this, &PreviewOverlay::onStepPrevFrame);
     buttonsLayout->addWidget(prevFrameBtn);
 
-    nextFrameBtn = new QPushButton("›", this);
+    nextFrameBtn = new QPushButton("›", controlsWidget);
+
     nextFrameBtn->setFixedSize(36, 36);
     nextFrameBtn->setToolTip("Next frame (.)");
     nextFrameBtn->setStyleSheet(
@@ -407,19 +409,20 @@ void PreviewOverlay::setupUi()
     buttonsLayout->addWidget(nextFrameBtn);
 
 
-    timeLabel = new QLabel("0:00 / 0:00", this);
+    timeLabel = new QLabel("0:00 / 0:00", controlsWidget);
     timeLabel->setStyleSheet("QLabel { color: white; font-size: 14px; padding: 0 10px; }");
     buttonsLayout->addWidget(timeLabel);
 
     buttonsLayout->addStretch();
 
     // Color space selector (for HDR/EXR images)
-    colorSpaceLabel = new QLabel("Color Space:", this);
+    colorSpaceLabel = new QLabel("Color Space:", controlsWidget);
     colorSpaceLabel->setStyleSheet("QLabel { color: white; font-size: 14px; padding: 0 5px; }");
     colorSpaceLabel->hide();
     buttonsLayout->addWidget(colorSpaceLabel);
 
-    colorSpaceCombo = new QComboBox(this);
+    colorSpaceCombo = new QComboBox(controlsWidget);
+
     colorSpaceCombo->addItem("Linear");
     colorSpaceCombo->addItem("sRGB");
     colorSpaceCombo->addItem("Rec.709");
@@ -437,14 +440,9 @@ void PreviewOverlay::setupUi()
             this, &PreviewOverlay::onColorSpaceChanged);
     buttonsLayout->addWidget(colorSpaceCombo);
 
-    buttonsLayout->addSpacing(20);
+    // Volume slider
+    volumeSlider = new QSlider(Qt::Horizontal, controlsWidget);
 
-    // Volume control
-    QLabel *volumeIcon = new QLabel("🔊", this);
-    volumeIcon->setStyleSheet("QLabel { color: white; font-size: 16px; }");
-    buttonsLayout->addWidget(volumeIcon);
-
-    volumeSlider = new QSlider(Qt::Horizontal, this);
     volumeSlider->setFixedWidth(100);
     volumeSlider->setRange(0, 100);
     volumeSlider->setValue(50);
@@ -452,8 +450,9 @@ void PreviewOverlay::setupUi()
     connect(volumeSlider, &QSlider::valueChanged, this, &PreviewOverlay::onVolumeChanged);
     buttonsLayout->addWidget(volumeSlider);
 
-    // Live scrubbing toggle
-    liveScrubCheck = new QCheckBox("Live Scrub", this);
+    // Live scrub checkbox
+    liveScrubCheck = new QCheckBox("Live Scrub", controlsWidget);
+
     liveScrubCheck->setToolTip("Seek continuously while dragging the timeline slider");
     buttonsLayout->addWidget(liveScrubCheck);
 
