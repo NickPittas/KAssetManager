@@ -799,8 +799,10 @@ void PreviewOverlay::onPlayPauseClicked()
 #ifdef HAVE_FFMPEG
         if (usingFallbackVideo) {
             fallbackPaused = !fallbackPaused;
+            qDebug() << "[PreviewOverlay] Toggling fallback pause to:" << fallbackPaused << "reader:" << (void*)fallbackReader;
             if (fallbackReader) {
-                QMetaObject::invokeMethod(fallbackReader, "setPaused", Qt::QueuedConnection, Q_ARG(bool, fallbackPaused));
+                bool invoked = QMetaObject::invokeMethod(fallbackReader, "setPaused", Qt::QueuedConnection, Q_ARG(bool, fallbackPaused));
+                qDebug() << "[PreviewOverlay] invokeMethod result:" << invoked;
             }
             updatePlayPauseButton();
         } else
