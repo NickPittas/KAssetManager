@@ -28,8 +28,15 @@
 #include <windows.h>
 #endif
 
+namespace {
+inline bool thumbnailDiagEnabled() {
+    static const bool enabled = !qEnvironmentVariableIsEmpty("KASSET_THUMBNAIL_DIAG");
+    return enabled;
+}
+}
 
 #ifdef HAVE_FFMPEG
+
 extern "C" {
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
@@ -61,23 +68,16 @@ void ThumbnailTask::run() {
         return;
     }
 
-    qDebug() << "[ThumbnailTask] Generating image thumbnail for:" << m_filePath;
-
     QString thumbnailPath;
     bool success = false;
 
     try {
         thumbnailPath = m_generator->generateImageThumbnail(m_filePath);
         success = !thumbnailPath.isEmpty();
-
-        if (success) {
-            qDebug() << "[ThumbnailTask] Successfully generated image thumbnail:" << thumbnailPath;
-        } else {
-            qDebug() << "[ThumbnailTask] No image thumbnail generated for:" << m_filePath;
-        }
     } catch (...) {
-        qWarning() << "[ThumbnailTask] Exception during image thumbnail generation:" << m_filePath;
+        qCritical() << "[ThumbnailTask] Exception during image thumbnail generation:" << m_filePath;
     }
+
 
     // CRITICAL: Don't capture 'this' because ThumbnailTask will be deleted after run() completes
     // Capture only the values we need by value
@@ -389,14 +389,12 @@ void VideoThumbnailGenerator::start() {
     
     // Check codec first to avoid unnecessary QMediaPlayer attempts
     if (MediaInfo::shouldUseFFmpegPlayback(m_filePath)) {
-        qDebug() << "[VideoThumbnailGenerator] Codec requires FFmpeg, using direct path for:" << m_filePath;
         startFfmpegFallback();
         return;
     }
     
     if (!m_player) { qWarning() << "[VideoThumbnailGenerator] Player null"; return; }
     
-    qDebug() << "[VideoThumbnailGenerator] Starting async video thumbnail generation for:" << m_filePath;
     // Track as active for cancellation
     {
         QMutexLocker locker(&m_generator->m_mutex);
@@ -411,19 +409,15 @@ void VideoThumbnailGenerator::onMediaStatusChanged() {
     if (!m_player) { qWarning() << "[VideoThumbnailGenerator] onMediaStatusChanged: Player null"; return; }
 
     QMediaPlayer::MediaStatus status = m_player->mediaStatus();
-    qDebug() << "[VideoThumbnailGenerator] Media status changed:" << status;
 
     if (status == QMediaPlayer::LoadedMedia) {
-        qint64 duration = m_player->duration();
-        // Favor an early keyframe (faster). Use min(1s, 10% of duration).
-        qint64 seekPos = duration > 0 ? qMin<qint64>(1000, duration / 10) : 0;
-        qDebug() << "[VideoThumbnailGenerator] Video loaded, duration:" << duration << "ms, seeking to:" << seekPos << "ms";
-        m_player->setPosition(seekPos);
-        m_player->play();
+        m_player->setPosition(m_seekTime);
+        // Don't start playing - just seek; the frame will arrive when ready
     }
 }
 
 void VideoThumbnailGenerator::onVideoFrameChanged() {
+
     if (!m_videoSink) { qWarning() << "[VideoThumbnailGenerator] onVideoFrameChanged: VideoSink null"; return; }
 
     if (m_frameReceived) return;
@@ -448,9 +442,6 @@ void VideoThumbnailGenerator::onVideoFrameChanged() {
         m_player->stop();
         m_player->setSource(QUrl());
 
-        qDebug() << "[VideoThumbnailGenerator] Captured video frame, size:" << m_capturedFrame.size()
-                 << "format:" << m_capturedFrame.format();
-
         // Handle alpha channel premultiplication for videos with transparency
         // QVideoFrame often provides unpremultiplied alpha, but Qt expects premultiplied for proper display
         if (m_capturedFrame.hasAlphaChannel()) {
@@ -458,7 +449,6 @@ void VideoThumbnailGenerator::onVideoFrameChanged() {
 
             // Convert to premultiplied alpha if needed
             if (format == QImage::Format_ARGB32 || format == QImage::Format_RGBA8888) {
-                qDebug() << "[VideoThumbnailGenerator] Converting to premultiplied alpha";
                 m_capturedFrame = m_capturedFrame.convertToFormat(QImage::Format_ARGB32_Premultiplied);
             } else if (format != QImage::Format_ARGB32_Premultiplied &&
                        format != QImage::Format_RGBA8888_Premultiplied) {
@@ -466,6 +456,7 @@ void VideoThumbnailGenerator::onVideoFrameChanged() {
                 m_capturedFrame = m_capturedFrame.convertToFormat(QImage::Format_ARGB32_Premultiplied);
             }
         }
+
 
         QImage thumbnail = m_capturedFrame.scaled(256, 256, Qt::KeepAspectRatio, Qt::SmoothTransformation);
 
@@ -760,7 +751,6 @@ void ThumbnailGenerator::requestThumbnail(const QString& filePath) {
     // Check if already cached
     if (isThumbnailCached(filePath)) {
         QString cachePath = getThumbnailCachePath(filePath);
-        qDebug() << "[ThumbnailGenerator] Using cached thumbnail:" << cachePath;
         // Always deliver on UI event loop to avoid re-entrancy from data()/paint()
         QMetaObject::invokeMethod(this, [this, filePath, cachePath]() {
             emit thumbnailGenerated(filePath, cachePath);
@@ -772,11 +762,11 @@ void ThumbnailGenerator::requestThumbnail(const QString& filePath) {
     {
         QMutexLocker locker(&m_mutex);
         if (m_pendingThumbnails.contains(filePath)) {
-            qDebug() << "[ThumbnailGenerator] Thumbnail already being generated:" << filePath;
             return; // Already in progress
         }
         m_pendingThumbnails.insert(filePath);
     }
+
 
     bool isVideo = isVideoFile(filePath);
     bool isImage = isImageFile(filePath);
@@ -808,14 +798,12 @@ void ThumbnailGenerator::requestThumbnail(const QString& filePath) {
             QMutexLocker locker(&m_mutex);
             if (m_activeVideoGenerators.size() >= m_maxActiveVideos) {
                 m_videoQueue.enqueue(qMakePair(filePath, cachePath));
-                qDebug() << "[ThumbnailGenerator] Queued video thumbnail (throttled):" << filePath;
                 return;
             }
         }
         // Start immediately if slot available
         VideoThumbnailGenerator* videoGen = new VideoThumbnailGenerator(filePath, cachePath, this, session);
         videoGen->start();
-        qDebug() << "[ThumbnailGenerator] Started async video thumbnail generation for:" << filePath;
     } else {
         {
             QMutexLocker locker(&m_mutex);
@@ -824,10 +812,9 @@ void ThumbnailGenerator::requestThumbnail(const QString& filePath) {
         }
         ThumbnailTask* task = new ThumbnailTask(filePath, this, session);
         m_threadPool->start(task);
-        qDebug() << "[ThumbnailGenerator] Queued image thumbnail generation for:" << filePath
-                 << "(active threads:" << m_threadPool->activeThreadCount() << ")";
     }
 }
+
 
 void ThumbnailGenerator::updateThreadPoolLimit() {
     if (m_pendingImageTasks < 10) {
@@ -840,8 +827,6 @@ void ThumbnailGenerator::updateThreadPoolLimit() {
     
     if (m_threadPool->maxThreadCount() != m_currentThreadLimit) {
         m_threadPool->setMaxThreadCount(m_currentThreadLimit);
-        qDebug() << "[ThumbnailGenerator] Adjusted thread limit to" << m_currentThreadLimit 
-                 << "pending tasks:" << m_pendingImageTasks;
     }
 }
 
@@ -863,12 +848,12 @@ void ThumbnailGenerator::requestThumbnailForce(const QString& filePath) {
 
 
 QString ThumbnailGenerator::generateImageThumbnail(const QString& filePath) {
-    qDebug() << "[ThumbnailGenerator] ===== START Generating image thumbnail for:" << filePath;
-
+#ifdef _MSC_VER
+    __try {
+#endif
     try {
         // Validate file exists and is readable
         QFileInfo fileInfo(filePath);
-        qDebug() << "[ThumbnailGenerator] File size:" << fileInfo.size() << "bytes";
 
         if (!fileInfo.exists() || !fileInfo.isReadable()) {
             qWarning() << "[ThumbnailGenerator] File not accessible:" << filePath;
@@ -877,29 +862,22 @@ QString ThumbnailGenerator::generateImageThumbnail(const QString& filePath) {
 
         // Check if this format should be handled by OpenImageIO
         if (OIIOImageLoader::isOIIOSupported(filePath)) {
-            qDebug() << "[ThumbnailGenerator] Using OpenImageIO for:" << filePath;
-
-        QImage image = OIIOImageLoader::loadImage(filePath, THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT);
-        if (!image.isNull()) {
-            QString cachePath = writeThumbnailImage(filePath, image);
-            if (!cachePath.isEmpty()) {
-                qDebug() << "[ThumbnailGenerator] OIIO thumbnail saved:" << cachePath;
+            QImage image = OIIOImageLoader::loadImage(filePath, THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT);
+            if (!image.isNull()) {
+                QString cachePath = writeThumbnailImage(filePath, image);
+                if (cachePath.isEmpty()) {
+                    qWarning() << "[ThumbnailGenerator] Failed to save OIIO thumbnail";
+                }
                 return cachePath;
             } else {
-                qWarning() << "[ThumbnailGenerator] Failed to save OIIO thumbnail";
-                return QString();
+                qWarning() << "[ThumbnailGenerator] OIIO failed to load image:" << filePath;
+                // Fall through to placeholder generation
             }
-        } else {
-            qWarning() << "[ThumbnailGenerator] OIIO failed to load image, falling back to placeholder";
-            // Fall through to placeholder generation
-        }
-
         }
 
         // Check if this is a Qt-supported format
         if (!isQtSupportedFormat(filePath)) {
-            qWarning() << "[ThumbnailGenerator] Format not supported by Qt or OIIO:" << filePath;
-            qWarning() << "[ThumbnailGenerator] Creating placeholder thumbnail for unsupported format";
+
 
             // Create a placeholder thumbnail with format info
             QImage placeholder(THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT, QImage::Format_RGB32);
@@ -928,37 +906,22 @@ QString ThumbnailGenerator::generateImageThumbnail(const QString& filePath) {
             painter.drawText(textRect, Qt::AlignCenter | Qt::TextWordWrap, "Preview Not Available\n(Format not supported)");
 
             QString cachePath = writeThumbnailImage(filePath, placeholder);
-            if (!cachePath.isEmpty()) {
-                qDebug() << "[ThumbnailGenerator] Created placeholder thumbnail:" << cachePath;
-                return cachePath;
-            } else {
+            if (cachePath.isEmpty()) {
                 qWarning() << "[ThumbnailGenerator] Failed to save placeholder thumbnail";
-                return QString();
             }
-
+            return cachePath;
         }
 
-        qDebug() << "[ThumbnailGenerator] Creating QImageReader...";
         QImageReader reader(filePath);
         reader.setAutoTransform(true);
-
-        // Set a decision handler to avoid crashes on corrupted images
         reader.setDecideFormatFromContent(true);
-
-        // CRITICAL: Set quality to speed for large images
         reader.setQuality(50);
 
-        qDebug() << "[ThumbnailGenerator] Reading image size...";
         QSize originalSize = reader.size();
         if (!originalSize.isValid()) {
             qWarning() << "[ThumbnailGenerator] Failed to read image size:" << filePath << reader.errorString();
-            if (!qEnvironmentVariableIsEmpty("KASSET_VERBOSE")) {
-                LogManager::instance().addLog(QString("Thumbnail read failure: %1").arg(QFileInfo(filePath).fileName()), "WARN");
-            }
             return QString();
         }
-
-        qDebug() << "[ThumbnailGenerator] Original image size:" << originalSize.width() << "x" << originalSize.height();
 
         // Validate size is reasonable
         if (originalSize.width() <= 0 || originalSize.height() <= 0 ||
@@ -969,51 +932,42 @@ QString ThumbnailGenerator::generateImageThumbnail(const QString& filePath) {
 
         // CRITICAL: For very large images (4K+), use scaled reading to avoid memory issues
         QSize scaledSize = originalSize.scaled(THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT, Qt::KeepAspectRatio);
-        qDebug() << "[ThumbnailGenerator] Scaled size will be:" << scaledSize.width() << "x" << scaledSize.height();
-
-        // Always set scaled size BEFORE reading to avoid loading full resolution
         reader.setScaledSize(scaledSize);
 
         // For very large images, also set a clip rect to limit memory usage
         if (originalSize.width() > 4000 || originalSize.height() > 4000) {
-            qDebug() << "[ThumbnailGenerator] Large image detected, using optimized loading";
             reader.setScaledClipRect(QRect(0, 0, scaledSize.width(), scaledSize.height()));
         }
 
-        qDebug() << "[ThumbnailGenerator] Reading image data...";
         QImage image = reader.read();
         if (image.isNull()) {
             qWarning() << "[ThumbnailGenerator] Failed to read image:" << filePath << reader.errorString();
-            if (!qEnvironmentVariableIsEmpty("KASSET_VERBOSE")) {
-                LogManager::instance().addLog(QString("Thumbnail decode failure: %1").arg(QFileInfo(filePath).fileName()), "WARN");
-            }
             return QString();
         }
-
-        qDebug() << "[ThumbnailGenerator] Image read successfully, actual size:" << image.size();
 
         QString cachePath = writeThumbnailImage(filePath, image);
         if (cachePath.isEmpty()) {
-            if (!qEnvironmentVariableIsEmpty("KASSET_VERBOSE")) {
-                LogManager::instance().addLog(QString("Thumbnail save failure: %1").arg(QFileInfo(filePath).fileName()), "WARN");
-            }
-            return QString();
-        }
-
-        qDebug() << "[ThumbnailGenerator] ===== SUCCESS Generated image thumbnail:" << cachePath;
-        if (!qEnvironmentVariableIsEmpty("KASSET_VERBOSE")) {
-            LogManager::instance().addLog(QString("Thumbnail generated: %1").arg(QFileInfo(cachePath).fileName()), "DEBUG");
+            qWarning() << "[ThumbnailGenerator] Failed to save thumbnail for:" << filePath;
         }
         return cachePath;
 
+
     } catch (const std::exception& e) {
-        qCritical() << "[ThumbnailGenerator] ===== EXCEPTION generating thumbnail for" << filePath << ":" << e.what();
+        qCritical() << "[ThumbnailGenerator] Exception generating thumbnail for" << filePath << ":" << e.what();
         return QString();
     } catch (...) {
-        qCritical() << "[ThumbnailGenerator] ===== UNKNOWN EXCEPTION generating thumbnail for" << filePath;
+        qCritical() << "[ThumbnailGenerator] Unknown exception generating thumbnail for" << filePath;
         return QString();
     }
+#ifdef _MSC_VER
+    } __except(EXCEPTION_EXECUTE_HANDLER) {
+        qCritical() << "[ThumbnailGenerator] SEH exception (access violation) for" << filePath 
+                    << "code:" << Qt::hex << GetExceptionCode();
+        return QString();
+    }
+#endif
 }
+
 
 QString ThumbnailGenerator::createSampleImage(const QString& directory) {
     QString baseDir = directory;
@@ -1081,27 +1035,32 @@ void ThumbnailGenerator::clearCache() {
 void ThumbnailGenerator::startProgress(int total) {
     m_totalThumbnails = total;
     m_completedThumbnails = 0;
-
-    if (total > 0) {
-        ProgressManager::instance().start("Generating thumbnails...", total);
-        qDebug() << "[ThumbnailGenerator] Started progress tracking for" << total << "thumbnails";
-    }
+    m_lastReportedProgress = 0;
+    ProgressManager::instance().start("Generating thumbnails", total);
 }
 
 void ThumbnailGenerator::updateProgress() {
+
     m_completedThumbnails++;
 
     if (m_totalThumbnails > 0) {
-        ProgressManager::instance().update(m_completedThumbnails);
-        emit progressChanged(m_completedThumbnails, m_totalThumbnails);
-        if (!qEnvironmentVariableIsEmpty("KASSET_DIAGNOSTICS")) {
-            qDebug() << "[ThumbnailGenerator] Progress:" << m_completedThumbnails << "/" << m_totalThumbnails;
+        // Batch progress updates: only emit every 5% or on completion to reduce UI flashing
+        const int progressPercent = (m_completedThumbnails * 100) / m_totalThumbnails;
+        const int lastPercent = (m_lastReportedProgress * 100) / m_totalThumbnails;
+        const bool shouldReport = (progressPercent - lastPercent >= 5) || (m_completedThumbnails >= m_totalThumbnails);
+        
+        if (shouldReport) {
+            ProgressManager::instance().update(m_completedThumbnails);
+            emit progressChanged(m_completedThumbnails, m_totalThumbnails);
+            m_lastReportedProgress = m_completedThumbnails;
         }
+        
         if (m_completedThumbnails >= m_totalThumbnails) {
             finishProgress();
         }
     }
 }
+
 
 void ThumbnailGenerator::finishProgress() {
     ProgressManager::instance().finish();

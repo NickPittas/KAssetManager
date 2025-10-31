@@ -132,6 +132,7 @@ private:
     int m_baseThreadCount = 2;
     int m_currentThreadLimit = 2;
     int m_pendingImageTasks = 0;
+    int m_lastReportedProgress = 0;
 
     std::atomic<int> m_sessionId{0};
 

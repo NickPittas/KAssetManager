@@ -55,25 +55,20 @@ public:
 
 public slots:
     void setPaused(bool p) { 
-        qDebug() << "[FallbackPngMovReader::setPaused]" << p;
         m_paused = p; 
     }
     void stepOnce() { 
-        qDebug() << "[FallbackPngMovReader::stepOnce]";
         m_singleStep = true; 
     }
     void seekToMs(qint64 ms) { 
-        qDebug() << "[FallbackPngMovReader::seekToMs]" << ms;
         m_seekTargetMs = ms; 
         m_seekRequested = true; 
     }
     void stop() { 
-        qDebug() << "[FallbackPngMovReader::stop]";
         m_stop = true; 
     }
     
     void start() {
-        qDebug() << "[FallbackPngMovReader::start]";
         if (!open()) { emit finished(); return; }
         const double intervalMs = m_fps > 0.0 ? (1000.0 / m_fps) : (1000.0 / 24.0);
         AVPacket pkt; av_init_packet(&pkt);
@@ -401,9 +396,7 @@ void PreviewOverlay::setupUi()
         "QPushButton:hover { background-color: #4a90e2; }"
     );
     connect(playPauseBtn, &QPushButton::clicked, this, &PreviewOverlay::onPlayPauseClicked);
-    connect(playPauseBtn, &QPushButton::clicked, []() { qDebug() << "[Lambda] Play/Pause button clicked!"; });
     buttonsLayout->addWidget(playPauseBtn);
-    qDebug() << "[PreviewOverlay] Play/pause button created and connected";
     // Frame step buttons
     prevFrameBtn = new QPushButton("‹", controlsWidget);
     prevFrameBtn->setFixedSize(36, 36);
@@ -768,7 +761,6 @@ void PreviewOverlay::showVideo(const QString &filePath)
     positionNavButtons(videoWidget);
     controlsWidget->show();
     controlsWidget->raise();
-    qDebug() << "[PreviewOverlay] Controls geometry:" << controlsWidget->geometry() << "visible:" << controlsWidget->isVisible();
 
     // Hide alpha toggle for videos
     if (alphaCheck) alphaCheck->hide();
@@ -796,7 +788,6 @@ void PreviewOverlay::showVideo(const QString &filePath)
 
 void PreviewOverlay::onPlayPauseClicked()
 {
-    qDebug() << "[PreviewOverlay::onPlayPauseClicked] Button clicked!";
     if (isSequence) {
         // Handle sequence playback
         if (sequencePlaying) {
@@ -809,7 +800,6 @@ void PreviewOverlay::onPlayPauseClicked()
 #ifdef HAVE_FFMPEG
         if (usingFallbackVideo) {
             fallbackPaused = !fallbackPaused;
-            qDebug() << "[PreviewOverlay] Toggling fallback pause to:" << fallbackPaused;
             if (fallbackReader) {
                 fallbackReader->setPaused(fallbackPaused);
             }
