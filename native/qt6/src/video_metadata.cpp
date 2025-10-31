@@ -190,5 +190,46 @@ bool probeVideoFile(const QString& filePath, VideoMetadata& out, QString* errorM
 #endif
 }
 
+bool shouldUseFFmpegPlayback(const QString& filePath)
+{
+#ifdef HAVE_FFMPEG
+    VideoMetadata meta;
+    if (!probeVideoFile(filePath, meta, nullptr)) {
+        // If we can't probe, default to FFmpeg (safer)
+        return true;
+    }
+
+    // Codecs that QMediaPlayer/Qt Multimedia typically cannot decode properly
+    // Use FFmpeg for these:
+    const QString codec = meta.videoCodec.toLower();
+    
+    if (codec.contains("png")) return true;           // PNG-coded MOV
+    if (codec.contains("prores")) return true;        // ProRes (all variants)
+    if (codec.contains("dnxhd")) return true;         // DNxHD/DNxHR
+    if (codec.contains("dnxhr")) return true;
+    if (codec.contains("cineform")) return true;      // CineForm
+    if (codec.contains("huffyuv")) return true;       // HuffYUV
+    if (codec.contains("ffv1")) return true;          // FFV1 lossless
+    if (codec.contains("utvideo")) return true;       // Ut Video
+    if (codec.contains("dirac")) return true;         // Dirac
+    
+    // Common codecs that QMediaPlayer handles well (use QMediaPlayer for potential HW accel)
+    if (codec.contains("h264") || codec.contains("avc")) return false;  // H.264
+    if (codec.contains("h265") || codec.contains("hevc")) return false; // H.265
+    if (codec.contains("vp8")) return false;          // VP8
+    if (codec.contains("vp9")) return false;          // VP9
+    if (codec.contains("av1")) return false;          // AV1
+    if (codec.contains("mpeg2")) return false;        // MPEG-2
+    if (codec.contains("mpeg4")) return false;        // MPEG-4
+    
+    // Unknown codec: prefer FFmpeg to avoid failures
+    return true;
+#else
+    Q_UNUSED(filePath);
+    return false; // No FFmpeg available, must use QMediaPlayer
+#endif
+}
+
 } // namespace MediaInfo
+
 

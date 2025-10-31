@@ -1,5 +1,7 @@
 #include "preview_overlay.h"
 #include "oiio_image_loader.h"
+#include "video_metadata.h"
+
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QPixmap>
@@ -738,6 +740,13 @@ void PreviewOverlay::showVideo(const QString &filePath)
     if (usingFallbackVideo) {
         stopFallbackVideo();
     }
+    
+    // Check codec upfront to decide which playback engine to use
+    if (MediaInfo::shouldUseFFmpegPlayback(filePath)) {
+        qDebug() << "[PreviewOverlay] Codec requires FFmpeg, using direct playback";
+        startFallbackVideo(filePath);
+        return;
+    }
 #endif
 
     // Ensure media player is in a clean state
@@ -783,6 +792,7 @@ void PreviewOverlay::showVideo(const QString &filePath)
 
     controlsTimer->start();
 }
+
 
 void PreviewOverlay::onPlayPauseClicked()
 {
@@ -1644,25 +1654,13 @@ void PreviewOverlay::stopFallbackVideo()
 
 void PreviewOverlay::onPlayerError(QMediaPlayer::Error error, const QString &errorString)
 {
+    // Errors should not occur now since we check codec upfront
+    // If they do, it indicates a different problem (corrupted file, missing file, etc)
     qWarning() << "[PreviewOverlay] Media player error:" << error << errorString;
-#ifdef HAVE_FFMPEG
-    // Only trigger fallback if the error belongs to the currently requested source
-    if (!isVideo) return;
-    const QUrl src = mediaPlayer->source();
-    if (src.isLocalFile()) {
-        const QString srcPath = QDir::fromNativeSeparators(src.toLocalFile());
-        const QString curPath = QDir::fromNativeSeparators(currentFilePath);
-        if (srcPath != curPath) {
-            qDebug() << "[PreviewOverlay] Ignoring error for stale source" << srcPath;
-            return;
-        }
-    }
-    // Fallback if codec is unsupported (e.g., PNG in MOV)
-    if (!usingFallbackVideo) {
-        startFallbackVideo(currentFilePath);
-    }
-#endif
+    qWarning() << "[PreviewOverlay] Unexpected error for file:" << currentFilePath;
+    qWarning() << "[PreviewOverlay] This file should have been routed to FFmpeg if codec was unsupported";
 }
+
 
 void PreviewOverlay::onMediaStatusChanged(QMediaPlayer::MediaStatus status)
 {

@@ -2,6 +2,8 @@
 #include "progress_manager.h"
 #include "log_manager.h"
 #include "oiio_image_loader.h"
+#include "video_metadata.h"
+
 #include <QCryptographicHash>
 #include <QFileInfo>
 #include <QFile>
@@ -383,9 +385,17 @@ void VideoThumbnailGenerator::startFfmpegFallback()
 
 void VideoThumbnailGenerator::start() {
     // Fast-cancel if session changed
-    if (!m_player) { qWarning() << "[VideoThumbnailGenerator] Player null"; return; }
-
     if (m_generator->m_sessionId.load() != m_sessionId) { deleteLater(); return; }
+    
+    // Check codec first to avoid unnecessary QMediaPlayer attempts
+    if (MediaInfo::shouldUseFFmpegPlayback(m_filePath)) {
+        qDebug() << "[VideoThumbnailGenerator] Codec requires FFmpeg, using direct path for:" << m_filePath;
+        startFfmpegFallback();
+        return;
+    }
+    
+    if (!m_player) { qWarning() << "[VideoThumbnailGenerator] Player null"; return; }
+    
     qDebug() << "[VideoThumbnailGenerator] Starting async video thumbnail generation for:" << m_filePath;
     // Track as active for cancellation
     {
@@ -395,6 +405,7 @@ void VideoThumbnailGenerator::start() {
     m_player->setSource(QUrl::fromLocalFile(m_filePath));
     m_timeout->start();
 }
+
 
 void VideoThumbnailGenerator::onMediaStatusChanged() {
     if (!m_player) { qWarning() << "[VideoThumbnailGenerator] onMediaStatusChanged: Player null"; return; }
@@ -528,31 +539,25 @@ void VideoThumbnailGenerator::onTimeout() {
 
 void VideoThumbnailGenerator::onError(QMediaPlayer::Error error, const QString &errorString) {
     if (m_generator->m_sessionId.load() != m_sessionId) { deleteLater(); return; }
-    qDebug() << "[VideoThumbnailGenerator] Media player error for" << m_filePath << "- Error:" << error << errorString;
+    qWarning() << "[VideoThumbnailGenerator] Unexpected media player error for" << m_filePath << "- Error:" << error << errorString;
+    qWarning() << "[VideoThumbnailGenerator] This file should have been routed to FFmpeg if codec was unsupported";
 
     m_timeout->stop();
     m_player->stop();
     m_player->setSource(QUrl());
-#ifdef HAVE_FFMPEG
-    // Try FFmpeg fallback asynchronously
-    startFfmpegFallback();
-    // Allow another video to start
-    QMetaObject::invokeMethod(m_generator, [g = m_generator]() {
-        g->startNextVideoIfPossible();
-    }, Qt::QueuedConnection);
-    deleteLater();
-    return;
-#endif
-    QMutexLocker locker(&m_generator->m_mutex);
-    m_generator->m_pendingThumbnails.remove(m_filePath);
+    
+    // Report failure - no fallback since codec detection should have caught this
+    {
+        QMutexLocker locker(&m_generator->m_mutex);
+        m_generator->m_pendingThumbnails.remove(m_filePath);
+        m_generator->m_activeVideoGenerators.remove(this);
+    }
     m_generator->updateProgress();
+    m_generator->startNextVideoIfPossible();
     emit m_generator->thumbnailFailed(m_filePath);
-    // Allow another video to start
-    QMetaObject::invokeMethod(m_generator, [g = m_generator]() {
-        g->startNextVideoIfPossible();
-    }, Qt::QueuedConnection);
     deleteLater();
 }
+
 
 // ThumbnailGenerator implementation
 ThumbnailGenerator& ThumbnailGenerator::instance() {

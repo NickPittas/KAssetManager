@@ -15,5 +15,9 @@ struct VideoMetadata {
 // Probes a media file for video/audio codec, resolution, fps and bitrate.
 // Returns true on success. On failure, returns false and optionally fills errorMessage.
 bool probeVideoFile(const QString& filePath, VideoMetadata& out, QString* errorMessage = nullptr);
+
+// Determines if a video file should use FFmpeg directly (true) or can use QMediaPlayer (false)
+// based on codec type. Returns true for codecs that QMediaPlayer typically can't handle.
+bool shouldUseFFmpegPlayback(const QString& filePath);
 }
 
