@@ -1920,8 +1920,6 @@ void MainWindow::setupUi()
     mainSplitter->setStretchFactor(2, 1);
 
     // Add Asset Manager page to tabs
-    mainTabs->addTab(assetManagerPage, "Asset Manager");
-
     // File Manager page
     fileManagerPage = new QWidget(this);
     qDebug() << "[INIT] About to call setupFileManagerUi";
@@ -1933,6 +1931,9 @@ void MainWindow::setupUi()
     LogManager::instance().addLog("[TRACE] after adding file manager tab", "DEBUG");
     qDebug() << "[INIT] File Manager tab added";
     LogManager::instance().addLog("[TRACE] file manager tab logged", "DEBUG");
+
+    // Add Asset Manager page to tabs
+    mainTabs->addTab(assetManagerPage, "Asset Manager");
 
     // Log viewer as dock widget at bottom (hidden by default)
     QDockWidget* logDock = new QDockWidget("Application Log", this);
