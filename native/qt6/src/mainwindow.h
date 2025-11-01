@@ -16,6 +16,8 @@
 #include <QMenu>
 #include <QAction>
 #include <QSet>
+#include <QHash>
+#include <QPixmap>
 #include <QTimer>
 #include <QTableWidget>
 #include <QCheckBox>
@@ -30,6 +32,7 @@ class AssetsModel;
 class TagsModel;
 class PreviewOverlay;
 class SequenceGroupingProxyModel;
+class GridScrubController;
 
 class ImportProgressDialog;
 class ProjectFolderWatcher;
@@ -79,10 +82,9 @@ private slots:
     void onImportFileChanged(const QString& fileName);
     void onImportFolderChanged(const QString& folderName);
     void onImportComplete();
-    void onThumbnailProgress(int current, int total);
     void onRatingChanged(int rating);
 
-    // Thumbnail generation (manual)
+    // Live preview prefetch (legacy actions)
     void onGenerateThumbnailsForFolder();
     void onRegenerateThumbnailsForFolder();
     void onGenerateThumbnailsRecursive();
@@ -244,16 +246,14 @@ private:
 
     // Preview overlay
     PreviewOverlay *previewOverlay;
+    GridScrubController *assetScrubController = nullptr;
+    GridScrubController *fmScrubController = nullptr;
 
     // Thumbnail generation progress
     QLabel *thumbnailProgressLabel;
     class QProgressBar *thumbnailProgressBar;
-
-    // Debounced updater for visible-only thumbnail progress
     QTimer visibleThumbTimer;
-
-    // Background image-to-pixmap loading coordination for thumbnails
-    QSet<QString> pendingPixmapLoads; // keys: thumbnail cache file paths
+    QHash<QString, QPixmap> versionPreviewCache;
 
 
     // Debounce for folder selection in Asset Manager

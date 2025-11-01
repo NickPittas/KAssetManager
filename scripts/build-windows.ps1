@@ -113,6 +113,13 @@ if ($Generator -eq "Ninja") {
     $build = Join-Path $buildBase "vs2022"
 }
 
+# Auto-load custom FFmpeg root if present
+$defaultFfmpeg = Join-Path $repoRoot "third_party/ffmpeg"
+if (-not $env:FFMPEG_ROOT -and (Test-Path $defaultFfmpeg)) {
+    $env:FFMPEG_ROOT = (Resolve-Path $defaultFfmpeg).Path
+    Write-Host "Using third_party/ffmpeg as FFMPEG_ROOT: $env:FFMPEG_ROOT" -ForegroundColor Green
+}
+
 if (-not $QtPrefix) { $QtPrefix = Find-QtPrefix -Hint $QtPrefix }
 Write-Host "Using Qt prefix: $QtPrefix"
 Initialize-MSVC -Generator $Generator
@@ -161,15 +168,37 @@ if ($Package) {
         if (Test-Path $vcpkgBin) {
             Write-Host "Copying ALL vcpkg DLLs to staging directory..." -ForegroundColor Cyan
             $stageBinDir = Join-Path $stage 'bin'
-            $dlls = Get-ChildItem -Path $vcpkgBin -Filter "*.dll" -ErrorAction SilentlyContinue
-            $copiedCount = 0
-            foreach ($dll in $dlls) {
-                Copy-Item $dll.FullName -Destination $stageBinDir -Force
-                $copiedCount++
+        $dlls = Get-ChildItem -Path $vcpkgBin -Filter "*.dll" -ErrorAction SilentlyContinue
+        $copiedCount = 0
+        foreach ($dll in $dlls) {
+            if ($dll.Name -match '^(avcodec|avdevice|avfilter|avformat|avutil|postproc|swresample|swscale).*-?\d*\.dll$') {
+                continue # Keep our custom FFmpeg runtime untouched
             }
-            Write-Host "Copied $copiedCount DLL files from vcpkg" -ForegroundColor Green
+            Copy-Item $dll.FullName -Destination $stageBinDir -Force
+            $copiedCount++
+        }
+        Write-Host "Copied $copiedCount DLL files from vcpkg" -ForegroundColor Green
         } else {
             Write-Warning "vcpkg not found at $vcpkgBin - application may be missing required DLLs"
+        }
+
+        # Optional: copy custom FFmpeg runtime if FFMPEG_ROOT environment variable is provided
+        $ffmpegRoot = $env:FFMPEG_ROOT
+        if ($ffmpegRoot) {
+            $ffmpegBin = Join-Path $ffmpegRoot 'bin'
+            if (Test-Path $ffmpegBin) {
+                Write-Host "Copying custom FFmpeg runtime from $ffmpegBin" -ForegroundColor Cyan
+                $stageBinDir = Join-Path $stage 'bin'
+                $ffmpegDlls = Get-ChildItem -Path $ffmpegBin -Filter "*.dll" -ErrorAction SilentlyContinue
+                $ffmpegCount = 0
+                foreach ($dll in $ffmpegDlls) {
+                    Copy-Item $dll.FullName -Destination $stageBinDir -Force
+                    $ffmpegCount++
+                }
+                Write-Host "Copied $ffmpegCount FFmpeg DLL files" -ForegroundColor Green
+            } else {
+                Write-Warning "FFMPEG_ROOT specified ($ffmpegRoot) but bin/ not found. Skipping custom FFmpeg copy."
+            }
         }
 
         # 3) Verify the app runs with all DLLs present

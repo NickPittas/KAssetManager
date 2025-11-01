@@ -1,10 +1,9 @@
 #include "settings_dialog.h"
 #include "db.h"
-#include "thumbnail_generator.h"
+#include "live_preview_manager.h"
 #include <QFileDialog>
 #include <QMessageBox>
 #include <QDir>
-#include <QDirIterator>
 #include <QApplication>
 #include <QStandardPaths>
 #include <QScrollArea>
@@ -98,25 +97,15 @@ void SettingsDialog::setupCacheTab()
     layout->setSpacing(15);
 
     // Cache info
-    QGroupBox* cacheGroup = new QGroupBox("Thumbnail Cache", cacheTab);
+    QGroupBox* cacheGroup = new QGroupBox("Live Preview Cache", cacheTab);
     cacheGroup->setStyleSheet("QGroupBox { color: #ffffff; border: 1px solid #333; padding: 10px; margin-top: 10px; } QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; }");
     QVBoxLayout* cacheLayout = new QVBoxLayout(cacheGroup);
 
-    // Calculate cache size
-    QString cacheDir = QStandardPaths::writableLocation(QStandardPaths::CacheLocation) + "/thumbnails";
-    qint64 cacheSize = 0;
-    QDirIterator it(cacheDir, QDir::Files, QDirIterator::Subdirectories);
-    while (it.hasNext()) {
-        it.next();
-        cacheSize += QFileInfo(it.filePath()).size();
-    }
-    double cacheSizeMB = cacheSize / (1024.0 * 1024.0);
-
-    cacheSizeLabel = new QLabel(QString("Current cache size: %1 MB").arg(cacheSizeMB, 0, 'f', 2), cacheGroup);
+    cacheSizeLabel = new QLabel(QString("Cached previews: %1 entries").arg(LivePreviewManager::instance().cacheEntryCount()), cacheGroup);
     cacheSizeLabel->setStyleSheet("color: #ffffff;");
     cacheLayout->addWidget(cacheSizeLabel);
 
-    clearCacheBtn = new QPushButton("Clear Thumbnail Cache", cacheGroup);
+    clearCacheBtn = new QPushButton("Clear Preview Cache", cacheGroup);
     clearCacheBtn->setStyleSheet(
         "QPushButton { background-color: #d73a49; color: #ffffff; border: none; padding: 8px 16px; border-radius: 4px; }"
         "QPushButton:hover { background-color: #b52a3a; }"
@@ -349,16 +338,14 @@ void SettingsDialog::onClearCache()
     QMessageBox::StandardButton reply = QMessageBox::question(
         this,
         "Clear Cache",
-        "Are you sure you want to clear the thumbnail cache? This will delete all cached thumbnails.",
+        "Are you sure you want to clear the in-memory preview cache?",
         QMessageBox::Yes | QMessageBox::No
     );
 
     if (reply == QMessageBox::Yes) {
-        ThumbnailGenerator::instance().clearCache();
-        QMessageBox::information(this, "Cache Cleared", "Thumbnail cache has been cleared successfully.");
-
-        // Update cache size label
-        cacheSizeLabel->setText("Current cache size: 0.00 MB");
+        LivePreviewManager::instance().clear();
+        QMessageBox::information(this, "Cache Cleared", "Live preview cache has been cleared successfully.");
+        cacheSizeLabel->setText(QString("Cached previews: %1 entries").arg(0));
     }
 }
 

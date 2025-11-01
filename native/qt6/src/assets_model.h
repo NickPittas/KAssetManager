@@ -17,7 +17,6 @@ struct AssetRow {
     QString fileType;
     QDateTime lastModified;
     int rating = -1;
-    QString thumbnailPath;  // Path to generated thumbnail
     bool isSequence = false;
     QString sequencePattern;
     int sequenceStartFrame = 0;
@@ -40,7 +39,6 @@ public:
         FileNameRole,
         FilePathRole,
         FileSizeRole,
-        ThumbnailPathRole,
         FileTypeRole,
         LastModifiedRole,
         RatingRole,
@@ -48,7 +46,8 @@ public:
         SequencePatternRole,
         SequenceStartFrameRole,
         SequenceEndFrameRole,
-        SequenceFrameCountRole
+        SequenceFrameCountRole,
+        PreviewStateRole
     };
     explicit AssetsModel(QObject* parent=nullptr);
 
@@ -106,7 +105,6 @@ signals:
     void tagsChangedForAsset(int assetId);
 
 private slots:
-    void onThumbnailGenerated(const QString& filePath, const QString& thumbnailPath);
     void onAssetsChangedForFolder(int folderId);
     void triggerDebouncedReload();
 
