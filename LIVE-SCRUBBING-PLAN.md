@@ -7,10 +7,10 @@
 - Keep previews in memory only; avoid regenerating or storing disk thumbnails.
 
 ## Current State
-- `LivePreviewManager` has replaced the legacy thumbnail generator for both grids, but decode failures keep the cards blank and the overlay shows noise instead of real frames.
-- The bundled FFmpeg build (BtbN `ffmpeg-master-latest-win64-gpl-shared`) lacks critical intraframe decoders such as PNG-in-MOV, ProRes, DNxHD, and several MXF variants. Any clip using those codecs logs `Decoder not found` and never returns a frame.
-- Hover scrubbing is wired to `Ctrl + wheel`, yet the overlay still renders as a tall scrollbar anchored to the card edge, and filenames in the file manager grid are clipped because the label sits too close to the bottom margin.
-- Settings expose a live preview cache flush, but UI text and docs still refer to “thumbnails”.
+- `LivePreviewManager` now powers both Asset Manager and File Manager grids. Frames stream in-memory, cards render a consistent inset preview, and scrubbing maps directly across the card width with cursor clamping.
+- The application ships with a custom FFmpeg full-shared build (via `scripts/fetch-ffmpeg.ps1`) covering intraframe codecs such as PNG-in-MOV, ProRes, DNxHD, MXF, DNxHR, and Animation. `scripts/build-windows.ps1` stages the matching DLLs into the portable bundle.
+- Hover scrubbing standardises on `Ctrl` + mouse movement (or wheel) with a slim HUD overlay and shared delegates in both grids. Cards include a neutral background so previews stay visually bounded.
+- UI copy, build scripts, and docs refer to **live previews** instead of disk thumbnails, and the File Manager toolbar exposes a "Group sequences" checkbox beside the preview toggle.
 
 ## Architecture Plan
 1. **FFmpeg-First Decode Pipeline**

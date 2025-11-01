@@ -36,14 +36,15 @@ KAsset Manager is a native Windows desktop application built with Qt 6 that prov
 - **Video Playback** - Play videos with timeline and volume controls
 - **Image Sequences** - Automatic detection and playback at 24fps
 - **HDR/EXR Support** - Color space selection (Linear, sRGB, Rec.709)
+- **Hover Scrubbing** - Hold Ctrl over grid cards to scrub videos and image sequences
 
 - **Focus Restoration** - When closing full-size preview, selection and keyboard focus return to the previously selected item so you can continue navigating with arrow keys instantly
 
 #### 🚀 **Performance**
-- **Multi-threaded Thumbnails** - Fast thumbnail generation (2-8 threads)
-- **Smart Caching** - 1000-thumbnail memory cache (~250MB)
+- **Live Preview Streaming** - FFmpeg/OpenImageIO decode with in-memory caching
+- **Smart Caching** - LRU pixmap cache (~512MB) keeps recent frames warm
 - **Database Indexes** - Optimized queries for large libraries
-- **Lazy Loading** - On-demand thumbnail generation
+- **Lazy Loading** - Decode only when cards enter the viewport
 
 #### 📊 **Professional Formats**
 - **Images**: PNG, JPG, JPEG, BMP, GIF, TIFF, TIF, EXR, HDR, PSD, IFF, RAW
@@ -104,7 +105,7 @@ KAssetManager/
 │   │   ├── virtual_folders.* # Folder tree model
 │   │   ├── tags_model.* # Tags model
 │   │   ├── importer.*   # File import logic
-│   │   └── thumbnail_generator.* # Thumbnail generation
+│   │   └── live_preview_manager.* # Live preview streaming
 │   ├── CMakeLists.txt   # Build configuration
 │   └── build/           # Build output (generated)
 ├── scripts/             # Build scripts
@@ -127,15 +128,15 @@ SQLite database stored in `data/kasset.db`:
 
 ### Common Issues
 
-**Thumbnails not showing:**
-- Wait for thumbnail generation to complete (check progress in status bar)
-- Restart the application to reload thumbnail cache
-- Check that files still exist at their original locations
+**Live preview not showing:**
+- Give the decoder a moment to cache the first frame (large EXR/ProRes files can take a second).
+- Check `debug.log` for `[LivePreview]` warnings about codecs or permissions.
+- Make sure the bundled FFmpeg DLLs were refreshed with `scripts/fetch-ffmpeg.ps1`.
 
 **Import not working:**
 - Verify file permissions (files must be readable)
 - Ensure files are not locked by another application
-- Check available disk space for database and thumbnails
+- Check available disk space for the database and cached previews
 
 **Preview not opening:**
 - Verify the file format is supported
@@ -163,7 +164,7 @@ SQLite database stored in `data/kasset.db`:
 
 - **OS**: Windows 10/11 (64-bit)
 - **RAM**: 4GB minimum, 8GB+ recommended
-- **Disk**: 500MB for application, additional space for thumbnails
+- **Disk**: 500MB for application plus space for cached previews
 - **Display**: 1920x1080 or higher recommended
 
 ## License

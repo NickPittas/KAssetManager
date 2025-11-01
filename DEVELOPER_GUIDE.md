@@ -98,7 +98,7 @@ KAssetManager/
 │   │   ├── virtual_folders.* # Folder tree model
 │   │   ├── tags_model.*     # Tags model
 │   │   ├── importer.*       # File import logic
-│   │   ├── thumbnail_generator.* # Thumbnail generation
+│   │   ├── live_preview_manager.* # Live preview streaming
 │   │   ├── preview_overlay.* # Full-screen preview
 │   │   ├── oiio_image_loader.* # OpenImageIO integration
 │   │   └── settings_dialog.* # Settings UI
@@ -224,24 +224,34 @@ void setTagFilter(const QList<int> &tagIds, bool andMode);
 void reload();                     // Refresh from database
 ```
 
-### ThumbnailGenerator (thumbnail_generator.h/cpp)
+### LivePreviewManager (live_preview_manager.h/cpp)
+**Purpose**: Asynchronous, in-memory streaming of poster frames and scrub previews.
 
-**Purpose**: Asynchronous thumbnail generation (Singleton)
+**Responsibilities**:
+- Normalise preview requests (file path, target size, playback position).
+- Dispatch decode jobs to background threads using FFmpeg (video) or OpenImageIO (image sequences).
+- Maintain an LRU pixmap cache keyed by `(filePath, size, position)` with timed eviction.
+- Emit `frameReady` / `frameFailed` signals for grid delegates, preview overlay, and sequence playback.
+- Deduplicate warnings per asset to avoid log spam.
 
-**Responsibilities:**
-- Generate thumbnails for images and videos
-- Cache thumbnails to disk
-- Thread pool management
-- Progress reporting
-
-**Key Methods:**
+**Key API**:
 ```cpp
-static ThumbnailGenerator& instance();
-void requestThumbnail(const QString &filePath);
-QString getThumbnailPath(const QString &filePath);
-bool isThumbnailCached(const QString &filePath);
-void startProgress(int total);
+LivePreviewManager &mgr = LivePreviewManager::instance();
+LivePreviewManager::FrameHandle handle = mgr.cachedFrame(path, targetSize, position);
+if (handle.isValid()) {
+    painter.drawPixmap(rect, handle.pixmap);
+} else {
+    mgr.requestFrame(path, targetSize, position);
+}
+
+connect(&mgr, &LivePreviewManager::frameReady, this, &MainWindow::onFrameReady);
+connect(&mgr, &LivePreviewManager::frameFailed, this, &MainWindow::onFrameFailed);
 ```
+
+**Notes**:
+- No thumbnails are written to disk; everything stays in memory.
+- FFmpeg decode features depend on the bundled `third_party/ffmpeg` build (see tooling scripts).
+- Image sequence metadata is memoised so grouped entries scrub smoothly without blocking the UI.
 
 ### PreviewOverlay (preview_overlay.h/cpp)
 
@@ -295,7 +305,7 @@ void navigatePrevious();           // Previous asset
 - `FileNameRole`: File name (QString)
 - `FilePathRole`: Full file path (QString)
 - `FileSizeRole`: File size in bytes (qint64)
-- `ThumbnailPathRole`: Thumbnail cache path (QString)
+- `PreviewStateRole`: Live preview metadata (struct with cache state)
 - `FileTypeRole`: File extension (QString)
 - `LastModifiedRole`: Modification timestamp (QDateTime)
 - `RatingRole`: Rating 0-5 (int)
@@ -433,7 +443,7 @@ db.commit();
 **Purpose**: Custom rendering for asset grid items
 
 **Features:**
-- Thumbnail display with scaling
+- Live preview display via `LivePreviewManager`
 - File name text
 - Rating stars
 - Hover effects
@@ -444,9 +454,9 @@ db.commit();
 void paint(QPainter *painter, const QStyleOptionViewItem &option,
            const QModelIndex &index) const override
 {
-    // 1. Load thumbnail from cache or disk
+    // 1. Query LivePreviewManager cache or request decode
     // 2. Draw card background
-    // 3. Draw thumbnail (centered, scaled)
+    // 3. Draw the pixmap inside the inset preview rect
     // 4. Draw file name (bottom, wrapped)
     // 5. Draw rating stars (if rated)
     // 6. Draw selection highlight
@@ -543,7 +553,7 @@ target_link_libraries(kassetmanagerqt PRIVATE
 
 **Classes**: PascalCase
 ```cpp
-class ThumbnailGenerator { };
+class LivePreviewManager { };
 class AssetsModel { };
 ```
 
@@ -570,7 +580,7 @@ private:
 
 **Constants**: UPPER_SNAKE_CASE or kPascalCase
 ```cpp
-constexpr int MAX_THUMBNAIL_SIZE = 400;
+constexpr int kPreviewInset = 8;
 constexpr int kDefaultRating = 0;
 ```
 
@@ -753,10 +763,10 @@ Get-Content debug.log -Tail 50 -Wait
 - Check database file permissions
 - Check debug.log for errors
 
-**Thumbnails not showing:**
-- Check `data/thumbnails/` directory
-- Check file permissions
-- Enable debug logging in ThumbnailGenerator
+**Live preview not showing:**
+- Check `debug.log` for `[LivePreview]` errors (permission denied, codec missing).
+- Verify the media file can be opened via the File Manager preview panel.
+- Ensure the bundled FFmpeg DLLs were refreshed with `scripts/fetch-ffmpeg.ps1`.
 
 **Database errors:**
 - Check database file is not locked
@@ -784,9 +794,9 @@ Get-Content debug.log -Tail 50 -Wait
 See [PERFORMANCE_OPTIMIZATIONS.md](PERFORMANCE_OPTIMIZATIONS.md) for detailed information.
 
 **Key optimizations:**
-1. Multi-threaded thumbnail generation (2-8 threads)
+1. Background FFmpeg/OpenImageIO decode jobs managed by LivePreviewManager
 2. Database indexes on frequently queried columns
-3. Pixmap cache (1000 thumbnails, ~250MB)
+3. In-memory pixmap cache (~512MB default) with LRU eviction
 4. Lazy loading for asset grid
 5. Prepared statements for database queries
 
