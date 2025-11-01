@@ -2145,16 +2145,14 @@ void MainWindow::setupFileManagerUi()
     tb->addWidget(fmThumbnailSizeSlider);
     connect(fmThumbnailSizeSlider, &QSlider::valueChanged, this, &MainWindow::onFmThumbnailSizeChanged);
 
-    // Group sequences toggle
-    fmGroupSequencesButton = new QToolButton(fmToolbar);
-    fmGroupSequencesButton->setIcon(icoGroup());
-    fmGroupSequencesButton->setToolTip("Group sequences");
-    fmGroupSequencesButton->setCheckable(true);
-    tb->addWidget(fmGroupSequencesButton);
-    connect(fmGroupSequencesButton, &QToolButton::toggled, this, &MainWindow::onFmGroupSequencesToggled);
-
-    // Right-aligned: Preview toggle
+    // Right-aligned controls
     tb->addStretch();
+
+    fmGroupSequencesCheckBox = new QCheckBox("Group sequences", fmToolbar);
+    fmGroupSequencesCheckBox->setToolTip("Group image sequences into single entries");
+    fmGroupSequencesCheckBox->setStyleSheet("QCheckBox { color:#9aa0a6; } QCheckBox::indicator { width: 16px; height: 16px; }");
+    connect(fmGroupSequencesCheckBox, &QCheckBox::toggled, this, &MainWindow::onFmGroupSequencesToggled);
+    tb->addWidget(fmGroupSequencesCheckBox);
 
     fmPreviewToggleButton = new QToolButton(fmToolbar);
     fmPreviewToggleButton->setIcon(icoEye());
@@ -2681,7 +2679,7 @@ void MainWindow::setupFileManagerUi()
         }
         // Group sequences toggle
         fmGroupSequences = s.value("FileManager/GroupSequences", true).toBool();
-        if (fmGroupSequencesButton) fmGroupSequencesButton->setChecked(fmGroupSequences);
+        if (fmGroupSequencesCheckBox) fmGroupSequencesCheckBox->setChecked(fmGroupSequences);
         if (fmProxyModel) fmProxyModel->setGroupingEnabled(fmGroupSequences);
 
         // Splitters
