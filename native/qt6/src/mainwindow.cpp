@@ -7,7 +7,7 @@
 #include "db.h"
 #include "preview_overlay.h"
 #include "oiio_image_loader.h"
-#include "thumbnail_generator.h"
+#include "live_preview_manager.h"
 #include "import_progress_dialog.h"
 #include "settings_dialog.h"
 #include "star_rating_widget.h"
@@ -16,6 +16,7 @@
 #include "progress_manager.h"
 #include "file_ops.h"
 #include "file_ops_dialog.h"
+#include "log_manager.h"
 
 #include "office_preview.h"
 
@@ -37,6 +38,8 @@
 #include <QDropEvent>
 #include <QMimeData>
 #include <QUrl>
+#include <cmath>
+#include <limits>
 #include <QProgressDialog>
 #ifdef Q_OS_WIN
 #ifndef NOMINMAX
@@ -58,6 +61,8 @@ static size_t currentWorkingSetMB() {
 #include <QDrag>
 #include <QMouseEvent>
 #include <QFuture>
+#include <functional>
+#include <algorithm>
 #include <QMenu>
 #include <QAction>
 
@@ -79,6 +84,7 @@ static size_t currentWorkingSetMB() {
 
 
 #include <QPlainTextEdit>
+#include <algorithm>
 #include <QStandardItemModel>
 #include <QDebug>
 #ifdef HAVE_QT_PDF
@@ -95,6 +101,46 @@ static size_t currentWorkingSetMB() {
 #include <QRunnable>
 
 #include <QPointer>
+#include <QHash>
+#include <QSet>
+#include <QCursor>
+
+namespace {
+
+QHash<QString, QString> g_lastPreviewError;
+
+constexpr qreal kScrubDefaultPosition = 0.0;
+constexpr int kPreviewInset = 8;
+
+QRect insetPreviewRect(const QRect &source)
+{
+    QRect result = source.adjusted(kPreviewInset, kPreviewInset, -kPreviewInset, -kPreviewInset);
+    if (result.width() <= 0 || result.height() <= 0) {
+        return source;
+    }
+    return result;
+}
+
+
+bool isPreviewableSuffix(const QString& suffix)
+{
+    if (suffix.isEmpty()) {
+        return false;
+    }
+    static const QSet<QString> kImageSuffixes = {
+        "png", "jpg", "jpeg", "bmp", "tif", "tiff", "tga", "gif",
+        "webp", "heic", "heif", "avif", "psd", "exr", "dpx"
+    };
+    static const QSet<QString> kVideoSuffixes = {
+        "mov", "qt", "mp4", "m4v", "mxf", "mkv", "avi", "asf",
+        "wmv", "webm", "mpg", "mpeg", "m2v", "m2ts", "mts",
+        "ogv", "flv", "f4v", "3gp", "3g2", "y4m"
+    };
+    const QString lower = suffix.toLower();
+    return kImageSuffixes.contains(lower) || kVideoSuffixes.contains(lower);
+}
+
+}
 
 
 // Forward declare helper
@@ -419,23 +465,30 @@ protected:
 };
 
 
-// Icon provider for File Manager using ThumbnailGenerator cache
+// Icon provider for File Manager using live previews
 class FmIconProvider : public QFileIconProvider {
 public:
     FmIconProvider() : QFileIconProvider() {}
     QIcon icon(const QFileInfo &info) const override {
-        if (info.isDir()) return QFileIconProvider::icon(info);
-        const QString path = info.absoluteFilePath();
-        const QString thumb = ThumbnailGenerator::instance().getThumbnailPath(path);
-        if (!thumb.isEmpty() && QFileInfo::exists(thumb)) {
-            return QIcon(thumb);
+        if (info.isDir()) {
+            return QFileIconProvider::icon(info);
         }
-        // Do NOT generate thumbnails from the icon provider; return default OS icon
+        const QString path = info.absoluteFilePath();
+        const QString suffix = info.suffix().toLower();
+        if (!isPreviewableSuffix(suffix)) {
+            return QFileIconProvider::icon(info);
+        }
+        const QSize targetSize(64, 64);
+        auto handle = LivePreviewManager::instance().cachedFrame(path, targetSize);
+        if (handle.isValid()) {
+            return QIcon(handle.pixmap);
+        }
+        LivePreviewManager::instance().requestFrame(path, targetSize);
         return QFileIconProvider::icon(info);
     }
 };
 
-// Custom delegate for asset grid view with thumbnails
+// Custom delegate for asset grid view with live previews
 class AssetItemDelegate : public QStyledItemDelegate
 {
 public:
@@ -443,9 +496,6 @@ public:
 
     void setThumbnailSize(int size) { m_thumbnailSize = size; }
     int thumbnailSize() const { return m_thumbnailSize; }
-
-    // Cache for loaded pixmaps to avoid repeated file I/O
-    mutable QHash<QString, QPixmap> pixmapCache;
 
 private:
     int m_thumbnailSize;
@@ -455,85 +505,55 @@ private:
         try {
             painter->save();
 
-            // Get thumbnail path
-            QString thumbnailPath = index.data(AssetsModel::ThumbnailPathRole).toString();
+            const QString filePath = index.data(AssetsModel::FilePathRole).toString();
+            const QString fileType = index.data(AssetsModel::FileTypeRole).toString();
 
-            // PERFORMANCE: Lazy loading - if thumbnail doesn't exist, request it
-            if (thumbnailPath.isEmpty()) {
-                QString filePath = index.data(AssetsModel::FilePathRole).toString();
-                if (!filePath.isEmpty()) {
-                    // Request thumbnail generation asynchronously
-                    ThumbnailGenerator::instance().requestThumbnail(filePath);
-                }
-                painter->restore();
-                return; // Don't draw anything yet - thumbnail is being generated
-            }
-
-            // If not in cache yet, synchronously load the small on-disk thumbnail (fast) on the GUI thread.
-            if (!pixmapCache.contains(thumbnailPath)) {
-                QPixmap px;
-                if (QFileInfo::exists(thumbnailPath)) {
-                    px.load(thumbnailPath);
-                }
-                if (!px.isNull()) {
-                    pixmapCache.insert(thumbnailPath, px);
-                } else {
-                    // Lightweight placeholder (type label + filename) until thumb exists
-                    if (option.state & (QStyle::State_Selected | QStyle::State_MouseOver)) {
-                        QColor c = (option.state & QStyle::State_Selected) ? QColor(88,166,255) : QColor(80,80,80);
-                        painter->setPen(QPen(c, 1.5)); painter->setBrush(Qt::NoBrush);
-                        painter->drawRect(option.rect.adjusted(1, 1, -1, -1));
-                    }
-                    const int margin = 6;
-                    const int thumbSide = m_thumbnailSize;
-                    QRect thumbRect(option.rect.x() + (option.rect.width()-thumbSide)/2, option.rect.y() + margin, thumbSide, thumbSide);
-                    painter->setPen(QPen(QColor(120,120,120), 1)); painter->setBrush(Qt::NoBrush);
-                    painter->drawRoundedRect(thumbRect.adjusted(8,8,-8,-8), 6, 6);
-                    const QString ft = index.data(AssetsModel::FileTypeRole).toString().toUpper();
-                    QString label = ft; if (label.isEmpty()) label = QFileInfo(index.data(AssetsModel::FilePathRole).toString()).suffix().toUpper();
-                    if (label.isEmpty()) label = "FILE";
-                    QFont nameFont("Segoe UI", 9);
-                    painter->setFont(nameFont);
-                    painter->setPen(QColor(180,180,180));
-                    painter->drawText(thumbRect.adjusted(10,10,-10,-10), Qt::AlignCenter | Qt::TextWordWrap, label.left(6));
-                    // Name label below
-                    QString fileName = index.data(AssetsModel::FileNameRole).toString();
-                    painter->setPen(QColor(230,230,230));
-                    QRect nameRect(option.rect.x()+4, thumbRect.bottom()+4, option.rect.width()-8, option.rect.bottom()-thumbRect.bottom()-6);
-                    QString elided = QFontMetrics(nameFont).elidedText(fileName, Qt::ElideRight, nameRect.width());
-                    painter->drawText(nameRect, Qt::AlignHCenter | Qt::AlignTop, elided);
-                    painter->restore();
-                    return;
-                }
-            }
-
-            QPixmap pixmap = pixmapCache.value(thumbnailPath);
-
-            if (pixmap.isNull()) {
-                painter->restore();
-                return; // Invalid pixmap - don't draw anything
-            }
-
-            // Now we have a valid thumbnail - draw the item
-            // No background fill to achieve Explorer-like no-cell look
-
-            // Outline on hover/selection only
             if (option.state & (QStyle::State_Selected | QStyle::State_MouseOver)) {
                 QColor c = (option.state & QStyle::State_Selected) ? QColor(88,166,255) : QColor(80,80,80);
-                painter->setPen(QPen(c, 1.5)); painter->setBrush(Qt::NoBrush);
+                painter->setPen(QPen(c, 1.5));
+                painter->setBrush(Qt::NoBrush);
                 painter->drawRect(option.rect.adjusted(1, 1, -1, -1));
             }
 
-            // Draw thumbnail centered within square top area
             const int margin = 6;
             const int thumbSide = m_thumbnailSize;
             QRect thumbRect(option.rect.x() + (option.rect.width()-thumbSide)/2, option.rect.y() + margin, thumbSide, thumbSide);
-            QPixmap scaled = pixmap.scaled(thumbRect.size(), Qt::KeepAspectRatio, Qt::SmoothTransformation);
-            int x = thumbRect.x() + (thumbRect.width() - scaled.width()) / 2;
-            int y = thumbRect.y() + (thumbRect.height() - scaled.height()) / 2;
-            painter->drawPixmap(x, y, scaled);
 
-            // Name label below thumbnail
+            const QString suffix = QFileInfo(filePath).suffix().toLower();
+            LivePreviewManager &previewMgr = LivePreviewManager::instance();
+            const QSize targetSize(thumbSide, thumbSide);
+            const bool previewable = isPreviewableSuffix(suffix);
+            bool drewPreview = false;
+            if (previewable) {
+                auto handle = previewMgr.cachedFrame(filePath, targetSize);
+                if (handle.isValid()) {
+                    painter->save();
+                    QRect previewRect = insetPreviewRect(thumbRect);
+                    painter->setClipRect(previewRect);
+                    QPixmap scaled = handle.pixmap.scaled(previewRect.size(), Qt::KeepAspectRatio, Qt::SmoothTransformation);
+                    int x = previewRect.x() + (previewRect.width() - scaled.width()) / 2;
+                    int y = previewRect.y() + (previewRect.height() - scaled.height()) / 2;
+                    painter->drawPixmap(x, y, scaled);
+                    painter->restore();
+                    drewPreview = true;
+                } else {
+                    previewMgr.requestFrame(filePath, targetSize);
+                }
+            }
+
+            if (!drewPreview) {
+                painter->setPen(QPen(QColor(120,120,120), 1)); painter->setBrush(Qt::NoBrush);
+                QRect placeholderRect = insetPreviewRect(thumbRect);
+                painter->drawRoundedRect(placeholderRect, 6, 6);
+                QString label = fileType.toUpper();
+                if (label.isEmpty()) label = suffix.toUpper();
+                if (label.isEmpty()) label = "FILE";
+                QFont placeholder("Segoe UI", 9, QFont::Medium);
+                painter->setFont(placeholder);
+                painter->setPen(QColor(180,180,180));
+                painter->drawText(thumbRect.adjusted(10,10,-10,-10), Qt::AlignCenter | Qt::TextWordWrap, label.left(6));
+            }
+
             QString fileName = index.data(AssetsModel::FileNameRole).toString();
             QFont nameFont("Segoe UI", 9);
             painter->setFont(nameFont);
@@ -541,18 +561,12 @@ private:
             QRect nameRect(option.rect.x()+4, thumbRect.bottom()+4, option.rect.width()-8, option.rect.bottom()-thumbRect.bottom()-6);
             QString elided = QFontMetrics(nameFont).elidedText(fileName, Qt::ElideRight, nameRect.width());
             painter->drawText(nameRect, Qt::AlignHCenter | Qt::AlignTop, elided);
-
-
-
-
-            painter->restore();
         } catch (const std::exception& e) {
             qCritical() << "[AssetItemDelegate] Exception in paint():" << e.what();
-            painter->restore();
         } catch (...) {
             qCritical() << "[AssetItemDelegate] Unknown exception in paint()";
-            painter->restore();
         }
+        painter->restore();
     }
 
 public:
@@ -565,7 +579,7 @@ public:
     }
 };
 
-// Minimalist delegate for File Manager grid: thumbnail + filename, no cell background
+// Minimalist delegate for File Manager grid: live preview + filename
 class FmItemDelegate : public QStyledItemDelegate
 {
 public:
@@ -584,26 +598,52 @@ public:
             painter->drawRect(option.rect.adjusted(1, 1, -1, -1));
         }
 
-        // Icon pixmap from model (uses FmIconProvider -> Thumbnail cache)
-        QIcon icon = qvariant_cast<QIcon>(index.data(Qt::DecorationRole));
-        QPixmap pix = icon.pixmap(m_thumbnailSize, m_thumbnailSize);
-
         const int margin = 6;
         const int thumbSide = m_thumbnailSize;
         QRect thumbRect(option.rect.x() + (option.rect.width()-thumbSide)/2, option.rect.y() + margin, thumbSide, thumbSide);
-        if (!pix.isNull()) {
-            QPixmap scaled = pix.scaled(thumbRect.size(), Qt::KeepAspectRatio, Qt::SmoothTransformation);
-            int x = thumbRect.x() + (thumbRect.width() - scaled.width()) / 2;
-            int y = thumbRect.y() + (thumbRect.height() - scaled.height()) / 2;
-            painter->drawPixmap(x, y, scaled);
+        const QString filePath = index.data(QFileSystemModel::FilePathRole).toString();
+        LivePreviewManager &previewMgr = LivePreviewManager::instance();
+        const QSize targetSize(thumbSide, thumbSide);
+        const QString suffix = QFileInfo(filePath).suffix().toLower();
+        const bool previewable = isPreviewableSuffix(suffix);
+        bool drewPreview = false;
+        if (previewable) {
+            auto handle = previewMgr.cachedFrame(filePath, targetSize);
+            if (handle.isValid()) {
+                painter->save();
+                QRect previewRect = insetPreviewRect(thumbRect);
+                    painter->setClipRect(previewRect);
+                QPixmap scaled = handle.pixmap.scaled(previewRect.size(), Qt::KeepAspectRatio, Qt::SmoothTransformation);
+                int x = previewRect.x() + (previewRect.width() - scaled.width()) / 2;
+                int y = previewRect.y() + (previewRect.height() - scaled.height()) / 2;
+                painter->drawPixmap(x, y, scaled);
+                painter->restore();
+                drewPreview = true;
+            } else {
+                previewMgr.requestFrame(filePath, targetSize);
+            }
+        }
+        if (!drewPreview) {
+            painter->setPen(QPen(QColor(120,120,120), 1)); painter->setBrush(Qt::NoBrush);
+            QRect placeholderRect = insetPreviewRect(thumbRect);
+                painter->drawRoundedRect(placeholderRect, 6, 6);
+            QString label = suffix.toUpper();
+            if (label.isEmpty()) label = index.data(Qt::DisplayRole).toString().left(4).toUpper();
+            if (label.isEmpty()) label = "FILE";
+            QFont placeholder("Segoe UI", 9, QFont::Medium);
+            painter->setFont(placeholder);
+            painter->setPen(QColor(180,180,180));
+            painter->drawText(thumbRect.adjusted(10,10,-10,-10), Qt::AlignCenter | Qt::TextWordWrap, label.left(6));
         }
 
-        // Filename below
         QString name = index.data(Qt::DisplayRole).toString();
         QFont f("Segoe UI", 9);
         painter->setFont(f);
         painter->setPen(QColor(230,230,230));
-        QRect nameRect(option.rect.x()+4, thumbRect.bottom()+4, option.rect.width()-8, option.rect.bottom()-thumbRect.bottom()-6);
+        const int textTop = thumbRect.bottom() + 6;
+        int textHeight = option.rect.bottom() - textTop - margin;
+        if (textHeight < 20) textHeight = 20;
+        QRect nameRect(option.rect.x() + 4, textTop, option.rect.width() - 8, textHeight);
         QString el = QFontMetrics(f).elidedText(name, Qt::ElideRight, nameRect.width());
         painter->drawText(nameRect, Qt::AlignHCenter | Qt::AlignTop, el);
 
@@ -614,9 +654,516 @@ private:
     int m_thumbnailSize;
 };
 
+class GridScrubOverlay : public QWidget
+{
+public:
+    explicit GridScrubOverlay(QWidget *parent = nullptr)
+        : QWidget(parent)
+    {
+        setAttribute(Qt::WA_TransparentForMouseEvents, true);
+        setAttribute(Qt::WA_NoSystemBackground, true);
+        setAttribute(Qt::WA_TranslucentBackground, true);
+        hide();
+    }
+
+    void setProgress(qreal value)
+    {
+        m_progress = std::clamp(value, 0.0, 1.0);
+        if (!m_hasCustomHint) {
+            m_statusText = QStringLiteral("%1%").arg(qRound(m_progress * 100.0));
+        }
+        update();
+    }
+
+    void setHintText(const QString &text)
+    {
+        m_statusText = text;
+        m_hasCustomHint = true;
+        update();
+    }
+
+    void clearHintText()
+    {
+        m_hasCustomHint = false;
+        m_statusText = m_defaultHint;
+        update();
+    }
+
+    void setFrame(const QPixmap &pixmap)
+    {
+        m_frame = pixmap;
+        update();
+    }
+
+    void clearFrame()
+    {
+        if (!m_frame.isNull()) {
+            m_frame = QPixmap();
+        }
+        update();
+    }
+
+protected:
+    void paintEvent(QPaintEvent *) override
+    {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+
+        const QRectF bounds = rect();
+        if (!bounds.isValid()) {
+            return;
+        }
+
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(Qt::NoBrush);
+        painter.setClipRect(bounds.adjusted(0, 0, -0.5, -0.5));
+
+        painter.fillRect(bounds, QColor(0, 0, 0, 220));
+
+        if (!m_frame.isNull()) {
+            QSize targetSize = bounds.size().toSize();
+            if (!targetSize.isEmpty()) {
+                QPixmap scaled = m_frame.scaled(targetSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+                const qreal x = bounds.left() + (bounds.width() - scaled.width()) / 2.0;
+                const qreal y = bounds.top() + (bounds.height() - scaled.height()) / 2.0;
+                painter.drawPixmap(QPointF(x, y), scaled);
+            }
+        } else {
+            painter.setPen(QPen(QColor(80, 80, 80, 160), 1.0));
+            painter.drawRoundedRect(bounds.adjusted(1, 1, -1, -1), 6, 6);
+            painter.setPen(Qt::NoPen);
+        }
+
+        const qreal hudHeight = 26.0;
+        QRectF hudRect = bounds.adjusted(8, bounds.height() - hudHeight - 10, -8, -6);
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(QColor(0, 0, 0, 170));
+        painter.drawRoundedRect(hudRect, 6, 6);
+
+        const qreal barHeight = 4.0;
+        QRectF barRect(hudRect.left() + 10, hudRect.bottom() - barHeight - 6, hudRect.width() - 20, barHeight);
+        painter.setBrush(QColor(60, 60, 60, 220));
+        painter.drawRoundedRect(barRect, 2, 2);
+
+        QRectF fillRect = barRect;
+        fillRect.setWidth(barRect.width() * m_progress);
+        if (fillRect.width() > 0) {
+            painter.setBrush(QColor(88, 166, 255, 230));
+            painter.drawRoundedRect(fillRect, 3, 3);
+        }
+
+        painter.setPen(Qt::white);
+        painter.setFont(QFont(QStringLiteral("Segoe UI"), 8, QFont::DemiBold));
+        QRectF textRect(hudRect.left() + 10, hudRect.top() + 6, hudRect.width() - 20, hudRect.height() - barHeight - 14);
+        painter.drawText(textRect, Qt::AlignLeft | Qt::AlignVCenter, m_statusText);
+    }
+
+private:
+    qreal m_progress = 0.0;
+    QString m_statusText = QStringLiteral("Ctrl + Move/Wheel to scrub");
+    const QString m_defaultHint = QStringLiteral("Ctrl + Move/Wheel to scrub");
+    bool m_hasCustomHint = false;
+    QPixmap m_frame;
+};
+
+class GridScrubController : public QObject
+{
+public:
+    GridScrubController(QAbstractItemView *view,
+                        std::function<QString(const QModelIndex&)> resolver,
+                        QObject *parent = nullptr)
+        : QObject(parent),
+          m_view(view),
+          m_pathResolver(std::move(resolver)),
+          m_overlay(new GridScrubOverlay(view->viewport()))
+    {
+        if (!m_view) return;
+        m_view->setMouseTracking(true);
+        if (m_view->viewport()) {
+            m_view->viewport()->setMouseTracking(true);
+            m_view->viewport()->installEventFilter(this);
+        }
+        m_view->installEventFilter(this);
+        if (m_view->verticalScrollBar()) {
+            connect(m_view->verticalScrollBar(), &QScrollBar::valueChanged, this, [this](){ updateOverlayGeometry(); });
+        }
+        if (m_view->horizontalScrollBar()) {
+            connect(m_view->horizontalScrollBar(), &QScrollBar::valueChanged, this, [this](){ updateOverlayGeometry(); });
+        }
+        if (m_view->model()) {
+            connect(m_view->model(), &QAbstractItemModel::modelReset, this, [this]() {
+                m_positions.clear();
+                hideOverlay();
+            });
+        }
+
+        LivePreviewManager &previewMgr = LivePreviewManager::instance();
+        connect(&previewMgr, &LivePreviewManager::frameReady, this,
+                [this](const QString &path, qreal position, QSize, const QPixmap &pixmap) {
+            if (path != m_currentPath || !m_overlay) {
+                return;
+            }
+            m_loadingFrame = false;
+            m_position = position;
+            m_positions[m_currentPath] = position;
+            m_overlay->setProgress(m_position);
+            m_overlay->setFrame(pixmap);
+            if (QApplication::keyboardModifiers().testFlag(Qt::ControlModifier) || !qFuzzyIsNull(m_position)) {
+                m_overlay->setHintText(QStringLiteral("%1%").arg(qRound(m_position * 100.0)));
+            } else {
+                m_overlay->clearHintText();
+            }
+        });
+        connect(&previewMgr, &LivePreviewManager::frameFailed, this,
+                [this](const QString &path, const QString &error) {
+            if (path != m_currentPath || !m_overlay) {
+                return;
+            }
+            m_loadingFrame = false;
+            m_overlay->clearFrame();
+            m_overlay->setHintText(error);
+        });
+    }
+
+    ~GridScrubController() override
+    {
+        endScrub();
+    }
+
+protected:
+    bool eventFilter(QObject *watched, QEvent *event) override
+    {
+        if (!m_view) return QObject::eventFilter(watched, event);
+
+        if (watched == m_view->viewport()) {
+            switch (event->type()) {
+            case QEvent::MouseMove:
+            {
+                auto moveEvent = static_cast<QMouseEvent*>(event);
+                const QPoint pos = moveEvent->position().toPoint();
+                handleHoverMove(pos);
+                if (QApplication::keyboardModifiers().testFlag(Qt::ControlModifier)) {
+                    if (m_currentIndex.isValid()) {
+                        handleCtrlScrub(pos);
+                        showOverlay();
+                    }
+                    event->accept();
+                    return true;
+                } else {
+                    endScrub();
+                    resetCtrlTracking();
+                }
+                break;
+            }
+            case QEvent::Leave:
+                if (m_scrubActive && m_currentIndex.isValid()) {
+                    updateOverlayGeometry();
+                } else {
+                    hideOverlay();
+                    m_currentPath.clear();
+                    m_currentIndex = QModelIndex();
+                }
+                break;
+            case QEvent::Wheel:
+            {
+                auto wheel = static_cast<QWheelEvent*>(event);
+                if (!wheel->modifiers().testFlag(Qt::ControlModifier)) {
+                    endScrub();
+                    hideOverlay();
+                    resetCtrlTracking();
+                    break;
+                }
+                QModelIndex idx = m_view->indexAt(wheel->position().toPoint());
+                if (!idx.isValid()) {
+                    wheel->accept();
+                    return true;
+                }
+                setCurrentIndex(idx);
+                beginScrub();
+                int delta = wheel->angleDelta().x();
+                if (delta == 0) {
+                    delta = wheel->angleDelta().y();
+                }
+                if (delta != 0 && !m_currentPath.isEmpty()) {
+                    const qreal step = static_cast<qreal>(delta) / 3600.0;
+                    setPosition(std::clamp(m_position + step, 0.0, 1.0));
+                    requestPreview();
+                }
+                showOverlay();
+                resetCtrlTracking();
+                wheel->accept();
+                return true;
+            }
+            case QEvent::Resize:
+                updateOverlayGeometry();
+                break;
+            default:
+                break;
+            }
+        } else if (watched == m_view) {
+            if (event->type() == QEvent::KeyRelease) {
+                auto keyEvent = static_cast<QKeyEvent*>(event);
+                if (keyEvent->key() == Qt::Key_Control) {
+                    if (qFuzzyIsNull(m_position)) {
+                        hideOverlay();
+                    }
+                    endScrub();
+                    resetCtrlTracking();
+                }
+            }
+        }
+
+        return QObject::eventFilter(watched, event);
+    }
+
+private:
+    void handleHoverMove(const QPoint &pos)
+    {
+        if (m_scrubActive && m_currentIndex.isValid()) {
+            handleCtrlScrub(pos);
+            updateOverlayGeometry();
+            return;
+        }
+        QModelIndex idx = m_view->indexAt(pos);
+        if (!idx.isValid()) {
+            if (!m_scrubActive) {
+                hideOverlay();
+                m_currentIndex = QModelIndex();
+                m_currentPath.clear();
+            }
+            return;
+        }
+        if (idx == m_currentIndex) {
+            return;
+        }
+        setCurrentIndex(idx);
+    }
+
+    void setCurrentIndex(const QModelIndex &idx)
+    {
+        if (!idx.isValid()) {
+            m_currentIndex = QModelIndex();
+            m_currentPath.clear();
+            hideOverlay();
+            resetCtrlTracking();
+            return;
+        }
+        QString resolved = m_pathResolver ? m_pathResolver(idx) : QString();
+        if (resolved.isEmpty()) {
+            m_currentIndex = QModelIndex();
+            m_currentPath.clear();
+            hideOverlay();
+            resetCtrlTracking();
+            return;
+        }
+
+        QFileInfo resolvedInfo(resolved);
+        if (!resolvedInfo.exists() || !resolvedInfo.isFile()) {
+            m_currentIndex = QModelIndex();
+            m_currentPath.clear();
+            hideOverlay();
+            resetCtrlTracking();
+            return;
+        }
+
+        m_currentIndex = idx;
+        m_currentPath = resolved;
+        m_position = m_positions.value(m_currentPath, kScrubDefaultPosition);
+        m_loadingFrame = false;
+        endScrub();
+        if (m_overlay) {
+            m_overlay->setProgress(m_position);
+            m_overlay->clearHintText();
+            m_overlay->clearFrame();
+        }
+        if (QApplication::keyboardModifiers().testFlag(Qt::ControlModifier)) {
+            m_lastMouseX = m_view->viewport()->mapFromGlobal(QCursor::pos()).x();
+            showOverlay();
+            requestPreview();
+        } else {
+            resetCtrlTracking();
+        }
+    }
+
+    void setPosition(qreal value)
+    {
+        m_position = std::clamp(value, 0.0, 1.0);
+        if (!m_currentPath.isEmpty()) {
+            m_positions[m_currentPath] = m_position;
+        }
+        m_overlay->setProgress(m_position);
+    }
+
+    void requestPreview()
+    {
+        QFileInfo info(m_currentPath);
+        if (!info.exists() || !info.isFile()) {
+            return;
+        }
+        QSize targetSize = currentTargetSize();
+        if (m_overlay) {
+            m_overlay->setProgress(m_position);
+            m_overlay->setHintText(QStringLiteral("Decoding..."));
+        }
+        beginScrub();
+        m_loadingFrame = true;
+        LivePreviewManager::instance().requestFrame(m_currentPath, targetSize, m_position);
+    }
+
+    void showOverlay()
+    {
+        if (!m_overlay || !m_currentIndex.isValid()) return;
+        if (m_loadingFrame) {
+            m_overlay->setHintText(QStringLiteral("Decoding..."));
+        } else if (qFuzzyCompare(m_position, kScrubDefaultPosition) && !QApplication::keyboardModifiers().testFlag(Qt::ControlModifier)) {
+            m_overlay->clearHintText();
+        } else {
+            m_overlay->setHintText(QStringLiteral("%1%").arg(qRound(m_position * 100.0)));
+        }
+        updateOverlayGeometry();
+        m_overlay->setProgress(m_position);
+        m_overlay->show();
+        m_overlay->raise();
+    }
+
+    void hideOverlay()
+    {
+        if (m_overlay) {
+            m_overlay->hide();
+            m_overlay->clearHintText();
+            m_overlay->clearFrame();
+        }
+        m_loadingFrame = false;
+        endScrub();
+        resetCtrlTracking();
+    }
+
+        void updateOverlayGeometry()
+    {
+        if (!m_overlay || !m_currentIndex.isValid()) return;
+        QRect thumbRect = currentThumbRect();
+        if (!thumbRect.isValid()) {
+            hideOverlay();
+            return;
+        }
+        m_overlay->setGeometry(thumbRect.adjusted(1, 1, -1, -1));
+    }
+
+    bool handleCtrlScrub(const QPoint &pos)
+    {
+        if (m_warpingCursor) {
+            m_warpingCursor = false;
+        }
+        if (m_currentPath.isEmpty() || !m_currentIndex.isValid()) {
+            return false;
+        }
+        QRect thumbRect = currentThumbRect();
+        if (!thumbRect.isValid() || thumbRect.width() <= 0) {
+            return false;
+        }
+        const int clampedX = std::clamp(pos.x(), thumbRect.left(), thumbRect.right());
+        const int clampedY = std::clamp(pos.y(), thumbRect.top(), thumbRect.bottom());
+        if (m_view && m_view->viewport() && (clampedX != pos.x() || clampedY != pos.y())) {
+            m_warpingCursor = true;
+            const QPoint clampedPoint(clampedX, clampedY);
+            QCursor::setPos(m_view->viewport()->mapToGlobal(clampedPoint));
+        }
+        beginScrub();
+        const qreal fraction = thumbRect.width() > 0
+            ? static_cast<qreal>(clampedX - thumbRect.left()) / static_cast<qreal>(thumbRect.width())
+            : 0.0;
+        m_lastMouseX = clampedX;
+        setPosition(fraction);
+        requestPreview();
+        return true;
+    }
+
+    QSize currentTargetSize() const
+    {
+        QSize targetSize = m_view ? m_view->iconSize() : QSize();
+        if (!targetSize.isValid() || targetSize.isEmpty()) {
+            targetSize = QSize(180, 180);
+        }
+        return targetSize;
+    }
+
+    QRect thumbRectFor(const QRect &itemRect) const
+    {
+        if (!itemRect.isValid()) {
+            return QRect();
+        }
+        const int margin = 6;
+        QSize icon = currentTargetSize();
+        int side = std::max(0, std::min(icon.width(), icon.height()));
+        side = std::min(side, itemRect.width() - margin * 2);
+        side = std::min(side, itemRect.height() - margin * 2);
+        if (side <= 0) {
+            return QRect();
+        }
+        int x = itemRect.x() + (itemRect.width() - side) / 2;
+        int y = itemRect.y() + margin;
+        if (y + side > itemRect.bottom() - margin) {
+            y = itemRect.bottom() - margin - side;
+        }
+        return QRect(x, y, side, side);
+    }
+
+    QRect currentThumbRect() const
+    {
+        if (!m_currentIndex.isValid() || !m_view) {
+            return QRect();
+        }
+        QRect itemRect = m_view->visualRect(m_currentIndex);
+        return thumbRectFor(itemRect);
+    }
+
+    void resetCtrlTracking()
+    {
+        m_lastMouseX = std::numeric_limits<qreal>::quiet_NaN();
+    }
+
+    void beginScrub()
+    {
+        if (m_scrubActive) {
+            return;
+        }
+        m_scrubActive = true;
+        if (m_view && m_view->viewport() && !m_mouseGrabbed) {
+            m_view->viewport()->grabMouse();
+            m_mouseGrabbed = true;
+        }
+    }
+
+    void endScrub()
+    {
+        if (!m_scrubActive) {
+            return;
+        }
+        m_scrubActive = false;
+        if (m_view && m_view->viewport() && m_mouseGrabbed) {
+            m_view->viewport()->releaseMouse();
+            m_mouseGrabbed = false;
+        }
+    }
+
+    QAbstractItemView *m_view = nullptr;
+    std::function<QString(const QModelIndex&)> m_pathResolver;
+    GridScrubOverlay *m_overlay = nullptr;
+    QModelIndex m_currentIndex;
+    QString m_currentPath;
+    qreal m_position = kScrubDefaultPosition;
+    QHash<QString, qreal> m_positions;
+    qreal m_lastMouseX = std::numeric_limits<qreal>::quiet_NaN();
+    bool m_loadingFrame = false;
+    bool m_scrubActive = false;
+    bool m_mouseGrabbed = false;
+    bool m_warpingCursor = false;
+};
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
+    , mainSplitter(nullptr)
+    , rightSplitter(nullptr)
     , anchorIndex(-1)
     , currentAssetId(-1)
     , previewIndex(-1)
@@ -626,6 +1173,7 @@ MainWindow::MainWindow(QWidget *parent)
     , assetsLocked(true) // Locked by default
 {
     fileOpsDialog = nullptr;
+    LogManager::instance().addLog("[MAINWINDOW] ctor begin");
     qDebug() << "[INIT] MainWindow ctor begin";
 
     m_initializing = true;
@@ -674,7 +1222,7 @@ MainWindow::MainWindow(QWidget *parent)
     // Create import progress dialog (will be shown when needed)
     importProgressDialog = nullptr;
 
-    // Setup thumbnail progress bar in status bar
+    // Setup live preview progress bar in status bar
     thumbnailProgressLabel = new QLabel(this);
     thumbnailProgressLabel->setVisible(false);
     thumbnailProgressBar = new QProgressBar(this);
@@ -684,32 +1232,43 @@ MainWindow::MainWindow(QWidget *parent)
     statusBar()->addPermanentWidget(thumbnailProgressLabel);
     statusBar()->addPermanentWidget(thumbnailProgressBar);
 
-    // Connect thumbnail generator progress (import-wide determinate)
-    connect(&ThumbnailGenerator::instance(), &ThumbnailGenerator::progressChanged,
-            this, &MainWindow::onThumbnailProgress);
-
-    // Debounced timer for visible-only thumbnail progress
+    // Debounced timer for visible-only preview progress
     visibleThumbTimer.setSingleShot(true);
     connect(&visibleThumbTimer, &QTimer::timeout, this, &MainWindow::updateVisibleThumbProgress);
 
-    // Load thumbnail into cache when generated, then refresh view
-    connect(&ThumbnailGenerator::instance(), &ThumbnailGenerator::thumbnailGenerated,
-            this, [this](const QString& filePath, const QString& thumbnailPath) {
-        try {
-            Q_UNUSED(filePath);
-            Q_UNUSED(thumbnailPath);
-            // Do not load QPixmaps on the GUI thread here. The delegate will paint
-            // placeholders until background loaders populate the cache.
-            if (assetGridView && assetGridView->viewport()) {
-                assetGridView->viewport()->update();
+    // Update views when live preview frames arrive
+    connect(&LivePreviewManager::instance(), &LivePreviewManager::frameReady,
+            this, [this](const QString& filePath, qreal, QSize, const QPixmap& pixmap) {
+        g_lastPreviewError.remove(filePath);
+        if (assetGridView && assetGridView->viewport()) assetGridView->viewport()->update();
+        if (fmGridView && fmGridView->viewport()) fmGridView->viewport()->update();
+        versionPreviewCache[filePath] = pixmap;
+        if (versionTable) {
+            for (int row = 0; row < versionTable->rowCount(); ++row) {
+                QTableWidgetItem *iconItem = versionTable->item(row, 0);
+                if (iconItem && iconItem->data(Qt::UserRole).toString() == filePath) {
+                    iconItem->setIcon(QIcon(pixmap));
+                    iconItem->setText(QString());
+                }
             }
-            // Also update visible-only progress meters soon
-            visibleThumbTimer.start(50);
-        } catch (const std::exception& e) {
-            qCritical() << "[MainWindow] Exception loading thumbnail:" << e.what();
-        } catch (...) {
-            qCritical() << "[MainWindow] Unknown exception loading thumbnail";
         }
+        visibleThumbTimer.start(50);
+    });
+    connect(&LivePreviewManager::instance(), &LivePreviewManager::frameFailed,
+            this, [](const QString& path, const QString& error) {
+        QFileInfo info(path);
+        if (!info.exists() || !info.isFile()) {
+            return;
+        }
+        if (!isPreviewableSuffix(info.suffix())) {
+            return;
+        }
+        const QString last = g_lastPreviewError.value(path);
+        if (last == error) {
+            return;
+        }
+        g_lastPreviewError.insert(path, error);
+        qWarning() << "[LivePreview] failed for" << path << ':' << error;
     });
     qDebug() << "[INIT] MainWindow ctor end";
 }
@@ -720,6 +1279,7 @@ MainWindow::~MainWindow()
 
 void MainWindow::setupUi()
 {
+    LogManager::instance().addLog("[TRACE] setupUi enter", "DEBUG");
     // Menu bar
     QMenuBar* menuBar = new QMenuBar(this);
     setMenuBar(menuBar);
@@ -782,7 +1342,9 @@ void MainWindow::setupUi()
 
     folderTreeView = new QTreeView(leftPanel);
     folderModel = new VirtualFolderTreeModel(leftPanel);
+    LogManager::instance().addLog("[TRACE] folder model created", "DEBUG");
     folderTreeView->setModel(folderModel);
+    LogManager::instance().addLog("[TRACE] folder model set on tree", "DEBUG");
     qDebug() << "[INIT] Folder model set on tree";
     folderTreeView->setHeaderHidden(true);
     folderTreeView->setContextMenuPolicy(Qt::CustomContextMenu);
@@ -889,18 +1451,18 @@ void MainWindow::setupUi()
     // Refresh button
     refreshButton = new QPushButton(toolbar);
     refreshButton->setIcon(icoRefresh());
-    // Generate thumbnails button (with menu)
+    // Live preview prefetch button (with menu)
     thumbGenButton = new QToolButton(toolbar);
     thumbGenButton->setIcon(icoRefresh());
-    thumbGenButton->setToolTip("Generate thumbnails");
+    thumbGenButton->setToolTip("Prefetch live previews");
     thumbGenButton->setAutoRaise(true);
     thumbGenButton->setIconSize(QSize(20,20));
     QMenu *genMenu = new QMenu(thumbGenButton);
-    QAction *actGen = genMenu->addAction("Generate for this folder");
-    QAction *actRegen = genMenu->addAction("Regenerate for this folder");
+    QAction *actGen = genMenu->addAction("Prefetch for this folder");
+    QAction *actRegen = genMenu->addAction("Refresh for this folder");
     genMenu->addSeparator();
-    QAction *actGenRec = genMenu->addAction("Generate recursive");
-    QAction *actRegenRec = genMenu->addAction("Regenerate recursive");
+    QAction *actGenRec = genMenu->addAction("Prefetch recursive");
+    QAction *actRegenRec = genMenu->addAction("Refresh recursive");
     connect(actGen, &QAction::triggered, this, &MainWindow::onGenerateThumbnailsForFolder);
     connect(actRegen, &QAction::triggered, this, &MainWindow::onRegenerateThumbnailsForFolder);
     connect(actGenRec, &QAction::triggered, this, &MainWindow::onGenerateThumbnailsRecursive);
@@ -928,6 +1490,7 @@ void MainWindow::setupUi()
     assetsModel = new AssetsModel(viewStack);
     qDebug() << "[INIT] AssetsModel created";
     assetGridView->setModel(assetsModel);
+    LogManager::instance().addLog("[TRACE] assetGridView + model wired", "DEBUG");
     assetGridView->setViewMode(QListView::IconMode);
     assetGridView->setResizeMode(QListView::Adjust);
     assetGridView->setSpacing(4);
@@ -1007,6 +1570,17 @@ void MainWindow::setupUi()
     assetGridView->viewport()->installEventFilter(this);
     assetTableView->viewport()->installEventFilter(this);
     qDebug() << "[INIT] After installing event filters on views";
+
+    assetScrubController = new GridScrubController(
+        assetGridView,
+        [this](const QModelIndex& idx) -> QString {
+            if (!assetsModel) {
+                return QString();
+            }
+            return assetsModel->data(idx, AssetsModel::FilePathRole).toString();
+        },
+        this);
+    LogManager::instance().addLog("[TRACE] assetScrubController ready", "DEBUG");
 
     // Right panel: Filters + Info
     rightPanel = new QWidget(this);
@@ -1318,12 +1892,17 @@ void MainWindow::setupUi()
     fileManagerPage = new QWidget(this);
     qDebug() << "[INIT] About to call setupFileManagerUi";
     setupFileManagerUi();
+    LogManager::instance().addLog("[TRACE] after setupFileManagerUi call", "DEBUG");
     qDebug() << "[INIT] setupFileManagerUi returned";
+    LogManager::instance().addLog("[TRACE] before adding file manager tab", "DEBUG");
     mainTabs->addTab(fileManagerPage, "File Manager");
+    LogManager::instance().addLog("[TRACE] after adding file manager tab", "DEBUG");
     qDebug() << "[INIT] File Manager tab added";
+    LogManager::instance().addLog("[TRACE] file manager tab logged", "DEBUG");
 
     // Log viewer as dock widget at bottom (hidden by default)
     QDockWidget* logDock = new QDockWidget("Application Log", this);
+    LogManager::instance().addLog("[TRACE] logDock created", "DEBUG");
     logDock->setAllowedAreas(Qt::BottomDockWidgetArea);
     logDock->setFeatures(QDockWidget::DockWidgetClosable);
     logViewerWidget = new LogViewerWidget(logDock);
@@ -1334,6 +1913,7 @@ void MainWindow::setupUi()
     );
     addDockWidget(Qt::BottomDockWidgetArea, logDock);
     logDock->hide(); // Hidden by default
+    LogManager::instance().addLog("[TRACE] logDock initialised", "DEBUG");
 
     // Connect dock visibility to menu action
     connect(logDock, &QDockWidget::visibilityChanged, this, [this](bool visible) {
@@ -1344,17 +1924,23 @@ void MainWindow::setupUi()
             toggleLogViewerAction->setText("Show &Log Viewer");
         }
     });
+    LogManager::instance().addLog("[TRACE] logDock visibility hook set", "DEBUG");
 
 
     // Restore window and workspace state
     {
         QSettings s("AugmentCode", "KAssetManager");
+        LogManager::instance().addLog("[TRACE] restore settings begin", "DEBUG");
         if (s.contains("Window/Geometry")) restoreGeometry(s.value("Window/Geometry").toByteArray());
         if (s.contains("Window/State")) restoreState(s.value("Window/State").toByteArray());
-        if (s.contains("AssetManager/MainSplitter")) mainSplitter->restoreState(s.value("AssetManager/MainSplitter").toByteArray());
-        if (s.contains("AssetManager/RightSplitter")) rightSplitter->restoreState(s.value("AssetManager/RightSplitter").toByteArray());
+        LogManager::instance().addLog("[TRACE] restore window geometry/state done", "DEBUG");
+        if (mainSplitter && s.contains("AssetManager/MainSplitter")) mainSplitter->restoreState(s.value("AssetManager/MainSplitter").toByteArray());
+        LogManager::instance().addLog("[TRACE] restore mainSplitter state done", "DEBUG");
+        if (rightSplitter && s.contains("AssetManager/RightSplitter")) rightSplitter->restoreState(s.value("AssetManager/RightSplitter").toByteArray());
+        LogManager::instance().addLog("[TRACE] restore rightSplitter state done", "DEBUG");
         if (s.contains("AssetManager/ViewMode")) {
             bool grid = s.value("AssetManager/ViewMode").toBool();
+            LogManager::instance().addLog(QString("[TRACE] restore view mode flag: %1").arg(grid), "DEBUG");
         if (versionTable) {
             auto hh = versionTable->horizontalHeader();
             for (int c = 0; c < versionTable->columnCount(); ++c) {
@@ -1362,12 +1948,15 @@ void MainWindow::setupUi()
                 if (v.isValid()) hh->resizeSection(c, v.toInt());
             }
         }
+            LogManager::instance().addLog("[TRACE] restored version table columns", "DEBUG");
 
             isGridMode = grid;
             viewStack->setCurrentIndex(grid ? 0 : 1);
             viewModeButton->setIcon(grid ? icoGrid() : icoList());
             thumbnailSizeSlider->setEnabled(grid);
+            LogManager::instance().addLog("[TRACE] applied view mode toggle", "DEBUG");
         }
+        LogManager::instance().addLog("[TRACE] restore asset manager view", "DEBUG");
         if (assetTableView && assetTableView->model()) {
             auto hh = assetTableView->horizontalHeader();
             for (int c = 0; c < assetTableView->model()->columnCount(); ++c) {
@@ -1375,7 +1964,9 @@ void MainWindow::setupUi()
                 if (v.isValid()) hh->resizeSection(c, v.toInt());
             }
         }
+        LogManager::instance().addLog("[TRACE] restore asset table columns", "DEBUG");
     }
+    LogManager::instance().addLog("[TRACE] window state restored", "DEBUG");
 
     // Load initial data
     folderModel->reload();
@@ -1385,6 +1976,7 @@ void MainWindow::setupUi()
         folderTreeView->setCurrentIndex(firstFolder);
         onFolderSelected(firstFolder);
     }
+    LogManager::instance().addLog("[TRACE] mainwindow ctor finished", "DEBUG");
 }
 void MainWindow::setupFileManagerUi()
 {
@@ -1584,9 +2176,31 @@ void MainWindow::setupFileManagerUi()
     connect(fmGridView, &QListView::doubleClicked, this, &MainWindow::onFmItemDoubleClicked);
     fmViewStack->addWidget(fmGridView); // 0
 
+    fmScrubController = new GridScrubController(
+        fmGridView,
+        [this](const QModelIndex& idx) -> QString {
+            if (!fmDirModel) {
+                return QString();
+            }
+            QModelIndex srcIdx = idx;
+            if (fmProxyModel && idx.model() == fmProxyModel) {
+                srcIdx = fmProxyModel->mapToSource(idx);
+            }
+            if (!srcIdx.isValid()) {
+                return QString();
+            }
+            if (fmDirModel->isDir(srcIdx)) {
+                return QString();
+            }
+            return fmDirModel->filePath(srcIdx);
+        },
+        this);
+    LogManager::instance().addLog("[TRACE] fmScrubController ready", "DEBUG");
+
     // List view
     fmListView = new QTableView(fmViewStack);
     fmListView->setModel(fmProxyModel);
+    LogManager::instance().addLog("[TRACE] fmListView created", "DEBUG");
     // Persist fmListView column widths immediately when resized
     connect(fmListView->horizontalHeader(), &QHeaderView::sectionResized, this, [this](int logical, int /*oldSize*/, int newSize){
         QSettings s("AugmentCode", "KAssetManager");
@@ -1617,16 +2231,20 @@ void MainWindow::setupFileManagerUi()
     if (fmListView->viewport()) fmListView->viewport()->installEventFilter(this);
     connect(fmListView, &QTableView::doubleClicked, this, &MainWindow::onFmItemDoubleClicked);
     fmViewStack->addWidget(fmListView); // 1
+    LogManager::instance().addLog("[TRACE] fmListView wired", "DEBUG");
 
     fmViewStack->setCurrentIndex(0);
+    LogManager::instance().addLog("[TRACE] fmViewStack initialised", "DEBUG");
 
     // Right-side splitter: views | preview panel
     fmRightSplitter = new QSplitter(Qt::Horizontal, right);
+    LogManager::instance().addLog("[TRACE] fmRightSplitter created", "DEBUG");
     QWidget *viewContainer = new QWidget(fmRightSplitter);
     QVBoxLayout *viewContainerLayout = new QVBoxLayout(viewContainer);
     viewContainerLayout->setContentsMargins(0,0,0,0);
     viewContainerLayout->setSpacing(0);
     viewContainerLayout->addWidget(fmViewStack);
+    LogManager::instance().addLog("[TRACE] fm view container ready", "DEBUG");
 
     // Preview panel (embedded)
     fmPreviewPanel = new QWidget(fmRightSplitter);
@@ -1638,6 +2256,7 @@ void MainWindow::setupFileManagerUi()
     QLabel *pvTitle = new QLabel("Preview", fmPreviewPanel);
     pvTitle->setStyleSheet("color:#9aa0a6; font-weight:bold;");
     pv->addWidget(pvTitle);
+    LogManager::instance().addLog("[TRACE] fm preview header ready", "DEBUG");
 
     // Image view with zoom/pan
     fmImageScene = new QGraphicsScene(fmPreviewPanel);
@@ -1958,8 +2577,7 @@ void MainWindow::setupFileManagerUi()
         QModelIndex idx = fmTreeModel->index(path);
         if (idx.isValid()) {
             fmTree->setCurrentIndex(idx);
-            ThumbnailGenerator::instance().beginNewSession();
-            fmDirModel->setRootPath(path);
+                    fmDirModel->setRootPath(path);
             QModelIndex srcRoot = fmDirModel->index(path);
             if (fmProxyModel) {
                 fmProxyModel->rebuildForRoot(path);
@@ -2010,15 +2628,6 @@ void MainWindow::setupFileManagerUi()
             s.sync();
         });
     }
-
-    // Refresh icons when thumbnails are generated
-    connect(&ThumbnailGenerator::instance(), &ThumbnailGenerator::thumbnailGenerated,
-            this, [this](const QString&, const QString&){
-
-                if (fmGridView) fmGridView->viewport()->update();
-                if (fmListView) fmListView->viewport()->update();
-            });
-
 
     // Restore persisted workspace for File Manager (after widgets are shown)
     QTimer::singleShot(0, this, [this]{
@@ -2097,6 +2706,7 @@ void MainWindow::setupFileManagerUi()
         }
     });
 
+    LogManager::instance().addLog("[TRACE] setupFileManagerUi exit", "DEBUG");
 }
 
 void MainWindow::onFmTreeActivated(const QModelIndex &index)
@@ -2104,7 +2714,6 @@ void MainWindow::onFmTreeActivated(const QModelIndex &index)
     QString path = fmTreeModel->filePath(index);
     if (path.isEmpty()) return;
 
-    ThumbnailGenerator::instance().beginNewSession();
     fmDirModel->setRootPath(path);
     QModelIndex srcRoot = fmDirModel->index(path);
     if (fmProxyModel) {
@@ -2179,8 +2788,7 @@ void MainWindow::onFmItemDoubleClicked(const QModelIndex &index)
 
     QFileInfo fi(path);
     if (fi.isDir()) {
-        ThumbnailGenerator::instance().beginNewSession();
-        fmDirModel->setRootPath(path);
+            fmDirModel->setRootPath(path);
         QModelIndex srcRoot = fmDirModel->index(path);
         if (fmProxyModel) {
             fmProxyModel->rebuildForRoot(path);
@@ -2370,8 +2978,7 @@ void MainWindow::onFmBackToParent()
     QDir dir(currentPath);
     if (dir.cdUp()) {
         const QString parentPath = dir.absolutePath();
-        ThumbnailGenerator::instance().beginNewSession();
-        fmDirModel->setRootPath(parentPath);
+            fmDirModel->setRootPath(parentPath);
         QModelIndex srcRoot = fmDirModel->index(parentPath);
         if (fmProxyModel) {
             fmProxyModel->rebuildForRoot(parentPath);
@@ -2471,7 +3078,6 @@ void MainWindow::onFmFavoriteActivated(QListWidgetItem* item)
     if (path.isEmpty()) return;
     QModelIndex idx = fmTreeModel->index(path);
     if (idx.isValid()) fmTree->setCurrentIndex(idx);
-    ThumbnailGenerator::instance().beginNewSession();
     fmDirModel->setRootPath(path);
     QModelIndex srcRoot = fmDirModel->index(path);
     if (fmProxyModel) {
@@ -2923,15 +3529,13 @@ void MainWindow::setupConnections()
     // Connect search box for real-time filtering
     connect(searchBox, &QLineEdit::textChanged, this, &MainWindow::onSearchTextChanged);
 
-    // Visible-only thumbnail progress (Option B) wiring
+    // Visible-only live preview progress wiring
     connect(assetsModel, &QAbstractItemModel::modelReset, this, &MainWindow::scheduleVisibleThumbProgressUpdate);
     connect(assetGridView->verticalScrollBar(), &QScrollBar::valueChanged, this, &MainWindow::scheduleVisibleThumbProgressUpdate);
     connect(assetGridView->horizontalScrollBar(), &QScrollBar::valueChanged, this, &MainWindow::scheduleVisibleThumbProgressUpdate);
     connect(assetTableView->verticalScrollBar(), &QScrollBar::valueChanged, this, &MainWindow::scheduleVisibleThumbProgressUpdate);
     connect(assetTableView->horizontalScrollBar(), &QScrollBar::valueChanged, this, &MainWindow::scheduleVisibleThumbProgressUpdate);
     connect(viewStack, &QStackedWidget::currentChanged, this, &MainWindow::scheduleVisibleThumbProgressUpdate);
-    connect(&ThumbnailGenerator::instance(), &ThumbnailGenerator::thumbnailGenerated,
-            this, &MainWindow::scheduleVisibleThumbProgressUpdate);
     connect(&ProgressManager::instance(), &ProgressManager::isActiveChanged, this, [this]() {
         if (ProgressManager::instance().isActive()) {
             // Hide our visible-only progress while an import/global progress is active
@@ -4297,7 +4901,7 @@ void MainWindow::onImportComplete()
     // Reload assets model to show new imports
     assetsModel->reload();
 
-    // Start thumbnail generation for all assets in current folder
+    // Warm live preview cache for all assets in current folder
     QList<int> assetIds;
     for (int row = 0; row < assetsModel->rowCount(QModelIndex()); ++row) {
         QModelIndex index = assetsModel->index(row, 0);
@@ -4306,9 +4910,8 @@ void MainWindow::onImportComplete()
     }
 
     if (!assetIds.isEmpty()) {
-        qDebug() << "[MainWindow] Starting thumbnail generation for" << assetIds.size() << "assets";
+        qDebug() << "[MainWindow] Prefetching live previews for" << assetIds.size() << "assets";
 
-        // Get file paths for all assets
         QStringList filePaths;
         for (int assetId : assetIds) {
             QString filePath = DB::instance().getAssetFilePath(assetId);
@@ -4317,11 +4920,13 @@ void MainWindow::onImportComplete()
             }
         }
 
-        // Start thumbnail generation
-        ThumbnailGenerator::instance().startProgress(filePaths.size());
+        LivePreviewManager &previewMgr = LivePreviewManager::instance();
+        QSize targetSize = assetGridView ? assetGridView->iconSize() : QSize(180, 180);
+        if (!targetSize.isValid()) targetSize = QSize(180, 180);
         for (const QString &filePath : filePaths) {
-            ThumbnailGenerator::instance().requestThumbnail(filePath);
+            previewMgr.requestFrame(filePath, targetSize);
         }
+        scheduleVisibleThumbProgressUpdate();
     }
 }
 
@@ -4911,39 +5516,47 @@ void MainWindow::onViewModeChanged()
 void MainWindow::onGenerateThumbnailsForFolder()
 {
     if (!assetsModel) return;
-    // Current folder only, generate missing thumbnails
-    QVector<QString> paths;
+    LivePreviewManager &previewMgr = LivePreviewManager::instance();
+    QSize targetSize = assetGridView ? assetGridView->iconSize() : QSize(180, 180);
+    if (!targetSize.isValid()) targetSize = QSize(180, 180);
+
+    int requested = 0;
     const int rows = assetsModel->rowCount(QModelIndex());
-    paths.reserve(rows);
     for (int r = 0; r < rows; ++r) {
         QModelIndex idx = assetsModel->index(r, 0);
         const QString fp = assetsModel->data(idx, AssetsModel::FilePathRole).toString();
-        if (!fp.isEmpty()) paths.push_back(fp);
+        if (fp.isEmpty()) continue;
+        auto handle = previewMgr.cachedFrame(fp, targetSize);
+        if (!handle.isValid()) {
+            previewMgr.requestFrame(fp, targetSize);
+            ++requested;
+        }
     }
-    // Filter to those missing thumbnails
-    QVector<QString> todo; todo.reserve(paths.size());
-    for (const QString &fp : paths) {
-        if (ThumbnailGenerator::instance().getThumbnailPath(fp).isEmpty()) todo.push_back(fp);
+    if (requested > 0) {
+        statusBar()->showMessage(QString("Prefetching %1 live previews...").arg(requested), 2000);
     }
-    if (todo.isEmpty()) return;
-    ThumbnailGenerator::instance().startProgress(todo.size());
-    for (const QString &fp : todo) ThumbnailGenerator::instance().requestThumbnail(fp);
 }
 
 void MainWindow::onRegenerateThumbnailsForFolder()
 {
     if (!assetsModel) return;
-    QVector<QString> paths;
+    LivePreviewManager &previewMgr = LivePreviewManager::instance();
+    QSize targetSize = assetGridView ? assetGridView->iconSize() : QSize(180, 180);
+    if (!targetSize.isValid()) targetSize = QSize(180, 180);
+
+    int requested = 0;
     const int rows = assetsModel->rowCount(QModelIndex());
-    paths.reserve(rows);
     for (int r = 0; r < rows; ++r) {
         QModelIndex idx = assetsModel->index(r, 0);
         const QString fp = assetsModel->data(idx, AssetsModel::FilePathRole).toString();
-        if (!fp.isEmpty()) paths.push_back(fp);
+        if (fp.isEmpty()) continue;
+        previewMgr.invalidate(fp);
+        previewMgr.requestFrame(fp, targetSize);
+        ++requested;
     }
-    if (paths.isEmpty()) return;
-    ThumbnailGenerator::instance().startProgress(paths.size());
-    for (const QString &fp : paths) ThumbnailGenerator::instance().requestThumbnailForce(fp);
+    if (requested > 0) {
+        statusBar()->showMessage(QString("Refreshing %1 live previews...").arg(requested), 2000);
+    }
 }
 
 void MainWindow::onGenerateThumbnailsRecursive()
@@ -4953,14 +5566,23 @@ void MainWindow::onGenerateThumbnailsRecursive()
     if (fid <= 0) return;
     QList<int> ids = DB::instance().getAssetIdsInFolder(fid, /*recursive*/true);
     if (ids.isEmpty()) return;
-    QVector<QString> todo; todo.reserve(ids.size());
+    LivePreviewManager &previewMgr = LivePreviewManager::instance();
+    QSize targetSize = assetGridView ? assetGridView->iconSize() : QSize(180, 180);
+    if (!targetSize.isValid()) targetSize = QSize(180, 180);
+
+    int requested = 0;
     for (int id : ids) {
         const QString fp = DB::instance().getAssetFilePath(id);
-        if (!fp.isEmpty() && ThumbnailGenerator::instance().getThumbnailPath(fp).isEmpty()) todo.push_back(fp);
+        if (fp.isEmpty()) continue;
+        auto handle = previewMgr.cachedFrame(fp, targetSize);
+        if (!handle.isValid()) {
+            previewMgr.requestFrame(fp, targetSize);
+            ++requested;
+        }
     }
-    if (todo.isEmpty()) return;
-    ThumbnailGenerator::instance().startProgress(todo.size());
-    for (const QString &fp : todo) ThumbnailGenerator::instance().requestThumbnail(fp);
+    if (requested > 0) {
+        statusBar()->showMessage(QString("Prefetching %1 live previews (recursive)...").arg(requested), 2000);
+    }
 }
 
 void MainWindow::onRegenerateThumbnailsRecursive()
@@ -4970,31 +5592,20 @@ void MainWindow::onRegenerateThumbnailsRecursive()
     if (fid <= 0) return;
     QList<int> ids = DB::instance().getAssetIdsInFolder(fid, /*recursive*/true);
     if (ids.isEmpty()) return;
-    ThumbnailGenerator::instance().startProgress(ids.size());
+    LivePreviewManager &previewMgr = LivePreviewManager::instance();
+    QSize targetSize = assetGridView ? assetGridView->iconSize() : QSize(180, 180);
+    if (!targetSize.isValid()) targetSize = QSize(180, 180);
+
+    int requested = 0;
     for (int id : ids) {
         const QString fp = DB::instance().getAssetFilePath(id);
-        if (!fp.isEmpty()) ThumbnailGenerator::instance().requestThumbnailForce(fp);
+        if (fp.isEmpty()) continue;
+        previewMgr.invalidate(fp);
+        previewMgr.requestFrame(fp, targetSize);
+        ++requested;
     }
-}
-
-// Called when thumbnail generation progress updates
-void MainWindow::onThumbnailProgress(int current, int total)
-{
-    if (total > 0) {
-        thumbnailProgressLabel->setText(QString("Generating thumbnails:"));
-        thumbnailProgressLabel->setVisible(true);
-        thumbnailProgressBar->setMaximum(total);
-        thumbnailProgressBar->setValue(current);
-        thumbnailProgressBar->setFormat(QString("%1/%2 (%p%)").arg(current).arg(total));
-        thumbnailProgressBar->setVisible(true);
-
-        // Hide when complete
-        if (current >= total) {
-            QTimer::singleShot(2000, this, [this]() {
-                thumbnailProgressLabel->setVisible(false);
-                thumbnailProgressBar->setVisible(false);
-            });
-        }
+    if (requested > 0) {
+        statusBar()->showMessage(QString("Refreshing %1 live previews (recursive)...").arg(requested), 2000);
     }
 }
 
@@ -5012,93 +5623,99 @@ void MainWindow::scheduleVisibleThumbProgressUpdate()
 void MainWindow::updateVisibleThumbProgress()
 {
     if (m_initializing) return;
-    // If an import/global progress is active, hide ours and bail
     if (ProgressManager::instance().isActive()) {
         if (thumbnailProgressLabel) thumbnailProgressLabel->setVisible(false);
         if (thumbnailProgressBar) thumbnailProgressBar->setVisible(false);
         return;
     }
 
-    QAbstractItemView* view = isGridMode ? static_cast<QAbstractItemView*>(assetGridView)
-                                         : static_cast<QAbstractItemView*>(assetTableView);
-    if (!view || !view->isVisible() || !view->viewport() || !assetsModel || !thumbnailProgressLabel || !thumbnailProgressBar) {
-        if (thumbnailProgressLabel) thumbnailProgressLabel->setVisible(false);
-        if (thumbnailProgressBar) thumbnailProgressBar->setVisible(false);
-
-        return;
-    }
-
-
-    // Proactively ensure visible items have their pixmaps; we now load synchronously in paint(), so disable background loader
-    AssetItemDelegate* gridDelegate = assetGridView ? static_cast<AssetItemDelegate*>(assetGridView->itemDelegate()) : nullptr;
-    auto enqueueLoad = [](const QString&) {
-        // Background pixmap loading disabled; thumbnails are small and are loaded on-demand in paint()
-    };
-
-    const QRect viewportRect = view->viewport()->rect();
-    const int totalRows = assetsModel ? assetsModel->rowCount(QModelIndex()) : 0;
-
     int visibleTotal = 0;
     int readyCount = 0;
+    bool anyViewConsidered = false;
 
-    if (totalRows <= 0) {
-        thumbnailProgressLabel->setVisible(false);
-        thumbnailProgressBar->setVisible(false);
+    if (!thumbnailProgressLabel || !thumbnailProgressBar) {
+        if (thumbnailProgressLabel) thumbnailProgressLabel->setVisible(false);
+        if (thumbnailProgressBar) thumbnailProgressBar->setVisible(false);
         return;
     }
+
+    auto accumulateFromAssets = [&](QAbstractItemView* view) {
+        if (!assetsModel || !view || !view->isVisible() || !view->viewport()) {
+            return;
+        }
+        const QRect viewportRect = view->viewport()->rect();
+        const int totalRows = assetsModel->rowCount(QModelIndex());
+        if (totalRows <= 0) return;
+        anyViewConsidered = true;
+        const int thumbSide = view->iconSize().isValid() ? view->iconSize().width() : 180;
+        const QSize targetSize(thumbSide, thumbSide);
+        LivePreviewManager &previewMgr = LivePreviewManager::instance();
+        for (int row = 0; row < totalRows; ++row) {
+            const QModelIndex idx = assetsModel->index(row, 0);
+            const QRect itemRect = view->visualRect(idx);
+            if (!itemRect.isValid() || !itemRect.intersects(viewportRect)) {
+                continue;
+            }
+            ++visibleTotal;
+            const QString filePath = assetsModel->data(idx, AssetsModel::FilePathRole).toString();
+            auto handle = previewMgr.cachedFrame(filePath, targetSize);
+            if (handle.isValid()) {
+                ++readyCount;
+            } else {
+                previewMgr.requestFrame(filePath, targetSize);
+            }
+        }
+    };
+
+    auto accumulateFromFileManager = [&](QAbstractItemView* view) {
+        if (!view || !view->isVisible() || !view->viewport() || !fmDirModel) {
+            return;
+        }
+        QAbstractItemModel* model = view->model();
+        if (!model) return;
+        const QRect viewportRect = view->viewport()->rect();
+        const int rows = model->rowCount();
+        const int thumbSide = view->iconSize().isValid() ? view->iconSize().width() : 120;
+        const QSize targetSize(thumbSide, thumbSide);
+        LivePreviewManager &previewMgr = LivePreviewManager::instance();
+        anyViewConsidered = true;
+        for (int row = 0; row < rows; ++row) {
+            const QModelIndex idx = model->index(row, 0);
+            const QRect itemRect = view->visualRect(idx);
+            if (!itemRect.isValid() || !itemRect.intersects(viewportRect)) {
+                continue;
+            }
+            ++visibleTotal;
+            QModelIndex srcIdx = idx;
+            if (fmProxyModel && idx.model() == fmProxyModel) {
+                srcIdx = fmProxyModel->mapToSource(idx);
+            }
+            const QString filePath = fmDirModel->filePath(srcIdx);
+            if (filePath.isEmpty()) continue;
+            auto handle = previewMgr.cachedFrame(filePath, targetSize);
+            if (handle.isValid()) {
+                ++readyCount;
+            } else {
+                previewMgr.requestFrame(filePath, targetSize);
+            }
+        }
+    };
 
     if (isGridMode) {
-        for (int row = 0; row < totalRows; ++row) {
-            const QModelIndex srcIdx = assetsModel->index(row, 0);
-            const QRect itemRect = assetGridView->visualRect(srcIdx);
-            if (itemRect.isValid() && itemRect.intersects(viewportRect)) {
-                ++visibleTotal;
-                const QString filePath = assetsModel->data(srcIdx, AssetsModel::FilePathRole).toString();
-                const QString thumbPath = ThumbnailGenerator::instance().getThumbnailPath(filePath);
-                if (!thumbPath.isEmpty()) {
-                    ++readyCount;
-                    if (gridDelegate) {
-                        if (!gridDelegate->pixmapCache.contains(thumbPath)) {
-                            enqueueLoad(thumbPath);
-                        }
-                    }
-                }
-            }
-        }
+        accumulateFromAssets(assetGridView);
     } else {
-        QAbstractItemModel* tableModel = assetTableView->model();
-        for (int row = 0; row < totalRows; ++row) {
-            const QModelIndex tableIdx = tableModel->index(row, 0);
-            const QRect itemRect = assetTableView->visualRect(tableIdx);
-            if (itemRect.isValid() && itemRect.intersects(viewportRect)) {
-                ++visibleTotal;
-                const QModelIndex srcIdx = assetsModel->index(row, 0);
-                const QString filePath = assetsModel->data(srcIdx, AssetsModel::FilePathRole).toString();
-                const QString thumbPath = ThumbnailGenerator::instance().getThumbnailPath(filePath);
-                if (!thumbPath.isEmpty()) {
-
-                    ++readyCount;
-                    if (gridDelegate) {
-                        if (!gridDelegate->pixmapCache.contains(thumbPath)) {
-                            enqueueLoad(thumbPath);
-                        }
-                    }
-                }
-            }
-        }
+        accumulateFromAssets(assetTableView);
     }
+    accumulateFromFileManager(fmGridView);
 
-    if (visibleTotal == 0 || readyCount >= visibleTotal) {
-        // Nothing to show or already complete for visible items
+    if (!anyViewConsidered || visibleTotal == 0 || readyCount >= visibleTotal) {
         thumbnailProgressLabel->setVisible(false);
         thumbnailProgressBar->setVisible(false);
         return;
     }
 
-    // Show determinate progress for currently visible items only
-    thumbnailProgressLabel->setText("Thumbnails (visible):");
+    thumbnailProgressLabel->setText("Live previews (visible):");
     thumbnailProgressLabel->setVisible(true);
-
     thumbnailProgressBar->setMaximum(visibleTotal);
     thumbnailProgressBar->setValue(readyCount);
     thumbnailProgressBar->setFormat(QString("%1/%2 (%p%)").arg(readyCount).arg(visibleTotal));
@@ -5310,15 +5927,20 @@ void MainWindow::reloadVersionHistory()
     for (const auto& v : versions) {
         // Icon column
         QTableWidgetItem *iconItem = new QTableWidgetItem();
-        QString thumbPath = ThumbnailGenerator::instance().getThumbnailPath(v.filePath);
-        if (!thumbPath.isEmpty()) {
-            QIcon icon(thumbPath);
-            iconItem->setIcon(icon);
+        const QSize targetSize(96, 96);
+        QPixmap cached = versionPreviewCache.value(v.filePath);
+        if (!cached.isNull()) {
+            iconItem->setIcon(QIcon(cached));
         } else {
-            // Request generation and a fallback text
-            ThumbnailGenerator::instance().requestThumbnail(v.filePath);
-            iconItem->setText("…");
+            auto handle = LivePreviewManager::instance().cachedFrame(v.filePath, targetSize);
+            if (handle.isValid()) {
+                iconItem->setIcon(QIcon(handle.pixmap));
+            } else {
+                LivePreviewManager::instance().requestFrame(v.filePath, targetSize);
+                iconItem->setText("...");
+            }
         }
+        iconItem->setData(Qt::UserRole, v.filePath);
         versionTable->setItem(row, 0, iconItem);
 
         // Version column (store id in UserRole)
@@ -5384,9 +6006,13 @@ void MainWindow::onRevertSelectedVersion()
     reloadVersionHistory();
     updateInfoPanel();
 
-    // Request fresh thumbnail for the asset file
+    // Prefetch live preview for the asset file
     const QString assetPath = DB::instance().getAssetFilePath(currentAssetId);
-    if (!assetPath.isEmpty()) ThumbnailGenerator::instance().requestThumbnail(assetPath);
+    if (!assetPath.isEmpty()) {
+        LivePreviewManager &previewMgr = LivePreviewManager::instance();
+        previewMgr.invalidate(assetPath);
+        previewMgr.requestFrame(assetPath, QSize(180, 180));
+    }
 
     QMessageBox::information(this, "Reverted", "Asset has been reverted to the selected version.");
 }

@@ -1,8 +1,9 @@
 #include "assets_model.h"
 #include "db.h"
-#include "thumbnail_generator.h"
 #include "progress_manager.h"
 #include "log_manager.h"
+#include <QSet>
+#include <QRegularExpression>
 #include <QSqlQuery>
 #include <QSqlError>
 #include <QFileInfo>
@@ -13,6 +14,33 @@
 #include <QFile>
 #include <QTextStream>
 
+namespace {
+
+bool isImageExtension(const QString& suffix) {
+    static const QSet<QString> extensions = {
+        "png","jpg","jpeg","bmp","tga","tif","tiff","gif","webp",
+        "ico","heic","heif","avif","psd","svg","dds"
+    };
+    return extensions.contains(suffix.toLower());
+}
+
+bool isVideoExtension(const QString& suffix) {
+    static const QSet<QString> extensions = {
+        "mp4","mov","m4v","mkv","avi","mpg","mpeg","mp2","mpg2",
+        "wmv","flv","webm","mxf","r3d","ogv","mts","m2ts"
+    };
+    return extensions.contains(suffix.toLower());
+}
+
+bool looksLikeSequence(const QString& filePath) {
+    QFileInfo info(filePath);
+    const QString base = info.completeBaseName();
+    static QRegularExpression seqPattern(R"(.*(\d{2,}|#+|%0\d+d).*)");
+    return seqPattern.match(base).hasMatch();
+}
+
+} // namespace
+
 AssetsModel::AssetsModel(QObject* parent): QAbstractListModel(parent){
     // Debounce DB-driven reloads to avoid re-entrancy and view churn during batch imports
     m_reloadTimer.setSingleShot(true);
@@ -20,10 +48,6 @@ AssetsModel::AssetsModel(QObject* parent): QAbstractListModel(parent){
     connect(&m_reloadTimer, &QTimer::timeout, this, &AssetsModel::triggerDebouncedReload);
 
     connect(&DB::instance(), &DB::assetsChanged, this, &AssetsModel::onAssetsChangedForFolder);
-
-    // Connect to thumbnail generator signals (queued to avoid re-entrancy during data()/resets)
-    connect(&ThumbnailGenerator::instance(), &ThumbnailGenerator::thumbnailGenerated,
-            this, &AssetsModel::onThumbnailGenerated, Qt::QueuedConnection);
 
     rebuildFilter();
 }
@@ -37,25 +61,6 @@ QVariant AssetsModel::data(const QModelIndex& idx, int role) const{
         case FileNameRole: return r.fileName;
         case FilePathRole: return r.filePath;
         case FileSizeRole: return QVariant::fromValue<qlonglong>(r.fileSize);
-        case ThumbnailPathRole: {
-            // Check if thumbnail is cached
-            QString thumbPath = ThumbnailGenerator::instance().getThumbnailPath(r.filePath);
-            static const bool diagEnabled = !qEnvironmentVariableIsEmpty("KASSET_DIAGNOSTICS");
-            if (diagEnabled) {
-                qDebug() << "[AssetsModel] data() thumbnailPath role for" << r.fileName << "cached?" << !thumbPath.isEmpty();
-            }
-
-            // If not cached, request async generation
-            if (thumbPath.isEmpty()) {
-                // Request thumbnail generation in background (non-blocking)
-                ThumbnailGenerator::instance().requestThumbnail(r.filePath);
-                if (diagEnabled) {
-                    qDebug() << "[AssetsModel] requested thumbnail generation for" << r.fileName;
-                }
-            }
-
-            return thumbPath;
-        }
         case FileTypeRole: return r.fileType;
         case LastModifiedRole: return r.lastModified;
         case RatingRole: return r.rating;
@@ -64,6 +69,19 @@ QVariant AssetsModel::data(const QModelIndex& idx, int role) const{
         case SequenceStartFrameRole: return r.sequenceStartFrame;
         case SequenceEndFrameRole: return r.sequenceEndFrame;
         case SequenceFrameCountRole: return r.sequenceFrameCount;
+        case PreviewStateRole: {
+            QVariantMap preview;
+            preview["filePath"] = r.filePath;
+            preview["fileType"] = r.fileType;
+            preview["isVideo"] = isVideoExtension(r.fileType);
+            preview["isSequence"] = r.isSequence;
+            preview["sequencePattern"] = r.sequencePattern;
+            preview["sequenceStart"] = r.sequenceStartFrame;
+            preview["sequenceEnd"] = r.sequenceEndFrame;
+            preview["sequenceCount"] = r.sequenceFrameCount;
+            preview["looksLikeSequence"] = looksLikeSequence(r.filePath);
+            return preview;
+        }
     }
     return {};
 }
@@ -74,7 +92,7 @@ QHash<int,QByteArray> AssetsModel::roleNames() const{
     r[FileNameRole]="fileName";
     r[FilePathRole]="filePath";
     r[FileSizeRole]="fileSize";
-    r[ThumbnailPathRole]="thumbnailPath";
+    r[PreviewStateRole]="previewState";
     r[FileTypeRole] = "fileType";
     r[LastModifiedRole] = "lastModified";
     r[RatingRole] = "rating";
@@ -303,73 +321,6 @@ void AssetsModel::query(){
     qDebug() << "AssetsModel::query() found" << m_rows.size() << "assets for folderId" << m_folderId;
 }
 
-void AssetsModel::onThumbnailGenerated(const QString& filePath, const QString& thumbnailPath) {
-    // Open crash log
-    QFile logFile("assets_model_crash.log");
-    logFile.open(QIODevice::Append | QIODevice::Text);
-    QTextStream log(&logFile);
-
-    // Guard: ignore updates while the model is resetting to avoid dataChanged during reset
-    if (m_isResetting) {
-        log << "[ASSETS MODEL] Skipping thumbnail update during model reset for: " << filePath << "\n";
-        log.flush();
-        return;
-    }
-
-    try {
-        log << "[ASSETS MODEL START] filePath: " << filePath << ", thumbnailPath: " << thumbnailPath << "\n";
-        log.flush();
-
-        // Find the row with this file path and update it
-        log << "[ASSETS MODEL] m_rows.size(): " << m_rows.size() << "\n";
-        log.flush();
-
-        for (int i = 0; i < m_rows.size(); ++i) {
-            log << "[ASSETS MODEL] Checking row " << i << ", filePath: " << m_rows[i].filePath << "\n";
-            log.flush();
-
-            if (m_rows[i].filePath == filePath) {
-                log << "[ASSETS MODEL] Found matching row " << i << "\n";
-                log.flush();
-
-                // CRITICAL: Update the thumbnail path in the row data
-                log << "[ASSETS MODEL] Updating thumbnailPath\n";
-                log.flush();
-                m_rows[i].thumbnailPath = thumbnailPath;
-                log << "[ASSETS MODEL] thumbnailPath updated\n";
-                log.flush();
-
-                log << "[ASSETS MODEL] Getting filtered row index\n";
-                log.flush();
-                int filteredRow = m_filteredRowIndexes.indexOf(i);
-                log << "[ASSETS MODEL] filteredRow: " << filteredRow << "\n";
-                log.flush();
-
-                if (filteredRow >= 0) {
-                    qDebug() << "AssetsModel::onThumbnailGenerated updating row" << filteredRow << "for" << filePath << "-> thumbnail:" << thumbnailPath;
-                    log << "[ASSETS MODEL] Creating QModelIndex\n";
-                    log.flush();
-                    QModelIndex idx = index(filteredRow, 0);
-                    log << "[ASSETS MODEL] Emitting dataChanged\n";
-                    log.flush();
-                    emit dataChanged(idx, idx, {ThumbnailPathRole});
-                    log << "[ASSETS MODEL] dataChanged emitted\n";
-                    log.flush();
-                }
-                break;
-            }
-        }
-        log << "[ASSETS MODEL END] Success\n\n";
-        log.flush();
-    } catch (const std::exception& e) {
-        log << "[ASSETS MODEL CRASH] Exception: " << e.what() << "\n\n";
-        log.flush();
-    } catch (...) {
-        log << "[ASSETS MODEL CRASH] Unknown exception\n\n";
-        log.flush();
-    }
-}
-
 bool AssetsModel::moveAssetToFolder(int assetId, int folderId){ bool ok=DB::instance().setAssetFolder(assetId,folderId); if (ok) scheduleReload(); return ok; }
 
 bool AssetsModel::moveAssetsToFolder(const QVariantList& assetIds, int folderId){ bool any=false; for (const auto& v: assetIds){ any |= DB::instance().setAssetFolder(v.toInt(),folderId); } scheduleReload(); return any; }
@@ -401,14 +352,12 @@ void AssetsModel::rebuildFilter() {
 }
 
 bool AssetsModel::matchesFilter(const AssetRow& row) const {
-    // Apply type filter
     if (m_typeFilter == Images) {
-        if (!ThumbnailGenerator::instance().isImageFile(row.filePath)) return false;
+        if (!isImageExtension(row.fileType)) return false;
     } else if (m_typeFilter == Videos) {
-        if (!ThumbnailGenerator::instance().isVideoFile(row.filePath)) return false;
+        if (!isVideoExtension(row.fileType)) return false;
     }
 
-    // Apply rating filter
     if (m_ratingFilter == FiveStars) {
         if (row.rating != 5) return false;
     } else if (m_ratingFilter == FourPlusStars) {
@@ -419,12 +368,10 @@ bool AssetsModel::matchesFilter(const AssetRow& row) const {
         if (row.rating > 0) return false;
     }
 
-    // Apply tag filter
     if (!m_selectedTagNames.isEmpty()) {
         QStringList assetTags = DB::instance().tagsForAsset(row.id);
         bool hasAnyTag = false;
         bool hasAllTags = true;
-
         for (const QString& selectedTag : m_selectedTagNames) {
             bool assetHasTag = assetTags.contains(selectedTag);
             if (assetHasTag) {
@@ -433,29 +380,23 @@ bool AssetsModel::matchesFilter(const AssetRow& row) const {
                 hasAllTags = false;
             }
         }
-
         if (m_tagFilterMode == And) {
             if (!hasAllTags) return false;
-        } else { // Or mode
+        } else {
             if (!hasAnyTag) return false;
         }
     }
 
     const QString needle = m_searchQuery.trimmed();
-    if (needle.isEmpty())
-        return true;
-    const QString needleLower = needle.toLower();
+    if (needle.isEmpty()) return true;
     const Qt::CaseSensitivity cs = Qt::CaseInsensitive;
-    if (row.fileName.contains(needle, cs))
-        return true;
-    if (row.filePath.contains(needle, cs))
-        return true;
-    if (!row.fileType.isEmpty() && row.fileType.contains(needle, cs))
-        return true;
-    if (row.lastModified.isValid() && row.lastModified.toString("yyyy-MM-dd hh:mm").toLower().contains(needleLower))
-        return true;
+    if (row.fileName.contains(needle, cs)) return true;
+    if (row.filePath.contains(needle, cs)) return true;
+    if (!row.fileType.isEmpty() && row.fileType.contains(needle, cs)) return true;
+    if (row.lastModified.isValid() && row.lastModified.toString("yyyy-MM-dd hh:mm").toLower().contains(needle.toLower())) return true;
     return false;
 }
+
 QVariantMap AssetsModel::get(int row) const {
     QVariantMap map;
     if (row < 0 || row >= m_filteredRowIndexes.size())
@@ -465,9 +406,19 @@ QVariantMap AssetsModel::get(int row) const {
     map.insert("fileName", r.fileName);
     map.insert("filePath", r.filePath);
     map.insert("fileSize", QVariant::fromValue<qlonglong>(r.fileSize));
-    map.insert("thumbnailPath", ThumbnailGenerator::instance().getThumbnailPath(r.filePath));
     map.insert("fileType", r.fileType);
     map.insert("lastModified", r.lastModified);
+    QVariantMap preview;
+    preview["filePath"] = r.filePath;
+    preview["fileType"] = r.fileType;
+    preview["isVideo"] = isVideoExtension(r.fileType);
+    preview["isSequence"] = r.isSequence;
+    preview["sequencePattern"] = r.sequencePattern;
+    preview["sequenceStart"] = r.sequenceStartFrame;
+    preview["sequenceEnd"] = r.sequenceEndFrame;
+    preview["sequenceCount"] = r.sequenceFrameCount;
+    preview["looksLikeSequence"] = looksLikeSequence(r.filePath);
+    map.insert("previewState", preview);
     return map;
 }
 

@@ -60,6 +60,35 @@ if(PkgConfig_FOUND)
     pkg_check_modules(FFMPEG QUIET libavutil)
 endif()
 if(NOT FFMPEG_FOUND)
+    if(DEFINED ENV{FFMPEG_ROOT} AND NOT ENV{FFMPEG_ROOT} STREQUAL "")
+        set(FFMPEG_ROOT $ENV{FFMPEG_ROOT})
+    endif()
+    if(NOT FFMPEG_ROOT)
+        # Probe common in-repo locations (supports running CMake from native/qt6 or repo root)
+        set(_ffmpeg_candidates
+            "${CMAKE_SOURCE_DIR}/../third_party/ffmpeg"
+            "${CMAKE_SOURCE_DIR}/../../third_party/ffmpeg"
+            "${CMAKE_CURRENT_LIST_DIR}/../third_party/ffmpeg"
+            "${CMAKE_CURRENT_LIST_DIR}/../../third_party/ffmpeg"
+        )
+        foreach(_candidate IN LISTS _ffmpeg_candidates)
+            get_filename_component(_abs_candidate "${_candidate}" ABSOLUTE)
+            if(EXISTS "${_abs_candidate}/include" AND EXISTS "${_abs_candidate}/lib")
+                set(FFMPEG_ROOT "${_abs_candidate}")
+                break()
+            endif()
+        endforeach()
+    endif()
+    if(FFMPEG_ROOT AND EXISTS "${FFMPEG_ROOT}")
+        set(FFMPEG_INCLUDE_DIR "${FFMPEG_ROOT}/include")
+        set(FFMPEG_LIBRARY_DIRS "${FFMPEG_ROOT}/lib")
+        if(EXISTS "${FFMPEG_INCLUDE_DIR}")
+            set(FFMPEG_FOUND TRUE)
+            message(STATUS "Using custom FFmpeg from ${FFMPEG_ROOT}")
+        endif()
+    endif()
+endif()
+if(NOT FFMPEG_FOUND)
     # Try vcpkg FFmpeg
     find_path(FFMPEG_INCLUDE_DIR libavutil/log.h PATHS "C:/vcpkg/installed/x64-windows/include")
     if(FFMPEG_INCLUDE_DIR)
@@ -95,8 +124,8 @@ qt_add_executable(kassetmanagerqt WIN32
     src/assets_table_model.h
     src/importer.h
     src/importer.cpp
-    src/thumbnail_generator.h
-    src/thumbnail_generator.cpp
+    src/live_preview_manager.h
+    src/live_preview_manager.cpp
     src/log_manager.h
     src/log_manager.cpp
     src/progress_manager.h

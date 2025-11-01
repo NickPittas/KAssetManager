@@ -9,7 +9,6 @@
 #include "db.h"
 #include "log_manager.h"
 #include "progress_manager.h"
-#include "thumbnail_generator.h"
 
 #ifdef Q_OS_WIN
 #include <windows.h>
@@ -125,7 +124,6 @@ int main(int argc, char *argv[])
     auto& logManager = LogManager::instance();
     logManager.addLog("Application started");
     auto& progressManager = ProgressManager::instance();
-    auto& thumbGen = ThumbnailGenerator::instance();
     LogManager::instance().addLog("[MAIN] Before DB init");
 
     // Init local SQLite DB under portable data folder
