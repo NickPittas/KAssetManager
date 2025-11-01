@@ -63,6 +63,8 @@ KAsset Manager is a professional Windows desktop application for organizing and 
 
 The application window is divided into three main panels:
 
+Tabs along the top default to **File Manager** (first) and **Asset Manager** (second).
+
 ### Left Panel - Folder Tree
 - **Hierarchical folder structure** for organizing assets
 - **Right-click** for folder operations (Create, Rename, Delete)
@@ -70,7 +72,7 @@ The application window is divided into three main panels:
 - **Expandable/collapsible** tree structure
 
 ### Center Panel - Asset Grid/List
-- **Grid View**: Thumbnail grid with file names
+- **Grid View**: Live preview cards with neutral backgrounds and file names (hold **Ctrl** to scrub clips directly in the grid)
 - **List View**: Table with columns (Name, Type, Size, Date, Rating)
 - **Toolbar**: View mode toggle and thumbnail size slider
 - **Multi-select**: Ctrl+Click, Shift+Click
@@ -148,7 +150,7 @@ The application window is divided into three main panels:
 
 - **Progress bar** shows overall completion
 - **Current file** being processed is displayed
-- **Thumbnail generation** happens in background
+- **Live previews** decode on demand; the first frame is cached automatically when a card becomes visible
 - **Cancel button** to stop import (not yet implemented)
 
 ### Image Sequence Detection
@@ -160,11 +162,10 @@ KAsset Manager automatically detects image sequences:
 - `filename_####.ext` (e.g., `shot_0001.png`)
 - `filename####.ext` (e.g., `frame0001.jpg`)
 
-**Sequence Handling:**
-- Sequences are **grouped as a single asset**
-- **First frame** is used for thumbnail
-- **Frame count** is displayed in info panel
-- **Preview mode** plays the sequence at 24fps
+**Sequence Handling (File Manager):**
+- Toggle **Group sequences** (checkbox next to the preview button) to collapse numbered frames into a single entry.
+- The representative frame uses a live preview; the info panel shows the frame range and count.
+- Double-click or hold **Ctrl** and scrub to preview the entire sequence at 24fps.
 
 ---
 
@@ -208,6 +209,13 @@ KAsset Manager automatically detects image sequences:
 **Selection Info:**
 - Selected count shown in info panel
 - Total size of selected assets displayed
+
+### Live Preview Scrubbing
+- Hold **Ctrl** while hovering a card to engage scrubbing. Move the mouse horizontally (or use the wheel) to scrub across the entire clip or image sequence.
+- The scrub HUD stays inside the card and maps the full card width to the source duration.
+- Release **Ctrl** to exit scrubbing; the cursor returns to standard hover behaviour.
+- Works in both Asset Manager and File Manager grid views, including grouped image sequences.
+
 
 ---
 
@@ -482,7 +490,7 @@ All filters work together:
 ### Performance
 
 1. **Import in batches** for large libraries
-2. **Wait for thumbnails** to generate before navigating
+2. Give live previews a moment to cache when you enter a dense folder (decoder work happens asynchronously)
 3. **Use filters** instead of scrolling through thousands of assets
 4. **Close preview** when done to free memory
 
@@ -504,15 +512,15 @@ All filters work together:
 
 ## Troubleshooting
 
-### Thumbnails Not Showing
+### Live Preview Not Showing
 
-**Problem**: Black squares instead of thumbnails
+**Problem**: Card stays blank or displays an error banner
 
 **Solutions:**
-1. Wait for thumbnail generation to complete
-2. Check if files still exist at original location
-3. Restart application to reload cache
-4. Check `data/thumbnails/` folder for cached files
+1. Give the decoder a moment to cache the first frame (especially for large EXR/ProRes files).
+2. Verify the file is accessible on disk and not locked by another application.
+3. Check `debug.log` for `[LivePreview]` warnings about missing codecs or permissions.
+4. Use the File Manager preview panel to verify playback; if grouping is enabled, ensure the representative frame still exists.
 
 ### Import Not Working
 

@@ -2,14 +2,14 @@
 
 | ID | Task | Owners | Status | Notes |
 |----|------|--------|--------|-------|
-| T1 | Ship a full-featured FFmpeg build and integrate it into the app | Codex | TODO | Build FFmpeg with PNG/ProRes/DNxHD/MXF support, update CMake, and package the new DLLs |
-| T2 | Harden `LivePreviewManager` for FFmpeg-first decoding (pool, caching, cancellation) | Codex | In Progress | Current manager handles requests but still needs robust error handling + codec reporting |
-| T3 | Build resilient image-sequence streaming (EXR/DPX) with watchdogs and throttled IO | Codex | In Progress | Sequence queue + normalized frame picking live; watchdog + worker pool tuning still needed |
-| T4 | Polish asset grid hover scrubbing (Ctrl + wheel, HUD-only overlay) | Codex | In Progress | Overlay renders decoded frames, grabs mouse during scrub, and locks focus until Ctrl released; awaiting user verification |
-| T5 | Replace file manager thumbnail flow with live preview delegate & shared overlay | Codex | In Progress | Delegate adjusted for text baseline; dependent on FFmpeg upgrade for visible frames |
-| T6 | Remove thumbnail cache UI/actions; add live scrubbing preferences | Codex | In Progress | Settings clears preview cache; preference toggles and terminology cleanup still needed |
-| T7 | Documentation updates (developer, user, API references) | Codex | TODO | Describe live scrubbing workflows and FFmpeg requirements |
-| T8 | Manual validation per developer guide checklist | Codex + QA | TODO | Capture findings in logs |
+| T1 | Ship a full-featured FFmpeg build and integrate it into the app | Codex | Done | Gyan full-shared bundle fetched via `scripts/fetch-ffmpeg.ps1`; build script stages the matching DLLs |
+| T2 | Harden `LivePreviewManager` for FFmpeg-first decoding (pool, caching, cancellation) | Codex | Done | Live previews stream in-memory with cache eviction, error dedupe, and cursor-clamped scrubbing |
+| T3 | Build resilient image-sequence streaming (EXR/DPX) with watchdogs and throttled IO | Codex | Done | Sequence metadata cache drives grouped previews; overlay plays reconstructed frame lists |
+| T4 | Polish asset grid hover scrubbing (Ctrl + wheel, HUD-only overlay) | Codex | Done | Shared controller clamps cursor, maps card width to timeline, and paints inset live previews |
+| T5 | Replace file manager thumbnail flow with live preview delegate & shared overlay | Codex | Done | File Manager uses the same delegate/overlay; sequence grouping checkbox controls proxy |
+| T6 | Remove thumbnail cache UI/actions; add live scrubbing preferences | Codex | Done | UI copy now references live previews; cache clear keeps in-memory store only |
+| T7 | Documentation updates (developer, user, API references) | Codex | Done | User/Developer/Tech guides now describe live previews, FFmpeg tooling, and File Manager controls |
+| T8 | Manual validation per developer guide checklist | Codex + QA | In Progress | Continue logging coverage for EXR sequences, intraframe codecs, and rapid-scroll scrubbing |
 
 ## Implementation Notes
 - Update this file as tasks move from TODO -> In Progress -> Done.

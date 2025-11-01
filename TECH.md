@@ -13,7 +13,7 @@ KAsset Manager is built with **Qt 6 Widgets** (C++20) for native Windows desktop
   - QTreeView - Folder tree navigation
   - QListView - Asset grid with icon mode
   - QSplitter - Resizable panels
-  - Custom QStyledItemDelegate - Thumbnail rendering
+  - Custom QStyledItemDelegate - Live preview rendering
   - Native multi-select (Ctrl+Click, Shift+Click)
   - Native drag-and-drop support
   - Native context menus
@@ -44,7 +44,7 @@ KAsset Manager is built with **Qt 6 Widgets** (C++20) for native Windows desktop
 ### Media Support
 
 - **Qt Multimedia** - Audio/video playback
-  - FFmpeg backend (bundled with Qt 6.9.3)
+  - FFmpeg backend (bundled Qt 6.9.3 + custom full-shared build in `third_party/ffmpeg`)
   - Hardware-accelerated decoding
   - Format support: MP4, MOV, AVI, MP3, WAV
 
@@ -84,9 +84,9 @@ MainWindow (QMainWindow)
 
 #### AssetsModel
 - Flat list of assets in current folder
-- Thumbnail caching
+- Live preview caching (in-memory via LivePreviewManager)
 - Filtering support (search, tags, rating)
-- Roles: IdRole, FileNameRole, FilePathRole, FileSizeRole, ThumbnailPathRole, FileTypeRole, LastModifiedRole, RatingRole
+- Roles: IdRole, FileNameRole, FilePathRole, FileSizeRole, PreviewStateRole, FileTypeRole, LastModifiedRole, RatingRole
 
 #### TagsModel
 - List of available tags
@@ -111,7 +111,6 @@ CREATE TABLE assets (
     file_path TEXT NOT NULL UNIQUE,
     file_size INTEGER,
     file_type TEXT,
-    thumbnail_path TEXT,
     last_modified INTEGER,
     rating INTEGER DEFAULT 0,
     folder_id INTEGER NOT NULL,
@@ -148,22 +147,29 @@ CREATE TABLE asset_tags (
 - CRUD operations for folders, assets, tags
 - Database initialization and migrations
 
-#### Importer (importer.h/cpp)
+#### LivePreviewManager (live_preview_manager.h/cpp)
+- Manages in-memory poster frames and hover scrubbing
+- Normalises requests (path, size, position)
+- Dispatches FFmpeg/OpenImageIO decode jobs on background threads
+- Emits `frameReady` / `frameFailed` signals consumed by grid delegates and the preview overlay
+- Maintains an LRU pixmap cache (~512 MB default)
+- Reconstructs image sequence frame lists for grouped entries
+
+### PreviewOverlay (preview_overlay.h/cpp)
+- Full-screen preview window (images, videos, sequences)
+- Live scrubbing, playback controls, metadata display
+- Reuses LivePreviewManager frames for consistency
+
+### Importer (importer.h/cpp)
 - Background file import
-- Thumbnail generation
+- Metadata extraction and checksum validation
 - Progress reporting
 - File type detection
-
-#### ThumbnailGenerator (thumbnail_generator.h/cpp)
-- Asynchronous thumbnail creation
-- Image scaling and caching
-- Video frame extraction
-- Thread pool for parallel processing
 
 #### AssetsModel (assets_model.h/cpp)
 - Asset data model for QListView
 - Filtering and sorting
-- Thumbnail loading
+- Live preview lookup via LivePreviewManager
 - Data refresh on changes
 
 #### VirtualFolderTreeModel (virtual_folders.h/cpp)
@@ -209,12 +215,12 @@ CREATE TABLE asset_tags (
 
 ## Performance Considerations
 
-### Thumbnail Caching
+### Live Preview Streaming
 
-- Thumbnails generated once and cached to disk
-- Lazy loading (only visible items)
-- Background generation with thread pool
-- Cache location: `data/thumbnails/`
+- LivePreviewManager decodes frames on demand and caches pixmaps in memory
+- Grid delegates clamp rendering to inset card bounds
+- Background jobs use FFmpeg (video) and OpenImageIO (image sequences)
+- Cache eviction is LRU-based and tunable via code constants
 
 ### Database Optimization
 
@@ -225,7 +231,7 @@ CREATE TABLE asset_tags (
 
 ### UI Responsiveness
 
-- Asynchronous operations (import, thumbnail generation)
+- Asynchronous operations (import, live preview decoding)
 - Progress reporting for long operations
 - Lazy loading in tree and list views
 - Efficient repainting with custom delegates
@@ -333,7 +339,7 @@ CREATE TABLE asset_tags (
 
 - Initial Qt Widgets implementation
 - Folder tree navigation
-- Asset grid view with thumbnails
+- Asset grid view with live preview cards
 - Multi-select support
 - Drag-and-drop import
 - Tagging system
