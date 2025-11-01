@@ -275,7 +275,7 @@ private:
     QSplitter *fmSplitter;
     // Sequence grouping
     SequenceGroupingProxyModel *fmProxyModel = nullptr;
-    QToolButton *fmGroupSequencesButton = nullptr;
+    QCheckBox *fmGroupSequencesCheckBox = nullptr;
     bool fmGroupSequences = true;
 
     QSplitter *fmLeftSplitter;   // Favorites | Folder tree
