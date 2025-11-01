@@ -505,10 +505,27 @@ private:
         try {
             painter->save();
 
+            const bool isSelected = option.state & QStyle::State_Selected;
+            const bool isHovered = option.state & QStyle::State_MouseOver;
+
+            const QRect cardRect = option.rect.adjusted(2, 2, -2, -2);
+            QColor baseColor(26, 26, 26);   // slightly lighter than #0a0a0a background
+            QColor hoverColor(38, 38, 38);
+            QColor selectedColor(62, 90, 140);
+            QColor cardColor = baseColor;
+            if (isSelected) {
+                cardColor = selectedColor;
+            } else if (isHovered) {
+                cardColor = hoverColor;
+            }
+            painter->setPen(Qt::NoPen);
+            painter->setBrush(cardColor);
+            painter->drawRoundedRect(cardRect, 6, 6);
+
             const QString filePath = index.data(AssetsModel::FilePathRole).toString();
             const QString fileType = index.data(AssetsModel::FileTypeRole).toString();
 
-            if (option.state & (QStyle::State_Selected | QStyle::State_MouseOver)) {
+            if (isSelected || isHovered) {
                 QColor c = (option.state & QStyle::State_Selected) ? QColor(88,166,255) : QColor(80,80,80);
                 painter->setPen(QPen(c, 1.5));
                 painter->setBrush(Qt::NoBrush);
@@ -592,9 +609,26 @@ public:
         painter->save();
 
         // Outline on hover/selection only
-        if (option.state & (QStyle::State_Selected | QStyle::State_MouseOver)) {
-            QColor c = (option.state & QStyle::State_Selected) ? QColor(88,166,255) : QColor(80,80,80);
-            painter->setPen(QPen(c, 1.5)); painter->setBrush(Qt::NoBrush);
+        const bool isSelected = option.state & QStyle::State_Selected;
+        const bool isHovered = option.state & QStyle::State_MouseOver;
+        const QRect cardRect = option.rect.adjusted(2, 2, -2, -2);
+        QColor baseColor(26, 26, 26);
+        QColor hoverColor(38, 38, 38);
+        QColor selectedColor(62, 90, 140);
+        QColor cardColor = baseColor;
+        if (isSelected) {
+            cardColor = selectedColor;
+        } else if (isHovered) {
+            cardColor = hoverColor;
+        }
+        painter->setPen(Qt::NoPen);
+        painter->setBrush(cardColor);
+        painter->drawRoundedRect(cardRect, 6, 6);
+
+        if (isSelected || isHovered) {
+            QColor c = isSelected ? QColor(88,166,255) : QColor(80,80,80);
+            painter->setPen(QPen(c, 1.5));
+            painter->setBrush(Qt::NoBrush);
             painter->drawRect(option.rect.adjusted(1, 1, -1, -1));
         }
 
