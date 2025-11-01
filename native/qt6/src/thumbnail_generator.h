@@ -11,10 +11,13 @@
 #include <QMediaPlayer>
 #include <QVideoSink>
 #include <QTimer>
+#include <QPointer>
 #include <atomic>
 
-// Forward declaration
+// Forward declarations
 class ThumbnailGenerator;
+class VideoThumbnailGenerator;
+
 
 // Runnable task for generating IMAGE thumbnails in background (images only, not videos)
 class ThumbnailTask : public QObject, public QRunnable {
@@ -36,14 +39,16 @@ private:
 class VideoFFmpegTask : public QObject, public QRunnable {
     Q_OBJECT
 public:
-    VideoFFmpegTask(const QString& filePath, const QString& cachePath, ThumbnailGenerator* generator);
+    VideoFFmpegTask(const QString& filePath, const QString& cachePath, ThumbnailGenerator* generator, VideoThumbnailGenerator* owner);
     void run() override;
 private:
     bool decodeAndSave();
     QString m_filePath;
     QString m_cachePath;
     ThumbnailGenerator* m_generator;
+    QPointer<VideoThumbnailGenerator> m_owner;
 };
+
 
 // Async video thumbnail generator (primary path via QMediaPlayer; falls back to FFmpeg task when needed)
 class VideoThumbnailGenerator : public QObject {
@@ -64,10 +69,11 @@ private:
     QString m_filePath;
     QString m_cachePath;
     ThumbnailGenerator* m_generator;
-    QMediaPlayer* m_player;
-    QVideoSink* m_videoSink;
-    QTimer* m_timeout;
+    QMediaPlayer* m_player = nullptr;
+    QVideoSink* m_videoSink = nullptr;
+    QTimer* m_timeout = nullptr;
     bool m_frameReceived;
+
     QImage m_capturedFrame;
     int m_sessionId = 0;
     qint64 m_seekTime = 1000; // Seek to 1 second for thumbnail

@@ -23,17 +23,31 @@
 #include <QVideoFrame>
 #include <QTimer>
 #include <QRegularExpression>
+#include <QThread>
+
+#include <algorithm>
+#include <cmath>
 
 #ifdef _MSC_VER
-#include <windows.h>
+#ifndef NOMINMAX
+#define NOMINMAX
 #endif
+#include <windows.h>
+#undef min
+#undef max
+#endif
+
 
 namespace {
 inline bool thumbnailDiagEnabled() {
     static const bool enabled = !qEnvironmentVariableIsEmpty("KASSET_THUMBNAIL_DIAG");
     return enabled;
 }
+
+constexpr int kFfmpegTargetFrameIndex = 19; // zero-based; aim for ~20th frame
+constexpr qint64 kSeekToleranceUs = 50000;  // 50ms tolerance when filtering frames
 }
+
 
 #ifdef HAVE_FFMPEG
 
@@ -102,11 +116,12 @@ void ThumbnailTask::run() {
 
 
 // VideoFFmpegTask implementation (fallback path)
-VideoFFmpegTask::VideoFFmpegTask(const QString& filePath, const QString& cachePath, ThumbnailGenerator* generator)
-    : m_filePath(filePath), m_cachePath(cachePath), m_generator(generator)
+VideoFFmpegTask::VideoFFmpegTask(const QString& filePath, const QString& cachePath, ThumbnailGenerator* generator, VideoThumbnailGenerator* owner)
+    : m_filePath(filePath), m_cachePath(cachePath), m_generator(generator), m_owner(owner)
 {
     setAutoDelete(true);
 }
+
 
 // Helper: decode first frame and save thumbnail using FFmpeg
 bool VideoFFmpegTask::decodeAndSave()
@@ -209,26 +224,57 @@ bool VideoFFmpegTask::decodeAndSave()
         avformat_close_input(&fmt);
         return false;
     }
+
+    int threadCount = qBound(1, QThread::idealThreadCount(), 8);
+    ctx->thread_count = threadCount;
+    ctx->thread_type = threadCount > 1 ? FF_THREAD_FRAME : FF_THREAD_SLICE;
+    ctx->skip_loop_filter = AVDISCARD_NONREF;
+    ctx->skip_idct = AVDISCARD_NONREF;
+
     if (avcodec_open2(ctx, dec, nullptr) < 0) {
         qWarning() << "[VideoFFmpegTask] avcodec_open2 failed";
         avcodec_free_context(&ctx);
         avformat_close_input(&fmt);
         return false;
     }
-    // Seek near the start (faster). Use min(1s, 10% of duration) if available.
-    if (fmt->duration > 0) {
-        int64_t target = std::min<int64_t>(AV_TIME_BASE, fmt->duration / 10);
-        int64_t ts = av_rescale_q(target, AV_TIME_BASE_Q, vs->time_base);
-        if (av_seek_frame(fmt, vIdx, ts, AVSEEK_FLAG_BACKWARD) >= 0) {
+
+    double fps = 0.0;
+    if (vs->avg_frame_rate.den > 0 && vs->avg_frame_rate.num > 0) {
+        fps = av_q2d(vs->avg_frame_rate);
+    }
+    if ((fps <= 0.0) && vs->r_frame_rate.den > 0 && vs->r_frame_rate.num > 0) {
+        fps = av_q2d(vs->r_frame_rate);
+    }
+
+    int64_t targetUs = 0;
+    int64_t targetPts = 0;
+    if (fps > 0.0) {
+        double targetSeconds = static_cast<double>(kFfmpegTargetFrameIndex) / fps;
+        targetSeconds = std::clamp(targetSeconds, 0.2, 5.0);
+        targetUs = static_cast<int64_t>(std::llround(targetSeconds * AV_TIME_BASE));
+        targetPts = av_rescale_q(targetUs, AV_TIME_BASE_Q, vs->time_base);
+    } else if (fmt->duration > 0) {
+        targetUs = std::min<int64_t>(fmt->duration / 10, static_cast<int64_t>(1.5 * AV_TIME_BASE));
+        if (targetUs <= 0) {
+            targetUs = AV_TIME_BASE;
+        }
+        targetPts = av_rescale_q(targetUs, AV_TIME_BASE_Q, vs->time_base);
+    }
+
+    if (targetPts > 0) {
+        if (av_seek_frame(fmt, vIdx, targetPts, AVSEEK_FLAG_BACKWARD) >= 0) {
             avcodec_flush_buffers(ctx);
-            qDebug() << "[VideoFFmpegTask] Sought to timestamp:" << ts;
-        } else {
-            qWarning() << "[VideoFFmpegTask] av_seek_frame near start failed; decoding from current position";
+            if (thumbnailDiagEnabled()) {
+                qDebug() << "[VideoFFmpegTask] Sought to pts" << targetPts << "targetUs" << targetUs;
+            }
+        } else if (thumbnailDiagEnabled()) {
+            qWarning() << "[VideoFFmpegTask] av_seek_frame target failed; decoding from beginning";
         }
     }
 
 
     AVPacket* pkt = av_packet_alloc();
+
     AVFrame* frame = av_frame_alloc();
     if (!pkt || !frame) {
         av_packet_free(&pkt); av_frame_free(&frame);
@@ -237,61 +283,130 @@ bool VideoFFmpegTask::decodeAndSave()
     }
 
     bool gotFrame = false;
+    int decodedFrames = 0;
     int packetsRead = 0;
-    const int maxPackets = 200; // keep fast
+    const int maxPackets = 600; // allow deeper scan for high-fps clips
 
-    while (packetsRead < maxPackets) {
+    auto frameReady = [&](AVFrame* frm, int decodedCount) -> bool {
+        if (targetUs <= 0) {
+            return decodedCount >= 1;
+        }
+        if (frm->pts != AV_NOPTS_VALUE) {
+            int64_t frameUs = av_rescale_q(frm->pts, vs->time_base, AV_TIME_BASE_Q);
+            if (frameUs + kSeekToleranceUs < targetUs) {
+                return false;
+            }
+        } else if (decodedCount < kFfmpegTargetFrameIndex + 1) {
+            return false;
+        }
+        return true;
+    };
+
+    while (packetsRead < maxPackets && !gotFrame) {
         int r = av_read_frame(fmt, pkt);
         if (r == AVERROR_EOF) {
-            // Flush decoder
             avcodec_send_packet(ctx, nullptr);
             while (true) {
                 r = avcodec_receive_frame(ctx, frame);
-                if (r == 0) { gotFrame = true; break; }
-                if (r == AVERROR(EAGAIN) || r == AVERROR_EOF) break;
+                if (r == 0) {
+                    ++decodedFrames;
+                    if (!frameReady(frame, decodedFrames)) {
+                        continue;
+                    }
+                    gotFrame = true;
+                    break;
+                }
+                if (r == AVERROR(EAGAIN) || r == AVERROR_EOF || r < 0) {
+                    break;
+                }
             }
             break;
         } else if (r < 0) {
             break;
         }
+
         if (pkt->stream_index == vIdx) {
             if (avcodec_send_packet(ctx, pkt) == 0) {
                 while (true) {
                     r = avcodec_receive_frame(ctx, frame);
-                    if (r == 0) { gotFrame = true; break; }
-                    if (r == AVERROR(EAGAIN) || r == AVERROR_EOF) break;
-                    if (r < 0) break;
+                    if (r == 0) {
+                        ++decodedFrames;
+                        if (!frameReady(frame, decodedFrames)) {
+                            continue;
+                        }
+                        gotFrame = true;
+                        break;
+                    }
+                    if (r == AVERROR(EAGAIN) || r == AVERROR_EOF) {
+                        break;
+                    }
+                    if (r < 0) {
+                        break;
+                    }
                 }
             }
         }
         av_packet_unref(pkt);
-        if (gotFrame) break;
-        ++packetsRead;
+        if (!gotFrame) {
+            ++packetsRead;
+        }
+    }
+
+    if (!gotFrame) {
+        avcodec_send_packet(ctx, nullptr);
+        while (true) {
+            int r = avcodec_receive_frame(ctx, frame);
+            if (r == 0) {
+                ++decodedFrames;
+                if (!frameReady(frame, decodedFrames)) {
+                    continue;
+                }
+                gotFrame = true;
+                break;
+            }
+            if (r == AVERROR(EAGAIN) || r == AVERROR_EOF || r < 0) {
+                break;
+            }
+        }
     }
 
     QImage outImage;
     if (gotFrame) {
-        SwsContext* sws = sws_getContext(
-            frame->width, frame->height, (AVPixelFormat)frame->format,
-            frame->width, frame->height, AV_PIX_FMT_BGRA,
-            SWS_BILINEAR, nullptr, nullptr, nullptr);
-        if (!sws) {
-            qWarning() << "[VideoFFmpegTask] sws_getContext failed";
-        } else {
-            uint8_t* dstData[4]; int dstLinesize[4];
-            if (av_image_alloc(dstData, dstLinesize, frame->width, frame->height, AV_PIX_FMT_BGRA, 1) >= 0) {
-                sws_scale(sws, frame->data, frame->linesize, 0, frame->height, dstData, dstLinesize);
-                // Copy to QImage
-                QImage img(frame->width, frame->height, QImage::Format_ARGB32);
-                for (int y = 0; y < frame->height; ++y) {
-                    memcpy(img.scanLine(y), dstData[0] + y * dstLinesize[0], frame->width * 4);
-                }
-                outImage = img;
-                av_freep(&dstData[0]);
+
+        const int srcW = frame->width;
+        const int srcH = frame->height;
+        if (srcW > 0 && srcH > 0) {
+            int targetW = ThumbnailGenerator::THUMBNAIL_WIDTH;
+            int targetH = ThumbnailGenerator::THUMBNAIL_HEIGHT;
+            if (srcW >= srcH) {
+                targetH = std::max(1, (srcH * targetW) / srcW);
+            } else {
+                targetW = std::max(1, (srcW * targetH) / srcH);
             }
-            sws_freeContext(sws);
+
+            SwsContext* sws = sws_getContext(
+                srcW, srcH, (AVPixelFormat)frame->format,
+                targetW, targetH, AV_PIX_FMT_BGRA,
+                SWS_BILINEAR, nullptr, nullptr, nullptr);
+            if (!sws) {
+                qWarning() << "[VideoFFmpegTask] sws_getContext failed";
+            } else {
+                uint8_t* dstData[4]; int dstLinesize[4];
+                if (av_image_alloc(dstData, dstLinesize, targetW, targetH, AV_PIX_FMT_BGRA, 1) >= 0) {
+                    sws_scale(sws, frame->data, frame->linesize, 0, srcH, dstData, dstLinesize);
+                    // Copy to QImage at thumbnail resolution
+                    QImage img(targetW, targetH, QImage::Format_ARGB32);
+                    for (int y = 0; y < targetH; ++y) {
+                        memcpy(img.scanLine(y), dstData[0] + y * dstLinesize[0], targetW * 4);
+                    }
+                    outImage = img;
+                    av_freep(&dstData[0]);
+                }
+                sws_freeContext(sws);
+            }
         }
     }
+
 
     av_frame_free(&frame);
     av_packet_free(&pkt);
@@ -323,86 +438,116 @@ bool VideoFFmpegTask::decodeAndSave()
 
 void VideoFFmpegTask::run()
 {
-    qDebug() << "[VideoFFmpegTask] Fallback decoding for" << m_filePath;
+    if (thumbnailDiagEnabled()) {
+        qDebug() << "[VideoFFmpegTask] Fallback decoding for" << m_filePath;
+    }
     bool success = false;
     success = decodeAndSave();
+
     const QString filePath = m_filePath;
     const QString cachePath = m_cachePath;
     ThumbnailGenerator* generator = m_generator;
 
-    QMetaObject::invokeMethod(generator, [generator, filePath, cachePath, success]() {
-        QMutexLocker locker(&generator->m_mutex);
-        generator->m_pendingThumbnails.remove(filePath);
+    QMetaObject::invokeMethod(generator, [generator, filePath, cachePath, success, owner = m_owner]() {
+        {
+            QMutexLocker locker(&generator->m_mutex);
+            generator->m_pendingThumbnails.remove(filePath);
+            if (owner) {
+                generator->m_activeVideoGenerators.remove(owner);
+            }
+        }
         generator->updateProgress();
         if (success) {
             emit generator->thumbnailGenerated(filePath, cachePath);
         } else {
             emit generator->thumbnailFailed(filePath);
         }
+        generator->startNextVideoIfPossible();
+        if (owner) {
+            owner->deleteLater();
+        }
     }, Qt::QueuedConnection);
 }
+
 
 // VideoThumbnailGenerator implementation
 VideoThumbnailGenerator::VideoThumbnailGenerator(const QString& filePath, const QString& cachePath, ThumbnailGenerator* generator, int sessionId)
     : QObject(nullptr), m_filePath(filePath), m_cachePath(cachePath), m_generator(generator),
       m_frameReceived(false), m_sessionId(sessionId) {
 
+#ifdef HAVE_FFMPEG
+    m_player = nullptr;
+    m_videoSink = nullptr;
+    m_timeout = nullptr;
+#else
     m_player = new QMediaPlayer(this);
     m_videoSink = new QVideoSink(this);
     m_player->setVideoSink(m_videoSink);
 
     m_timeout = new QTimer(this);
     m_timeout->setSingleShot(true);
-    m_timeout->setInterval(2000);
+    m_timeout->setInterval(150);
 
     connect(m_player, &QMediaPlayer::mediaStatusChanged, this, &VideoThumbnailGenerator::onMediaStatusChanged);
     connect(m_player, &QMediaPlayer::errorOccurred, this, &VideoThumbnailGenerator::onError);
     connect(m_videoSink, &QVideoSink::videoFrameChanged, this, &VideoThumbnailGenerator::onVideoFrameChanged);
     connect(m_timeout, &QTimer::timeout, this, &VideoThumbnailGenerator::onTimeout);
+#endif
 }
 
+
 VideoThumbnailGenerator::~VideoThumbnailGenerator() {
+#ifndef HAVE_FFMPEG
     if (m_player) {
         m_player->stop();
         m_player->setSource(QUrl());
     }
-    // Remove from active set
+#endif
     if (m_generator) {
         QMutexLocker locker(&m_generator->m_mutex);
         m_generator->m_activeVideoGenerators.remove(this);
     }
 }
 
+
 void VideoThumbnailGenerator::startFfmpegFallback()
 {
 #ifdef HAVE_FFMPEG
-    // Keep pending set entry; FFmpeg task will clear it on completion
-    VideoFFmpegTask* task = new VideoFFmpegTask(m_filePath, m_cachePath, m_generator);
+    {
+        QMutexLocker locker(&m_generator->m_mutex);
+        m_generator->m_activeVideoGenerators.insert(this);
+    }
+    VideoFFmpegTask* task = new VideoFFmpegTask(m_filePath, m_cachePath, m_generator, this);
     m_generator->m_threadPool->start(task);
-    qDebug() << "[VideoThumbnailGenerator] Scheduled FFmpeg fallback for:" << m_filePath;
+    if (thumbnailDiagEnabled()) {
+        qDebug() << "[VideoThumbnailGenerator] Scheduled FFmpeg fallback for:" << m_filePath;
+    }
 #endif
 }
 
+
 void VideoThumbnailGenerator::start() {
-    // Fast-cancel if session changed
     if (m_generator->m_sessionId.load() != m_sessionId) { deleteLater(); return; }
-    
-    // Check codec first to avoid unnecessary QMediaPlayer attempts
+
+#ifdef HAVE_FFMPEG
+    startFfmpegFallback();
+#else
     if (MediaInfo::shouldUseFFmpegPlayback(m_filePath)) {
         startFfmpegFallback();
         return;
     }
-    
+
     if (!m_player) { qWarning() << "[VideoThumbnailGenerator] Player null"; return; }
-    
-    // Track as active for cancellation
+
     {
         QMutexLocker locker(&m_generator->m_mutex);
         m_generator->m_activeVideoGenerators.insert(this);
     }
     m_player->setSource(QUrl::fromLocalFile(m_filePath));
     m_timeout->start();
+#endif
 }
+
 
 
 void VideoThumbnailGenerator::onMediaStatusChanged() {
@@ -1026,7 +1171,9 @@ void ThumbnailGenerator::startProgress(int total) {
     m_completedThumbnails = 0;
     m_lastReportedProgress = 0;
     ProgressManager::instance().start("Generating thumbnails", total);
+    emit progressChanged(0, m_totalThumbnails);
 }
+
 
 void ThumbnailGenerator::updateProgress() {
 

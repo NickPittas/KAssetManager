@@ -454,22 +454,84 @@ private:
     {
         try {
             painter->save();
+            painter->setRenderHint(QPainter::Antialiasing, true);
 
-            // Get thumbnail path
+            QRect cardRect = option.rect.adjusted(6, 6, -6, -6);
+            if (cardRect.width() <= 0 || cardRect.height() <= 0) {
+                painter->restore();
+                return;
+            }
+
+            const bool selected = option.state & QStyle::State_Selected;
+            const bool hovered = option.state & QStyle::State_MouseOver;
+
+            QColor cardBg = selected ? QColor(48, 68, 104)
+                                     : (hovered ? QColor(44, 44, 48) : QColor(34, 34, 36));
+            QColor borderColor = selected ? QColor(88, 166, 255)
+                                          : (hovered ? QColor(70, 70, 78) : QColor(55, 55, 60));
+
+            painter->setPen(Qt::NoPen);
+            painter->setBrush(cardBg);
+            painter->drawRoundedRect(cardRect, 8, 8);
+
+            painter->setPen(QPen(borderColor, selected ? 2.0 : 1.2));
+            painter->setBrush(Qt::NoBrush);
+            painter->drawRoundedRect(cardRect, 8, 8);
+
+            painter->setRenderHint(QPainter::Antialiasing, false);
+
+            const int contentMargin = 16;
+            int thumbSide = qMin(m_thumbnailSize, cardRect.width() - contentMargin * 2);
+            int maxThumb = cardRect.height() - 40;
+            if (maxThumb < 48) {
+                maxThumb = 48;
+            }
+            thumbSide = qMin(thumbSide, maxThumb);
+            if (thumbSide < 48) {
+                thumbSide = 48;
+            }
+            QRect thumbRect(cardRect.x() + (cardRect.width() - thumbSide) / 2,
+                            cardRect.y() + contentMargin,
+                            thumbSide,
+                            thumbSide);
+
+            auto drawFileName = [&]() {
+                QString fileName = index.data(AssetsModel::FileNameRole).toString();
+                QFont nameFont("Segoe UI", 9);
+                painter->setFont(nameFont);
+                painter->setPen(QColor(225, 225, 225));
+                QRect nameRect(cardRect.x() + 10,
+                               thumbRect.bottom() + 6,
+                               cardRect.width() - 20,
+                               28);
+                QString elided = QFontMetrics(nameFont).elidedText(fileName, Qt::ElideRight, nameRect.width());
+                painter->drawText(nameRect, Qt::AlignHCenter | Qt::AlignTop, elided);
+            };
+
+            auto drawPlaceholder = [&](const QString& label) {
+                painter->setPen(QPen(borderColor.lighter(140), 1.0));
+                painter->setBrush(Qt::NoBrush);
+                painter->drawRoundedRect(thumbRect.adjusted(4, 4, -4, -4), 6, 6);
+
+                painter->setFont(QFont("Segoe UI", 10, QFont::Medium));
+                painter->setPen(QColor(180, 180, 180));
+                painter->drawText(thumbRect.adjusted(6, 6, -6, -6),
+                                  Qt::AlignCenter | Qt::TextWordWrap,
+                                  label);
+                drawFileName();
+                painter->restore();
+            };
+
             QString thumbnailPath = index.data(AssetsModel::ThumbnailPathRole).toString();
-
-            // PERFORMANCE: Lazy loading - if thumbnail doesn't exist, request it
             if (thumbnailPath.isEmpty()) {
                 QString filePath = index.data(AssetsModel::FilePathRole).toString();
                 if (!filePath.isEmpty()) {
-                    // Request thumbnail generation asynchronously
                     ThumbnailGenerator::instance().requestThumbnail(filePath);
                 }
-                painter->restore();
-                return; // Don't draw anything yet - thumbnail is being generated
+                drawPlaceholder(QStringLiteral("Generating..."));
+                return;
             }
 
-            // If not in cache yet, synchronously load the small on-disk thumbnail (fast) on the GUI thread.
             if (!pixmapCache.contains(thumbnailPath)) {
                 QPixmap px;
                 if (QFileInfo::exists(thumbnailPath)) {
@@ -477,74 +539,32 @@ private:
                 }
                 if (!px.isNull()) {
                     pixmapCache.insert(thumbnailPath, px);
-                } else {
-                    // Lightweight placeholder (type label + filename) until thumb exists
-                    if (option.state & (QStyle::State_Selected | QStyle::State_MouseOver)) {
-                        QColor c = (option.state & QStyle::State_Selected) ? QColor(88,166,255) : QColor(80,80,80);
-                        painter->setPen(QPen(c, 1.5)); painter->setBrush(Qt::NoBrush);
-                        painter->drawRect(option.rect.adjusted(1, 1, -1, -1));
-                    }
-                    const int margin = 6;
-                    const int thumbSide = m_thumbnailSize;
-                    QRect thumbRect(option.rect.x() + (option.rect.width()-thumbSide)/2, option.rect.y() + margin, thumbSide, thumbSide);
-                    painter->setPen(QPen(QColor(120,120,120), 1)); painter->setBrush(Qt::NoBrush);
-                    painter->drawRoundedRect(thumbRect.adjusted(8,8,-8,-8), 6, 6);
-                    const QString ft = index.data(AssetsModel::FileTypeRole).toString().toUpper();
-                    QString label = ft; if (label.isEmpty()) label = QFileInfo(index.data(AssetsModel::FilePathRole).toString()).suffix().toUpper();
-                    if (label.isEmpty()) label = "FILE";
-                    QFont nameFont("Segoe UI", 9);
-                    painter->setFont(nameFont);
-                    painter->setPen(QColor(180,180,180));
-                    painter->drawText(thumbRect.adjusted(10,10,-10,-10), Qt::AlignCenter | Qt::TextWordWrap, label.left(6));
-                    // Name label below
-                    QString fileName = index.data(AssetsModel::FileNameRole).toString();
-                    painter->setPen(QColor(230,230,230));
-                    QRect nameRect(option.rect.x()+4, thumbRect.bottom()+4, option.rect.width()-8, option.rect.bottom()-thumbRect.bottom()-6);
-                    QString elided = QFontMetrics(nameFont).elidedText(fileName, Qt::ElideRight, nameRect.width());
-                    painter->drawText(nameRect, Qt::AlignHCenter | Qt::AlignTop, elided);
-                    painter->restore();
-                    return;
                 }
             }
 
             QPixmap pixmap = pixmapCache.value(thumbnailPath);
-
             if (pixmap.isNull()) {
-                painter->restore();
-                return; // Invalid pixmap - don't draw anything
+                QString ft = index.data(AssetsModel::FileTypeRole).toString().toUpper();
+                if (ft.isEmpty()) {
+                    ft = QFileInfo(index.data(AssetsModel::FilePathRole).toString()).suffix().toUpper();
+                }
+                if (ft.isEmpty()) {
+                    ft = QStringLiteral("FILE");
+                }
+                drawPlaceholder(ft.left(8));
+                return;
             }
 
-            // Now we have a valid thumbnail - draw the item
-            // No background fill to achieve Explorer-like no-cell look
-
-            // Outline on hover/selection only
-            if (option.state & (QStyle::State_Selected | QStyle::State_MouseOver)) {
-                QColor c = (option.state & QStyle::State_Selected) ? QColor(88,166,255) : QColor(80,80,80);
-                painter->setPen(QPen(c, 1.5)); painter->setBrush(Qt::NoBrush);
-                painter->drawRect(option.rect.adjusted(1, 1, -1, -1));
-            }
-
-            // Draw thumbnail centered within square top area
-            const int margin = 6;
-            const int thumbSide = m_thumbnailSize;
-            QRect thumbRect(option.rect.x() + (option.rect.width()-thumbSide)/2, option.rect.y() + margin, thumbSide, thumbSide);
             QPixmap scaled = pixmap.scaled(thumbRect.size(), Qt::KeepAspectRatio, Qt::SmoothTransformation);
             int x = thumbRect.x() + (thumbRect.width() - scaled.width()) / 2;
             int y = thumbRect.y() + (thumbRect.height() - scaled.height()) / 2;
             painter->drawPixmap(x, y, scaled);
 
-            // Name label below thumbnail
-            QString fileName = index.data(AssetsModel::FileNameRole).toString();
-            QFont nameFont("Segoe UI", 9);
-            painter->setFont(nameFont);
-            painter->setPen(QColor(230,230,230));
-            QRect nameRect(option.rect.x()+4, thumbRect.bottom()+4, option.rect.width()-8, option.rect.bottom()-thumbRect.bottom()-6);
-            QString elided = QFontMetrics(nameFont).elidedText(fileName, Qt::ElideRight, nameRect.width());
-            painter->drawText(nameRect, Qt::AlignHCenter | Qt::AlignTop, elided);
+            painter->setPen(QPen(borderColor.lighter(130), 1.0));
+            painter->setBrush(Qt::NoBrush);
+            painter->drawRoundedRect(thumbRect.adjusted(3, 3, -3, -3), 6, 6);
 
-
-
-
+            drawFileName();
             painter->restore();
         } catch (const std::exception& e) {
             qCritical() << "[AssetItemDelegate] Exception in paint():" << e.what();
@@ -560,8 +580,10 @@ public:
     {
         Q_UNUSED(option);
         Q_UNUSED(index);
-        int height = m_thumbnailSize + 60; // Add space for text overlay
-        return QSize(m_thumbnailSize, height);
+        const int textHeight = 36;
+        const int verticalPadding = 32;
+        int height = m_thumbnailSize + textHeight + verticalPadding;
+        return QSize(m_thumbnailSize + 24, height);
     }
 };
 
