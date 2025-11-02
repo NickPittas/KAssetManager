@@ -20,6 +20,19 @@
  * The manager is intentionally agnostic of any particular view; callers provide the
  * requested normalized position (0-1) and target size. Internally the manager performs
  * smart caching and throttles expensive requests so scrubbing stays responsive.
+ *
+ * **Thread Safety:**
+ * - All public methods are thread-safe via internal QMutex (m_mutex)
+ * - cachedFrame() and requestFrame() can be called from any thread
+ * - Signals (frameReady, frameFailed) are emitted from worker threads; connect with Qt::QueuedConnection
+ * - The cache is protected by m_mutex; concurrent access is serialized
+ * - Decode operations run on QThreadPool; no blocking on GUI thread
+ *
+ * **Memory Management:**
+ * - Cache uses LRU eviction when m_maxCacheEntries is exceeded
+ * - Sequence metadata cache (m_sequenceMetaCache) is pruned periodically
+ * - All QPixmap objects are stored in m_cache and managed by the manager
+ * - Callers should not retain references to returned pixmaps beyond the current scope
  */
 class LivePreviewManager : public QObject {
     Q_OBJECT
