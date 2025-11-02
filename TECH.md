@@ -133,6 +133,45 @@ CREATE TABLE asset_tags (
 );
 ```
 
+### Database Indexes
+
+The following indexes are created to optimize query performance:
+
+```sql
+-- Explicit index for file_path lookups (UNIQUE constraint creates implicit index, but explicit is clearer)
+CREATE UNIQUE INDEX idx_assets_file_path ON assets(file_path);
+
+-- Folder hierarchy lookups
+CREATE UNIQUE INDEX idx_virtual_folders_parent_name ON virtual_folders(parent_id, name);
+
+-- Asset queries by folder
+CREATE INDEX idx_assets_folder ON assets(virtual_folder_id);
+
+-- Asset queries by file name
+CREATE INDEX idx_assets_file_name ON assets(file_name);
+
+-- Asset queries by rating
+CREATE INDEX idx_assets_rating ON assets(rating);
+
+-- Asset queries by update time
+CREATE INDEX idx_assets_updated_at ON assets(updated_at);
+
+-- Asset-tag relationship queries
+CREATE INDEX idx_asset_tags_tag_id ON asset_tags(tag_id);
+CREATE INDEX idx_asset_tags_asset_id ON asset_tags(asset_id);
+
+-- Asset version queries
+CREATE INDEX idx_asset_versions_asset_id ON asset_versions(asset_id);
+```
+
+**Index Strategy:**
+- `idx_assets_file_path`: Explicit UNIQUE index for file existence checks and asset lookups by path
+- `idx_assets_folder`: Enables fast folder navigation and asset listing
+- `idx_assets_file_name`: Supports sorting and filtering by file name
+- `idx_assets_rating`: Enables fast rating-based filtering
+- `idx_assets_updated_at`: Supports time-based queries and sorting
+- Composite indexes on foreign keys for efficient joins
+
 ### Key Components
 
 #### MainWindow (mainwindow.h/cpp)

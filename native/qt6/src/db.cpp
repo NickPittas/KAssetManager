@@ -72,6 +72,8 @@ bool DB::migrate(){
         "  updated_at TEXT DEFAULT CURRENT_TIMESTAMP\n"
         ");",
         "CREATE INDEX IF NOT EXISTS idx_assets_folder ON assets(virtual_folder_id);",
+        // Explicit index for file_path lookups (UNIQUE constraint creates implicit index, but explicit is clearer)
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_assets_file_path ON assets(file_path);",
         // tags
         "CREATE TABLE IF NOT EXISTS tags (\n"
         "  id INTEGER PRIMARY KEY AUTOINCREMENT,\n"
