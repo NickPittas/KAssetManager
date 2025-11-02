@@ -483,6 +483,20 @@ bool DB::setAssetsRating(const QList<int>& assetIds, int rating){
     return ok;
 }
 
+bool DB::updateAssetPath(int assetId, const QString& newPath) {
+    QSqlQuery q(m_db);
+    q.prepare("UPDATE assets SET file_path=?, updated_at=CURRENT_TIMESTAMP WHERE id=?");
+    q.addBindValue(newPath);
+    q.addBindValue(assetId);
+    bool ok = q.exec();
+    if (!ok) {
+        qWarning() << "DB::updateAssetPath failed" << q.lastError();
+    } else {
+        emit assetsChanged(m_rootId);
+    }
+    return ok;
+}
+
 int DB::createTag(const QString& name){
     QSqlQuery q(m_db);
     q.prepare("INSERT OR IGNORE INTO tags(name) VALUES(?)");

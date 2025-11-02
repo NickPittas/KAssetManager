@@ -21,6 +21,7 @@
 #include "context_preserver.h"
 #include "database_health_agent.h"
 #include "database_health_dialog.h"
+#include "bulk_rename_dialog.h"
 
 #include "office_preview.h"
 
@@ -3849,6 +3850,14 @@ void MainWindow::onAssetContextMenu(const QPoint &pos)
         rating5->setData(5);
 
         menu.addSeparator();
+
+        // Bulk rename action (only show if multiple assets selected)
+        QAction *bulkRenameAction = nullptr;
+        QSet<int> selectedIds = getSelectedAssetIds();
+        if (selectedIds.size() > 1) {
+            bulkRenameAction = menu.addAction(QString("Bulk Rename (%1 assets)...").arg(selectedIds.size()));
+        }
+
         QAction *removeAction = menu.addAction("Remove from App");
 
         QAction *selected = menu.exec(assetGridView->mapToGlobal(pos));
@@ -3887,6 +3896,16 @@ void MainWindow::onAssetContextMenu(const QPoint &pos)
                 statusBar()->showMessage(QString("Set rating to %1 for %2 asset(s)").arg(ratingText).arg(assetIdsList.size()), 3000);
             } else {
                 QMessageBox::warning(this, "Error", "Failed to set rating");
+            }
+        } else if (bulkRenameAction && selected == bulkRenameAction) {
+            // Bulk rename action
+            QSet<int> selectedIds = getSelectedAssetIds();
+            QVector<int> assetIdsVec = selectedIds.values().toVector();
+
+            BulkRenameDialog dialog(assetIdsVec, this);
+            if (dialog.exec() == QDialog::Accepted) {
+                assetsModel->reload();
+                statusBar()->showMessage("Bulk rename completed", 3000);
             }
         } else if (selected == removeAction) {
             // Remove selected assets from database

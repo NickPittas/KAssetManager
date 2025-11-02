@@ -161,6 +161,8 @@ qt_add_executable(kassetmanagerqt WIN32
     src/database_health_agent.cpp
     src/database_health_dialog.h
     src/database_health_dialog.cpp
+    src/bulk_rename_dialog.h
+    src/bulk_rename_dialog.cpp
     ${APP_RESOURCES}
 )
 
