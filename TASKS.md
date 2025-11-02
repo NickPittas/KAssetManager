@@ -41,6 +41,13 @@ Legend: [ ] todo, [/] in progress, [x] done
   - [x] PERFORMANCE_OPTIMIZATIONS.md: replace disk-thumbnails sections with LivePreview (done in Phase 1.1)
   - DoD: Docs reflect current architecture ✓
 
+- [x] Phase 1.6 Verify Phase 1 with full build and package
+  - [x] Run full build: powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-windows.ps1 -Generator Ninja -Package
+  - [x] Verify package created: dist/portable/bin/kassetmanagerqt.exe
+  - [x] Manual smoke test: import folder, browse grid/list, preview, log viewer
+  - [x] Verify no crashes on exit
+  - DoD: Build succeeds; package created; no crashes in manual testing ✓
+
 ## Next (Phase 2  2 weeks)
 - [ ] H-3 Establish Qt Test harness and seed tests
   - [ ] Add tests/ CMake target and runner; integrate optional ctest
