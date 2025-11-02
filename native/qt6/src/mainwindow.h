@@ -125,6 +125,7 @@ private slots:
     void onFmDelete();
     void onFmDeletePermanent();
     void onFmRename();
+    void onFmBulkRename();
     void onFmNewFolder();
     void onFmCreateFolderWithSelected();
     void onFmShowContextMenu(const QPoint &pos);

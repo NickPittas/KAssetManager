@@ -16,7 +16,7 @@
 #include <QString>
 
 struct RenamePreviewItem {
-    int assetId;
+    int assetId;           // -1 if file-only mode
     QString originalName;
     QString newName;
     QString fullPath;
@@ -28,7 +28,12 @@ class BulkRenameDialog : public QDialog {
     Q_OBJECT
 
 public:
+    // Asset Manager mode: rename assets in database + filesystem
     explicit BulkRenameDialog(const QVector<int>& assetIds, QWidget* parent = nullptr);
+
+    // File Manager mode: rename files only (no database)
+    explicit BulkRenameDialog(const QStringList& filePaths, QWidget* parent = nullptr);
+
     ~BulkRenameDialog() = default;
 
 private slots:
@@ -40,18 +45,20 @@ private slots:
 private:
     void setupUI();
     void loadAssets();
+    void loadFiles();
     void updatePreview();
     QString applyPattern(const QString& originalName, int index) const;
     bool validateRename();
     bool performRename();
+    bool performFileRename();
     void rollbackRename(const QVector<QPair<int, QString>>& renamedAssets);
-    
+
     // Pattern tokens
     QString replaceTokens(const QString& pattern, const QString& originalName, int index) const;
-    
+
     // UI components
     QVBoxLayout* m_mainLayout;
-    
+
     // Pattern input section
     QGroupBox* m_patternGroup;
     QLineEdit* m_patternEdit;
@@ -59,7 +66,7 @@ private:
     QPushButton* m_insertCounterButton;
     QPushButton* m_insertOriginalButton;
     QPushButton* m_insertDateButton;
-    
+
     // Options section
     QGroupBox* m_optionsGroup;
     QCheckBox* m_preserveExtensionCheck;
@@ -67,18 +74,20 @@ private:
     QCheckBox* m_updateFilesystemCheck;
     QSpinBox* m_startNumberSpin;
     QSpinBox* m_paddingSpin;
-    
+
     // Preview section
     QGroupBox* m_previewGroup;
     QTableWidget* m_previewTable;
     QLabel* m_statusLabel;
-    
+
     // Action buttons
     QPushButton* m_applyButton;
     QPushButton* m_cancelButton;
-    
+
     // Data
+    bool m_fileManagerMode;  // true = file paths only, false = asset IDs
     QVector<int> m_assetIds;
+    QStringList m_filePaths;
     QVector<RenamePreviewItem> m_previewItems;
     bool m_hasConflicts;
 };

@@ -3169,6 +3169,25 @@ void MainWindow::onFmRename()
     }
 }
 
+void MainWindow::onFmBulkRename()
+{
+    QStringList paths = getSelectedFileManagerPaths(fmDirModel, fmGridView, fmListView, fmViewStack);
+    if (paths.size() < 2) return;
+
+    releaseAnyPreviewLocksForPaths(paths);
+
+    BulkRenameDialog dialog(paths, this);
+    if (dialog.exec() == QDialog::Accepted) {
+        // Refresh the file manager view
+        if (fmDirModel) {
+            QString currentPath = fmDirModel->rootPath();
+            fmDirModel->setRootPath("");
+            fmDirModel->setRootPath(currentPath);
+        }
+        statusBar()->showMessage("Bulk rename completed", 3000);
+    }
+}
+
 void MainWindow::onFmNewFolder()
 {
     if (qobject_cast<QShortcut*>(sender())) {
@@ -3285,6 +3304,7 @@ void MainWindow::onFmShowContextMenu(const QPoint &pos)
     QAction *pasteA = menu.addAction("Paste", this, &MainWindow::onFmPaste, QKeySequence::Paste);
     menu.addSeparator();
     QAction *renameA = menu.addAction("Rename", this, &MainWindow::onFmRename, QKeySequence(Qt::Key_F2));
+    QAction *bulkRenameA = menu.addAction("Bulk Rename...", this, &MainWindow::onFmBulkRename);
     QAction *delA = menu.addAction("Delete", this, &MainWindow::onFmDelete, QKeySequence::Delete);
     QAction *createFolderWithSel = menu.addAction("Create Folder with Selected Files", this, &MainWindow::onFmCreateFolderWithSelected);
     menu.addSeparator();
@@ -3293,10 +3313,14 @@ void MainWindow::onFmShowContextMenu(const QPoint &pos)
     QAction *favA = menu.addAction("Add to Favorites", this, &MainWindow::onFmAddToFavorites);
 
     // Enable/disable depending on selection
-    bool hasSel = !getSelectedFileManagerPaths(fmDirModel, fmGridView, fmListView, fmViewStack).isEmpty();
+    QStringList selectedPaths = getSelectedFileManagerPaths(fmDirModel, fmGridView, fmListView, fmViewStack);
+    bool hasSel = !selectedPaths.isEmpty();
+    int selCount = selectedPaths.size();
+
     copyA->setEnabled(hasSel);
     cutA->setEnabled(hasSel);
-    renameA->setEnabled(hasSel && getSelectedFileManagerPaths(fmDirModel, fmGridView, fmListView, fmViewStack).size()==1);
+    renameA->setEnabled(selCount == 1);
+    bulkRenameA->setEnabled(selCount >= 2);
     delA->setEnabled(hasSel);
     pasteA->setEnabled(!fmClipboard.isEmpty());
     addLibA->setEnabled(hasSel);

@@ -10,14 +10,29 @@
 
 BulkRenameDialog::BulkRenameDialog(const QVector<int>& assetIds, QWidget* parent)
     : QDialog(parent)
+    , m_fileManagerMode(false)
     , m_assetIds(assetIds)
     , m_hasConflicts(false)
 {
     setWindowTitle(QString("Bulk Rename - %1 Asset(s)").arg(assetIds.size()));
     resize(900, 600);
-    
+
     setupUI();
     loadAssets();
+    updatePreview();
+}
+
+BulkRenameDialog::BulkRenameDialog(const QStringList& filePaths, QWidget* parent)
+    : QDialog(parent)
+    , m_fileManagerMode(true)
+    , m_filePaths(filePaths)
+    , m_hasConflicts(false)
+{
+    setWindowTitle(QString("Bulk Rename - %1 File(s)").arg(filePaths.size()));
+    resize(900, 600);
+
+    setupUI();
+    loadFiles();
     updatePreview();
 }
 
@@ -80,8 +95,9 @@ void BulkRenameDialog::setupUI() {
     m_updateDatabaseCheck = new QCheckBox("Update Database", this);
     m_updateDatabaseCheck->setChecked(true);
     m_updateDatabaseCheck->setToolTip("Update asset names in database");
+    m_updateDatabaseCheck->setVisible(!m_fileManagerMode);  // Hide in file manager mode
     optionsLayout->addWidget(m_updateDatabaseCheck);
-    
+
     m_updateFilesystemCheck = new QCheckBox("Rename Files on Disk", this);
     m_updateFilesystemCheck->setChecked(true);
     m_updateFilesystemCheck->setToolTip("Physically rename files on filesystem");
@@ -157,6 +173,23 @@ void BulkRenameDialog::loadAssets() {
         RenamePreviewItem item;
         item.assetId = assetId;
         item.originalName = QFileInfo(filePath).fileName();
+        item.fullPath = filePath;
+        item.hasConflict = false;
+
+        m_previewItems.append(item);
+    }
+}
+
+void BulkRenameDialog::loadFiles() {
+    m_previewItems.clear();
+
+    for (const QString& filePath : m_filePaths) {
+        QFileInfo fi(filePath);
+        if (!fi.exists()) continue;
+
+        RenamePreviewItem item;
+        item.assetId = -1;  // No asset ID in file manager mode
+        item.originalName = fi.fileName();
         item.fullPath = filePath;
         item.hasConflict = false;
 
@@ -340,14 +373,15 @@ void BulkRenameDialog::onApplyRename() {
     }
 
     // Confirm with user
-    QString message = QString("Rename %1 asset(s)?\n\n").arg(changedCount);
+    QString itemType = m_fileManagerMode ? "file(s)" : "asset(s)";
+    QString message = QString("Rename %1 %2?\n\n").arg(changedCount).arg(itemType);
     if (m_updateFilesystemCheck->isChecked()) {
         message += "Files will be physically renamed on disk.\n";
     }
-    if (m_updateDatabaseCheck->isChecked()) {
+    if (!m_fileManagerMode && m_updateDatabaseCheck->isChecked()) {
         message += "Database records will be updated.\n";
     }
-    message += "\nThis operation can be undone from the database, but filesystem changes are permanent.";
+    message += "\nFilesystem changes are permanent.";
 
     QMessageBox::StandardButton reply = QMessageBox::question(this, "Confirm Bulk Rename",
         message, QMessageBox::Yes | QMessageBox::No);
@@ -357,9 +391,10 @@ void BulkRenameDialog::onApplyRename() {
     }
 
     // Perform rename
-    if (performRename()) {
+    bool success = m_fileManagerMode ? performFileRename() : performRename();
+    if (success) {
         QMessageBox::information(this, "Success",
-            QString("Successfully renamed %1 asset(s)").arg(changedCount));
+            QString("Successfully renamed %1 %2").arg(changedCount).arg(itemType));
         accept();
     }
 }
@@ -401,6 +436,41 @@ bool BulkRenameDialog::performRename() {
         }
 
         renamedAssets.append({item.assetId, item.fullPath});
+    }
+
+    return true;
+}
+
+bool BulkRenameDialog::performFileRename() {
+    QVector<QPair<QString, QString>> renamedFiles; // Track for potential rollback (old, new)
+
+    for (const auto& item : m_previewItems) {
+        if (item.newName == item.originalName) {
+            continue; // Skip unchanged
+        }
+
+        QFileInfo originalInfo(item.fullPath);
+        QString newPath = originalInfo.dir().filePath(item.newName);
+
+        // Rename file on filesystem
+        if (m_updateFilesystemCheck->isChecked()) {
+            QFile file(item.fullPath);
+            if (!file.rename(newPath)) {
+                QMessageBox::critical(this, "Rename Failed",
+                    QString("Failed to rename:\n%1\nto:\n%2\n\nError: %3")
+                        .arg(item.fullPath)
+                        .arg(newPath)
+                        .arg(file.errorString()));
+
+                // Rollback previous renames
+                for (const auto& pair : renamedFiles) {
+                    QFile rollbackFile(pair.second);
+                    rollbackFile.rename(pair.first);
+                }
+                return false;
+            }
+            renamedFiles.append(qMakePair(item.fullPath, newPath));
+        }
     }
 
     return true;
