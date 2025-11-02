@@ -639,32 +639,58 @@ public:
         const int thumbSide = m_thumbnailSize;
         QRect thumbRect(option.rect.x() + (option.rect.width()-thumbSide)/2, option.rect.y() + margin, thumbSide, thumbSide);
         const QString filePath = index.data(QFileSystemModel::FilePathRole).toString();
-        LivePreviewManager &previewMgr = LivePreviewManager::instance();
-        const QSize targetSize(thumbSide, thumbSide);
-        const QString suffix = QFileInfo(filePath).suffix().toLower();
-        const bool previewable = isPreviewableSuffix(suffix);
+
+        // Check if this is a folder
+        QFileInfo fileInfo(filePath);
+        const bool isFolder = fileInfo.isDir();
+
         bool drewPreview = false;
-        if (previewable) {
-            auto handle = previewMgr.cachedFrame(filePath, targetSize);
-            if (handle.isValid()) {
-                painter->save();
-                QRect previewRect = insetPreviewRect(thumbRect);
+
+        if (isFolder) {
+            // Draw folder icon using Qt's standard folder icon
+            QIcon folderIcon = option.widget->style()->standardIcon(QStyle::SP_DirIcon);
+            QRect iconRect = insetPreviewRect(thumbRect);
+            // Scale icon to fit nicely in the preview area (80% of available space)
+            int iconSize = qMin(iconRect.width(), iconRect.height()) * 0.8;
+            QRect centeredIconRect(
+                iconRect.x() + (iconRect.width() - iconSize) / 2,
+                iconRect.y() + (iconRect.height() - iconSize) / 2,
+                iconSize,
+                iconSize
+            );
+            folderIcon.paint(painter, centeredIconRect, Qt::AlignCenter);
+            drewPreview = true;
+        } else {
+            // Handle file preview
+            LivePreviewManager &previewMgr = LivePreviewManager::instance();
+            const QSize targetSize(thumbSide, thumbSide);
+            const QString suffix = fileInfo.suffix().toLower();
+            const bool previewable = isPreviewableSuffix(suffix);
+
+            if (previewable) {
+                auto handle = previewMgr.cachedFrame(filePath, targetSize);
+                if (handle.isValid()) {
+                    painter->save();
+                    QRect previewRect = insetPreviewRect(thumbRect);
                     painter->setClipRect(previewRect);
-                QPixmap scaled = handle.pixmap.scaled(previewRect.size(), Qt::KeepAspectRatio, Qt::SmoothTransformation);
-                int x = previewRect.x() + (previewRect.width() - scaled.width()) / 2;
-                int y = previewRect.y() + (previewRect.height() - scaled.height()) / 2;
-                painter->drawPixmap(x, y, scaled);
-                painter->restore();
-                drewPreview = true;
-            } else {
-                previewMgr.requestFrame(filePath, targetSize);
+                    QPixmap scaled = handle.pixmap.scaled(previewRect.size(), Qt::KeepAspectRatio, Qt::SmoothTransformation);
+                    int x = previewRect.x() + (previewRect.width() - scaled.width()) / 2;
+                    int y = previewRect.y() + (previewRect.height() - scaled.height()) / 2;
+                    painter->drawPixmap(x, y, scaled);
+                    painter->restore();
+                    drewPreview = true;
+                } else {
+                    previewMgr.requestFrame(filePath, targetSize);
+                }
             }
         }
+
         if (!drewPreview) {
-            painter->setPen(QPen(QColor(120,120,120), 1)); painter->setBrush(Qt::NoBrush);
+            painter->setPen(QPen(QColor(120,120,120), 1));
+            painter->setBrush(Qt::NoBrush);
             QRect placeholderRect = insetPreviewRect(thumbRect);
-                painter->drawRoundedRect(placeholderRect, 6, 6);
-            QString label = suffix.toUpper();
+            painter->drawRoundedRect(placeholderRect, 6, 6);
+            QString label = fileInfo.suffix().toUpper();
             if (label.isEmpty()) label = index.data(Qt::DisplayRole).toString().left(4).toUpper();
             if (label.isEmpty()) label = "FILE";
             QFont placeholder("Segoe UI", 9, QFont::Medium);
