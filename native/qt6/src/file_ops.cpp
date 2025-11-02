@@ -12,6 +12,8 @@
 #include <QAbstractButton>
 #include <QPushButton>
 #include <QDebug>
+
+#include "file_utils.h"
 #include <QApplication>
 #include <QWidget>
 
@@ -310,7 +312,7 @@ QString FileOpsQueue::uniqueNameInDir(const QString& dir, const QString& baseNam
     QString name = baseName;
     QString path = QDir(dir).filePath(name);
     int i=2;
-    while (QFileInfo::exists(path)) {
+    while (FileUtils::pathExists(path)) {
         QString stem = QFileInfo(baseName).completeBaseName();
         QString ext = QFileInfo(baseName).suffix();
         if (ext.isEmpty()) name = QString("%1 (%2)").arg(stem).arg(i++);
@@ -371,8 +373,8 @@ bool FileOpsQueue::copyRecursively(const QString& src, const QString& dstDir, st
 
 bool FileOpsQueue::removeRecursively(const QString& path, std::atomic_bool& cancel)
 {
+    if (!FileUtils::pathExists(path)) return true;
     QFileInfo fi(path);
-    if (!fi.exists()) return true;
     if (fi.isDir()) {
         QDir dir(path);
         QFileInfoList list = dir.entryInfoList(QDir::NoDotAndDotDot | QDir::AllEntries);

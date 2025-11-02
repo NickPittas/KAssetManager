@@ -10,6 +10,8 @@
 #include <QSet>
 #include <QSqlDatabase>
 
+#include "file_utils.h"
+
 Importer::Importer(QObject* parent): QObject(parent) {}
 
 static QString norm(const QString& p){ return QFileInfo(p).absoluteFilePath(); }
@@ -53,7 +55,7 @@ bool Importer::importPaths(const QStringList& paths){
 }
 
 bool Importer::importFile(const QString& filePath, int parentFolderId){
-    if (!QFileInfo::exists(filePath)) {
+    if (!FileUtils::fileExists(filePath)) {
         return false;
     }
     if (!isMediaFile(filePath)) {
@@ -192,7 +194,7 @@ int Importer::purgeMissingAssets() {
         int id = select.value(0).toInt();
         QString path = select.value(1).toString();
         int folderId = select.value(2).toInt();
-        if (!QFileInfo::exists(path)) {
+        if (!FileUtils::fileExists(path)) {
             QSqlQuery del(db);
             del.prepare("DELETE FROM assets WHERE id=?");
             del.addBindValue(id);

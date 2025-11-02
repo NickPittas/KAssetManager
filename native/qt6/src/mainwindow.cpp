@@ -41,6 +41,8 @@
 #include <cmath>
 #include <limits>
 #include <QProgressDialog>
+
+#include "file_utils.h"
 #ifdef Q_OS_WIN
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -3372,9 +3374,9 @@ void MainWindow::onFmCreateFolderWithSelected()
     if (folderName.isEmpty()) return;
     QDir dd(destDir);
     QString folderPath = dd.filePath(folderName);
-    if (QFileInfo::exists(folderPath)) {
+    if (FileUtils::pathExists(folderPath)) {
         // attempt unique suffix
-        int i=2; QString base = folderName; while (QFileInfo::exists(folderPath)) { folderName = QString("%1 (%2)").arg(base).arg(i++); folderPath = dd.filePath(folderName);}
+        int i=2; QString base = folderName; while (FileUtils::pathExists(folderPath)) { folderName = QString("%1 (%2)").arg(base).arg(i++); folderPath = dd.filePath(folderName);}
     }
     if (!dd.mkpath(folderPath)) {
         QMessageBox::warning(this, "Error", QString("Failed to create folder: %1").arg(folderPath));
@@ -5821,7 +5823,7 @@ QStringList MainWindow::reconstructSequenceFramePaths(const QString& firstFrameP
         QString framePath = QDir(dirPath).filePath(baseName + frameNum + suffix);
 
         // Only add if file exists
-        if (QFile::exists(framePath)) {
+        if (FileUtils::fileExists(framePath)) {
             framePaths.append(framePath);
         }
     }

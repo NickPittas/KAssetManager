@@ -5,6 +5,8 @@
 #include <QFile>
 #include <QCryptographicHash>
 
+#include "file_utils.h"
+
 static QString lastErrorToString(const QSqlQuery& q){ return q.lastError().text(); }
 
 static QString computeFileSha256(const QString& path)
@@ -206,11 +208,11 @@ bool DB::moveFolder(int id, int newParentId){
 }
 
 int DB::upsertAsset(const QString& filePath){
-    QFileInfo fi(filePath);
-    if (!fi.exists()) {
+    if (!FileUtils::fileExists(filePath)) {
         qDebug() << "DB::upsertAsset: file does not exist:" << filePath;
         return 0;
     }
+    QFileInfo fi(filePath);
     const QString absPath = fi.absoluteFilePath();
 
     // Check if already exists
@@ -637,7 +639,7 @@ int DB::createAssetVersion(int assetId, const QString& srcFilePath, const QStrin
     const QString destPath = versionsDir + "/" + destFileName;
 
     // Copy file
-    if (QFile::exists(destPath)) QFile::remove(destPath);
+    if (FileUtils::fileExists(destPath)) QFile::remove(destPath);
     if (!QFile::copy(sfi.absoluteFilePath(), destPath)) {
         qWarning() << "createAssetVersion: failed to copy" << sfi.absoluteFilePath() << "to" << destPath;
         return 0;
@@ -692,7 +694,7 @@ bool DB::revertAssetToVersion(int assetId, int versionId, bool createBackupVersi
     }
 
     // Overwrite asset file with version file
-    if (QFile::exists(destPath)) QFile::remove(destPath);
+    if (FileUtils::fileExists(destPath)) QFile::remove(destPath);
     if (!QFile::copy(srcPath, destPath)) {
         qWarning() << "revertAssetToVersion: failed to copy" << srcPath << "to" << destPath;
         return false;
@@ -815,7 +817,7 @@ bool DB::exportDatabase(const QString& filePath)
 
 bool DB::importDatabase(const QString& filePath)
 {
-    if (!QFile::exists(filePath)) {
+    if (!FileUtils::fileExists(filePath)) {
         qWarning() << "DB::importDatabase: Source file does not exist:" << filePath;
         return false;
     }
