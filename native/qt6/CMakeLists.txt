@@ -157,6 +157,8 @@ qt_add_executable(kassetmanagerqt WIN32
     src/office_preview.cpp
     src/context_preserver.h
     src/context_preserver.cpp
+    src/database_health_agent.h
+    src/database_health_agent.cpp
     ${APP_RESOURCES}
 )
 
