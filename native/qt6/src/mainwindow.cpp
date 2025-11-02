@@ -575,6 +575,30 @@ private:
                 painter->drawText(thumbRect.adjusted(10,10,-10,-10), Qt::AlignCenter | Qt::TextWordWrap, label.left(6));
             }
 
+            // Draw warning badge for sequences with gaps
+            bool isSequence = index.data(AssetsModel::IsSequenceRole).toBool();
+            bool hasGaps = index.data(AssetsModel::SequenceHasGapsRole).toBool();
+            if (isSequence && hasGaps) {
+                int gapCount = index.data(AssetsModel::SequenceGapCountRole).toInt();
+
+                // Draw warning triangle badge in top-right corner
+                int badgeSize = 24;
+                QRect badgeRect(thumbRect.right() - badgeSize - 4, thumbRect.top() + 4, badgeSize, badgeSize);
+
+                // Draw semi-transparent background
+                painter->setBrush(QColor(255, 140, 0, 200)); // Orange
+                painter->setPen(Qt::NoPen);
+                painter->drawEllipse(badgeRect);
+
+                // Draw warning icon (exclamation mark)
+                painter->setPen(QColor(255, 255, 255));
+                QFont badgeFont("Segoe UI", 14, QFont::Bold);
+                painter->setFont(badgeFont);
+                painter->drawText(badgeRect, Qt::AlignCenter, "!");
+
+                // Tooltip would show: "Sequence has X gap(s)"
+            }
+
             QString fileName = index.data(AssetsModel::FileNameRole).toString();
             QFont nameFont("Segoe UI", 9);
             painter->setFont(nameFont);
@@ -4227,6 +4251,9 @@ void MainWindow::updateInfoPanel()
             int frameCount = index.data(AssetsModel::SequenceFrameCountRole).toInt();
             int startFrame = index.data(AssetsModel::SequenceStartFrameRole).toInt();
             int endFrame = index.data(AssetsModel::SequenceEndFrameRole).toInt();
+            bool hasGaps = index.data(AssetsModel::SequenceHasGapsRole).toBool();
+            int gapCount = index.data(AssetsModel::SequenceGapCountRole).toInt();
+            QString version = index.data(AssetsModel::SequenceVersionRole).toString();
 
             // Try to get dimensions from first frame
             QImageReader reader(filePath);
@@ -4238,6 +4265,19 @@ void MainWindow::updateInfoPanel()
             } else {
                 dimensionsStr = QString("Sequence: %1 frames (%2-%3)")
                     .arg(frameCount).arg(startFrame).arg(endFrame);
+            }
+
+            // Add gap warning if present
+            if (hasGaps) {
+                int expectedFrames = endFrame - startFrame + 1;
+                int missingFrames = expectedFrames - frameCount;
+                dimensionsStr += QString("\n⚠ WARNING: %1 gap(s), %2 missing frame(s)")
+                    .arg(gapCount).arg(missingFrames);
+            }
+
+            // Add version info if present
+            if (!version.isEmpty()) {
+                dimensionsStr += QString("\nVersion: %1").arg(version);
             }
         } else {
             // Check if it's an image
