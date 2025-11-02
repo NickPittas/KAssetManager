@@ -103,6 +103,10 @@ private slots:
     // Log viewer
     void onToggleLogViewer();
 
+    // Database health
+    void showDatabaseHealthDialog();
+    void performStartupHealthCheck();
+
     // File Manager slots
     void onFmTreeActivated(const QModelIndex &index);
     void onFmTreeContextMenu(const QPoint &pos);

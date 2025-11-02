@@ -19,6 +19,8 @@
 #include "log_manager.h"
 #include "sequence_detector.h"
 #include "context_preserver.h"
+#include "database_health_agent.h"
+#include "database_health_dialog.h"
 
 #include "office_preview.h"
 
@@ -1415,6 +1417,17 @@ void MainWindow::setupUi()
     toggleLogViewerAction->setChecked(false);
     connect(toggleLogViewerAction, &QAction::triggered, this, &MainWindow::onToggleLogViewer);
 
+    // Tools menu
+    QMenu* toolsMenu = menuBar->addMenu("&Tools");
+    toolsMenu->setStyleSheet(
+        "QMenu { background-color: #1a1a1a; color: #ffffff; border: 1px solid #333; }"
+        "QMenu::item:selected { background-color: #2f3a4a; }"
+    );
+
+    QAction* dbHealthAction = toolsMenu->addAction("Database &Health...");
+    dbHealthAction->setShortcut(QKeySequence("Ctrl+H"));
+    connect(dbHealthAction, &QAction::triggered, this, &MainWindow::showDatabaseHealthDialog);
+
     // Tabs: Asset Manager | File Manager
     mainTabs = new QTabWidget(this);
     mainTabs->setDocumentMode(true);
@@ -2076,7 +2089,43 @@ void MainWindow::setupUi()
     }
 
     LogManager::instance().addLog("[TRACE] mainwindow ctor finished", "DEBUG");
+
+    // Schedule database health check on startup (delayed to avoid blocking UI)
+    QTimer::singleShot(2000, this, &MainWindow::performStartupHealthCheck);
 }
+
+void MainWindow::performStartupHealthCheck()
+{
+    DatabaseHealthAgent& agent = DatabaseHealthAgent::instance();
+    DatabaseStats stats = agent.getDatabaseStats();
+
+    // Check if VACUUM is recommended
+    if (agent.shouldVacuum()) {
+        QString recommendation = agent.getVacuumRecommendation();
+
+        // Show notification in status bar
+        statusBar()->showMessage(QString("Database maintenance recommended: %1").arg(recommendation), 10000);
+
+        // Log the recommendation
+        qInfo() << "[DatabaseHealth] Startup check:" << recommendation;
+    }
+
+    // Check for critical issues (orphaned records, missing files)
+    if (stats.orphanedAssets > 0 || stats.missingFiles > 10) {
+        QString message = QString("Database health issues detected: ");
+        if (stats.orphanedAssets > 0) {
+            message += QString("%1 orphaned asset(s) ").arg(stats.orphanedAssets);
+        }
+        if (stats.missingFiles > 10) {
+            message += QString("%1 missing file(s) ").arg(stats.missingFiles);
+        }
+        message += "- Open Tools > Database Health to review.";
+
+        statusBar()->showMessage(message, 15000);
+        qWarning() << "[DatabaseHealth]" << message;
+    }
+}
+
 void MainWindow::setupFileManagerUi()
 {
     // Splitter: left (tree) | right (view)
@@ -6898,3 +6947,8 @@ QKeySequence MainWindow::fmShortcutFor(const QString& actionName, const QKeySequ
     return QKeySequence(stored);
 }
 
+void MainWindow::showDatabaseHealthDialog()
+{
+    DatabaseHealthDialog dialog(this);
+    dialog.exec();
+}
