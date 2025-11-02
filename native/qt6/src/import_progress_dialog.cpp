@@ -42,9 +42,9 @@ ImportProgressDialog::ImportProgressDialog(QWidget* parent)
     progressBar->setFormat("%v / %m files (%p%)");
     progressBar->setMinimumHeight(25);
     mainLayout->addWidget(progressBar);
-    
+
     // Close button (initially hidden)
-    QHBoxLayout* buttonLayout = new QHBoxLayout();
+    QHBoxLayout* buttonLayout = new QHBoxLayout(nullptr);  // Will be added to mainLayout, which manages it
     buttonLayout->addStretch();
     closeButton = new QPushButton("Close", this);
     closeButton->setVisible(false);

@@ -28,7 +28,7 @@ FileOpsProgressDialog::FileOpsProgressDialog(QWidget* parent) : QDialog(parent)
     v->addWidget(label);
     v->addWidget(bar);
 
-    QHBoxLayout* h = new QHBoxLayout();
+    QHBoxLayout* h = new QHBoxLayout(nullptr);  // Will be added to v, which manages it
     cancelCurrentBtn = new QPushButton(style()->standardIcon(QStyle::SP_BrowserStop), "Cancel Current", this);
     cancelAllBtn = new QPushButton("Cancel All", this);
     closeBtn = new QPushButton("Close", this);

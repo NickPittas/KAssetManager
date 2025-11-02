@@ -29,14 +29,15 @@ bool DragUtils::startFileDrag(const QStringList &paths) {
     return VirtualDrag::startRealPathsDrag(v);
 #else
     // Fallback to Qt cross-platform drag (non-Windows)
-    auto *mime = new QMimeData();
-    QList<QUrl> urls; urls.reserve(paths.size());
-    for (const auto &p : paths) urls << QUrl::fromLocalFile(p);
-    mime->setUrls(urls);
     QWindow *win = QGuiApplication::focusWindow();
     if (!win) win = QGuiApplication::activeWindow();
     QObject *dragParent = win ? static_cast<QObject*>(win) : static_cast<QObject*>(QGuiApplication::instance());
+
     auto *drag = new QDrag(dragParent);
+    auto *mime = new QMimeData(drag);  // Set drag as parent for ownership
+    QList<QUrl> urls; urls.reserve(paths.size());
+    for (const auto &p : paths) urls << QUrl::fromLocalFile(p);
+    mime->setUrls(urls);
     drag->setMimeData(mime);
     Qt::DropAction act = drag->exec(Qt::CopyAction);
     return act != Qt::IgnoreAction;
