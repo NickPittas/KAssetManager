@@ -110,7 +110,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-windows.ps1
 After successful build:
 
 - **Executable**: `dist/portable/bin/kassetmanagerqt.exe`
-- **Package**: `native/qt6/build/ninja/KAsset Manager Qt-0.1.0-win64.zip`
+- **Package**: `native/qt6/build/ninja/KAsset Manager Qt-1.0.0-win64.zip`
 - **Build files**: `native/qt6/build/ninja/`
 
 ### 4. Run the Application
