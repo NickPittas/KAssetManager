@@ -246,6 +246,26 @@ if (WIN32)
     install(CODE "\ninclude(\"${_DEPLOY_QT_CMAKE}\")\nset(_exe \"\${CMAKE_INSTALL_PREFIX}/bin/kassetmanagerqt.exe\")\nmessage(STATUS \"Invoking windeployqt for \${_exe}\")\nqt_deploy(\"\${_exe}\" \"\${CMAKE_INSTALL_PREFIX}\" \"\")\n")
   endif()
 
+  # Install Qt6Test DLL for test executables
+  get_target_property(_QT_INSTALL_PATH Qt6::Core IMPORTED_LOCATION_RELEASE)
+  get_filename_component(_QT_BIN_PATH "${_QT_INSTALL_PATH}" DIRECTORY)
+  if(EXISTS "${_QT_BIN_PATH}/Qt6Test.dll")
+    install(FILES "${_QT_BIN_PATH}/Qt6Test.dll" DESTINATION bin)
+  endif()
+
+  # Install Qt plugins for tests (SQL driver and platform plugin)
+  get_filename_component(_QT_PLUGINS_PATH "${_QT_BIN_PATH}/../plugins" ABSOLUTE)
+  if(EXISTS "${_QT_PLUGINS_PATH}/sqldrivers/qsqlited.dll")
+    install(FILES "${_QT_PLUGINS_PATH}/sqldrivers/qsqlited.dll" DESTINATION plugins/sqldrivers)
+  elseif(EXISTS "${_QT_PLUGINS_PATH}/sqldrivers/qsqlite.dll")
+    install(FILES "${_QT_PLUGINS_PATH}/sqldrivers/qsqlite.dll" DESTINATION plugins/sqldrivers)
+  endif()
+  if(EXISTS "${_QT_PLUGINS_PATH}/platforms/qoffscreend.dll")
+    install(FILES "${_QT_PLUGINS_PATH}/platforms/qoffscreend.dll" DESTINATION plugins/platforms)
+  elseif(EXISTS "${_QT_PLUGINS_PATH}/platforms/qoffscreen.dll")
+    install(FILES "${_QT_PLUGINS_PATH}/platforms/qoffscreen.dll" DESTINATION plugins/platforms)
+  endif()
+
   # Install all vcpkg DLLs (OpenImageIO, zlib, bzip2, liblzma, libpng, libjpeg, etc.)
   set(_VCPKG_BIN "C:/vcpkg/installed/x64-windows/bin")
   if(EXISTS "${_VCPKG_BIN}")
@@ -269,6 +289,15 @@ if (WIN32)
       endforeach()
     endif()
   endif()
+endif()
+
+# Enable testing
+enable_testing()
+
+# Add tests subdirectory (optional, can be disabled with -DBUILD_TESTS=OFF)
+option(BUILD_TESTS "Build unit tests" ON)
+if(BUILD_TESTS)
+    add_subdirectory(tests)
 endif()
 
 # CPack configuration (NSIS + ZIP)
