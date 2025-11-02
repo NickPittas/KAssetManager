@@ -36,10 +36,10 @@ Legend: [ ] todo, [/] in progress, [x] done
   - [x] log_viewer_widget.cpp: audit/fix (all widgets already have proper parents)
   - DoD: No raw new without parent/smart pointer in these files; spot-run app and exit cleanly ✓
 
-- [ ] L-1/L-4 Documentation updates
-  - [ ] live_preview_manager.h: brief Doxygen about thread safety and mutex
-  - [ ] PERFORMANCE_OPTIMIZATIONS.md: replace disk-thumbnails sections with LivePreview
-  - DoD: Docs reflect current architecture
+- [x] L-1/L-4 Documentation updates
+  - [x] live_preview_manager.h: brief Doxygen about thread safety and mutex
+  - [x] PERFORMANCE_OPTIMIZATIONS.md: replace disk-thumbnails sections with LivePreview (done in Phase 1.1)
+  - DoD: Docs reflect current architecture ✓
 
 ## Next (Phase 2  2 weeks)
 - [ ] H-3 Establish Qt Test harness and seed tests
