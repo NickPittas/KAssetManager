@@ -1208,23 +1208,24 @@ MainWindow::MainWindow(QWidget *parent)
 {
     fileOpsDialog = nullptr;
     LogManager::instance().addLog("[MAINWINDOW] ctor begin");
-    qDebug() << "[INIT] MainWindow ctor begin";
 
     m_initializing = true;
     setupUi();
-    qDebug() << "[INIT] MainWindow setupUi finished";
     setupConnections();
-    qDebug() << "[INIT] MainWindow setupConnections finished";
     m_initializing = false;
+#ifdef QT_DEBUG
+    qDebug() << "[INIT] [PREVIEW_CAPS] QtPdf="
 #ifdef HAVE_QT_PDF
-    qDebug() << "[INIT] [PREVIEW_CAPS] QtPdf=ON";
+             << "ON";
 #else
-    qDebug() << "[INIT] [PREVIEW_CAPS] QtPdf=OFF";
+             << "OFF";
 #endif
+    qDebug() << "[INIT] [PREVIEW_CAPS] ActiveQt="
 #ifdef HAVE_QT_AX
-    qDebug() << "[INIT] [PREVIEW_CAPS] ActiveQt=ON";
+             << "ON";
 #else
-    qDebug() << "[INIT] [PREVIEW_CAPS] ActiveQt=OFF";
+             << "OFF";
+#endif
 #endif
 
     setWindowTitle("KAsset Manager");
@@ -1304,7 +1305,7 @@ MainWindow::MainWindow(QWidget *parent)
         g_lastPreviewError.insert(path, error);
         qWarning() << "[LivePreview] failed for" << path << ':' << error;
     });
-    qDebug() << "[INIT] MainWindow ctor end";
+
 }
 
 MainWindow::~MainWindow()
@@ -1379,7 +1380,7 @@ void MainWindow::setupUi()
     LogManager::instance().addLog("[TRACE] folder model created", "DEBUG");
     folderTreeView->setModel(folderModel);
     LogManager::instance().addLog("[TRACE] folder model set on tree", "DEBUG");
-    qDebug() << "[INIT] Folder model set on tree";
+
     folderTreeView->setHeaderHidden(true);
     folderTreeView->setContextMenuPolicy(Qt::CustomContextMenu);
 
@@ -1413,7 +1414,7 @@ void MainWindow::setupUi()
     connect(recursiveCheckBox, &QCheckBox::toggled, this, [this](bool checked) {
         assetsModel->setRecursiveMode(checked);
     });
-    qDebug() << "[INIT] Recursive checkbox added";
+
     leftLayout->addWidget(recursiveCheckBox);
 
     // Center panel: Asset grid with toolbar
@@ -1512,17 +1513,17 @@ void MainWindow::setupUi()
     connect(refreshButton, &QPushButton::clicked, this, &MainWindow::onRefreshAssets);
     toolbarLayout->addWidget(refreshButton);
 
-    qDebug() << "[INIT] Center toolbar added";
+
     centerLayout->addWidget(toolbar);
 
-    qDebug() << "[INIT] ViewStack created";
+
     // Stacked widget to switch between grid and table views
     viewStack = new QStackedWidget(centerPanel);
 
     // Asset grid view (using custom AssetGridView with compact drag pixmap)
     assetGridView = new AssetGridView(viewStack);
     assetsModel = new AssetsModel(viewStack);
-    qDebug() << "[INIT] AssetsModel created";
+
     assetGridView->setModel(assetsModel);
     LogManager::instance().addLog("[TRACE] assetGridView + model wired", "DEBUG");
     assetGridView->setViewMode(QListView::IconMode);
@@ -1532,7 +1533,7 @@ void MainWindow::setupUi()
     assetGridView->setSelectionMode(QAbstractItemView::ExtendedSelection);
     assetGridView->setContextMenuPolicy(Qt::CustomContextMenu);
     assetGridView->setItemDelegate(new AssetItemDelegate(viewStack));
-    qDebug() << "[INIT] Asset grid view added to stack";
+
     assetGridView->setIconSize(QSize(180, 180));
     assetGridView->setStyleSheet(
         "QListView { background-color: #0a0a0a; border: none; }"
@@ -1569,12 +1570,12 @@ void MainWindow::setupUi()
     assetTableView->setColumnWidth(AssetsTableModel::NameColumn, 300);
     assetTableView->setColumnWidth(AssetsTableModel::ExtensionColumn, 80);
     assetTableView->setColumnWidth(AssetsTableModel::SizeColumn, 100);
-    qDebug() << "[INIT] ViewStack index set";
+
     assetTableView->setColumnWidth(AssetsTableModel::DateColumn, 150);
-    qDebug() << "[INIT] Center viewStack added to layout";
+
     assetTableView->setColumnWidth(AssetsTableModel::RatingColumn, 100);
     viewStack->addWidget(assetTableView); // Index 1
-    qDebug() << "[INIT] Asset table view added to stack";
+
 
     // Set grid view as default
     viewStack->setCurrentIndex(0);
@@ -1594,7 +1595,7 @@ void MainWindow::setupUi()
     folderTreeView->setDropIndicatorShown(true);
     folderTreeView->setDragDropMode(QAbstractItemView::DragDrop);
     folderTreeView->setDefaultDropAction(Qt::MoveAction);
-    qDebug() << "[INIT] Event filters installed on asset views";
+
     folderTreeView->viewport()->installEventFilter(this);
 
     // Install event filter on asset views to handle Space key for preview
@@ -6777,3 +6778,4 @@ QKeySequence MainWindow::fmShortcutFor(const QString& actionName, const QKeySequ
     if (stored.isEmpty()) return def;
     return QKeySequence(stored);
 }
+
