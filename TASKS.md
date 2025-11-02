@@ -14,7 +14,7 @@ Legend: [ ] todo, [/] in progress, [x] done
   - [x] Update API_REFERENCE.md to remove ThumbnailGenerator docs
   - DoD: No references; builds & packages succeed
 
-- [ ] H-1 Rename misleading slots in MainWindow to Preview terminology (and wire-up)
+- [x] H-1 Rename misleading slots in MainWindow to Preview terminology (and wire-up)
   - [x] mainwindow.h/.cpp: onGenerateThumbnailsForFolder > onPrefetchLivePreviewsForFolder
   - [x] mainwindow.h/.cpp: onRegenerateThumbnailsForFolder > onRefreshLivePreviewsForFolder
   - [x] mainwindow.h/.cpp: onGenerateThumbnailsRecursive > onPrefetchLivePreviewsRecursive
