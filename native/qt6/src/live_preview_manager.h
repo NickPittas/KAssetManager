@@ -64,6 +64,10 @@ public:
     void clear();
     int cacheEntryCount() const;
 
+    // Configure cache size (bounds: 64-2048 entries)
+    void setMaxCacheEntries(int maxEntries);
+    int maxCacheEntries() const;
+
 signals:
     void frameReady(const QString& filePath, qreal position, QSize targetSize, const QPixmap& pixmap);
     void frameFailed(const QString& filePath, QString errorString);

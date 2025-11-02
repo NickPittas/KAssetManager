@@ -173,6 +173,21 @@ int LivePreviewManager::cacheEntryCount() const
     return m_cache.size();
 }
 
+void LivePreviewManager::setMaxCacheEntries(int maxEntries)
+{
+    // Bounds: 64-2048 entries
+    const int bounded = qBound(64, maxEntries, 2048);
+    QMutexLocker locker(&m_mutex);
+    m_maxCacheEntries = bounded;
+    qInfo() << "[LivePreview] Cache size set to" << bounded << "entries";
+}
+
+int LivePreviewManager::maxCacheEntries() const
+{
+    QMutexLocker locker(&m_mutex);
+    return m_maxCacheEntries;
+}
+
 QString LivePreviewManager::makeCacheKey(const QString& filePath, const QSize& targetSize, qreal position) const
 {
     return QStringLiteral("%1|%2x%3|%4")

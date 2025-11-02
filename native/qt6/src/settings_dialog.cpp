@@ -105,6 +105,26 @@ void SettingsDialog::setupCacheTab()
     cacheSizeLabel->setStyleSheet("color: #ffffff;");
     cacheLayout->addWidget(cacheSizeLabel);
 
+    // Cache size configuration
+    QHBoxLayout* cacheSizeLayout = new QHBoxLayout();
+    QLabel* maxCacheLabel = new QLabel("Maximum cache size:", cacheGroup);
+    maxCacheLabel->setStyleSheet("color: #ffffff;");
+    cacheSizeLayout->addWidget(maxCacheLabel);
+
+    maxCacheSizeSpin = new QSpinBox(cacheGroup);
+    maxCacheSizeSpin->setMinimum(64);
+    maxCacheSizeSpin->setMaximum(2048);
+    maxCacheSizeSpin->setSingleStep(64);
+    maxCacheSizeSpin->setValue(LivePreviewManager::instance().maxCacheEntries());
+    maxCacheSizeSpin->setStyleSheet("QSpinBox { background-color: #1e1e1e; color: #ffffff; border: 1px solid #333; padding: 4px; }");
+    cacheSizeLayout->addWidget(maxCacheSizeSpin);
+
+    QLabel* entriesLabel = new QLabel("entries", cacheGroup);
+    entriesLabel->setStyleSheet("color: #ffffff;");
+    cacheSizeLayout->addWidget(entriesLabel);
+    cacheSizeLayout->addStretch();
+    cacheLayout->addLayout(cacheSizeLayout);
+
     clearCacheBtn = new QPushButton("Clear Preview Cache", cacheGroup);
     clearCacheBtn->setStyleSheet(
         "QPushButton { background-color: #d73a49; color: #ffffff; border: none; padding: 8px 16px; border-radius: 4px; }"
@@ -411,6 +431,13 @@ void SettingsDialog::onImportDatabase()
 
 void SettingsDialog::saveSettings()
 {
+    // Save cache size setting
+    if (maxCacheSizeSpin) {
+        int cacheSize = maxCacheSizeSpin->value();
+        LivePreviewManager::instance().setMaxCacheEntries(cacheSize);
+        QSettings s("AugmentCode", "KAssetManager");
+        s.setValue("LivePreview/MaxCacheEntries", cacheSize);
+    }
 
     // Persist File Manager shortcuts
     if (fmShortcutsTable) {

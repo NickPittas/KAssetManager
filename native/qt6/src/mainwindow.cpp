@@ -1209,6 +1209,13 @@ MainWindow::MainWindow(QWidget *parent)
     fileOpsDialog = nullptr;
     LogManager::instance().addLog("[MAINWINDOW] ctor begin");
 
+    // Load LivePreview cache size setting
+    {
+        QSettings s("AugmentCode", "KAssetManager");
+        int cacheSize = s.value("LivePreview/MaxCacheEntries", 256).toInt();
+        LivePreviewManager::instance().setMaxCacheEntries(cacheSize);
+    }
+
     m_initializing = true;
     setupUi();
     setupConnections();
