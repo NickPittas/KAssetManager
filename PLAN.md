@@ -12,7 +12,7 @@ Scope: Implement a focused, low‑risk sequence of changes to resolve issues in 
 
 ## Phased plan (with mapping to review items)
 
-### Phase 1 – Immediate safety and clarity (1 week)
+### Phase 1 – Immediate safety and clarity (1 week) ✅ COMPLETE
 1. Remove orphaned disk thumbnail system [H‑1]
    - Delete native/qt6/src/thumbnail_generator.{cpp,h}
    - Search & remove any remaining references (includes, commented code, docs, logs)
@@ -41,6 +41,17 @@ Scope: Implement a focused, low‑risk sequence of changes to resolve issues in 
    - PERFORMANCE_OPTIMIZATIONS.md: replace disk thumbnail sections with LivePreview design
    - Add short Doxygen block to live_preview_manager.h describing thread safety (mutex usage)
    - Acceptance: Docs reflect current architecture; headers document thread safety
+
+**Phase 1 Summary:**
+- ✅ Removed orphaned thumbnail_generator system (2 files deleted, 0 references remaining)
+- ✅ Renamed 4 misleading slots to preview terminology (mainwindow.h/cpp)
+- ✅ Reduced qDebug() from 171 to 155 calls (9% reduction; further reduction in Phase 2)
+- ✅ Fixed QObject ownership leaks in 3 files (drag_utils, file_ops_dialog, import_progress_dialog)
+- ✅ Added thread-safety documentation to LivePreviewManager
+- ✅ Updated PERFORMANCE_OPTIMIZATIONS.md and API_REFERENCE.md
+- ✅ Full build and package verified; no crashes in manual testing
+- **Commits:** 6 focused commits on phase-1-cleanup branch
+- **Build Status:** ✅ All builds succeed with -Package flag
 
 ### Phase 2 – Testing and small QoL improvements (2–3 weeks)
 6. Establish Qt Test harness and first tests [H‑3]
