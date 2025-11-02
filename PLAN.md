@@ -53,28 +53,38 @@ Scope: Implement a focused, low‑risk sequence of changes to resolve issues in 
 - **Commits:** 6 focused commits on phase-1-cleanup branch
 - **Build Status:** ✅ All builds succeed with -Package flag
 
-### Phase 2 – Testing and small QoL improvements (2–3 weeks)
-6. Establish Qt Test harness and first tests [H‑3]
+### Phase 2 – Testing and small QoL improvements (2–3 weeks) ✅ COMPLETE
+6. Establish Qt Test harness and first tests [H‑3] ✅
    - Create tests/ with CMake target; add test_db.cpp (createFolder, upsertAsset, transactions)
    - Wire minimal CI locally (GitHub Actions workflow proposal kept in repo but not required to run yet)
-   - Acceptance: `ctest` or test executable runs locally with passing tests; included in build script optionally
+   - Acceptance: `ctest` or test executable runs locally with passing tests; included in build script optionally ✓
 
-7. Configurable LivePreview cache size [M‑6]
+7. Configurable LivePreview cache size [M‑6] ✅
    - Expose m_maxCacheEntries via QSettings + Settings dialog control; sane defaults and bounds
    - Log metrics (hit rate/evictions) to LogManager under KASSET_DIAGNOSTICS
-   - Acceptance: Setting persists; changing value affects runtime cache behavior
+   - Acceptance: Setting persists; changing value affects runtime cache behavior ✓
 
-8. Standardize external file existence checks [M‑4]
+8. Standardize external file existence checks [M‑4] ✅
    - Add small helper in a shared utils header; replace inconsistent checks
-   - Acceptance: All external file path operations validated consistently; early returns with clear logs
+   - Acceptance: All external file path operations validated consistently; early returns with clear logs ✓
 
-9. DB index documentation/explicit index on assets.file_path [M‑5]
+9. DB index documentation/explicit index on assets.file_path [M‑5] ✅
    - Either document UNIQUE(file_path) implicit index or add explicit index; confirm with EXPLAIN
-   - Acceptance: Decision recorded in TECH.md; schema updated or comment added
+   - Acceptance: Decision recorded in TECH.md; schema updated or comment added ✓
 
-10. Centralize sequence detection regex [M‑7]
+10. Centralize sequence detection regex [M‑7] ✅
    - Move pattern to SequenceDetector (single source); update callers (mainwindow.cpp, sequence_detector.cpp)
-   - Acceptance: One authoritative definition; tests for a few patterns
+   - Acceptance: One authoritative definition; tests for a few patterns ✓
+
+**Phase 2 Summary:**
+- ✅ Established Qt Test harness with 3 test executables (test_simple, test_db, test_models)
+- ✅ Made LivePreview cache size configurable via Settings dialog with QSettings persistence
+- ✅ Standardized file existence validation with FileUtils helper namespace
+- ✅ Added explicit UNIQUE index for assets.file_path and documented index strategy in TECH.md
+- ✅ Centralized sequence detection regex patterns in SequenceDetector class
+- ✅ All tests passing (100%); full build and package verified
+- **Commits:** 5 focused commits on phase-2-testing branch
+- **Build Status:** ✅ All builds succeed with -Package flag; all tests pass
 
 ### Phase 3 – MainWindow de‑monolithization (quarter)
 11. Extract FileManagerWidget [H‑2, M‑3]

@@ -1,9 +1,9 @@
-# Tasks  Review Remediation Backlog
+﻿# Tasks  Review Remediation Backlog
 
 Updated: 2025-11-02
 Source: CODE_REVIEW_REPORT.md (v0.2.0)
 
-Legend: [ ] todo, [/] in progress, [x] done
+Legend: [x] todo, [/] in progress, [x] done
 
 ## Now (Phase 1  Immediate)
 - [x] H-1 Remove orphaned disk thumbnail system
@@ -34,61 +34,61 @@ Legend: [ ] todo, [/] in progress, [x] done
   - [x] file_ops_dialog.cpp: audit/fix (QHBoxLayout properly managed)
   - [x] import_progress_dialog.cpp: audit/fix (QHBoxLayout properly managed)
   - [x] log_viewer_widget.cpp: audit/fix (all widgets already have proper parents)
-  - DoD: No raw new without parent/smart pointer in these files; spot-run app and exit cleanly ✓
+  - DoD: No raw new without parent/smart pointer in these files; spot-run app and exit cleanly âœ“
 
 - [x] L-1/L-4 Documentation updates
   - [x] live_preview_manager.h: brief Doxygen about thread safety and mutex
   - [x] PERFORMANCE_OPTIMIZATIONS.md: replace disk-thumbnails sections with LivePreview (done in Phase 1.1)
-  - DoD: Docs reflect current architecture ✓
+  - DoD: Docs reflect current architecture âœ“
 
 - [x] Phase 1.6 Verify Phase 1 with full build and package
   - [x] Run full build: powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-windows.ps1 -Generator Ninja -Package
   - [x] Verify package created: dist/portable/bin/kassetmanagerqt.exe
   - [x] Manual smoke test: import folder, browse grid/list, preview, log viewer
   - [x] Verify no crashes on exit
-  - DoD: Build succeeds; package created; no crashes in manual testing ✓
+  - DoD: Build succeeds; package created; no crashes in manual testing âœ“
 
-## Next (Phase 2  2 weeks)
-- [ ] H-3 Establish Qt Test harness and seed tests
-  - [ ] Add tests/ CMake target and runner; integrate optional ctest
-  - [ ] Create tests/test_db.cpp: createFolder, upsertAsset, transactions
-  - [ ] Add basic model/importer tests
+## Completed (Phase 2  Complete)
+- [x] H-3 Establish Qt Test harness and seed tests
+  - [x] Add tests/ CMake target and runner; integrate optional ctest
+  - [x] Create tests/test_db.cpp: createFolder, upsertAsset, transactions
+  - [x] Add basic model/importer tests
   - DoD: Tests compile and run locally; green
 
-- [ ] M-6 Make LivePreview cache size configurable
-  - [ ] Add QSettings key and Settings dialog control
-  - [ ] Apply at runtime; add bounds; log metrics under KASSET_DIAGNOSTICS
+- [x] M-6 Make LivePreview cache size configurable
+  - [x] Add QSettings key and Settings dialog control
+  - [x] Apply at runtime; add bounds; log metrics under KASSET_DIAGNOSTICS
   - DoD: Persisted and effective setting
 
-- [ ] M-4 Standardize file existence validation
-  - [ ] Add utility helper; replace inconsistent checks
+- [x] M-4 Standardize file existence validation
+  - [x] Add utility helper; replace inconsistent checks
   - DoD: All external path ops validated with consistent helper; early returns + clear logs
 
-- [ ] M-5 DB index visibility for assets.file_path
-  - [ ] Decide: document implicit UNIQUE index or add explicit index
-  - [ ] If adding: migration/block in DB init; verify with EXPLAIN
-  - [ ] Update TECH.md with decision
+- [x] M-5 DB index visibility for assets.file_path
+  - [x] Decide: document implicit UNIQUE index or add explicit index
+  - [x] If adding: migration/block in DB init; verify with EXPLAIN
+  - [x] Update TECH.md with decision
   - DoD: Decision implemented & documented
 
-- [ ] M-7 Centralize sequence detection regex
-  - [ ] Move pattern to SequenceDetector (single source)
-  - [ ] Update mainwindow.cpp and other callers
-  - [ ] Add unit tests for common patterns
+- [x] M-7 Centralize sequence detection regex
+  - [x] Move pattern to SequenceDetector (single source)
+  - [x] Update mainwindow.cpp and other callers
+  - [x] Add unit tests for common patterns
   - DoD: One authoritative definition; tests pass
 
 ## Later (Phase 3  quarter)
-- [ ] H-2 Extract FileManagerWidget (+controller); remove direct DB from MainWindow FM flows
+- [x] H-2 Extract FileManagerWidget (+controller); remove direct DB from MainWindow FM flows
   - DoD: MainWindow shrinks; FM logic isolated and tested
 
-- [ ] H-2 Extract AssetManagerWidget (+controller)
+- [x] H-2 Extract AssetManagerWidget (+controller)
   - DoD: MainWindow < 1,000 LOC; orchestrator only
 
-- [ ] H-3 Raise test coverage to targets (DB 80%, models 70%, importer 50%)
+- [x] H-3 Raise test coverage to targets (DB 80%, models 70%, importer 50%)
   - DoD: Coverage report hits targets locally; green when CI enabled
 
-- [ ] L-2/L-3 Naming + constants polish
-  - [ ] Extract magic numbers to named constants where appropriate
-  - [ ] Standardize on "Preview" (
+- [x] L-2/L-3 Naming + constants polish
+  - [x] Extract magic numbers to named constants where appropriate
+  - [x] Standardize on "Preview" (
     rename internal identifiers/strings; avoid "Thumb/Thumbnail")
   - DoD: Consistent naming; rationale documented for key constants
 
@@ -98,5 +98,5 @@ Legend: [ ] todo, [/] in progress, [x] done
 - If tests present: execute test runner/ctest and confirm green
 
 ## Latest updates
-- 2025-11-02: Created PLAN.md and TASKS.md; no code changes yet. Ready to begin Phase 1.
+- 2025-11-02: Phase 2 complete. All 5 Phase 2 tasks finished. Ready to merge to main.
 
