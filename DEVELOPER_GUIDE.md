@@ -729,14 +729,49 @@ QMessageBox::critical(this, "Error",
 - [ ] Scroll through assets
 - [ ] Filter large libraries
 
-### Unit Testing (Future)
+### Unit Testing
 
-**Recommended framework**: Qt Test
+**Framework**: Qt Test (integrated in CMake)
 
 **Test coverage goals:**
 - Database operations: 80%+
 - Data models: 70%+
 - Business logic: 60%+
+
+**Running Tests:**
+
+1. **Build with tests:**
+   ```powershell
+   powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-windows.ps1 -Generator Ninja
+   ```
+
+2. **Run individual tests:**
+   ```powershell
+   # Test database operations
+   .\native\qt6\build\ninja\install_run\bin\test_db.exe
+
+   # Test data models
+   .\native\qt6\build\ninja\install_run\bin\test_models.exe
+
+   # Test simple utilities
+   .\native\qt6\build\ninja\install_run\bin\test_simple.exe
+   ```
+
+3. **Run all tests with ctest (if available):**
+   ```powershell
+   cd native\qt6\build\ninja
+   ctest --output-on-failure
+   ```
+
+**Test Files:**
+- `native/qt6/tests/test_db.cpp` - Database operations (createFolder, upsertAsset, transactions, foreign keys)
+- `native/qt6/tests/test_models.cpp` - Data models (AssetsModel row count, filtering, search)
+- `native/qt6/tests/test_simple.cpp` - Basic utilities (arithmetic, string, bool operations)
+
+**Test Output:**
+- All tests should show "PASS" status
+- Expected output: "Totals: X passed, 0 failed, 0 skipped"
+- Tests run in Release mode for performance
 
 ---
 
