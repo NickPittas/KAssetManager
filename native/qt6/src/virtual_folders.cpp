@@ -221,3 +221,33 @@ int VirtualFolderTreeModel::getProjectFolderId(int virtualFolderId) const
     const VFNode* n = nodeForId(virtualFolderId);
     return n ? n->projectFolderId : 0;
 }
+
+QModelIndex VirtualFolderTreeModel::findIndexById(int folderId) const
+{
+    if (folderId <= 0) return QModelIndex();
+
+    const VFNode* node = nodeForId(folderId);
+    if (!node) return QModelIndex();
+
+    // Build path from root to this node
+    QVector<int> path;
+    const VFNode* current = node;
+    while (current && current->id != m_rootId) {
+        path.prepend(current->id);
+        current = nodeForId(current->parentId);
+    }
+
+    // Navigate from root to build QModelIndex
+    QModelIndex idx;
+    for (int nodeId : path) {
+        const VFNode* parent = idx.isValid() ? nodeForId(idx.data(IdRole).toInt()) : nodeForId(m_rootId);
+        if (!parent) return QModelIndex();
+
+        int row = parent->children.indexOf(nodeId);
+        if (row < 0) return QModelIndex();
+
+        idx = index(row, 0, idx);
+    }
+
+    return idx;
+}

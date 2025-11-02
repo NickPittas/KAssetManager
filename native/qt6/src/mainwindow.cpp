@@ -18,6 +18,7 @@
 #include "file_ops_dialog.h"
 #include "log_manager.h"
 #include "sequence_detector.h"
+#include "context_preserver.h"
 
 #include "office_preview.h"
 
@@ -2021,11 +2022,35 @@ void MainWindow::setupUi()
     // Load initial data
     folderModel->reload();
     tagsModel->reload();
-    if (folderModel->rowCount(QModelIndex()) > 0) {
+
+    // Restore last active tab
+    int lastTab = ContextPreserver::instance().loadLastActiveTab();
+    if (mainTabs && lastTab >= 0 && lastTab < mainTabs->count()) {
+        mainTabs->setCurrentIndex(lastTab);
+    }
+
+    // Restore last active folder or select first folder
+    int lastFolderId = ContextPreserver::instance().loadLastActiveFolder();
+    bool folderRestored = false;
+
+    if (lastFolderId > 0) {
+        // Try to find and select the last active folder
+        QModelIndex lastFolderIndex = folderModel->findIndexById(lastFolderId);
+        if (lastFolderIndex.isValid()) {
+            folderTreeView->setCurrentIndex(lastFolderIndex);
+            onFolderSelected(lastFolderIndex);
+            folderRestored = true;
+            qDebug() << "[ContextPreserver] Restored last active folder:" << lastFolderId;
+        }
+    }
+
+    // Fallback to first folder if restoration failed
+    if (!folderRestored && folderModel->rowCount(QModelIndex()) > 0) {
         QModelIndex firstFolder = folderModel->index(0, 0, QModelIndex());
         folderTreeView->setCurrentIndex(firstFolder);
         onFolderSelected(firstFolder);
     }
+
     LogManager::instance().addLog("[TRACE] mainwindow ctor finished", "DEBUG");
 }
 void MainWindow::setupFileManagerUi()
@@ -3522,16 +3547,78 @@ void MainWindow::setupConnections()
     connect(&folderSelectTimer, &QTimer::timeout, this, [this]{
         const int fid = pendingFolderId;
         if (fid <= 0) return;
+
+        // Save context for current folder before switching
+        if (currentAssetId > 0 || !selectedAssetIds.isEmpty()) {
+            int currentFolderId = assetsModel->folderId();
+            if (currentFolderId > 0) {
+                ContextPreserver::FolderContext ctx;
+                // Save scroll position
+                if (isGridMode && assetGridView) {
+                    ctx.scrollPosition = assetGridView->verticalScrollBar()->value();
+                } else if (!isGridMode && assetTableView) {
+                    ctx.scrollPosition = assetTableView->verticalScrollBar()->value();
+                }
+                ctx.isGridMode = isGridMode;
+                ctx.searchText = searchBox->text();
+                ctx.ratingFilter = ratingFilter->currentIndex() - 1; // -1 for "All"
+                ctx.selectedAssetIds = selectedAssetIds;
+                ctx.recursiveMode = recursiveCheckBox->isChecked();
+
+                // Save selected tags
+                QModelIndexList tagSelection = tagsListView->selectionModel()->selectedIndexes();
+                for (const QModelIndex& idx : tagSelection) {
+                    int tagId = idx.data(TagsModel::IdRole).toInt();
+                    if (tagId > 0) ctx.selectedTagIds.insert(tagId);
+                }
+
+                ContextPreserver::instance().saveFolderContext(currentFolderId, ctx);
+            }
+        }
+
         // Stop any preview playback but do NOT cancel thumbnail generation; allow it to continue in background
         if (previewOverlay) previewOverlay->stopPlayback();
         // Apply folder change
         assetsModel->setFolderId(fid);
 
-        // Ensure the asset views start at the top for every new folder
-        QTimer::singleShot(0, this, [this](){
-            if (assetGridView) assetGridView->scrollToTop();
-            if (assetTableView) assetTableView->scrollToTop();
-        });
+        // Try to restore context for new folder
+        if (ContextPreserver::instance().hasFolderContext(fid)) {
+            QTimer::singleShot(50, this, [this, fid](){
+                ContextPreserver::FolderContext ctx = ContextPreserver::instance().loadFolderContext(fid);
+
+                // Restore view mode
+                if (ctx.isGridMode != isGridMode) {
+                    onViewModeChanged();
+                }
+
+                // Restore filters
+                if (!ctx.searchText.isEmpty()) {
+                    searchBox->setText(ctx.searchText);
+                }
+                if (ctx.ratingFilter >= -1) {
+                    ratingFilter->setCurrentIndex(ctx.ratingFilter + 1);
+                }
+                recursiveCheckBox->setChecked(ctx.recursiveMode);
+
+                // Restore scroll position
+                if (ctx.scrollPosition > 0) {
+                    if (isGridMode && assetGridView) {
+                        assetGridView->verticalScrollBar()->setValue(ctx.scrollPosition);
+                    } else if (!isGridMode && assetTableView) {
+                        assetTableView->verticalScrollBar()->setValue(ctx.scrollPosition);
+                    }
+                }
+
+                // Note: Asset selection restoration would need to wait for model to load
+                // This is a future enhancement
+            });
+        } else {
+            // No saved context - ensure the asset views start at the top for every new folder
+            QTimer::singleShot(0, this, [this](){
+                if (assetGridView) assetGridView->scrollToTop();
+                if (assetTableView) assetTableView->scrollToTop();
+            });
+        }
 
         // Log memory usage before/after applying folder change
 #ifdef Q_OS_WIN
@@ -3541,6 +3628,9 @@ void MainWindow::setupConnections()
 
         clearSelection();
         updateInfoPanel();
+
+        // Save as last active folder
+        ContextPreserver::instance().saveLastActiveFolder(fid);
     });
 
     connect(folderTreeView, &QTreeView::clicked, this, &MainWindow::onFolderSelected);
@@ -6638,6 +6728,37 @@ void MainWindow::onFmOpenOverlay()
 
 void MainWindow::closeEvent(QCloseEvent* event)
 {
+    // Save current folder context before closing
+    int currentFolderId = assetsModel->folderId();
+    if (currentFolderId > 0) {
+        ContextPreserver::FolderContext ctx;
+        // Save scroll position
+        if (isGridMode && assetGridView) {
+            ctx.scrollPosition = assetGridView->verticalScrollBar()->value();
+        } else if (!isGridMode && assetTableView) {
+            ctx.scrollPosition = assetTableView->verticalScrollBar()->value();
+        }
+        ctx.isGridMode = isGridMode;
+        ctx.searchText = searchBox->text();
+        ctx.ratingFilter = ratingFilter->currentIndex() - 1;
+        ctx.selectedAssetIds = selectedAssetIds;
+        ctx.recursiveMode = recursiveCheckBox->isChecked();
+
+        // Save selected tags
+        QModelIndexList tagSelection = tagsListView->selectionModel()->selectedIndexes();
+        for (const QModelIndex& idx : tagSelection) {
+            int tagId = idx.data(TagsModel::IdRole).toInt();
+            if (tagId > 0) ctx.selectedTagIds.insert(tagId);
+        }
+
+        ContextPreserver::instance().saveFolderContext(currentFolderId, ctx);
+    }
+
+    // Save current tab
+    if (mainTabs) {
+        ContextPreserver::instance().saveLastActiveTab(mainTabs->currentIndex());
+    }
+
     QSettings s("AugmentCode", "KAssetManager");
     // Window
     s.setValue("Window/Geometry", saveGeometry());

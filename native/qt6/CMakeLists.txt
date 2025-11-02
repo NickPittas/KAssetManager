@@ -155,6 +155,8 @@ qt_add_executable(kassetmanagerqt WIN32
     src/file_ops_dialog.cpp
     src/office_preview.h
     src/office_preview.cpp
+    src/context_preserver.h
+    src/context_preserver.cpp
     ${APP_RESOURCES}
 )
 

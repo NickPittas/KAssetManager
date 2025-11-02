@@ -44,6 +44,9 @@ public:
     Q_INVOKABLE bool isProjectFolder(int id) const;
     Q_INVOKABLE int getProjectFolderId(int virtualFolderId) const;
 
+    // Find QModelIndex for a given folder ID
+    QModelIndex findIndexById(int folderId) const;
+
 public slots:
     void reload();
 
