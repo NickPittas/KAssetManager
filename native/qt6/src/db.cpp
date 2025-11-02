@@ -211,7 +211,6 @@ bool DB::moveFolder(int id, int newParentId){
 
 int DB::upsertAsset(const QString& filePath){
     if (!FileUtils::fileExists(filePath)) {
-        qDebug() << "DB::upsertAsset: file does not exist:" << filePath;
         return 0;
     }
     QFileInfo fi(filePath);
@@ -247,8 +246,6 @@ int DB::upsertAsset(const QString& filePath){
                 qWarning() << "DB::upsertAsset: UPDATE failed:" << upd.lastError();
             }
             emit assetsChanged(m_rootId);
-        } else {
-            qDebug() << "DB::upsertAsset: unchanged asset, id=" << existingId;
         }
         return existingId;
     }
@@ -271,7 +268,6 @@ int DB::upsertAsset(const QString& filePath){
     // Create initial version v1
     createAssetVersion(newId, absPath, QStringLiteral("Initial import"));
 
-    qDebug() << "DB::upsertAsset: created new asset, id=" << newId << "path=" << filePath;
     emit assetsChanged(m_rootId);
     return newId;
 }
@@ -279,7 +275,6 @@ int DB::upsertAsset(const QString& filePath){
 int DB::upsertSequence(const QString& sequencePattern, int startFrame, int endFrame, int frameCount, const QString& firstFramePath){
     QFileInfo fi(firstFramePath);
     if (!fi.exists()) {
-        qDebug() << "DB::upsertSequence: first frame does not exist:" << firstFramePath;
         return 0;
     }
 
@@ -289,7 +284,6 @@ int DB::upsertSequence(const QString& sequencePattern, int startFrame, int endFr
     sel.addBindValue(sequencePattern);
     if (sel.exec() && sel.next()) {
         int existingId = sel.value(0).toInt();
-        qDebug() << "DB::upsertSequence: sequence already exists, id=" << existingId << "pattern=" << sequencePattern;
 
         // Update frame range if changed
         QSqlQuery upd(m_db);
@@ -320,7 +314,6 @@ int DB::upsertSequence(const QString& sequencePattern, int startFrame, int endFr
         return 0;
     }
     int newId = ins.lastInsertId().toInt();
-    qDebug() << "DB::upsertSequence: created new sequence, id=" << newId << "pattern=" << sequencePattern << "frames=" << startFrame << "-" << endFrame;
     emit assetsChanged(m_rootId);
     return newId;
 }
@@ -330,7 +323,6 @@ int DB::insertAssetMetadataFast(const QString& filePath, int folderId)
 {
     QFileInfo fi(filePath);
     if (!fi.exists()) {
-        qDebug() << "DB::insertAssetMetadataFast: file does not exist:" << filePath;
         return 0;
     }
     const QString absPath = fi.absoluteFilePath();
@@ -371,7 +363,6 @@ int DB::upsertSequenceInFolderFast(const QString& sequencePattern, int startFram
 {
     QFileInfo fi(firstFramePath);
     if (!fi.exists()) {
-        qDebug() << "DB::upsertSequenceInFolderFast: first frame does not exist:" << firstFramePath;
         return 0;
     }
 
@@ -440,7 +431,6 @@ bool DB::setAssetFolder(int assetId, int folderId){
     if (!ok) {
         qWarning() << "DB::setAssetFolder: UPDATE failed:" << q.lastError();
     } else {
-        qDebug() << "DB::setAssetFolder: moved asset" << assetId << "from folder" << oldFolderId << "to folder" << folderId;
         // Emit for both old and new folders
         if (oldFolderId != folderId) {
             emit assetsChanged(oldFolderId);
@@ -901,7 +891,6 @@ int DB::createProjectFolder(const QString& name, const QString& path)
     }
 
     int projectFolderId = ins.lastInsertId().toInt();
-    qDebug() << "DB::createProjectFolder: created project folder" << projectFolderId << "name=" << name << "path=" << path;
     emit projectFoldersChanged();
     return projectFolderId;
 }
@@ -933,7 +922,6 @@ bool DB::renameProjectFolder(int id, const QString& name)
     if (!ok) {
         qWarning() << "DB::renameProjectFolder: UPDATE failed:" << upd1.lastError() << upd2.lastError();
     } else {
-        qDebug() << "DB::renameProjectFolder: renamed project folder" << id << "to" << name;
         emit projectFoldersChanged();
         emit foldersChanged();
     }
@@ -961,7 +949,6 @@ bool DB::deleteProjectFolder(int id)
     if (!ok) {
         qWarning() << "DB::deleteProjectFolder: DELETE failed:" << del.lastError();
     } else {
-        qDebug() << "DB::deleteProjectFolder: deleted project folder" << id;
         // Also delete the virtual folder
         deleteFolder(virtualFolderId);
         emit projectFoldersChanged();

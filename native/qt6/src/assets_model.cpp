@@ -144,9 +144,6 @@ QMimeData *AssetsModel::mimeData(const QModelIndexList &indexes) const
         mimeData->setUrls(urls);
     }
 
-    qDebug() << "AssetsModel::mimeData() - Dragging" << assetIds.size() << "assets:" << assetIds;
-    qDebug() << "  File URLs:" << urls;
-
     return mimeData;
 }
 
@@ -158,7 +155,6 @@ Qt::DropActions AssetsModel::supportedDragActions() const
 void AssetsModel::setFolderId(int id){
     if (m_folderId==id) return;
     m_folderId=id;
-    qDebug() << "AssetsModel::setFolderId" << id;
     scheduleReload();
     emit folderIdChanged();
 }
@@ -220,32 +216,23 @@ void AssetsModel::setTagFilterMode(int mode) {
 void AssetsModel::setRecursiveMode(bool recursive) {
     if (m_recursiveMode == recursive) return;
     m_recursiveMode = recursive;
-    qDebug() << "AssetsModel::setRecursiveMode" << recursive;
     scheduleReload();
     emit recursiveModeChanged();
 }
 
 void AssetsModel::reload(){
-    qDebug() << "===== AssetsModel::reload() START for folderId" << m_folderId << "on thread" << QThread::currentThread();
     QElapsedTimer t; t.start();
 
-    qDebug() << "AssetsModel::reload() - Calling beginResetModel()...";
     m_isResetting = true;
     beginResetModel();
 
-    qDebug() << "AssetsModel::reload() - Calling query()...";
     query();
-    qDebug() << "AssetsModel::reload() - query() returned" << m_rows.size() << "rows";
 
-    qDebug() << "AssetsModel::reload() - Calling rebuildFilter()...";
     rebuildFilter();
-    qDebug() << "AssetsModel::reload() - rebuildFilter() returned" << m_filteredRowIndexes.size() << "filtered rows";
 
-    qDebug() << "AssetsModel::reload() - Calling endResetModel()...";
     endResetModel();
     m_isResetting = false;
 
-    qDebug() << "===== AssetsModel::reload() SUCCESS - loaded" << m_rows.size() << "assets in" << t.elapsed() << "ms";
     LogManager::instance().addLog(QString("AssetsModel reload: %1 assets in %2 ms").arg(m_rows.size()).arg(t.elapsed()), "DEBUG");
 }
 
@@ -260,7 +247,6 @@ void AssetsModel::query(){
         q.prepare("SELECT id,file_name,file_path,file_size,COALESCE(rating,-1),virtual_folder_id,COALESCE(is_sequence,0),sequence_pattern,sequence_start_frame,sequence_end_frame,sequence_frame_count FROM assets ORDER BY file_name");
     } else {
         if (m_folderId<=0) {
-            qDebug() << "AssetsModel::query() skipped - invalid folderId" << m_folderId;
             m_filteredRowIndexes.clear();
             return;
         }
@@ -269,7 +255,6 @@ void AssetsModel::query(){
         if (m_recursiveMode) {
             QList<int> assetIds = DB::instance().getAssetIdsInFolder(m_folderId, true);
             if (assetIds.isEmpty()) {
-                qDebug() << "AssetsModel::query() - No assets found in folder" << m_folderId << "(recursive)";
                 m_filteredRowIndexes.clear();
                 return;
             }
@@ -318,7 +303,6 @@ void AssetsModel::query(){
         ++rows;
     }
     LogManager::instance().addLog(QString("DB query complete: %1 rows").arg(rows), "DEBUG");
-    qDebug() << "AssetsModel::query() found" << m_rows.size() << "assets for folderId" << m_folderId;
 }
 
 bool AssetsModel::moveAssetToFolder(int assetId, int folderId){ bool ok=DB::instance().setAssetFolder(assetId,folderId); if (ok) scheduleReload(); return ok; }

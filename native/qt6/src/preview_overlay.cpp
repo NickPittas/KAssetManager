@@ -618,8 +618,6 @@ void PreviewOverlay::showAsset(const QString &filePath, const QString &fileName,
 
 void PreviewOverlay::showImage(const QString &filePath)
 {
-    qDebug() << "[PreviewOverlay::showImage] Loading image:" << filePath;
-
     // CRITICAL: Hide other widgets and show image view
     if (videoWidget) videoWidget->hide();
     if (textView) textView->hide();
@@ -635,12 +633,10 @@ void PreviewOverlay::showImage(const QString &filePath)
 
     // CRITICAL: Stop any video playback
     if (mediaPlayer->playbackState() != QMediaPlayer::StoppedState) {
-        qDebug() << "[PreviewOverlay::showImage] Stopping video playback";
         mediaPlayer->stop();
     }
 #ifdef HAVE_FFMPEG
     if (usingFallbackVideo) {
-        qDebug() << "[PreviewOverlay::showImage] Stopping fallback playback";
         stopFallbackVideo();
     }
 #endif
@@ -654,12 +650,10 @@ void PreviewOverlay::showImage(const QString &filePath)
     QImage image;
     QPixmap newPixmap;
     if (OIIOImageLoader::isOIIOSupported(filePath)) {
-        qDebug() << "[PreviewOverlay::showImage] Loading with OpenImageIO:" << filePath;
         // Load at full resolution for preview (no size limit) with current color space
         image = OIIOImageLoader::loadImage(filePath, 0, 0, currentColorSpace);
         if (!image.isNull()) {
             newPixmap = QPixmap::fromImage(image);
-            qDebug() << "[PreviewOverlay::showImage] OIIO loaded successfully, size:" << newPixmap.size();
         } else {
             qWarning() << "[PreviewOverlay::showImage] OIIO failed to load:" << filePath;
         }
@@ -667,21 +661,16 @@ void PreviewOverlay::showImage(const QString &filePath)
 
     // Fall back to Qt's native loader if OIIO didn't work or isn't supported
     if (newPixmap.isNull()) {
-        qDebug() << "[PreviewOverlay::showImage] Loading with Qt native loader:" << filePath;
         newPixmap = QPixmap(filePath);
         isHDRImage = false; // Qt loader doesn't support HDR
     }
 
 
     if (!newPixmap.isNull()) {
-        qDebug() << "[PreviewOverlay::showImage] Loaded new pixmap, size:" << newPixmap.size();
-
         // CRITICAL: Update the pixmap on existing item or create new one
         if (imageItem) {
-            qDebug() << "[PreviewOverlay::showImage] Updating existing item with setPixmap()";
             imageItem->setPixmap(newPixmap);
         } else {
-            qDebug() << "[PreviewOverlay::showImage] Creating new graphics item";
             imageScene->clear();
             imageItem = imageScene->addPixmap(newPixmap);
         }
@@ -704,7 +693,6 @@ void PreviewOverlay::showImage(const QString &filePath)
         imageView->update();
         imageScene->update();
         QApplication::processEvents(); // Force immediate processing
-        qDebug() << "[PreviewOverlay::showImage] Image displayed successfully";
 
         // Show/hide color space selector based on whether this is HDR
         if (isHDRImage) {
@@ -723,7 +711,6 @@ void PreviewOverlay::showImage(const QString &filePath)
 
 void PreviewOverlay::showVideo(const QString &filePath)
 {
-    qDebug() << "[PreviewOverlay::showVideo] Loading video:" << filePath;
 
     // Ensure any fallback is stopped before starting normal video
 #ifdef HAVE_FFMPEG
@@ -759,13 +746,11 @@ void PreviewOverlay::showVideo(const QString &filePath)
     imageItem = nullptr;
     originalPixmap = QPixmap(); // Clear the pixmap
 
-    qDebug() << "[PreviewOverlay::showVideo] Setting video source";
     mediaPlayer->setSource(QUrl::fromLocalFile(filePath));
 
     // Set video to fill the widget while maintaining aspect ratio
     videoWidget->setAspectRatioMode(Qt::KeepAspectRatio);
 
-    qDebug() << "[PreviewOverlay::showVideo] Starting playback";
     mediaPlayer->play();
 
     // Try to detect FPS from metadata early (may be updated later)
@@ -1278,8 +1263,6 @@ void PreviewOverlay::resetImageZoom()
 
 void PreviewOverlay::showSequence(const QStringList &framePaths, const QString &sequenceName, int startFrame, int endFrame)
 {
-    qDebug() << "[PreviewOverlay::showSequence] Showing sequence:" << sequenceName << "frames:" << startFrame << "-" << endFrame;
-
     isSequence = true;
     isVideo = false;
     sequenceFramePaths = framePaths;
@@ -1309,7 +1292,6 @@ void PreviewOverlay::showSequence(const QStringList &framePaths, const QString &
     QApplication::processEvents();
 
     // CRITICAL: Clear scene before loading sequence
-    qDebug() << "[PreviewOverlay::showSequence] Clearing scene";
     imageScene->clear();
     imageItem = nullptr;
 
@@ -1320,7 +1302,6 @@ void PreviewOverlay::showSequence(const QStringList &framePaths, const QString &
 
     // Stop video player if running
     if (mediaPlayer->playbackState() != QMediaPlayer::StoppedState) {
-        qDebug() << "[PreviewOverlay::showSequence] Stopping video playback";
         mediaPlayer->stop();
     }
 
@@ -1358,8 +1339,6 @@ void PreviewOverlay::showSequence(const QStringList &framePaths, const QString &
 
 void PreviewOverlay::loadSequenceFrame(int frameIndex)
 {
-    qDebug() << "[PreviewOverlay::loadSequenceFrame] Called with frameIndex:" << frameIndex << "total frames:" << sequenceFramePaths.size();
-
     if (frameIndex < 0 || frameIndex >= sequenceFramePaths.size()) {
         qWarning() << "[PreviewOverlay::loadSequenceFrame] Invalid frame index:" << frameIndex;
         return;
@@ -1368,16 +1347,12 @@ void PreviewOverlay::loadSequenceFrame(int frameIndex)
     currentSequenceFrame = frameIndex;
     QString framePath = sequenceFramePaths[frameIndex];
 
-    qDebug() << "[PreviewOverlay::loadSequenceFrame] Loading frame:" << framePath;
-
     // Load frame with OpenImageIO if supported
     QImage image;
     if (OIIOImageLoader::isOIIOSupported(framePath)) {
-        qDebug() << "[PreviewOverlay::loadSequenceFrame] Using OIIO to load frame with color space";
         image = OIIOImageLoader::loadImage(framePath, 0, 0, currentColorSpace);
         if (!image.isNull()) {
             originalPixmap = QPixmap::fromImage(image);
-            qDebug() << "[PreviewOverlay::loadSequenceFrame] OIIO loaded successfully, size:" << originalPixmap.size();
         } else {
             qWarning() << "[PreviewOverlay::loadSequenceFrame] OIIO failed to load frame";
         }
@@ -1385,17 +1360,13 @@ void PreviewOverlay::loadSequenceFrame(int frameIndex)
 
     // Fall back to Qt loader
     if (originalPixmap.isNull()) {
-        qDebug() << "[PreviewOverlay::loadSequenceFrame] Using Qt to load frame";
         originalPixmap = QPixmap(framePath);
-        if (!originalPixmap.isNull()) {
-            qDebug() << "[PreviewOverlay::loadSequenceFrame] Qt loaded successfully, size:" << originalPixmap.size();
-        } else {
+        if (originalPixmap.isNull()) {
             qWarning() << "[PreviewOverlay::loadSequenceFrame] Qt failed to load frame";
         }
     }
 
     if (!originalPixmap.isNull()) {
-        qDebug() << "[PreviewOverlay::loadSequenceFrame] Adding pixmap to scene";
         imageScene->clear();
         imageItem = imageScene->addPixmap(originalPixmap);
         imageScene->setSceneRect(originalPixmap.rect());
@@ -1405,11 +1376,8 @@ void PreviewOverlay::loadSequenceFrame(int frameIndex)
         if (alphaCheck) { alphaCheck->setVisible(previewHasAlpha); alphaCheck->blockSignals(true); alphaCheck->setChecked(false); alphaOnlyMode = false; alphaCheck->blockSignals(false); }
 
         fitImageToView();
-        qDebug() << "[PreviewOverlay::loadSequenceFrame] Frame loaded and displayed";
     } else {
         qWarning() << "[PreviewOverlay::loadSequenceFrame] Failed to load frame - pixmap is null!";
-
-
     }
 
     // Update slider and time label
@@ -1419,8 +1387,6 @@ void PreviewOverlay::loadSequenceFrame(int frameIndex)
 
     int actualFrame = sequenceStartFrame + frameIndex;
     timeLabel->setText(QString("Frame %1 / %2").arg(actualFrame).arg(sequenceEndFrame));
-
-    qDebug() << "[PreviewOverlay::loadSequenceFrame] Frame loading complete";
 }
 
 void PreviewOverlay::playSequence()

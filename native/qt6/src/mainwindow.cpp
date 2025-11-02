@@ -1614,7 +1614,6 @@ void MainWindow::setupUi()
     // Also monitor viewport resize to update visible-only progress
     assetGridView->viewport()->installEventFilter(this);
     assetTableView->viewport()->installEventFilter(this);
-    qDebug() << "[INIT] After installing event filters on views";
 
     assetScrubController = new GridScrubController(
         assetGridView,
@@ -1630,7 +1629,6 @@ void MainWindow::setupUi()
     // Right panel: Filters + Info
     rightPanel = new QWidget(this);
     QVBoxLayout *rightLayout = new QVBoxLayout(rightPanel);
-    qDebug() << "[INIT] Right panel created";
     rightLayout->setContentsMargins(0, 0, 0, 0);
     rightLayout->setSpacing(0);
 
@@ -1638,7 +1636,6 @@ void MainWindow::setupUi()
     filtersPanel = new QWidget(this);
     QVBoxLayout *filtersLayout = new QVBoxLayout(filtersPanel);
     filtersLayout->setContentsMargins(8, 8, 8, 8);
-    qDebug() << "[INIT] Filters panel created";
 
     QLabel *filtersTitle = new QLabel("Filters", this);
     filtersTitle->setStyleSheet("font-size: 14px; font-weight: bold; color: #ffffff;");
@@ -1674,8 +1671,6 @@ void MainWindow::setupUi()
 
     QPushButton *addTagBtn = new QPushButton("+", this);
     addTagBtn->setFixedSize(24, 24);
-    qDebug() << "[INIT] TagsModel created and set on list";
-    qDebug() << "[INIT] Tags list created";
     addTagBtn->setStyleSheet(
         "QPushButton { background-color: #58a6ff; color: #ffffff; border: none; border-radius: 12px; font-size: 16px; font-weight: bold; }"
         "QPushButton:hover { background-color: #4a8fd9; }"
@@ -1687,14 +1682,9 @@ void MainWindow::setupUi()
     filtersLayout->addLayout(tagsHeaderLayout);
 
     tagsListView = new QListView(filtersPanel);
-    qDebug() << "[INIT] Creating tagsListView";
-    qDebug() << "[INIT] Before TagsModel ctor";
     tagsModel = new TagsModel(this);
-    qDebug() << "[INIT] After TagsModel ctor";
     tagsListView->setModel(tagsModel);
-    qDebug() << "[INIT] tagsListView setModel ok";
     tagsListView->setSelectionMode(QAbstractItemView::MultiSelection);
-    qDebug() << "[INIT] tagsListView selection configured";
     tagsListView->setContextMenuPolicy(Qt::CustomContextMenu);
     tagsListView->setStyleSheet("");
     tagsListView->setMaximumHeight(150);
@@ -1703,10 +1693,8 @@ void MainWindow::setupUi()
     tagsListView->setAcceptDrops(true);
     tagsListView->setDropIndicatorShown(true);
     tagsListView->setDragDropMode(QAbstractItemView::DropOnly);
-    qDebug() << "[INIT] tagsListView drag-drop configured";
     // Tag action buttons
     QHBoxLayout *tagButtonsLayout = new QHBoxLayout();
-    qDebug() << "[INIT] Before creating tagButtonsLayout";
 
     applyTagsBtn = new QPushButton("Apply", this);
     applyTagsBtn->setStyleSheet(
@@ -1762,7 +1750,6 @@ void MainWindow::setupUi()
     filtersLayout->addStretch();
     filtersPanel->setStyleSheet("background-color: #121212;");
 
-    qDebug() << "[INIT] Creating infoPanel";
     // Info panel with scrollable area for all metadata
     infoPanel = new QWidget(this);
     QVBoxLayout *infoPanelLayout = new QVBoxLayout(infoPanel);
@@ -1905,7 +1892,6 @@ void MainWindow::setupUi()
     connect(revertVersionButton, &QPushButton::clicked, this, &MainWindow::onRevertSelectedVersion);
     connect(versionTable->selectionModel(), &QItemSelectionModel::selectionChanged, this, [this](const QItemSelection&, const QItemSelection&){
         revertVersionButton->setEnabled(versionTable->currentRow() >= 0);
-    qDebug() << "[INIT] Filters & Info panels added to right panel";
     });
     versionButtonsLayout->addWidget(backupVersionCheck);
     versionButtonsLayout->addStretch();
@@ -1917,7 +1903,6 @@ void MainWindow::setupUi()
     infoScrollArea->setWidget(infoScrollWidget);
     infoPanelLayout->addWidget(infoScrollArea);
     infoPanel->setStyleSheet("background-color: #121212;");
-    qDebug() << "[INIT] Asset Manager tab added";
 
     rightLayout->addWidget(filtersPanel, 1);
     rightLayout->addWidget(infoPanel, 1);
@@ -1933,15 +1918,8 @@ void MainWindow::setupUi()
     // Add Asset Manager page to tabs
     // File Manager page
     fileManagerPage = new QWidget(this);
-    qDebug() << "[INIT] About to call setupFileManagerUi";
     setupFileManagerUi();
-    LogManager::instance().addLog("[TRACE] after setupFileManagerUi call", "DEBUG");
-    qDebug() << "[INIT] setupFileManagerUi returned";
-    LogManager::instance().addLog("[TRACE] before adding file manager tab", "DEBUG");
     mainTabs->addTab(fileManagerPage, "File Manager");
-    LogManager::instance().addLog("[TRACE] after adding file manager tab", "DEBUG");
-    qDebug() << "[INIT] File Manager tab added";
-    LogManager::instance().addLog("[TRACE] file manager tab logged", "DEBUG");
 
     // Add Asset Manager page to tabs
     mainTabs->addTab(assetManagerPage, "Asset Manager");
@@ -3924,10 +3902,7 @@ void MainWindow::showPreview(int index)
     QString fileType = modelIndex.data(AssetsModel::FileTypeRole).toString();
     bool isSequence = modelIndex.data(AssetsModel::IsSequenceRole).toBool();
 
-    qDebug() << "[MainWindow::showPreview] File:" << fileName << "Type:" << fileType << "IsSequence:" << isSequence;
-
     if (!previewOverlay) {
-        qDebug() << "[MainWindow::showPreview] Creating new PreviewOverlay";
         previewOverlay = new PreviewOverlay(this);
         previewOverlay->setGeometry(rect());
 
@@ -3935,25 +3910,18 @@ void MainWindow::showPreview(int index)
         connect(previewOverlay, &PreviewOverlay::navigateRequested, this, &MainWindow::changePreview);
     } else {
         // CRITICAL FIX: Stop any playing media before loading new content
-        qDebug() << "[MainWindow::showPreview] Reusing existing PreviewOverlay - stopping current playback";
         previewOverlay->stopPlayback();
     }
 
     if (isSequence) {
-        qDebug() << "[MainWindow::showPreview] Opening as sequence";
-
         // Get sequence information
         QString sequencePattern = modelIndex.data(AssetsModel::SequencePatternRole).toString();
         int startFrame = modelIndex.data(AssetsModel::SequenceStartFrameRole).toInt();
         int endFrame = modelIndex.data(AssetsModel::SequenceEndFrameRole).toInt();
         int frameCount = modelIndex.data(AssetsModel::SequenceFrameCountRole).toInt();
 
-        qDebug() << "[MainWindow::showPreview] Sequence info - Pattern:" << sequencePattern << "Start:" << startFrame << "End:" << endFrame << "Count:" << frameCount;
-
         // Reconstruct frame paths from first frame path and pattern
         QStringList framePaths = reconstructSequenceFramePaths(filePath, startFrame, endFrame);
-
-        qDebug() << "[MainWindow] Opening sequence:" << sequencePattern << "frames:" << startFrame << "-" << endFrame << "paths:" << framePaths.size();
 
         if (framePaths.isEmpty()) {
             qWarning() << "[MainWindow::showPreview] No frame paths reconstructed! Cannot show sequence.";
@@ -3962,14 +3930,9 @@ void MainWindow::showPreview(int index)
         }
 
         previewOverlay->showSequence(framePaths, sequencePattern, startFrame, endFrame);
-        qDebug() << "[MainWindow::showPreview] showSequence() called";
     } else {
-        qDebug() << "[MainWindow::showPreview] Opening as regular asset";
         previewOverlay->showAsset(filePath, fileName, fileType);
-        qDebug() << "[MainWindow::showPreview] showAsset() called";
     }
-
-    qDebug() << "[MainWindow::showPreview] Preview overlay visible:" << previewOverlay->isVisible();
 }
 
 void MainWindow::closePreview()
@@ -4588,13 +4551,10 @@ void MainWindow::onApplyTags()
 
     // Apply tags to assets
     QList<int> assetIdList = assetIds.values();
-    qDebug() << "Applying tags" << tagIds << "to assets" << assetIdList;
     if (DB::instance().assignTagsToAssets(assetIdList, tagIds)) {
         statusBar()->showMessage(QString("Applied %1 tag(s) to %2 asset(s)").arg(tagIds.size()).arg(assetIds.size()), 3000);
         updateInfoPanel();
-        qDebug() << "Tags applied successfully";
     } else {
-        qDebug() << "Failed to apply tags";
         QMessageBox::warning(this, "Error", "Failed to apply tags");
     }
 }
@@ -4777,8 +4737,6 @@ void MainWindow::updateTagButtonStates()
 
 void MainWindow::dragEnterEvent(QDragEnterEvent *event)
 {
-    qDebug() << "MainWindow::dragEnterEvent - hasUrls:" << event->mimeData()->hasUrls();
-
     if (event->mimeData()->hasUrls()) {
         event->acceptProposedAction();
         statusBar()->showMessage("Drop files here to import...");
@@ -4799,14 +4757,10 @@ void MainWindow::dropEvent(QDropEvent *event)
 
     const QMimeData *mimeData = event->mimeData();
 
-    qDebug() << "MainWindow::dropEvent - hasUrls:" << mimeData->hasUrls();
-
     if (mimeData->hasUrls()) {
         QStringList filePaths;
         QStringList folderPaths;
         QList<QUrl> urls = mimeData->urls();
-
-        qDebug() << "Drop URLs count:" << urls.size();
 
         // Get currently selected folder ID
         QModelIndex currentFolderIndex = folderTreeView->currentIndex();
@@ -4819,13 +4773,9 @@ void MainWindow::dropEvent(QDropEvent *event)
         }
 
         for (const QUrl &url : urls) {
-            qDebug() << "Processing URL:" << url.toString();
-
             if (url.isLocalFile()) {
                 QString path = url.toLocalFile();
                 QFileInfo info(path);
-
-                qDebug() << "Local file path:" << path << "isFile:" << info.isFile() << "isDir:" << info.isDir();
 
                 if (info.isFile()) {
                     filePaths.append(path);
@@ -4835,8 +4785,6 @@ void MainWindow::dropEvent(QDropEvent *event)
                 }
             }
         }
-
-        qDebug() << "Files to import:" << filePaths.size() << "Folders to import:" << folderPaths.size();
 
         int totalImported = 0;
 
@@ -4853,7 +4801,6 @@ void MainWindow::dropEvent(QDropEvent *event)
 
         // Import folders with structure preservation
         for (const QString &folderPath : folderPaths) {
-            qDebug() << "Importing folder with structure:" << folderPath;
             if (importer->importFolder(folderPath, parentFolderId)) {
                 totalImported++;
             }
@@ -5224,8 +5171,6 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
                     QList<int> assetIds;
                     stream >> assetIds;
 
-                    qDebug() << "Drop assets on folder" << targetFolderId << "- moving" << assetIds.size() << "assets";
-
                     // Check if locked and if move is allowed
                     if (assetsLocked) {
                         // Check if target is in a project folder
@@ -5318,8 +5263,6 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
                     QList<int> folderIds;
                     stream >> folderIds;
 
-                    qDebug() << "Drop folders on folder" << targetFolderId << "- moving" << folderIds.size() << "folders";
-
                     // Move folders to new parent
                     bool success = true;
                     for (int folderId : folderIds) {
@@ -5330,9 +5273,7 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
                             continue;
                         }
 
-                        if (folderModel->moveFolder(folderId, targetFolderId)) {
-                            qDebug() << "Moved folder" << folderId << "to parent" << targetFolderId;
-                        } else {
+                        if (!folderModel->moveFolder(folderId, targetFolderId)) {
                             success = false;
                         }
                     }
@@ -5401,8 +5342,6 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
                     QList<int> assetIds;
                     stream >> assetIds;
 
-                    qDebug() << "Drop assets on tag" << tagName << "- assigning to" << assetIds.size() << "assets";
-
                     // Assign tag to assets
                     QList<int> tagIds;
                     tagIds.append(tagId);
@@ -5423,8 +5362,6 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
                     QDataStream stream(&encodedData, QIODevice::ReadOnly);
                     QList<int> folderIds;
                     stream >> folderIds;
-
-                    qDebug() << "Drop folders on tag" << tagName << "- assigning to all assets in" << folderIds.size() << "folders";
 
                     // Get all assets in these folders (recursive)
                     QList<int> allAssetIds;
@@ -5501,7 +5438,6 @@ void MainWindow::restoreFolderExpansionState()
     };
 
     restoreExpanded(QModelIndex());
-    qDebug() << "Restored expansion state for" << expandedFolderIds.size() << "folders";
 }
 
 void MainWindow::onOpenSettings()
@@ -5526,8 +5462,6 @@ void MainWindow::onThumbnailSizeChanged(int size)
     // Force view to update by resetting the model
     assetGridView->reset();
 
-    qDebug() << "Thumbnail size changed to:" << size;
-
     // Recompute visible-only progress since layout changed
     scheduleVisibleThumbProgressUpdate();
 }
@@ -5541,15 +5475,11 @@ void MainWindow::onViewModeChanged()
         viewModeButton->setIcon(icoGrid());
         viewStack->setCurrentIndex(0); // Show grid view
         thumbnailSizeSlider->setEnabled(true);
-
-        qDebug() << "Switched to Grid view";
     } else {
         // Switch to list mode (table view)
         viewModeButton->setIcon(icoList());
         viewStack->setCurrentIndex(1); // Show table view
         thumbnailSizeSlider->setEnabled(false);
-
-        qDebug() << "Switched to List view (table)";
     }
 
     // Recompute visible-only progress for the new view
@@ -5814,10 +5744,6 @@ QStringList MainWindow::reconstructSequenceFramePaths(const QString& firstFrameP
     // Extract the suffix (everything after the frame number, including extension)
     QString suffix = fileName.mid(matchPos + paddingLength);
 
-    qDebug() << "[MainWindow] Reconstructing sequence from:" << fileName;
-    qDebug() << "[MainWindow] Base:" << baseName << "Padding:" << paddingLength << "Suffix:" << suffix;
-    qDebug() << "[MainWindow] Frame range:" << startFrame << "-" << endFrame;
-
     // Reconstruct all frame paths
     for (int frame = startFrame; frame <= endFrame; ++frame) {
         QString frameNum = QString("%1").arg(frame, paddingLength, 10, QChar('0'));
@@ -5829,7 +5755,6 @@ QStringList MainWindow::reconstructSequenceFramePaths(const QString& firstFrameP
         }
     }
 
-    qDebug() << "[MainWindow] Reconstructed" << framePaths.size() << "frame paths for sequence";
     return framePaths;
 }
 
@@ -5922,7 +5847,6 @@ void MainWindow::onRefreshAssets()
 void MainWindow::onLockToggled(bool checked)
 {
     assetsLocked = checked;
-    qDebug() << "MainWindow::onLockToggled - Assets locked:" << assetsLocked;
 
     if (checked) {
         statusBar()->showMessage("Assets locked - can only move within project folders", 3000);
@@ -5933,8 +5857,6 @@ void MainWindow::onLockToggled(bool checked)
 
 void MainWindow::onProjectFolderChanged(int projectFolderId, const QString& path)
 {
-    qDebug() << "MainWindow::onProjectFolderChanged" << projectFolderId << path;
-
     // Re-import the folder to pick up new/changed files
     // This will update existing assets and add new ones
     statusBar()->showMessage(QString("Refreshing project folder: %1").arg(QFileInfo(path).fileName()), 2000);
