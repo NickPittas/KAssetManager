@@ -126,15 +126,23 @@ QVector<ImageSequence> SequenceDetector::detectSequences(const QStringList& file
         seq.endFrame = frames.last().frameNumber;
         seq.frameCount = frames.size();
         seq.firstFramePath = frames.first().filePath;
-        
+
         // Generate pattern
         seq.pattern = generatePattern(key.baseName, key.paddingLength, key.extension);
-        
-        // Store all frame paths
+
+        // Store all frame paths and frame numbers
+        QVector<int> frameNumbers;
         for (const FrameInfo& frame : frames) {
             seq.framePaths.append(frame.filePath);
+            frameNumbers.append(frame.frameNumber);
         }
-        
+
+        // Detect gaps in the sequence
+        detectGaps(seq, frameNumbers);
+
+        // Extract version information
+        seq.version = extractVersion(key.baseName);
+
         sequences.append(seq);
         
         qDebug() << "[SequenceDetector] Detected sequence:" << seq.pattern 
@@ -195,9 +203,69 @@ QString SequenceDetector::generatePattern(const QString& baseName, int paddingLe
     for (int i = 0; i < paddingLength; ++i) {
         padding += "#";
     }
-    
+
     // Determine separator (dot or underscore)
     // Default to dot
     return QString("%1.%2.%3").arg(baseName).arg(padding).arg(extension);
+}
+
+void SequenceDetector::detectGaps(ImageSequence& sequence, const QVector<int>& frameNumbers) {
+    if (frameNumbers.size() < 2) {
+        sequence.hasGaps = false;
+        sequence.gapCount = 0;
+        return;
+    }
+
+    // Check for missing frames between start and end
+    int expectedFrameCount = sequence.endFrame - sequence.startFrame + 1;
+    int actualFrameCount = frameNumbers.size();
+
+    if (expectedFrameCount == actualFrameCount) {
+        // No gaps - continuous sequence
+        sequence.hasGaps = false;
+        sequence.gapCount = 0;
+        return;
+    }
+
+    // Find missing frames
+    QSet<int> existingFrames = QSet<int>(frameNumbers.begin(), frameNumbers.end());
+    sequence.missingFrames.clear();
+
+    for (int frame = sequence.startFrame; frame <= sequence.endFrame; ++frame) {
+        if (!existingFrames.contains(frame)) {
+            sequence.missingFrames.append(frame);
+        }
+    }
+
+    sequence.hasGaps = !sequence.missingFrames.isEmpty();
+
+    // Count gaps (consecutive missing frames count as one gap)
+    sequence.gapCount = 0;
+    if (!sequence.missingFrames.isEmpty()) {
+        sequence.gapCount = 1;
+        for (int i = 1; i < sequence.missingFrames.size(); ++i) {
+            if (sequence.missingFrames[i] != sequence.missingFrames[i-1] + 1) {
+                sequence.gapCount++;
+            }
+        }
+    }
+
+    if (sequence.hasGaps) {
+        qDebug() << "[SequenceDetector] Sequence" << sequence.pattern
+                 << "has" << sequence.gapCount << "gap(s),"
+                 << sequence.missingFrames.size() << "missing frames";
+    }
+}
+
+QString SequenceDetector::extractVersion(const QString& baseName) {
+    // Look for version patterns like v01, v02, v1, v2, _v01, _v02, etc.
+    QRegularExpression versionPattern(R"([_\.]?(v\d+))", QRegularExpression::CaseInsensitiveOption);
+    QRegularExpressionMatch match = versionPattern.match(baseName);
+
+    if (match.hasMatch()) {
+        return match.captured(1).toLower(); // Return "v01", "v02", etc.
+    }
+
+    return QString(); // No version found
 }
 

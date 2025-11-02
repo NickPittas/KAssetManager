@@ -15,6 +15,14 @@ struct ImageSequence {
     int frameCount;
     QStringList framePaths;    // All file paths in the sequence
     QString firstFramePath;    // Path to first frame (for thumbnail)
+
+    // Gap detection
+    bool hasGaps = false;      // True if sequence has missing frames
+    QVector<int> missingFrames; // List of missing frame numbers
+    int gapCount = 0;          // Number of gaps in the sequence
+
+    // Version tracking
+    QString version;           // e.g., "v01", "v02" extracted from baseName
 };
 
 class SequenceDetector {
@@ -40,7 +48,13 @@ public:
 
     // Generate pattern string (e.g., "render.####.exr")
     static QString generatePattern(const QString& baseName, int paddingLength, const QString& extension);
-    
+
+    // Detect gaps in a sequence (missing frames)
+    static void detectGaps(ImageSequence& sequence, const QVector<int>& frameNumbers);
+
+    // Extract version string from base name (e.g., "v01", "v02")
+    static QString extractVersion(const QString& baseName);
+
 private:
     struct SequenceKey {
         QString baseName;

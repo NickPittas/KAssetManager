@@ -116,6 +116,15 @@ bool DB::migrate(){
     if (!hasColumn("assets", "sequence_frame_count")) {
         exec("ALTER TABLE assets ADD COLUMN sequence_frame_count INTEGER NULL");
     }
+    if (!hasColumn("assets", "sequence_has_gaps")) {
+        exec("ALTER TABLE assets ADD COLUMN sequence_has_gaps INTEGER DEFAULT 0");
+    }
+    if (!hasColumn("assets", "sequence_gap_count")) {
+        exec("ALTER TABLE assets ADD COLUMN sequence_gap_count INTEGER DEFAULT 0");
+    }
+    if (!hasColumn("assets", "sequence_version")) {
+        exec("ALTER TABLE assets ADD COLUMN sequence_version TEXT NULL");
+    }
 
     // Ensure checksum column exists for change detection
     if (!hasColumn("assets", "checksum")) {
@@ -359,7 +368,7 @@ int DB::insertAssetMetadataFast(const QString& filePath, int folderId)
     return ins.lastInsertId().toInt();
 }
 
-int DB::upsertSequenceInFolderFast(const QString& sequencePattern, int startFrame, int endFrame, int frameCount, const QString& firstFramePath, int folderId)
+int DB::upsertSequenceInFolderFast(const QString& sequencePattern, int startFrame, int endFrame, int frameCount, const QString& firstFramePath, int folderId, bool hasGaps, int gapCount, const QString& version)
 {
     QFileInfo fi(firstFramePath);
     if (!fi.exists()) {
@@ -373,7 +382,7 @@ int DB::upsertSequenceInFolderFast(const QString& sequencePattern, int startFram
     if (sel.exec() && sel.next()) {
         int existingId = sel.value(0).toInt();
         QSqlQuery upd(m_db);
-        upd.prepare("UPDATE assets SET file_path=?, file_name=?, virtual_folder_id=?, file_size=?, sequence_start_frame=?, sequence_end_frame=?, sequence_frame_count=?, updated_at=CURRENT_TIMESTAMP WHERE id=?");
+        upd.prepare("UPDATE assets SET file_path=?, file_name=?, virtual_folder_id=?, file_size=?, sequence_start_frame=?, sequence_end_frame=?, sequence_frame_count=?, sequence_has_gaps=?, sequence_gap_count=?, sequence_version=?, updated_at=CURRENT_TIMESTAMP WHERE id=?");
         upd.addBindValue(fi.absoluteFilePath());
         upd.addBindValue(sequencePattern);
         upd.addBindValue(folderId<=0?m_rootId:folderId);
@@ -381,6 +390,9 @@ int DB::upsertSequenceInFolderFast(const QString& sequencePattern, int startFram
         upd.addBindValue(startFrame);
         upd.addBindValue(endFrame);
         upd.addBindValue(frameCount);
+        upd.addBindValue(hasGaps ? 1 : 0);
+        upd.addBindValue(gapCount);
+        upd.addBindValue(version);
         upd.addBindValue(existingId);
         if (!upd.exec()) {
             qWarning() << "DB::upsertSequenceInFolderFast: UPDATE failed:" << upd.lastError();
@@ -389,7 +401,7 @@ int DB::upsertSequenceInFolderFast(const QString& sequencePattern, int startFram
     }
 
     QSqlQuery ins(m_db);
-    ins.prepare("INSERT INTO assets(file_path,file_name,virtual_folder_id,file_size,is_sequence,sequence_pattern,sequence_start_frame,sequence_end_frame,sequence_frame_count) VALUES(?,?,?,?,1,?,?,?,?)");
+    ins.prepare("INSERT INTO assets(file_path,file_name,virtual_folder_id,file_size,is_sequence,sequence_pattern,sequence_start_frame,sequence_end_frame,sequence_frame_count,sequence_has_gaps,sequence_gap_count,sequence_version) VALUES(?,?,?,?,1,?,?,?,?,?,?,?)");
     ins.addBindValue(fi.absoluteFilePath());
     ins.addBindValue(sequencePattern);
     ins.addBindValue(folderId<=0?m_rootId:folderId);
@@ -398,6 +410,9 @@ int DB::upsertSequenceInFolderFast(const QString& sequencePattern, int startFram
     ins.addBindValue(startFrame);
     ins.addBindValue(endFrame);
     ins.addBindValue(frameCount);
+    ins.addBindValue(hasGaps ? 1 : 0);
+    ins.addBindValue(gapCount);
+    ins.addBindValue(version);
 
     if (!ins.exec()) {
         qWarning() << "DB::upsertSequenceInFolderFast: INSERT failed:" << ins.lastError();

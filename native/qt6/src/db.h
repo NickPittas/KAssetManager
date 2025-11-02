@@ -53,7 +53,7 @@ public:
     // Fast path for bulk imports: metadata only (no checksum, no versioning, no signals)
     int insertAssetMetadataFast(const QString& filePath, int folderId);
     // Fast path for image sequences during bulk import (no signals)
-    int upsertSequenceInFolderFast(const QString& sequencePattern, int startFrame, int endFrame, int frameCount, const QString& firstFramePath, int folderId);
+    int upsertSequenceInFolderFast(const QString& sequencePattern, int startFrame, int endFrame, int frameCount, const QString& firstFramePath, int folderId, bool hasGaps = false, int gapCount = 0, const QString& version = QString());
     bool setAssetFolder(int assetId, int folderId);
     bool removeAssets(const QList<int>& assetIds);
     bool setAssetsRating(const QList<int>& assetIds, int rating); // 0-5, -1 to clear

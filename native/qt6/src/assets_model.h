@@ -22,6 +22,9 @@ struct AssetRow {
     int sequenceStartFrame = 0;
     int sequenceEndFrame = 0;
     int sequenceFrameCount = 0;
+    bool sequenceHasGaps = false;
+    int sequenceGapCount = 0;
+    QString sequenceVersion;
 };
 
 class AssetsModel : public QAbstractListModel {
@@ -47,6 +50,9 @@ public:
         SequenceStartFrameRole,
         SequenceEndFrameRole,
         SequenceFrameCountRole,
+        SequenceHasGapsRole,
+        SequenceGapCountRole,
+        SequenceVersionRole,
         PreviewStateRole
     };
     explicit AssetsModel(QObject* parent=nullptr);

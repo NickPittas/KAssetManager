@@ -69,6 +69,9 @@ QVariant AssetsModel::data(const QModelIndex& idx, int role) const{
         case SequenceStartFrameRole: return r.sequenceStartFrame;
         case SequenceEndFrameRole: return r.sequenceEndFrame;
         case SequenceFrameCountRole: return r.sequenceFrameCount;
+        case SequenceHasGapsRole: return r.sequenceHasGaps;
+        case SequenceGapCountRole: return r.sequenceGapCount;
+        case SequenceVersionRole: return r.sequenceVersion;
         case PreviewStateRole: {
             QVariantMap preview;
             preview["filePath"] = r.filePath;
@@ -101,6 +104,9 @@ QHash<int,QByteArray> AssetsModel::roleNames() const{
     r[SequenceStartFrameRole] = "sequenceStartFrame";
     r[SequenceEndFrameRole] = "sequenceEndFrame";
     r[SequenceFrameCountRole] = "sequenceFrameCount";
+    r[SequenceHasGapsRole] = "sequenceHasGaps";
+    r[SequenceGapCountRole] = "sequenceGapCount";
+    r[SequenceVersionRole] = "sequenceVersion";
     return r;
 }
 
@@ -244,7 +250,7 @@ void AssetsModel::query(){
     QSqlQuery q(DB::instance().database());
     if (globalScope) {
         LogManager::instance().addLog("DB query (all assets) started", "DEBUG");
-        q.prepare("SELECT id,file_name,file_path,file_size,COALESCE(rating,-1),virtual_folder_id,COALESCE(is_sequence,0),sequence_pattern,sequence_start_frame,sequence_end_frame,sequence_frame_count FROM assets ORDER BY file_name");
+        q.prepare("SELECT id,file_name,file_path,file_size,COALESCE(rating,-1),virtual_folder_id,COALESCE(is_sequence,0),sequence_pattern,sequence_start_frame,sequence_end_frame,sequence_frame_count,COALESCE(sequence_has_gaps,0),COALESCE(sequence_gap_count,0),sequence_version FROM assets ORDER BY file_name");
     } else {
         if (m_folderId<=0) {
             m_filteredRowIndexes.clear();
@@ -265,14 +271,14 @@ void AssetsModel::query(){
                 placeholders.replace(i * 2 - 1, 1, ",?");
             }
 
-            q.prepare(QString("SELECT id,file_name,file_path,file_size,COALESCE(rating,-1),virtual_folder_id,COALESCE(is_sequence,0),sequence_pattern,sequence_start_frame,sequence_end_frame,sequence_frame_count FROM assets WHERE id IN (%1) ORDER BY file_name").arg(placeholders));
+            q.prepare(QString("SELECT id,file_name,file_path,file_size,COALESCE(rating,-1),virtual_folder_id,COALESCE(is_sequence,0),sequence_pattern,sequence_start_frame,sequence_end_frame,sequence_frame_count,COALESCE(sequence_has_gaps,0),COALESCE(sequence_gap_count,0),sequence_version FROM assets WHERE id IN (%1) ORDER BY file_name").arg(placeholders));
             LogManager::instance().addLog(QString("DB query (assets by folder %1, recursive) started - %2 assets").arg(m_folderId).arg(assetIds.size()), "DEBUG");
             for (int assetId : assetIds) {
                 q.addBindValue(assetId);
             }
         } else {
             // Non-recursive: just get assets in this folder
-            q.prepare("SELECT id,file_name,file_path,file_size,COALESCE(rating,-1),virtual_folder_id,COALESCE(is_sequence,0),sequence_pattern,sequence_start_frame,sequence_end_frame,sequence_frame_count FROM assets WHERE virtual_folder_id=? ORDER BY file_name");
+            q.prepare("SELECT id,file_name,file_path,file_size,COALESCE(rating,-1),virtual_folder_id,COALESCE(is_sequence,0),sequence_pattern,sequence_start_frame,sequence_end_frame,sequence_frame_count,COALESCE(sequence_has_gaps,0),COALESCE(sequence_gap_count,0),sequence_version FROM assets WHERE virtual_folder_id=? ORDER BY file_name");
             LogManager::instance().addLog(QString("DB query (assets by folder %1) started").arg(m_folderId), "DEBUG");
             q.addBindValue(m_folderId);
         }
@@ -295,6 +301,9 @@ void AssetsModel::query(){
         r.sequenceStartFrame = q.value(8).toInt();
         r.sequenceEndFrame = q.value(9).toInt();
         r.sequenceFrameCount = q.value(10).toInt();
+        r.sequenceHasGaps = q.value(11).toBool();
+        r.sequenceGapCount = q.value(12).toInt();
+        r.sequenceVersion = q.value(13).toString();
 
         QFileInfo fi(r.filePath);
         r.fileType = fi.exists() ? fi.suffix().toLower() : QString();

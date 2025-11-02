@@ -140,9 +140,12 @@ bool Importer::importFolder(const QString& dirPath, int parentFolderId){
         for (const ImageSequence& seq : sequences) {
             emit currentFileChanged(seq.pattern);
 
-            int seqId = DB::instance().upsertSequenceInFolderFast(seq.pattern, seq.startFrame, seq.endFrame, seq.frameCount, seq.firstFramePath, fid);
+            int seqId = DB::instance().upsertSequenceInFolderFast(seq.pattern, seq.startFrame, seq.endFrame, seq.frameCount, seq.firstFramePath, fid, seq.hasGaps, seq.gapCount, seq.version);
             if (seqId > 0) {
                 qDebug() << "Imported sequence:" << seq.pattern << "frames:" << seq.startFrame << "-" << seq.endFrame;
+                if (seq.hasGaps) {
+                    qDebug() << "  WARNING: Sequence has" << seq.gapCount << "gap(s)," << seq.missingFrames.size() << "missing frames";
+                }
             }
 
             // Mark all sequence files as processed and update progress for each frame
