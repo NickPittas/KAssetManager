@@ -750,12 +750,11 @@ QMessageBox::critical(this, "Error",
    # Test database operations
    .\native\qt6\build\ninja\install_run\bin\test_db.exe
 
-   # Test data models
-   .\native\qt6\build\ninja\install_run\bin\test_models.exe
-
    # Test simple utilities
    .\native\qt6\build\ninja\install_run\bin\test_simple.exe
    ```
+
+   Note: test_models is currently disabled due to DB singleton initialization issues in the test environment.
 
 3. **Run all tests with ctest (if available):**
    ```powershell
@@ -765,7 +764,7 @@ QMessageBox::critical(this, "Error",
 
 **Test Files:**
 - `native/qt6/tests/test_db.cpp` - Database operations (createFolder, upsertAsset, transactions, foreign keys)
-- `native/qt6/tests/test_models.cpp` - Data models (AssetsModel row count, filtering, search)
+- `native/qt6/tests/test_models.cpp` - Data models (currently disabled due to DB singleton initialization issues)
 - `native/qt6/tests/test_simple.cpp` - Basic utilities (arithmetic, string, bool operations)
 
 **Test Output:**
