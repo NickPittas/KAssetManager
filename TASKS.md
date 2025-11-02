@@ -22,10 +22,10 @@ Legend: [ ] todo, [/] in progress, [x] done
   - [x] Update connects/actions/menu strings/tooltips/QSettings keys (if any)
   - DoD: Compile passes; UI strings standardized to "Preview"; behavior unchanged
 
-- [ ] H-4 Reduce/replace qDebug() occurrences
-  - [ ] Adopt policy: use qInfo/qWarning/qCritical or LogManager; dev-only under #ifdef QT_DEBUG
-  - [ ] Replace/remove high-traffic qDebug in mainwindow.cpp and other hot paths
-  - [ ] Aim: reduce from 216 to <50; keep diagnostics gated by env or DEBUG
+- [/] H-4 Reduce/replace qDebug() occurrences
+  - [x] Adopt policy: use qInfo/qWarning/qCritical or LogManager; dev-only under #ifdef QT_DEBUG
+  - [x] Replace/remove high-traffic qDebug in mainwindow.cpp and other hot paths
+  - [/] Aim: reduce from 216 to <50; currently at 155 (28% reduction); keep diagnostics gated by env or DEBUG
   - DoD: Build clean; app log readable without spam
 
 - [ ] M-1 Fix potential ownership leaks
