@@ -76,19 +76,19 @@ Legend: [x] todo, [/] in progress, [x] done
   - [x] Add unit tests for common patterns
   - DoD: One authoritative definition; tests pass
 
-## Later (Phase 3  quarter)
-- [x] H-2 Extract FileManagerWidget (+controller); remove direct DB from MainWindow FM flows
+## Next (Phase 3  quarter)
+- [ ] H-2 Extract FileManagerWidget (+controller); remove direct DB from MainWindow FM flows
   - DoD: MainWindow shrinks; FM logic isolated and tested
 
-- [x] H-2 Extract AssetManagerWidget (+controller)
+- [ ] H-2 Extract AssetManagerWidget (+controller)
   - DoD: MainWindow < 1,000 LOC; orchestrator only
 
-- [x] H-3 Raise test coverage to targets (DB 80%, models 70%, importer 50%)
+- [ ] H-3 Raise test coverage to targets (DB 80%, models 70%, importer 50%)
   - DoD: Coverage report hits targets locally; green when CI enabled
 
-- [x] L-2/L-3 Naming + constants polish
-  - [x] Extract magic numbers to named constants where appropriate
-  - [x] Standardize on "Preview" (
+- [ ] L-2/L-3 Naming + constants polish
+  - [ ] Extract magic numbers to named constants where appropriate
+  - [ ] Standardize on "Preview" (
     rename internal identifiers/strings; avoid "Thumb/Thumbnail")
   - DoD: Consistent naming; rationale documented for key constants
 
@@ -99,4 +99,8 @@ Legend: [x] todo, [/] in progress, [x] done
 
 ## Latest updates
 - 2025-11-02: Phase 2 complete. All 5 Phase 2 tasks finished. Ready to merge to main.
+
+
+
+
 
