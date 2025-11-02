@@ -6,7 +6,7 @@
 2. [AssetsModel Class](#assetsmodel-class)
 3. [VirtualFolderTreeModel Class](#virtualfoldertreemodel-class)
 4. [TagsModel Class](#tagsmodel-class)
-5. [ThumbnailGenerator Class](#thumbnailgenerator-class)
+5. [LivePreviewManager Class](#livepreviewmanager-class)
 6. [PreviewOverlay Class](#previewoverlay-class)
 7. [OIIOImageLoader Class](#oiioimageloader-class)
 8. [AssetsTableModel Class](#assetstablemodel-class)
@@ -567,68 +567,42 @@ Reload tags from database.
 
 ---
 
-## ThumbnailGenerator Class
+## LivePreviewManager Class
 
-**Header**: `native/qt6/src/thumbnail_generator.h`
+**Header**: `native/qt6/src/live_preview_manager.h`
 
-**Purpose**: Singleton for asynchronous thumbnail generation
+**Purpose**: Singleton for in-memory live preview caching with thread-safe access
 
 **Base Class**: `QObject`
 
+**Thread Safety**: All public methods are thread-safe and protected by an internal mutex.
+
 ### Static Methods
 
-#### `static ThumbnailGenerator& instance()`
+#### `static LivePreviewManager& instance()`
 Get the singleton instance.
 
 ### Methods
 
-#### `QString getThumbnailPath(const QString& filePath)`
-Get thumbnail path for a file (returns empty if not cached).
+#### `void requestFrame(const QString& filePath, const QSize& targetSize)`
+Request a preview frame asynchronously.
 
 **Parameters**:
 - `filePath`: Source file path
+- `targetSize`: Desired preview size
 
-**Returns**: Thumbnail path, or empty string if not cached
+**Emits**: `frameReady()` when complete
 
-#### `void requestThumbnail(const QString& filePath)`
-Request thumbnail generation (asynchronous).
-
-**Parameters**:
-- `filePath`: Source file path
-
-**Emits**: `thumbnailGenerated()` when complete
-
-#### `bool isImageFile(const QString& filePath)`
-Check if file is an image.
-
-#### `bool isVideoFile(const QString& filePath)`
-Check if file is a video.
-
-#### `bool isQtSupportedFormat(const QString& filePath)`
-Check if Qt can load the format natively.
+#### `QPixmap getFrame(const QString& filePath, const QSize& targetSize)`
+Get a cached preview frame (returns null if not cached).
 
 #### `void clearCache()`
-Clear all cached thumbnails from disk.
-
-#### `void startProgress(int total)`
-Start progress tracking.
-
-#### `void updateProgress()`
-Increment progress counter.
-
-#### `void finishProgress()`
-Finish progress tracking.
+Clear all cached previews from memory.
 
 ### Signals
 
-#### `void thumbnailGenerated(const QString& filePath, const QString& thumbnailPath)`
-Emitted when thumbnail is generated.
-
-#### `void thumbnailFailed(const QString& filePath)`
-Emitted when thumbnail generation fails.
-
-#### `void progressChanged(int current, int total)`
-Emitted when progress changes.
+#### `void frameReady(const QString& filePath, const QPixmap& pixmap)`
+Emitted when a preview frame is ready.
 
 ---
 
@@ -796,19 +770,6 @@ if (newFolderId > 0) {
 }
 ```
 
-### Generating Thumbnails
-
-```cpp
-// Request thumbnail
-ThumbnailGenerator::instance().requestThumbnail("/path/to/image.jpg");
-
-// Connect to signal
-connect(&ThumbnailGenerator::instance(), &ThumbnailGenerator::thumbnailGenerated,
-        this, [](const QString& filePath, const QString& thumbnailPath) {
-    qDebug() << "Thumbnail generated:" << thumbnailPath;
-});
-```
-
 ### Loading HDR Images
 
 ```cpp
@@ -825,7 +786,7 @@ if (!image.isNull()) {
 ## Thread Safety
 
 - **DB**: Thread-safe (uses Qt's database connection per thread)
-- **ThumbnailGenerator**: Thread-safe (uses mutex for pending set)
+- **LivePreviewManager**: Thread-safe (uses mutex for cache access)
 - **Models**: Not thread-safe (must be used from main thread only)
 - **OIIOImageLoader**: Thread-safe (static methods, no shared state)
 
@@ -836,7 +797,7 @@ if (!image.isNull()) {
 All classes follow Qt's parent-child ownership model:
 - Objects with a parent are automatically deleted when parent is deleted
 - Models should be created with a parent (usually the view or main window)
-- Singletons (DB, ThumbnailGenerator) manage their own lifetime
+- Singletons (DB, LivePreviewManager) manage their own lifetime
 
 ---
 

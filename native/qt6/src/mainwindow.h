@@ -84,11 +84,11 @@ private slots:
     void onImportComplete();
     void onRatingChanged(int rating);
 
-    // Live preview prefetch (legacy actions)
-    void onGenerateThumbnailsForFolder();
-    void onRegenerateThumbnailsForFolder();
-    void onGenerateThumbnailsRecursive();
-    void onRegenerateThumbnailsRecursive();
+    // Live preview prefetch
+    void onPrefetchLivePreviewsForFolder();
+    void onRefreshLivePreviewsForFolder();
+    void onPrefetchLivePreviewsRecursive();
+    void onRefreshLivePreviewsRecursive();
 
     // Project folder operations
     void onAddProjectFolder();

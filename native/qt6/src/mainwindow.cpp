@@ -1497,10 +1497,10 @@ void MainWindow::setupUi()
     genMenu->addSeparator();
     QAction *actGenRec = genMenu->addAction("Prefetch recursive");
     QAction *actRegenRec = genMenu->addAction("Refresh recursive");
-    connect(actGen, &QAction::triggered, this, &MainWindow::onGenerateThumbnailsForFolder);
-    connect(actRegen, &QAction::triggered, this, &MainWindow::onRegenerateThumbnailsForFolder);
-    connect(actGenRec, &QAction::triggered, this, &MainWindow::onGenerateThumbnailsRecursive);
-    connect(actRegenRec, &QAction::triggered, this, &MainWindow::onRegenerateThumbnailsRecursive);
+    connect(actGen, &QAction::triggered, this, &MainWindow::onPrefetchLivePreviewsForFolder);
+    connect(actRegen, &QAction::triggered, this, &MainWindow::onRefreshLivePreviewsForFolder);
+    connect(actGenRec, &QAction::triggered, this, &MainWindow::onPrefetchLivePreviewsRecursive);
+    connect(actRegenRec, &QAction::triggered, this, &MainWindow::onRefreshLivePreviewsRecursive);
     thumbGenButton->setMenu(genMenu);
     thumbGenButton->setPopupMode(QToolButton::MenuButtonPopup);
     toolbarLayout->addWidget(thumbGenButton);
@@ -5546,7 +5546,7 @@ void MainWindow::onViewModeChanged()
 }
 
 
-void MainWindow::onGenerateThumbnailsForFolder()
+void MainWindow::onPrefetchLivePreviewsForFolder()
 {
     if (!assetsModel) return;
     LivePreviewManager &previewMgr = LivePreviewManager::instance();
@@ -5570,7 +5570,7 @@ void MainWindow::onGenerateThumbnailsForFolder()
     }
 }
 
-void MainWindow::onRegenerateThumbnailsForFolder()
+void MainWindow::onRefreshLivePreviewsForFolder()
 {
     if (!assetsModel) return;
     LivePreviewManager &previewMgr = LivePreviewManager::instance();
@@ -5592,7 +5592,7 @@ void MainWindow::onRegenerateThumbnailsForFolder()
     }
 }
 
-void MainWindow::onGenerateThumbnailsRecursive()
+void MainWindow::onPrefetchLivePreviewsRecursive()
 {
     if (!assetsModel) return;
     int fid = assetsModel->folderId();
@@ -5618,7 +5618,7 @@ void MainWindow::onGenerateThumbnailsRecursive()
     }
 }
 
-void MainWindow::onRegenerateThumbnailsRecursive()
+void MainWindow::onRefreshLivePreviewsRecursive()
 {
     if (!assetsModel) return;
     int fid = assetsModel->folderId();

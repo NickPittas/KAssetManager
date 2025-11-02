@@ -6,37 +6,44 @@ This document describes the performance optimizations implemented in KAssetManag
 
 The following optimizations have been implemented to improve application performance, especially when dealing with large asset libraries:
 
-1. **Multi-threaded Thumbnail Generation**
+1. **In-Memory Live Preview System**
 2. **Database Query Optimization**
-3. **Pixmap Cache Optimization**
-4. **Lazy Loading for Asset Grid**
+3. **Lazy Loading for Asset Grid**
+4. **Concurrent Frame Decoding**
 
 ---
 
-## 1. Multi-threaded Thumbnail Generation
+## 1. In-Memory Live Preview System
 
 ### Problem
-Originally, thumbnail generation used only 1 thread, which was very slow for large imports.
+Previous disk-based thumbnail generation was slow and created I/O bottlenecks, especially during large imports.
 
 ### Solution
-Implemented dynamic thread pool sizing based on CPU capabilities:
+Implemented `LivePreviewManager` for on-demand, in-memory preview caching:
 
 ```cpp
-// Use half of available CPU cores to avoid overwhelming the system
-// Minimum 2 threads, maximum 8 threads for best balance
-int idealThreads = QThread::idealThreadCount();
-int optimalThreads = qBound(2, idealThreads / 2, 8);
-m_threadPool->setMaxThreadCount(optimalThreads);
+// Thread-safe, LRU-evicted cache with configurable size
+// Previews generated on-demand when requested
+// No disk I/O - fully memory-resident
+LivePreviewManager::instance().requestFrame(filePath, targetSize);
 ```
 
 ### Benefits
-- **4-8x faster thumbnail generation** on multi-core systems
-- Automatic scaling based on available CPU cores
-- Capped at 8 threads to prevent system overload
-- Minimum 2 threads even on low-end systems
+- **Eliminates disk I/O** for preview generation
+- **Faster preview display** (in-memory cache hits)
+- **Configurable cache size** based on available system memory
+- **LRU eviction** prevents unbounded memory growth
+- **Thread-safe** for concurrent access from UI and worker threads
+- **Automatic cleanup** when cache is full
+
+### Architecture
+- Cache size: 256 entries (default, configurable via QSettings)
+- Eviction policy: Least Recently Used (LRU)
+- Thread safety: QMutex protects all cache operations
+- Memory usage: ~1-2MB per cached preview (depends on resolution)
 
 ### Files Modified
-- `native/qt6/src/thumbnail_generator.cpp` (lines 177-193)
+- `native/qt6/src/live_preview_manager.h/cpp`
 
 ---
 
@@ -68,40 +75,7 @@ CREATE INDEX IF NOT EXISTS idx_asset_tags_asset_id ON asset_tags(asset_id);
 
 ---
 
-## 3. Pixmap Cache Optimization
-
-### Problem
-The pixmap cache was limited to 200 thumbnails, causing frequent cache clears and repeated disk I/O.
-
-### Solution
-Increased cache size from 200 to 1000 thumbnails:
-
-```cpp
-// PERFORMANCE: Increased cache size from 200 to 1000 for better performance
-// At 256x256 thumbnails, this is ~250MB of memory which is reasonable
-if (pixmapCache.size() > 1000) {
-    pixmapCache.clear();
-}
-```
-
-### Benefits
-- **5x larger cache** reduces disk I/O
-- Smoother scrolling through large asset libraries
-- ~250MB memory usage (reasonable for modern systems)
-- Fewer cache clears = better performance
-
-### Memory Usage
-- Thumbnail size: 256x256 pixels
-- Average size per thumbnail: ~250KB
-- Cache capacity: 1000 thumbnails
-- Total memory: ~250MB
-
-### Files Modified
-- `native/qt6/src/mainwindow.cpp` (lines 144-147, 441-443)
-
----
-
-## 4. Lazy Loading for Asset Grid
+## 3. Lazy Loading for Asset Grid
 
 ### Problem
 All thumbnails were generated during import, even for assets not visible in the viewport.
