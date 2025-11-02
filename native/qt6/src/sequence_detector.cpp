@@ -3,6 +3,29 @@
 #include <QDebug>
 #include <QMap>
 
+// Centralized regex patterns for sequence detection
+const QRegularExpression& SequenceDetector::mainPattern()
+{
+    // Matches: name.####.ext, name_####.ext, name####.ext
+    // Captures: (1) base name, (2) separator, (3) frame number, (4) extension
+    static const QRegularExpression pattern(R"(^(.*?)([._]?)(\d{2,})\.([A-Za-z0-9]+)$)");
+    return pattern;
+}
+
+const QRegularExpression& SequenceDetector::loosePattern()
+{
+    // Loose pattern: matches any filename with 2+ digits, hashes, or printf-style padding
+    static const QRegularExpression pattern(R"(.*(?:\d{2,}|%0\d+d|\#\#\#).*)");
+    return pattern;
+}
+
+const QRegularExpression& SequenceDetector::lastFramePattern()
+{
+    // Matches the last occurrence of consecutive digits in a filename
+    static const QRegularExpression pattern(R"((\d+)(?!.*\d))");
+    return pattern;
+}
+
 QVector<ImageSequence> SequenceDetector::detectSequences(const QStringList& filePaths) {
     QMap<SequenceKey, QVector<FrameInfo>> sequenceGroups;
     QStringList nonSequenceFiles;

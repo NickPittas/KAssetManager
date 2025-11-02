@@ -17,6 +17,7 @@
 #include "file_ops.h"
 #include "file_ops_dialog.h"
 #include "log_manager.h"
+#include "sequence_detector.h"
 
 #include "office_preview.h"
 
@@ -273,10 +274,9 @@ public:
         // Only files are considered for sequences
         const auto files = d.entryInfoList(QDir::Files | QDir::NoDotAndDotDot, QDir::Name);
         QHash<QString, QList<QFileInfo>> buckets;
-        static const QRegularExpression re("^(.*?)([._]?)(\\d{2,})\\.([A-Za-z0-9]+)$");
         for (const QFileInfo &fi : files) {
             const QString name = fi.fileName();
-            auto m = re.match(name);
+            auto m = SequenceDetector::mainPattern().match(name);
             if (!m.hasMatch()) continue;
             const QString base = m.captured(1);
             const QString digits = m.captured(3);
@@ -293,15 +293,16 @@ public:
             int end = std::numeric_limits<int>::min();
             QFileInfo repr;
             for (const QFileInfo &fi : it.value()) {
-                auto m = re.match(fi.fileName());
+                auto m = SequenceDetector::mainPattern().match(fi.fileName());
                 int f = m.captured(3).toInt();
                 if (f < start) { start = f; repr = fi; }
                 if (f > end) end = f;
             }
             Info info;
             info.dir = repr.absolutePath();
-            info.base = re.match(repr.fileName()).captured(1);
-            info.ext = re.match(repr.fileName()).captured(4).toLower();
+            auto reprMatch = SequenceDetector::mainPattern().match(repr.fileName());
+            info.base = reprMatch.captured(1);
+            info.ext = reprMatch.captured(4).toLower();
             info.start = start; info.end = end; info.count = it->size();
             info.reprPath = repr.absoluteFilePath();
             const QString key = it.key();
@@ -2818,8 +2819,8 @@ void MainWindow::onFmItemDoubleClicked(const QModelIndex &index)
             fmOverlayCurrentIndex = QPersistentModelIndex(idx);
             fmOverlaySourceView = srcView;
             // Build display name
-            int pad = 0; QRegularExpression re("^(.*?)([._]?)((\\d{2,}))\\.([A-Za-z0-9]+)$");
-            auto m = re.match(QFileInfo(info.reprPath).fileName());
+            int pad = 0;
+            auto m = SequenceDetector::mainPattern().match(QFileInfo(info.reprPath).fileName());
             if (m.hasMatch()) pad = m.captured(3).length(); else pad = QString::number(info.start).length();
             QString s0 = QString("%1").arg(info.start, pad, 10, QLatin1Char('0'));
             QString s1 = QString("%1").arg(info.end, pad, 10, QLatin1Char('0'));
@@ -4059,8 +4060,8 @@ void MainWindow::changeFmPreview(int delta)
         QStringList frames = reconstructSequenceFramePaths(info.reprPath, info.start, info.end);
         if (!frames.isEmpty()) {
             previewOverlay->stopPlayback();
-            int pad = 0; QRegularExpression re("^(.*?)([._]?)(()(\\d{2,}))\\.([A-Za-z0-9]+)$");
-            auto m = re.match(QFileInfo(info.reprPath).fileName());
+            int pad = 0;
+            auto m = SequenceDetector::mainPattern().match(QFileInfo(info.reprPath).fileName());
             if (m.hasMatch()) pad = m.captured(3).length(); else pad = QString::number(info.start).length();
             QString s0 = QString("%1").arg(info.start, pad, 10, QLatin1Char('0'));
             QString s1 = QString("%1").arg(info.end, pad, 10, QLatin1Char('0'));
@@ -6655,8 +6656,8 @@ void MainWindow::onFmOpenOverlay()
             } else {
                 previewOverlay->stopPlayback();
             }
-            int pad = 0; QRegularExpression re("^(.*?)([._]?)((\\d{2,}))\\.([A-Za-z0-9]+)$");
-            auto m = re.match(QFileInfo(info.reprPath).fileName());
+            int pad = 0;
+            auto m = SequenceDetector::mainPattern().match(QFileInfo(info.reprPath).fileName());
             if (m.hasMatch()) pad = m.captured(3).length(); else pad = QString::number(info.start).length();
             QString s0 = QString("%1").arg(info.start, pad, 10, QLatin1Char('0'));
             QString s1 = QString("%1").arg(info.end, pad, 10, QLatin1Char('0'));

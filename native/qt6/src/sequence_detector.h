@@ -19,15 +19,25 @@ struct ImageSequence {
 
 class SequenceDetector {
 public:
+    // Regex patterns for sequence detection (centralized for consistency)
+    // Main pattern: matches "name.####.ext" or "name_####.ext" or "name####.ext"
+    static const QRegularExpression& mainPattern();
+
+    // Pattern for detecting any sequence-like filename (loose check)
+    static const QRegularExpression& loosePattern();
+
+    // Pattern for extracting the last frame number from a filename
+    static const QRegularExpression& lastFramePattern();
+
     // Detect sequences in a list of file paths
     static QVector<ImageSequence> detectSequences(const QStringList& filePaths);
-    
+
     // Check if a filename matches a sequence pattern
     static bool isSequenceFile(const QString& fileName);
-    
+
     // Extract frame number from a filename
     static int extractFrameNumber(const QString& fileName, int& paddingLength);
-    
+
     // Generate pattern string (e.g., "render.####.exr")
     static QString generatePattern(const QString& baseName, int paddingLength, const QString& extension);
     
