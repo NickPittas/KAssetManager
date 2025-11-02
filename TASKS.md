@@ -28,13 +28,13 @@ Legend: [ ] todo, [/] in progress, [x] done
   - [/] Aim: reduce from 216 to <50; currently at 155 (28% reduction); keep diagnostics gated by env or DEBUG
   - DoD: Build clean; app log readable without spam
 
-- [ ] M-1 Fix potential ownership leaks
-  - [ ] assets_model.cpp: audit raw new; ensure QObject parents / smart pointers
-  - [ ] drag_utils.cpp: audit/fix
-  - [ ] file_ops_dialog.cpp: audit/fix
-  - [ ] import_progress_dialog.cpp: audit/fix
-  - [ ] log_viewer_widget.cpp: audit/fix
-  - DoD: No raw new without parent/smart pointer in these files; spot-run app and exit cleanly
+- [x] M-1 Fix potential ownership leaks
+  - [x] assets_model.cpp: audit raw new; ensure QObject parents / smart pointers (mimeData() correctly unparented)
+  - [x] drag_utils.cpp: audit/fix (QMimeData now parented to QDrag)
+  - [x] file_ops_dialog.cpp: audit/fix (QHBoxLayout properly managed)
+  - [x] import_progress_dialog.cpp: audit/fix (QHBoxLayout properly managed)
+  - [x] log_viewer_widget.cpp: audit/fix (all widgets already have proper parents)
+  - DoD: No raw new without parent/smart pointer in these files; spot-run app and exit cleanly ✓
 
 - [ ] L-1/L-4 Documentation updates
   - [ ] live_preview_manager.h: brief Doxygen about thread safety and mutex
