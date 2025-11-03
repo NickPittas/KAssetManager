@@ -17,17 +17,18 @@ EverythingSearchDialog::EverythingSearchDialog(Mode mode, QWidget* parent)
     QString title = (mode == AssetManagerMode) ? "Everything Search - Asset Manager" : "Everything Search - File Manager";
     setWindowTitle(title);
     resize(1000, 600);
-    
+
     setupUI();
-    
-    // Check if Everything is available
-    if (!EverythingSearch::instance().isAvailable()) {
+
+    // Initialize and check if Everything is available
+    if (!EverythingSearch::instance().initialize()) {
         QMessageBox::warning(this, "Everything Not Available",
             "Everything search engine is not available.\n\n"
             "Please ensure:\n"
             "1. Everything is installed (https://www.voidtools.com/)\n"
             "2. Everything service is running\n"
-            "3. Everything64.dll is in the application directory");
+            "3. Everything64.dll is in the application directory\n\n"
+            "Check the log viewer (Ctrl+L) for detailed error messages.");
         m_searchEdit->setEnabled(false);
         m_searchButton->setEnabled(false);
     }
