@@ -99,6 +99,9 @@ public:
         } else if (role == Qt::UserRole + 1) {
             // Return file path for drag-and-drop, preview, etc.
             return m_sourceModel->data(sourceIndex, AssetsModel::FilePathRole);
+        } else if (role >= AssetsModel::IdRole && role <= AssetsModel::PreviewStateRole) {
+            // Forward all AssetsModel custom roles to the source model
+            return m_sourceModel->data(sourceIndex, role);
         }
 
         return QVariant();

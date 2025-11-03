@@ -1,9 +1,21 @@
 # KAssetManager - New Features Roadmap
 
-**Version:** 0.3.0+  
-**Status:** Planning & Design Phase  
-**Last Updated:** 2025-11-02  
+**Version:** 0.3.0+
+**Status:** Implementation Phase - 5 Features Complete
+**Last Updated:** 2025-11-03
 **Target:** Post Phase 1 & 2 Completion
+
+## ✅ Completed Features (v0.3.0)
+
+The following intelligent features have been implemented and are available in the current build:
+
+1. **✅ Feature 3: Everything Search Integration** - Ultra-fast disk-wide search with bulk import
+2. **✅ Feature 6: Database Health Agent** - Automated health checks and maintenance
+3. **✅ Feature 7: Bulk Rename Intelligence** - Pattern-based renaming with preview
+4. **✅ Feature 9: Sequence Intelligence** - Gap detection and version tracking
+5. **✅ Feature 10: Context Preserver** - Per-folder UI state persistence
+
+See [INTELLIGENT_FEATURES.md](INTELLIGENT_FEATURES.md) for complete installation and usage instructions.
 
 ---
 

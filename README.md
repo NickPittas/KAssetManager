@@ -8,6 +8,15 @@ KAsset Manager is a native Windows desktop application built with Qt 6 that prov
 
 ### Key Features
 
+#### 🤖 **Intelligent Features (v0.3.0)**
+- **Everything Search Integration** - Ultra-fast disk-wide search with bulk import
+- **Database Health Agent** - Automated health checks and maintenance
+- **Bulk Rename Intelligence** - Pattern-based renaming with preview and rollback
+- **Sequence Intelligence** - Automatic gap detection and version tracking
+- **Context Preserver** - Per-folder UI state persistence
+
+See [INTELLIGENT_FEATURES.md](INTELLIGENT_FEATURES.md) for complete installation and usage instructions.
+
 #### 🗂️ **Organization**
 - **Virtual Folder System** - Organize assets without moving files on disk
 - **Hierarchical Structure** - Create nested folders for complex projects
@@ -83,11 +92,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-windows.ps1 
 ## Documentation
 
 ### For Users
+- **[INTELLIGENT_FEATURES.md](INTELLIGENT_FEATURES.md)** - ⭐ **NEW!** Installation and usage guide for intelligent features
 - **[USER_GUIDE.md](USER_GUIDE.md)** - Complete user guide with tutorials and workflows
 - **[INSTALL.md](INSTALL.md)** - Installation and build instructions
 
 ### For Developers
 - **[DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md)** - Architecture, code structure, and contribution guidelines
+- **[NEW_FEATURES.md](NEW_FEATURES.md)** - Intelligent features roadmap and implementation status
 - **[API_REFERENCE.md](API_REFERENCE.md)** - Complete API documentation for all classes
 - **[TECH.md](TECH.md)** - Technology stack and design decisions
 - **[PERFORMANCE_OPTIMIZATIONS.md](PERFORMANCE_OPTIMIZATIONS.md)** - Performance optimization details

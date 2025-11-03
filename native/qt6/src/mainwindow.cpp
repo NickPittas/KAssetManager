@@ -4305,7 +4305,10 @@ QItemSelectionModel* MainWindow::getCurrentSelectionModel()
 
 void MainWindow::updateInfoPanel()
 {
-    QModelIndexList selected = getCurrentSelectionModel()->selectedIndexes();
+    // Use selectedRows() to get one index per row, avoiding duplicate counts in table view
+    QModelIndexList selected = isGridMode
+        ? getCurrentSelectionModel()->selectedIndexes()
+        : getCurrentSelectionModel()->selectedRows();
 
     if (selected.isEmpty()) {
         infoFileName->setText("No selection");

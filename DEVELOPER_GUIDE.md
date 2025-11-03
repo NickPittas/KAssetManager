@@ -98,6 +98,13 @@ KAssetManager/
 │   │   ├── virtual_folders.* # Folder tree model
 │   │   ├── tags_model.*     # Tags model
 │   │   ├── importer.*       # File import logic
+│   │   ├── everything_search.* # Everything SDK integration
+│   │   ├── everything_search_dialog.* # Everything search UI
+│   │   ├── database_health_dialog.* # Database health UI
+│   │   ├── database_health_agent.* # Health check logic
+│   │   ├── bulk_rename_dialog.* # Bulk rename UI
+│   │   ├── context_preserver.* # UI state persistence
+│   │   ├── sequence_detector.* # Sequence gap detection
 │   │   ├── live_preview_manager.* # Live preview streaming
 │   │   ├── preview_overlay.* # Full-screen preview
 │   │   ├── oiio_image_loader.* # OpenImageIO integration
@@ -164,6 +171,160 @@ KAsset Manager follows Qt's Model-View architecture:
 ---
 
 ## Core Components
+
+### Intelligent Features (v0.3.0)
+
+KAssetManager v0.3.0 introduces five intelligent features. See [INTELLIGENT_FEATURES.md](INTELLIGENT_FEATURES.md) for user documentation.
+
+#### EverythingSearch (everything_search.h/cpp)
+
+**Purpose**: Integration with Everything search engine (Singleton)
+
+**Responsibilities:**
+- Load Everything SDK DLL dynamically
+- Provide search API for ultra-fast file search
+- Parse search results and return structured data
+
+**Key Methods:**
+```cpp
+static EverythingSearch& instance();  // Get singleton
+bool initialize();                     // Load DLL and initialize
+bool isAvailable() const;              // Check if Everything is available
+QVector<EverythingResult> search(const QString& query, int maxResults);
+QVector<EverythingResult> searchWithFilter(const QString& query, const QString& filter, int maxResults);
+```
+
+**Dependencies:**
+- Everything SDK (Everything64.dll)
+- QLibrary for dynamic DLL loading
+- Windows API types (LPCWSTR, DWORD, etc.)
+
+#### EverythingSearchDialog (everything_search_dialog.h/cpp)
+
+**Purpose**: UI dialog for Everything search with dual-mode support
+
+**Modes:**
+- **AssetManagerMode**: Shows import status, allows bulk import
+- **FileManagerMode**: Shows results, allows navigation to file location
+
+**Key Methods:**
+```cpp
+EverythingSearchDialog(Mode mode, QWidget* parent);
+QStringList getSelectedPaths() const;  // Get selected file paths
+
+signals:
+void importRequested(const QStringList& paths);  // Bulk import signal
+```
+
+#### DatabaseHealthAgent (database_health_agent.h/cpp)
+
+**Purpose**: Database health monitoring and maintenance (Singleton)
+
+**Health Checks:**
+- Orphaned records (assets with missing files)
+- Missing files sampling
+- Database fragmentation analysis
+- SQLite integrity check
+- Index validation
+
+**Maintenance Operations:**
+- VACUUM (rebuild database, reclaim space)
+- REINDEX (rebuild all indexes)
+- Fix orphaned records (remove entries for missing files)
+
+**Key Methods:**
+```cpp
+static DatabaseHealthAgent& instance();
+HealthReport runHealthCheck();         // Run all health checks
+bool vacuum();                         // VACUUM database
+bool reindex();                        // REINDEX database
+bool fixOrphanedRecords();             // Remove orphaned records
+```
+
+#### DatabaseHealthDialog (database_health_dialog.h/cpp)
+
+**Purpose**: UI dialog for database health reports and maintenance
+
+**Features:**
+- Display health report with color-coded status
+- Show detailed issue information
+- Provide maintenance operation buttons
+- Progress indication for long operations
+
+#### BulkRenameDialog (bulk_rename_dialog.h/cpp)
+
+**Purpose**: Pattern-based bulk rename with preview and rollback
+
+**Modes:**
+- **Asset Manager Mode**: Rename assets + update database
+- **File Manager Mode**: Rename files only (no database)
+
+**Pattern Placeholders:**
+- `{name}` - Original filename (without extension)
+- `{ext}` - File extension
+- `{#}` - Sequential number (1, 2, 3, ...)
+- `{##}` - Zero-padded number (01, 02, 03, ...)
+- `{###}` - Three-digit number (001, 002, 003, ...)
+
+**Key Methods:**
+```cpp
+BulkRenameDialog(const QVector<int>& assetIds, QWidget* parent);  // Asset Manager mode
+BulkRenameDialog(const QStringList& filePaths, QWidget* parent);  // File Manager mode
+void performRename();                  // Apply rename operation
+void rollback();                       // Undo last rename
+```
+
+#### SequenceDetector (sequence_detector.h/cpp)
+
+**Purpose**: Detect image sequences, gaps, and version information
+
+**Features:**
+- Detect numbered image sequences
+- Identify missing frames (gaps)
+- Extract version information (v01, v02, etc.)
+- Store gap and version data in database
+
+**Key Methods:**
+```cpp
+static bool isSequence(const QString& filePath);
+static QString getSequencePattern(const QString& filePath);
+static QVector<int> detectGaps(const QStringList& files);
+static QString extractVersion(const QString& filePath);
+```
+
+**Database Columns:**
+- `sequence_gaps` (TEXT) - Comma-separated list of missing frames
+- `sequence_version` (TEXT) - Extracted version string
+
+#### ContextPreserver (context_preserver.h/cpp)
+
+**Purpose**: Save and restore UI state per folder (Singleton)
+
+**Saved State:**
+- Scroll position (grid and list views)
+- View mode (grid or list)
+- Search text
+- Selected tag filters
+- Rating filter
+- File type filter
+- Selected asset IDs
+- Last active folder
+
+**Key Methods:**
+```cpp
+static ContextPreserver& instance();
+void saveContext(int folderId, const FolderContext& context);
+FolderContext loadContext(int folderId);
+void saveLastActiveFolder(int folderId);
+int loadLastActiveFolder();
+```
+
+**Storage:**
+- Uses QSettings (Windows Registry)
+- Settings key: `AugmentCode/KAssetManager`
+- Per-folder keys: `AssetManager/Folder_{id}/...`
+
+---
 
 ### MainWindow (mainwindow.h/cpp)
 
