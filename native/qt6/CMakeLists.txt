@@ -301,6 +301,16 @@ if (WIN32)
       endforeach()
     endif()
   endif()
+
+  # Install Everything SDK DLL if available
+  set(_EVERYTHING_DLL "${CMAKE_SOURCE_DIR}/../../third_party/everything/Everything64.dll")
+  if(EXISTS "${_EVERYTHING_DLL}")
+    install(FILES "${_EVERYTHING_DLL}" DESTINATION bin)
+    message(STATUS "Everything64.dll will be installed to bin directory")
+  else()
+    message(WARNING "Everything64.dll not found at ${_EVERYTHING_DLL}")
+    message(WARNING "Run scripts/download-everything-sdk.ps1 to download the Everything SDK")
+  endif()
 endif()
 
 # Enable testing
