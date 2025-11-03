@@ -54,6 +54,7 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include <shellapi.h>
 #include <psapi.h>
 static size_t currentWorkingSetMB() {
     PROCESS_MEMORY_COUNTERS_EX pmc;
@@ -156,10 +157,10 @@ bool isPreviewableSuffix(const QString& suffix)
 #include <functional>
 static QIcon mkIcon(const std::function<void(QPainter&, const QRectF&)>& draw)
 {
-    QPixmap pm(24, 24); pm.fill(Qt::transparent);
+    QPixmap pm(32, 32); pm.fill(Qt::transparent);
     QPainter p(&pm); p.setRenderHint(QPainter::Antialiasing);
-    QRectF r(3, 3, 18, 18);
-    QPen pen(QColor(235,235,235)); pen.setWidthF(1.6);
+    QRectF r(4, 4, 24, 24);
+    QPen pen(QColor(235,235,235)); pen.setWidthF(2.0);
     p.setPen(pen); p.setBrush(Qt::NoBrush);
     draw(p, r);
     p.end();
@@ -240,6 +241,38 @@ static QIcon icoEye() { return mkIcon([](QPainter& p, const QRectF& r){
     p.drawPath(path); p.drawEllipse(QRectF(c.x()-3, c.y()-3, 6, 6));
 }); }
 
+static QIcon icoBack() { return mkIcon([](QPainter& p, const QRectF& r){
+    QPainterPath arrow;
+    QPointF tip(r.x()+4, r.center().y());
+    QPointF top(r.center().x(), r.y()+4);
+    QPointF bottom(r.center().x(), r.bottom()-4);
+    QPointF tail(r.right()-4, r.center().y());
+    arrow.moveTo(tip);
+    arrow.lineTo(top);
+    arrow.lineTo(QPointF(r.center().x(), r.center().y()-2));
+    arrow.lineTo(tail);
+    arrow.lineTo(QPointF(r.center().x(), r.center().y()+2));
+    arrow.lineTo(bottom);
+    arrow.closeSubpath();
+    p.drawPath(arrow);
+}); }
+
+static QIcon icoUp() { return mkIcon([](QPainter& p, const QRectF& r){
+    QPainterPath arrow;
+    QPointF tip(r.center().x(), r.y()+4);
+    QPointF left(r.x()+4, r.center().y());
+    QPointF right(r.right()-4, r.center().y());
+    QPointF tail(r.center().x(), r.bottom()-4);
+    arrow.moveTo(tip);
+    arrow.lineTo(left);
+    arrow.lineTo(QPointF(r.center().x()-2, r.center().y()));
+    arrow.lineTo(tail);
+    arrow.lineTo(QPointF(r.center().x()+2, r.center().y()));
+    arrow.lineTo(right);
+    arrow.closeSubpath();
+    p.drawPath(arrow);
+}); }
+
 
 static QIcon icoRefresh() { return mkIcon([](QPainter& p, const QRectF& r){
     QPointF c = r.center(); qreal rad = r.width()/2 - 4;
@@ -249,6 +282,129 @@ static QIcon icoRefresh() { return mkIcon([](QPainter& p, const QRectF& r){
     QPointF a(c.x()-rad, c.y()-rad+2);
     p.drawLine(QPointF(a.x(), a.y()), QPointF(a.x()-4, a.y()+2));
     p.drawLine(QPointF(a.x(), a.y()), QPointF(a.x()+2, a.y()+4));
+}); }
+
+// File type icons for File Manager
+static QIcon icoFilePdf() { return mkIcon([](QPainter& p, const QRectF& r){
+    // PDF document icon - page with folded corner
+    QPainterPath page;
+    page.moveTo(r.x()+4, r.y()+2);
+    page.lineTo(r.right()-6, r.y()+2);
+    page.lineTo(r.right()-2, r.y()+6);
+    page.lineTo(r.right()-2, r.bottom()-2);
+    page.lineTo(r.x()+4, r.bottom()-2);
+    page.closeSubpath();
+    p.drawPath(page);
+    // Folded corner
+    p.drawLine(QPointF(r.right()-6, r.y()+2), QPointF(r.right()-6, r.y()+6));
+    p.drawLine(QPointF(r.right()-6, r.y()+6), QPointF(r.right()-2, r.y()+6));
+    // PDF text
+    QFont f = p.font(); f.setPixelSize(6); f.setBold(true); p.setFont(f);
+    p.drawText(QRectF(r.x()+4, r.center().y()-2, r.width()-8, 8), Qt::AlignCenter, "PDF");
+}); }
+
+static QIcon icoFileCsv() { return mkIcon([](QPainter& p, const QRectF& r){
+    // Spreadsheet grid icon
+    QRectF sheet(r.x()+3, r.y()+4, r.width()-6, r.height()-8);
+    p.drawRect(sheet);
+    // Grid lines
+    qreal cellH = sheet.height() / 3;
+    qreal cellW = sheet.width() / 3;
+    for (int i = 1; i < 3; i++) {
+        p.drawLine(QPointF(sheet.x(), sheet.y() + i*cellH), QPointF(sheet.right(), sheet.y() + i*cellH));
+        p.drawLine(QPointF(sheet.x() + i*cellW, sheet.y()), QPointF(sheet.x() + i*cellW, sheet.bottom()));
+    }
+}); }
+
+static QIcon icoFileDoc() { return mkIcon([](QPainter& p, const QRectF& r){
+    // Word document icon - page with lines
+    QPainterPath page;
+    page.moveTo(r.x()+4, r.y()+2);
+    page.lineTo(r.right()-6, r.y()+2);
+    page.lineTo(r.right()-2, r.y()+6);
+    page.lineTo(r.right()-2, r.bottom()-2);
+    page.lineTo(r.x()+4, r.bottom()-2);
+    page.closeSubpath();
+    p.drawPath(page);
+    // Folded corner
+    p.drawLine(QPointF(r.right()-6, r.y()+2), QPointF(r.right()-6, r.y()+6));
+    p.drawLine(QPointF(r.right()-6, r.y()+6), QPointF(r.right()-2, r.y()+6));
+    // Text lines
+    for (int i = 0; i < 3; i++) {
+        qreal y = r.y() + 10 + i*4;
+        p.drawLine(QPointF(r.x()+6, y), QPointF(r.right()-4, y));
+    }
+}); }
+
+static QIcon icoFileXls() { return mkIcon([](QPainter& p, const QRectF& r){
+    // Excel spreadsheet icon - page with grid
+    QPainterPath page;
+    page.moveTo(r.x()+4, r.y()+2);
+    page.lineTo(r.right()-6, r.y()+2);
+    page.lineTo(r.right()-2, r.y()+6);
+    page.lineTo(r.right()-2, r.bottom()-2);
+    page.lineTo(r.x()+4, r.bottom()-2);
+    page.closeSubpath();
+    p.drawPath(page);
+    // Folded corner
+    p.drawLine(QPointF(r.right()-6, r.y()+2), QPointF(r.right()-6, r.y()+6));
+    p.drawLine(QPointF(r.right()-6, r.y()+6), QPointF(r.right()-2, r.y()+6));
+    // Small grid
+    QRectF grid(r.x()+6, r.y()+10, r.width()-12, r.height()-16);
+    p.drawRect(grid);
+    p.drawLine(QPointF(grid.center().x(), grid.y()), QPointF(grid.center().x(), grid.bottom()));
+    p.drawLine(QPointF(grid.x(), grid.center().y()), QPointF(grid.right(), grid.center().y()));
+}); }
+
+static QIcon icoFileTxt() { return mkIcon([](QPainter& p, const QRectF& r){
+    // Text file icon - simple page
+    QPainterPath page;
+    page.moveTo(r.x()+5, r.y()+3);
+    page.lineTo(r.right()-5, r.y()+3);
+    page.lineTo(r.right()-5, r.bottom()-3);
+    page.lineTo(r.x()+5, r.bottom()-3);
+    page.closeSubpath();
+    p.drawPath(page);
+    // Text lines
+    for (int i = 0; i < 4; i++) {
+        qreal y = r.y() + 7 + i*4;
+        p.drawLine(QPointF(r.x()+7, y), QPointF(r.right()-7, y));
+    }
+}); }
+
+static QIcon icoFileAi() { return mkIcon([](QPainter& p, const QRectF& r){
+    // Adobe Illustrator icon - page with vector path
+    QPainterPath page;
+    page.moveTo(r.x()+4, r.y()+2);
+    page.lineTo(r.right()-6, r.y()+2);
+    page.lineTo(r.right()-2, r.y()+6);
+    page.lineTo(r.right()-2, r.bottom()-2);
+    page.lineTo(r.x()+4, r.bottom()-2);
+    page.closeSubpath();
+    p.drawPath(page);
+    // Folded corner
+    p.drawLine(QPointF(r.right()-6, r.y()+2), QPointF(r.right()-6, r.y()+6));
+    p.drawLine(QPointF(r.right()-6, r.y()+6), QPointF(r.right()-2, r.y()+6));
+    // Bezier curve
+    QPainterPath curve;
+    curve.moveTo(r.x()+6, r.center().y()+2);
+    curve.cubicTo(r.x()+8, r.y()+10, r.right()-8, r.y()+10, r.right()-6, r.center().y()+2);
+    p.drawPath(curve);
+}); }
+
+static QIcon icoFileGeneric() { return mkIcon([](QPainter& p, const QRectF& r){
+    // Generic file icon - simple page
+    QPainterPath page;
+    page.moveTo(r.x()+5, r.y()+3);
+    page.lineTo(r.right()-7, r.y()+3);
+    page.lineTo(r.right()-3, r.y()+7);
+    page.lineTo(r.right()-3, r.bottom()-3);
+    page.lineTo(r.x()+5, r.bottom()-3);
+    page.closeSubpath();
+    p.drawPath(page);
+    // Folded corner
+    p.drawLine(QPointF(r.right()-7, r.y()+3), QPointF(r.right()-7, r.y()+7));
+    p.drawLine(QPointF(r.right()-7, r.y()+7), QPointF(r.right()-3, r.y()+7));
 }); }
 
 static bool isImageFile(const QString &ext);
@@ -271,6 +427,9 @@ public:
 
     void setGroupingEnabled(bool on) { if (m_enabled == on) return; m_enabled = on; invalidateFilter(); }
     bool groupingEnabled() const { return m_enabled; }
+
+    void setHideFolders(bool hide) { if (m_hideFolders == hide) return; m_hideFolders = hide; invalidateFilter(); }
+    bool hideFolders() const { return m_hideFolders; }
 
     void rebuildForRoot(const QString& dirPath) {
         m_hidden.clear(); m_infoByRepr.clear(); m_keyByRepr.clear();
@@ -342,14 +501,27 @@ public:
 
 protected:
     bool filterAcceptsRow(int source_row, const QModelIndex &source_parent) const override {
-        if (!m_enabled) return QSortFilterProxyModel::filterAcceptsRow(source_row, source_parent);
         auto *fs = qobject_cast<QFileSystemModel*>(sourceModel());
         if (!fs) return true;
         QModelIndex idx = fs->index(source_row, 0, source_parent);
         if (!idx.isValid()) return true;
-        QString path = fs->filePath(idx);
-        // Never hide directories
-        if (fs->isDir(idx)) return true;
+
+        const bool isDir = fs->isDir(idx);
+        const QString path = fs->filePath(idx);
+
+        // Check if we should hide folders - this is independent of sequence grouping
+        if (isDir) {
+            return !m_hideFolders; // Hide folders if flag is set, show if not
+        }
+
+        // For files: check sequence grouping (only if enabled)
+        if (!m_enabled) {
+            // Sequence grouping is disabled, show all files
+            return true;
+        }
+
+        // Sequence grouping is enabled
+        // Show files that are NOT in the hidden set (i.e., show representatives and non-sequence files)
         return !m_hidden.contains(path);
     }
 
@@ -371,13 +543,16 @@ protected:
         const bool leftIsDir = fs->isDir(source_left);
         const bool rightIsDir = fs->isDir(source_right);
         if (leftIsDir != rightIsDir) {
-            // Folders-first invariant
-            return leftIsDir; // true when left is a dir
+            // Folders-first invariant: folders should be "less than" files to appear first
+            // In ascending order, "less than" means "comes before"
+            // Return true if left is a folder (should come first)
+            return leftIsDir;
         }
-        // Same type: defer to default comparison (respects column and sort role)
+        // Same type (both folders or both files): defer to default comparison by name
         return QSortFilterProxyModel::lessThan(source_left, source_right);
     }
 
+public:
     void sort(int column, Qt::SortOrder order = Qt::AscendingOrder) override {
         m_sortOrder = order;
         QSortFilterProxyModel::sort(column, order);
@@ -385,6 +560,7 @@ protected:
 
 private:
     bool m_enabled = true;
+    bool m_hideFolders = false;
     QSet<QString> m_hidden; // absolute file paths to hide
     QHash<QString, Info> m_infoByRepr; // reprPath -> info
     QHash<QString, QString> m_keyByRepr; // reprPath -> grouping key
@@ -628,6 +804,9 @@ public:
     }
 };
 
+// Helper function to get file type icon based on extension (forward declaration needed by FmItemDelegate)
+static QIcon getFileTypeIcon(const QString &ext);
+
 // Minimalist delegate for File Manager grid: live preview + filename
 class FmItemDelegate : public QStyledItemDelegate
 {
@@ -715,31 +894,60 @@ public:
         }
 
         if (!drewPreview) {
-            painter->setPen(QPen(QColor(120,120,120), 1));
-            painter->setBrush(Qt::NoBrush);
-            QRect placeholderRect = insetPreviewRect(thumbRect);
-            painter->drawRoundedRect(placeholderRect, 6, 6);
-            QString label = fileInfo.suffix().toUpper();
-            if (label.isEmpty()) label = index.data(Qt::DisplayRole).toString().left(4).toUpper();
-            if (label.isEmpty()) label = "FILE";
-            QFont placeholder("Segoe UI", 9, QFont::Medium);
-            painter->setFont(placeholder);
-            painter->setPen(QColor(180,180,180));
-            painter->drawText(thumbRect.adjusted(10,10,-10,-10), Qt::AlignCenter | Qt::TextWordWrap, label.left(6));
+            // Try to use file type icon
+            QString suffix = fileInfo.suffix();
+            QIcon fileIcon = getFileTypeIcon(suffix);
+
+            QRect iconRect = insetPreviewRect(thumbRect);
+            // Scale icon to fit nicely in the preview area (60% of available space)
+            int iconSize = qMin(iconRect.width(), iconRect.height()) * 0.6;
+            QRect centeredIconRect(
+                iconRect.x() + (iconRect.width() - iconSize) / 2,
+                iconRect.y() + (iconRect.height() - iconSize) / 2,
+                iconSize,
+                iconSize
+            );
+            fileIcon.paint(painter, centeredIconRect, Qt::AlignCenter);
         }
 
         QString name = index.data(Qt::DisplayRole).toString();
         QFont f("Segoe UI", 9);
         painter->setFont(f);
         painter->setPen(QColor(230,230,230));
-        const int textTop = thumbRect.bottom() + 6;
-        int textHeight = option.rect.bottom() - textTop - margin;
-        if (textHeight < 20) textHeight = 20;
+        const int textTop = thumbRect.bottom() - 2; // Start slightly overlapping thumbnail area
+        int textHeight = option.rect.bottom() - textTop; // Use all remaining space
+        if (textHeight < 35) textHeight = 35; // Ensure at least 2 lines
         QRect nameRect(option.rect.x() + 4, textTop, option.rect.width() - 8, textHeight);
-        QString el = QFontMetrics(f).elidedText(name, Qt::ElideRight, nameRect.width());
-        painter->drawText(nameRect, Qt::AlignHCenter | Qt::AlignTop, el);
+
+        // Draw text with word wrapping instead of eliding
+        painter->drawText(nameRect, Qt::AlignHCenter | Qt::AlignTop | Qt::TextWordWrap, name);
 
         painter->restore();
+    }
+
+public:
+    QSize sizeHint(const QStyleOptionViewItem &option, const QModelIndex &index) const override
+    {
+        Q_UNUSED(option);
+        // Calculate height needed for wrapped text
+        QString name = index.data(Qt::DisplayRole).toString();
+        QFont f("Segoe UI", 9);
+        QFontMetrics fm(f);
+
+        // Calculate text area width (card width minus margins)
+        int textWidth = m_thumbnailSize + 24 - 8; // grid width minus horizontal margins
+
+        // Calculate how many lines the text will need
+        QRect boundingRect = fm.boundingRect(QRect(0, 0, textWidth, 1000),
+                                             Qt::AlignHCenter | Qt::AlignTop | Qt::TextWordWrap,
+                                             name);
+        int textHeight = boundingRect.height();
+
+        // Total height: thumbnail + margins + text height
+        // Text starts slightly overlapping: top(6) + thumbnail - overlap(2) + text + extra padding(10)
+        int totalHeight = m_thumbnailSize + 6 - 2 + textHeight + 10;
+
+        return QSize(m_thumbnailSize + 24, totalHeight);
     }
 
 private:
@@ -867,7 +1075,8 @@ public:
         : QObject(parent),
           m_view(view),
           m_pathResolver(std::move(resolver)),
-          m_overlay(new GridScrubOverlay(view->viewport()))
+          m_overlay(new GridScrubOverlay(view->viewport())),
+          m_sequenceGroupingEnabled(true)
     {
         if (!m_view) return;
         m_view->setMouseTracking(true);
@@ -922,6 +1131,41 @@ public:
         endScrub();
     }
 
+    void setSequenceGroupingEnabled(bool enabled)
+    {
+        m_sequenceGroupingEnabled = enabled;
+        if (!m_sequenceGroupingEnabled) {
+            endScrub();
+            hideOverlay();
+            resetCtrlTracking();
+        }
+    }
+
+    bool isSequenceGroupingEnabled() const { return m_sequenceGroupingEnabled; }
+
+    bool canScrubFile(const QString& filePath) const
+    {
+        if (filePath.isEmpty()) return false;
+
+        QFileInfo info(filePath);
+        QString suffix = info.suffix().toLower();
+
+        // Videos can always be scrubbed
+        if (suffix == "mp4" || suffix == "mov" || suffix == "avi" ||
+            suffix == "mkv" || suffix == "webm" || suffix == "m4v") {
+            return true;
+        }
+
+        // Image sequences can only be scrubbed when grouping is enabled
+        if (m_sequenceGroupingEnabled) {
+            // Check if it's an image with sequence-like name
+            static QRegularExpression seqPattern(R"(.*(?:\d{2,}|%0\d+d|\#\#\#).*)");
+            return seqPattern.match(info.fileName()).hasMatch();
+        }
+
+        return false;
+    }
+
 protected:
     bool eventFilter(QObject *watched, QEvent *event) override
     {
@@ -935,16 +1179,15 @@ protected:
                 const QPoint pos = moveEvent->position().toPoint();
                 handleHoverMove(pos);
                 if (QApplication::keyboardModifiers().testFlag(Qt::ControlModifier)) {
-                    if (m_currentIndex.isValid()) {
+                    if (m_currentIndex.isValid() && canScrubFile(m_currentPath)) {
                         handleCtrlScrub(pos);
                         showOverlay();
+                        event->accept();
+                        return true;
                     }
-                    event->accept();
-                    return true;
-                } else {
-                    endScrub();
-                    resetCtrlTracking();
                 }
+                endScrub();
+                resetCtrlTracking();
                 break;
             }
             case QEvent::Leave:
@@ -971,6 +1214,12 @@ protected:
                     return true;
                 }
                 setCurrentIndex(idx);
+                if (!canScrubFile(m_currentPath)) {
+                    endScrub();
+                    hideOverlay();
+                    resetCtrlTracking();
+                    break;
+                }
                 beginScrub();
                 int delta = wheel->angleDelta().x();
                 if (delta == 0) {
@@ -1250,6 +1499,7 @@ private:
     bool m_scrubActive = false;
     bool m_mouseGrabbed = false;
     bool m_warpingCursor = false;
+    bool m_sequenceGroupingEnabled = true;
 };
 
 MainWindow::MainWindow(QWidget *parent)
@@ -2223,19 +2473,34 @@ void MainWindow::setupFileManagerUi()
     // Toolbar
     fmToolbar = new QWidget(right);
     fmToolbar->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    fmToolbar->setFixedHeight(40);
+    fmToolbar->setFixedHeight(48);
 
     QHBoxLayout *tb = new QHBoxLayout(fmToolbar);
-    tb->setContentsMargins(8,4,8,4);
-    tb->setSpacing(6);
+    tb->setContentsMargins(8,6,8,6);
+    tb->setSpacing(8);
 
     fmIsGridMode = true;
 
     auto mkTb = [&](const QIcon &ic, const QString &tip) {
         QToolButton *b = new QToolButton(fmToolbar);
-        b->setIcon(ic); b->setToolTip(tip); b->setAutoRaise(true); b->setIconSize(QSize(20,20));
+        b->setIcon(ic); b->setToolTip(tip); b->setAutoRaise(true); b->setIconSize(QSize(28,28));
         return b;
     };
+
+    // Navigation buttons (Back and Up) at the left
+    fmBackButton = mkTb(icoBack(), "Back");
+    connect(fmBackButton, &QToolButton::clicked, this, &MainWindow::onFmNavigateBack);
+    tb->addWidget(fmBackButton);
+
+    fmUpButton = mkTb(icoUp(), "Up");
+    connect(fmUpButton, &QToolButton::clicked, this, &MainWindow::onFmNavigateUp);
+    tb->addWidget(fmUpButton);
+
+    // Separator
+    QFrame *sep1 = new QFrame(fmToolbar);
+    sep1->setFrameShape(QFrame::VLine);
+    sep1->setFrameShadow(QFrame::Sunken);
+    tb->addWidget(sep1);
 
     // Left-aligned: New Folder, Copy, Cut, Paste, Delete, Rename, Add to Library, List/Grid Toggle, Grid Size bar, Group Sequences
     QToolButton *newFolderBtn = mkTb(icoFolderNew(), "New Folder");
@@ -2256,7 +2521,7 @@ void MainWindow::setupFileManagerUi()
     fmViewModeButton->setIcon(icoGrid());
     fmViewModeButton->setToolTip("Toggle Grid/List");
     fmViewModeButton->setAutoRaise(true);
-    fmViewModeButton->setIconSize(QSize(20,20));
+    fmViewModeButton->setIconSize(QSize(28,28));
     connect(fmViewModeButton, &QToolButton::clicked, this, &MainWindow::onFmViewModeToggled);
     tb->addWidget(fmViewModeButton);
 
@@ -2278,12 +2543,18 @@ void MainWindow::setupFileManagerUi()
     connect(fmGroupSequencesCheckBox, &QCheckBox::toggled, this, &MainWindow::onFmGroupSequencesToggled);
     tb->addWidget(fmGroupSequencesCheckBox);
 
+    fmHideFoldersCheckBox = new QCheckBox("Hide folders", fmToolbar);
+    fmHideFoldersCheckBox->setToolTip("Hide folders in Grid view (show files only)");
+    fmHideFoldersCheckBox->setStyleSheet("QCheckBox { color:#9aa0a6; } QCheckBox::indicator { width: 16px; height: 16px; }");
+    connect(fmHideFoldersCheckBox, &QCheckBox::toggled, this, &MainWindow::onFmHideFoldersToggled);
+    tb->addWidget(fmHideFoldersCheckBox);
+
     // Everything Search button
     QToolButton* fmSearchButton = new QToolButton(fmToolbar);
     fmSearchButton->setIcon(style()->standardIcon(QStyle::SP_FileDialogContentsView));
     fmSearchButton->setToolTip("Everything Search - Search entire disk");
     fmSearchButton->setAutoRaise(true);
-    fmSearchButton->setIconSize(QSize(20,20));
+    fmSearchButton->setIconSize(QSize(28,28));
     connect(fmSearchButton, &QToolButton::clicked, this, &MainWindow::onEverythingSearchFileManager);
     tb->addWidget(fmSearchButton);
 
@@ -2293,7 +2564,7 @@ void MainWindow::setupFileManagerUi()
     fmPreviewToggleButton->setCheckable(true);
     fmPreviewToggleButton->setChecked(true);
     fmPreviewToggleButton->setAutoRaise(true);
-    fmPreviewToggleButton->setIconSize(QSize(20,20));
+    fmPreviewToggleButton->setIconSize(QSize(28,28));
     connect(fmPreviewToggleButton, &QToolButton::toggled, this, &MainWindow::onFmTogglePreview);
     tb->addWidget(fmPreviewToggleButton);
     rightLayout->addWidget(fmToolbar);
@@ -2311,12 +2582,18 @@ void MainWindow::setupFileManagerUi()
     // Sequence grouping proxy
     fmProxyModel = new SequenceGroupingProxyModel(fmViewStack);
     fmProxyModel->setSourceModel(fmDirModel);
+    // Enable sorting to ensure folders appear first
+    fmProxyModel->setSortCaseSensitivity(Qt::CaseInsensitive);
+    fmProxyModel->setSortRole(Qt::DisplayRole);
+    fmProxyModel->setDynamicSortFilter(true);
+    fmProxyModel->sort(0, Qt::AscendingOrder);
 
     fmGridView->setModel(fmProxyModel);
     fmGridView->setViewMode(QListView::IconMode);
     fmGridView->setResizeMode(QListView::Adjust);
     fmGridView->setSpacing(4);
-    fmGridView->setUniformItemSizes(true);
+    // Don't use uniform item sizes since text wrapping creates variable heights
+    fmGridView->setUniformItemSizes(false);
     fmGridView->setSelectionMode(QAbstractItemView::ExtendedSelection);
     fmGridView->setContextMenuPolicy(Qt::CustomContextMenu);
 
@@ -2383,6 +2660,8 @@ void MainWindow::setupFileManagerUi()
     fmListView->verticalHeader()->setMinimumSectionSize(18);
     fmListView->setIconSize(QSize(18,18));
     fmListView->horizontalHeader()->setStretchLastSection(true);
+    // Set default sort: column 0 (Name), ascending order, folders first
+    fmListView->sortByColumn(0, Qt::AscendingOrder);
     fmListView->setStyleSheet(
         "QTableView { background-color: #0a0a0a; color: #ffffff; border: none; }"
         "QTableView::item { padding: 2px 6px; }"
@@ -2506,7 +2785,11 @@ void MainWindow::setupFileManagerUi()
                 disp = a.convertToFormat(QImage::Format_Grayscale8);
             }
             fmImageItem->setPixmap(QPixmap::fromImage(disp));
-            if (fmImageFitToView) fmImageView->fitInView(fmImageItem, Qt::KeepAspectRatio);
+            if (fmImageFitToView) {
+                fmImageScene->setSceneRect(fmImageItem->boundingRect());
+                fmImageView->centerOn(fmImageItem);
+                fmImageView->fitInView(fmImageItem, Qt::KeepAspectRatio);
+            }
         }
     });
     alphaRow->addWidget(fmAlphaCheck);
@@ -2551,6 +2834,7 @@ void MainWindow::setupFileManagerUi()
                 if (fmImageScene) fmImageScene->setSceneRect(fmImageItem->boundingRect());
                 if (fmImageView) {
                     fmImageView->resetTransform();
+                    fmImageView->centerOn(fmImageItem);
                     fmImageView->fitInView(fmImageItem, Qt::KeepAspectRatio);
                     fmImageFitToView = true;
                     fmImageView->setBackgroundBrush(Qt::white);
@@ -2586,6 +2870,7 @@ void MainWindow::setupFileManagerUi()
                 if (fmImageScene) fmImageScene->setSceneRect(fmImageItem->boundingRect());
                 if (fmImageView) {
                     fmImageView->resetTransform();
+                    fmImageView->centerOn(fmImageItem);
                     fmImageView->fitInView(fmImageItem, Qt::KeepAspectRatio);
                     fmImageFitToView = true;
                     fmImageView->setBackgroundBrush(Qt::white);
@@ -2794,6 +3079,11 @@ void MainWindow::setupFileManagerUi()
         connect(sc, &QShortcut::activated, this, &MainWindow::onFmBackToParent);
         fmShortcutObjs.insert("BackToParent", sc);
     }
+    {
+        auto sc = new QShortcut(QKeySequence(Qt::Key_F5), fileManagerPage);
+        connect(sc, &QShortcut::activated, this, &MainWindow::onFmRefresh);
+        fmShortcutObjs.insert("Refresh", sc);
+    }
 
 
     // Apply custom shortcuts from settings (overrides defaults)
@@ -2837,6 +3127,9 @@ void MainWindow::setupFileManagerUi()
             }
         }
     }
+
+    // Initialize navigation button states
+    fmUpdateNavigationButtons();
 
     // React to tree single-click to change right view root
     // (activated via Enter/double-click remains for expansion)
@@ -2894,6 +3187,16 @@ void MainWindow::setupFileManagerUi()
             fmIsGridMode = grid;
             fmViewStack->setCurrentIndex(grid ? 0 : 1);
             if (fmViewModeButton) fmViewModeButton->setIcon(grid ? icoGrid() : icoList());
+
+            // Always ensure correct sort order on startup
+            // Grid view: always A-Z with folders first
+            // List view: default to A-Z with folders first (user can change via column headers)
+            if (fmProxyModel) {
+                fmProxyModel->sort(0, Qt::AscendingOrder);
+            }
+            if (fmListView) {
+                fmListView->sortByColumn(0, Qt::AscendingOrder);
+            }
         }
         if (s.contains("FileManager/PreviewVisible")) {
             bool vis = s.value("FileManager/PreviewVisible").toBool();
@@ -2904,6 +3207,32 @@ void MainWindow::setupFileManagerUi()
         fmGroupSequences = s.value("FileManager/GroupSequences", true).toBool();
         if (fmGroupSequencesCheckBox) fmGroupSequencesCheckBox->setChecked(fmGroupSequences);
         if (fmProxyModel) fmProxyModel->setGroupingEnabled(fmGroupSequences);
+        // Initialize LivePreviewManager sequence detection state
+        LivePreviewManager::instance().setSequenceDetectionEnabled(fmGroupSequences);
+        // Initialize scrub controller state
+        if (fmScrubController) fmScrubController->setSequenceGroupingEnabled(fmGroupSequences);
+
+        // Hide folders toggle
+        fmHideFolders = s.value("FileManager/HideFolders", false).toBool();
+        if (fmHideFoldersCheckBox) fmHideFoldersCheckBox->setChecked(fmHideFolders);
+        if (fmDirModel) {
+            QDir::Filters filters = QDir::NoDotAndDotDot | (fmHideFolders ? QDir::Files : QDir::AllEntries);
+            fmDirModel->setFilter(filters);
+            // Ensure current root is preserved
+            QString pathNow = fmDirModel->rootPath();
+            if (!pathNow.isEmpty()) {
+                QModelIndex srcRoot = fmDirModel->index(pathNow);
+                if (fmProxyModel) {
+                    fmProxyModel->rebuildForRoot(pathNow);
+                    QModelIndex proxyRoot = fmProxyModel->mapFromSource(srcRoot);
+                    if (fmGridView) fmGridView->setRootIndex(proxyRoot);
+                    if (fmListView) fmListView->setRootIndex(proxyRoot);
+                } else {
+                    if (fmGridView) fmGridView->setRootIndex(srcRoot);
+                    if (fmListView) fmListView->setRootIndex(srcRoot);
+                }
+            }
+        }
 
         // Splitters
         if (fmSplitter && s.contains("FileManager/MainSplitter")) fmSplitter->restoreState(s.value("FileManager/MainSplitter").toByteArray());
@@ -2972,37 +3301,24 @@ void MainWindow::onFmTreeActivated(const QModelIndex &index)
     QString path = fmTreeModel->filePath(index);
     if (path.isEmpty()) return;
 
-    fmDirModel->setRootPath(path);
-    QModelIndex srcRoot = fmDirModel->index(path);
-    if (fmProxyModel) {
-        fmProxyModel->rebuildForRoot(path);
-        QModelIndex proxyRoot = fmProxyModel->mapFromSource(srcRoot);
-        fmGridView->setRootIndex(proxyRoot);
-        fmListView->setRootIndex(proxyRoot);
-    } else {
-        fmGridView->setRootIndex(srcRoot);
-        fmListView->setRootIndex(srcRoot);
-    }
-
-    // Sync folder tree selection/expansion
-    if (fmTree && fmTreeModel) {
-        QModelIndex treeIdx = fmTreeModel->index(path);
-        if (treeIdx.isValid()) {
-            QModelIndex p = treeIdx;
-            while (p.isValid()) { fmTree->expand(p); p = p.parent(); }
-            fmTree->setCurrentIndex(treeIdx);
-            fmTree->scrollTo(treeIdx, QAbstractItemView::PositionAtCenter);
-        }
-    }
-
-    // Persist current path
-    QSettings s("AugmentCode", "KAssetManager");
-    s.setValue("FileManager/CurrentPath", path);
+    fmNavigateToPath(path, true);
 }
 
 // Forward declarations for file-type helpers used by File Manager handlers
 static bool isImageFile(const QString &ext);
 static bool isVideoFile(const QString &ext);
+
+// Helper function to get file type icon based on extension
+static QIcon getFileTypeIcon(const QString &ext) {
+    QString lower = ext.toLower();
+    if (lower == "pdf") return icoFilePdf();
+    if (lower == "csv") return icoFileCsv();
+    if (lower == "doc" || lower == "docx") return icoFileDoc();
+    if (lower == "xls" || lower == "xlsx") return icoFileXls();
+    if (lower == "txt" || lower == "log" || lower == "md") return icoFileTxt();
+    if (lower == "ai" || lower == "eps") return icoFileAi();
+    return icoFileGeneric();
+}
 
 void MainWindow::onFmItemDoubleClicked(const QModelIndex &index)
 {
@@ -3046,29 +3362,7 @@ void MainWindow::onFmItemDoubleClicked(const QModelIndex &index)
 
     QFileInfo fi(path);
     if (fi.isDir()) {
-            fmDirModel->setRootPath(path);
-        QModelIndex srcRoot = fmDirModel->index(path);
-        if (fmProxyModel) {
-            fmProxyModel->rebuildForRoot(path);
-            QModelIndex proxyRoot = fmProxyModel->mapFromSource(srcRoot);
-            fmGridView->setRootIndex(proxyRoot);
-            fmListView->setRootIndex(proxyRoot);
-        } else {
-            fmGridView->setRootIndex(srcRoot);
-            fmListView->setRootIndex(srcRoot);
-        }
-        // Sync folder tree selection/expansion
-        if (fmTree && fmTreeModel) {
-            QModelIndex treeIdx = fmTreeModel->index(path);
-            if (treeIdx.isValid()) {
-                QModelIndex p = treeIdx;
-                while (p.isValid()) { fmTree->expand(p); p = p.parent(); }
-                fmTree->setCurrentIndex(treeIdx);
-                fmTree->scrollTo(treeIdx, QAbstractItemView::PositionAtCenter);
-            }
-        }
-        QSettings s("AugmentCode", "KAssetManager");
-        s.setValue("FileManager/CurrentPath", path);
+        fmNavigateToPath(path, true);
         return;
     }
 
@@ -3230,31 +3524,54 @@ void MainWindow::onFmBackToParent()
         QWidget* fw = QApplication::focusWidget();
         if (fw && (qobject_cast<QLineEdit*>(fw) || fw->inherits("QTextEdit") || fw->inherits("QPlainTextEdit"))) return;
     }
+    onFmNavigateUp();
+}
+
+void MainWindow::onFmRefresh()
+{
     if (!fmDirModel) return;
+
+    // Get the current directory path
     QString currentPath = fmDirModel->rootPath();
-    if (currentPath.isEmpty()) return;
-    QDir dir(currentPath);
-    if (dir.cdUp()) {
-        const QString parentPath = dir.absolutePath();
-            fmDirModel->setRootPath(parentPath);
-        QModelIndex srcRoot = fmDirModel->index(parentPath);
-        if (fmProxyModel) {
-            fmProxyModel->rebuildForRoot(parentPath);
-            QModelIndex proxyRoot = fmProxyModel->mapFromSource(srcRoot);
-            if (fmGridView) fmGridView->setRootIndex(proxyRoot);
-            if (fmListView) fmListView->setRootIndex(proxyRoot);
-        } else {
-            if (fmGridView) fmGridView->setRootIndex(srcRoot);
-            if (fmListView) fmListView->setRootIndex(srcRoot);
+
+    if (currentPath.isEmpty()) {
+        // If no specific path is set, refresh the entire model
+        fmDirModel->setRootPath("");
+        if (fmTreeModel) {
+            fmTreeModel->setRootPath("");
         }
-        // select in tree if exists
-        if (fmTree && fmTreeModel) {
-            QModelIndex idx = fmTreeModel->index(parentPath);
-            if (idx.isValid()) fmTree->setCurrentIndex(idx);
-        }
-        QSettings s("AugmentCode", "KAssetManager");
-        s.setValue("FileManager/CurrentPath", parentPath);
+        statusBar()->showMessage("File Manager refreshed", 2000);
+        return;
     }
+
+    // Clear any cached thumbnails for this directory
+    LivePreviewManager::instance().clear();
+
+    // Force QFileSystemModel to re-read the directory
+    // We do this by temporarily setting a different root and then setting it back
+    QString tempPath = QDir::tempPath();
+    fmDirModel->setRootPath(tempPath);
+    fmDirModel->setRootPath(currentPath);
+
+    // Also refresh the tree model
+    if (fmTreeModel) {
+        fmTreeModel->setRootPath("");
+    }
+
+    // Rebuild proxy model if it exists
+    if (fmProxyModel) {
+        fmProxyModel->rebuildForRoot(currentPath);
+    }
+
+    // Force viewport updates
+    if (fmGridView) {
+        fmGridView->viewport()->update();
+    }
+    if (fmListView) {
+        fmListView->viewport()->update();
+    }
+
+    statusBar()->showMessage("Folder refreshed", 2000);
 }
 
 void MainWindow::onFmRename()
@@ -3353,21 +3670,7 @@ void MainWindow::onFmFavoriteActivated(QListWidgetItem* item)
     if (!item) return;
     QString path = item->data(Qt::UserRole).toString();
     if (path.isEmpty()) return;
-    QModelIndex idx = fmTreeModel->index(path);
-    if (idx.isValid()) fmTree->setCurrentIndex(idx);
-    fmDirModel->setRootPath(path);
-    QModelIndex srcRoot = fmDirModel->index(path);
-    if (fmProxyModel) {
-        fmProxyModel->rebuildForRoot(path);
-        QModelIndex proxyRoot = fmProxyModel->mapFromSource(srcRoot);
-        fmGridView->setRootIndex(proxyRoot);
-        fmListView->setRootIndex(proxyRoot);
-    } else {
-        fmGridView->setRootIndex(srcRoot);
-        fmListView->setRootIndex(srcRoot);
-    }
-    QSettings s("AugmentCode", "KAssetManager");
-    s.setValue("FileManager/CurrentPath", path);
+    fmNavigateToPath(path, true);
 }
 
 void MainWindow::loadFmFavorites()
@@ -3410,6 +3713,8 @@ void MainWindow::onFmShowContextMenu(const QPoint &pos)
     QWidget *senderW = qobject_cast<QWidget*>(sender());
     QPoint globalPos = senderW->mapToGlobal(pos);
     QMenu menu;
+    QAction *refreshA = menu.addAction("Refresh", this, &MainWindow::onFmRefresh, QKeySequence(Qt::Key_F5));
+    menu.addSeparator();
     QAction *copyA = menu.addAction("Copy", this, &MainWindow::onFmCopy, QKeySequence::Copy);
     QAction *cutA = menu.addAction("Cut", this, &MainWindow::onFmCut, QKeySequence::Cut);
     QAction *pasteA = menu.addAction("Paste", this, &MainWindow::onFmPaste, QKeySequence::Paste);
@@ -3422,6 +3727,11 @@ void MainWindow::onFmShowContextMenu(const QPoint &pos)
     QAction *addLibA = menu.addAction("Add to Asset Library", this, &MainWindow::onAddSelectionToAssetLibrary);
 
     QAction *favA = menu.addAction("Add to Favorites", this, &MainWindow::onFmAddToFavorites);
+
+    menu.addSeparator();
+    QAction *openInExplorerA = menu.addAction("Open in Explorer");
+    QAction *propertiesA = menu.addAction("Properties");
+    QAction *openWithA = menu.addAction("Open With...");
 
     // Enable/disable depending on selection
     QStringList selectedPaths = getSelectedFileManagerPaths(fmDirModel, fmGridView, fmListView, fmViewStack);
@@ -3437,8 +3747,43 @@ void MainWindow::onFmShowContextMenu(const QPoint &pos)
     addLibA->setEnabled(hasSel);
     favA->setEnabled(hasSel);
     createFolderWithSel->setEnabled(hasSel);
+    openInExplorerA->setEnabled(selCount == 1);
+    propertiesA->setEnabled(selCount == 1);
+    openWithA->setEnabled(selCount == 1);
 
-    menu.exec(globalPos);
+    QAction *chosen = menu.exec(globalPos);
+    if (!chosen) return;
+
+    // Handle new context menu actions
+    if (chosen == openInExplorerA && selCount == 1) {
+        QString path = selectedPaths.first();
+        // Use explorer.exe /select to open Explorer and select the file
+        QProcess::startDetached("explorer.exe", QStringList() << "/select," << QDir::toNativeSeparators(path));
+    } else if (chosen == propertiesA && selCount == 1) {
+        QString path = selectedPaths.first();
+        // Use Windows Shell API to show Properties dialog
+        #ifdef Q_OS_WIN
+        std::wstring wpath = path.toStdWString();
+        SHELLEXECUTEINFOW sei = { sizeof(sei) };
+        sei.lpVerb = L"properties";
+        sei.lpFile = wpath.c_str();
+        sei.nShow = SW_SHOW;
+        sei.fMask = SEE_MASK_INVOKEIDLIST;
+        ShellExecuteExW(&sei);
+        #endif
+    } else if (chosen == openWithA && selCount == 1) {
+        QString path = selectedPaths.first();
+        // Use Windows Shell API to show Open With dialog
+        #ifdef Q_OS_WIN
+        std::wstring wpath = path.toStdWString();
+        SHELLEXECUTEINFOW sei = { sizeof(sei) };
+        sei.lpVerb = L"openas";
+        sei.lpFile = wpath.c_str();
+        sei.nShow = SW_SHOW;
+        sei.fMask = SEE_MASK_INVOKEIDLIST;
+        ShellExecuteExW(&sei);
+        #endif
+    }
 
 }
 
@@ -3451,6 +3796,8 @@ void MainWindow::onFmTreeContextMenu(const QPoint &pos)
     if (path.isEmpty()) return;
 
     QMenu menu;
+    QAction *refreshA = menu.addAction("Refresh");
+    menu.addSeparator();
     QAction *copyA = menu.addAction("Copy");
     QAction *cutA = menu.addAction("Cut");
     QAction *pasteA = menu.addAction("Paste");
@@ -3468,7 +3815,9 @@ void MainWindow::onFmTreeContextMenu(const QPoint &pos)
     QAction *chosen = menu.exec(fmTree->viewport()->mapToGlobal(pos));
     if (!chosen) return;
 
-    if (chosen == copyA) {
+    if (chosen == refreshA) {
+        onFmRefresh();
+    } else if (chosen == copyA) {
         fmClipboard = getSelectedFmTreePaths();
         fmClipboardCutMode = false;
     } else if (chosen == cutA) {
@@ -3649,6 +3998,12 @@ void MainWindow::onFmViewModeToggled()
                 if (fmListView) fmListView->setRootIndex(srcRoot);
             }
         }
+    }
+
+    // Grid view always maintains ascending alphabetical sort with folders first
+    // regardless of List view's current sort order
+    if (fmIsGridMode && fmProxyModel) {
+        fmProxyModel->sort(0, Qt::AscendingOrder);
     }
 
     // Persist immediately
@@ -5320,9 +5675,39 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
         QWheelEvent *wheel = static_cast<QWheelEvent*>(event);
         const int delta = wheel->angleDelta().y();
         double factor = (delta > 0) ? 1.15 : 0.85;
-        if (fmImageView) fmImageView->scale(factor, factor);
-        // User performed manual zoom; stop auto-fit
-        fmImageFitToView = false;
+
+        if (fmImageView && fmImageItem && !fmImageItem->pixmap().isNull()) {
+            // Get current transform scale
+            QTransform currentTransform = fmImageView->transform();
+            double currentScale = currentTransform.m11(); // horizontal scale factor
+
+            // Apply zoom
+            fmImageView->scale(factor, factor);
+
+            // If zooming out (factor < 1.0), check if we should reset to fit-to-view
+            if (delta < 0) {
+                double newScale = currentScale * factor;
+
+                // Calculate what the fit-to-view scale would be
+                QRectF itemRect = fmImageItem->boundingRect();
+                QRectF viewRect = fmImageView->viewport()->rect();
+                double fitScale = qMin(viewRect.width() / itemRect.width(),
+                                      viewRect.height() / itemRect.height());
+
+                // If zoomed out beyond fit-to-view, reset to fit-to-view and center
+                if (newScale <= fitScale * 0.95) { // 0.95 threshold to avoid flickering
+                    fmImageScene->setSceneRect(fmImageItem->boundingRect());
+                    fmImageView->resetTransform();
+                    fmImageView->centerOn(fmImageItem);
+                    fmImageView->fitInView(fmImageItem, Qt::KeepAspectRatio);
+                    fmImageFitToView = true;
+                    return true;
+                }
+            }
+
+            // User performed manual zoom; stop auto-fit
+            fmImageFitToView = false;
+        }
         return true;
     }
     // Keep image fitted on view resize if auto-fit is active
@@ -6484,7 +6869,9 @@ void MainWindow::updateFmPreviewForIndex(const QModelIndex &idx)
         fmCurrentPreviewPath = path;
         fmImageItem->setPixmap(px);
         fmImageItem->setTransformationMode(Qt::SmoothTransformation);
+        fmImageScene->setSceneRect(fmImageItem->boundingRect());
         fmImageView->resetTransform();
+        fmImageView->centerOn(fmImageItem);
         fmImageView->fitInView(fmImageItem, Qt::KeepAspectRatio);
         fmImageFitToView = true;
         fmImageView->setBackgroundBrush(QColor("#0a0a0a"));
@@ -6555,7 +6942,9 @@ void MainWindow::updateFmPreviewForIndex(const QModelIndex &idx)
         }
         fmImageItem->setPixmap(QPixmap::fromImage(disp));
         fmImageItem->setTransformationMode(Qt::SmoothTransformation);
+        fmImageScene->setSceneRect(fmImageItem->boundingRect());
         fmImageView->resetTransform();
+        fmImageView->centerOn(fmImageItem);
         fmImageView->fitInView(fmImageItem, Qt::KeepAspectRatio);
         fmImageFitToView = true;
         fmImageView->setBackgroundBrush(QColor("#0a0a0a"));
@@ -7318,13 +7707,59 @@ void MainWindow::onFmGroupSequencesToggled(bool checked)
 {
     fmGroupSequences = checked;
     if (fmProxyModel) fmProxyModel->setGroupingEnabled(checked);
+    // Update LivePreviewManager to enable/disable sequence detection
+    LivePreviewManager::instance().setSequenceDetectionEnabled(checked);
+    // Update scrub controller to know about grouping state (for selective scrubbing)
+    if (fmScrubController) fmScrubController->setSequenceGroupingEnabled(checked);
+    // Clear the cache to force regeneration of thumbnails with new settings
+    LivePreviewManager::instance().clear();
     // Rebuild for current root
     if (fmDirModel && fmProxyModel) {
         QString rootPath = fmDirModel->rootPath();
         if (!rootPath.isEmpty()) fmProxyModel->rebuildForRoot(rootPath);
     }
+    // Force complete repaint of grid view to regenerate thumbnails
+    if (fmGridView) {
+        fmGridView->viewport()->update();
+        // Also schedule a delayed update to catch async thumbnail loads
+        QTimer::singleShot(100, fmGridView->viewport(), [this]() {
+            if (fmGridView) fmGridView->viewport()->update();
+        });
+        QTimer::singleShot(500, fmGridView->viewport(), [this]() {
+            if (fmGridView) fmGridView->viewport()->update();
+        });
+    }
     QSettings s("AugmentCode", "KAssetManager");
     s.setValue("FileManager/GroupSequences", checked);
+}
+
+void MainWindow::onFmHideFoldersToggled(bool checked)
+{
+    fmHideFolders = checked;
+    if (fmDirModel) {
+        // Preserve current path
+        QString currentPath = fmDirModel->rootPath();
+
+        // Update source model filter to hide/show folders in the listing
+        QDir::Filters filters = QDir::NoDotAndDotDot | (checked ? QDir::Files : QDir::AllEntries);
+        fmDirModel->setFilter(filters);
+
+        // Rebuild proxy and restore root
+        if (!currentPath.isEmpty()) {
+            QModelIndex srcRoot = fmDirModel->index(currentPath);
+            if (fmProxyModel) {
+                fmProxyModel->rebuildForRoot(currentPath);
+                QModelIndex proxyRoot = fmProxyModel->mapFromSource(srcRoot);
+                if (fmGridView) fmGridView->setRootIndex(proxyRoot);
+                if (fmListView) fmListView->setRootIndex(proxyRoot);
+            } else {
+                if (fmGridView) fmGridView->setRootIndex(srcRoot);
+                if (fmListView) fmListView->setRootIndex(srcRoot);
+            }
+        }
+    }
+    QSettings s("AugmentCode", "KAssetManager");
+    s.setValue("FileManager/HideFolders", checked);
 }
 
 QKeySequence MainWindow::fmShortcutFor(const QString& actionName, const QKeySequence& def)
@@ -7454,4 +7889,105 @@ void MainWindow::onEverythingImportRequested(const QStringList& paths)
     }
 
     statusBar()->showMessage(QString("Imported %1 file(s)").arg(successCount), 5000);
+}
+
+// File Manager Navigation Implementation
+void MainWindow::fmNavigateToPath(const QString& path, bool addToHistory)
+{
+    if (path.isEmpty() || !QFileInfo::exists(path)) return;
+
+    // Add current path to history before navigating (if requested)
+    if (addToHistory && fmDirModel) {
+        QString currentPath = fmDirModel->rootPath();
+        if (!currentPath.isEmpty() && currentPath != path) {
+            // Remove any forward history when navigating to a new location
+            while (fmNavigationIndex < fmNavigationHistory.size() - 1) {
+                fmNavigationHistory.removeLast();
+            }
+            // Add current path to history
+            fmNavigationHistory.append(currentPath);
+            fmNavigationIndex = fmNavigationHistory.size() - 1;
+        }
+    }
+
+    // Navigate to the new path
+    fmDirModel->setRootPath(path);
+    QModelIndex srcRoot = fmDirModel->index(path);
+    if (fmProxyModel) {
+        fmProxyModel->rebuildForRoot(path);
+        QModelIndex proxyRoot = fmProxyModel->mapFromSource(srcRoot);
+        fmGridView->setRootIndex(proxyRoot);
+        fmListView->setRootIndex(proxyRoot);
+    } else {
+        fmGridView->setRootIndex(srcRoot);
+        fmListView->setRootIndex(srcRoot);
+    }
+
+    // Scroll tree to show the current folder
+    fmScrollTreeToPath(path);
+
+    // Persist current path
+    QSettings s("AugmentCode", "KAssetManager");
+    s.setValue("FileManager/CurrentPath", path);
+
+    // Update navigation button states
+    fmUpdateNavigationButtons();
+}
+
+void MainWindow::fmScrollTreeToPath(const QString& path)
+{
+    if (!fmTree || !fmTreeModel || path.isEmpty()) return;
+
+    QModelIndex treeIdx = fmTreeModel->index(path);
+    if (treeIdx.isValid()) {
+        // Expand all parent folders
+        QModelIndex p = treeIdx.parent();
+        while (p.isValid()) {
+            fmTree->expand(p);
+            p = p.parent();
+        }
+        // Select and scroll to the folder
+        fmTree->setCurrentIndex(treeIdx);
+        fmTree->scrollTo(treeIdx, QAbstractItemView::PositionAtCenter);
+    }
+}
+
+void MainWindow::fmUpdateNavigationButtons()
+{
+    if (fmBackButton) {
+        fmBackButton->setEnabled(fmNavigationIndex > 0);
+    }
+    if (fmUpButton) {
+        QString currentPath = fmDirModel ? fmDirModel->rootPath() : QString();
+        if (!currentPath.isEmpty()) {
+            QDir dir(currentPath);
+            fmUpButton->setEnabled(dir.cdUp());
+        } else {
+            fmUpButton->setEnabled(false);
+        }
+    }
+}
+
+void MainWindow::onFmNavigateBack()
+{
+    if (fmNavigationIndex <= 0 || fmNavigationHistory.isEmpty()) return;
+
+    fmNavigationIndex--;
+    QString path = fmNavigationHistory[fmNavigationIndex];
+
+    // Navigate without adding to history
+    fmNavigateToPath(path, false);
+}
+
+void MainWindow::onFmNavigateUp()
+{
+    if (!fmDirModel) return;
+    QString currentPath = fmDirModel->rootPath();
+    if (currentPath.isEmpty()) return;
+
+    QDir dir(currentPath);
+    if (dir.cdUp()) {
+        QString parentPath = dir.absolutePath();
+        fmNavigateToPath(parentPath, true);
+    }
 }

@@ -68,6 +68,10 @@ public:
     void setMaxCacheEntries(int maxEntries);
     int maxCacheEntries() const;
 
+    // Enable/disable automatic sequence detection for File Manager
+    void setSequenceDetectionEnabled(bool enabled);
+    bool sequenceDetectionEnabled() const;
+
 signals:
     void frameReady(const QString& filePath, qreal position, QSize targetSize, const QPixmap& pixmap);
     void frameFailed(const QString& filePath, QString errorString);
@@ -82,7 +86,7 @@ private:
     static QImage loadImageFrame(const Request& request, QString& error);
     static QImage loadVideoFrame(const Request& request, QString& error);
     static QImage loadSequenceFrame(const Request& request, QString& error);
-    static bool isImageSequence(const QString& filePath);
+    bool isImageSequence(const QString& filePath) const;
     static QString sequenceHead(const QString& filePath);
     struct SequenceMeta;
     SequenceMeta sequenceMetaFor(const QString& filePath, QString& error);
@@ -124,4 +128,5 @@ private:
     int m_activeSequenceLoads = 0;
     int m_sequenceMetaLimit = 64;
     int m_sequenceQueueLimit = 24;
+    bool m_sequenceDetectionEnabled = true; // Default to enabled for backward compatibility
 };

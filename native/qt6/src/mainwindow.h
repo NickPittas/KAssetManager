@@ -117,6 +117,8 @@ private slots:
     void onFmAddToFavorites();
     void onFmRemoveFavorite();
     void onFmFavoriteActivated(QListWidgetItem* item);
+    void onFmNavigateBack();
+    void onFmNavigateUp();
 
     // File operations
     void onFmCopy();
@@ -130,7 +132,9 @@ private slots:
     void onFmCreateFolderWithSelected();
     void onFmShowContextMenu(const QPoint &pos);
     void onFmBackToParent();
+    void onFmRefresh();
     void onFmGroupSequencesToggled(bool checked);
+    void onFmHideFoldersToggled(bool checked);
 
     // Everything Search
     void onEverythingSearchAssetManager();
@@ -146,6 +150,9 @@ private:
     QString fmPathForIndex(const QModelIndex& idx) const;
     void releaseAnyPreviewLocksForPaths(const QStringList& paths);
     void updateFmInfoPanel();
+    void fmNavigateToPath(const QString& path, bool addToHistory = true);
+    void fmUpdateNavigationButtons();
+    void fmScrollTreeToPath(const QString& path);
 
 
 protected:
@@ -286,6 +293,9 @@ private:
     SequenceGroupingProxyModel *fmProxyModel = nullptr;
     QCheckBox *fmGroupSequencesCheckBox = nullptr;
     bool fmGroupSequences = true;
+    // Hide folders in grid view
+    QCheckBox *fmHideFoldersCheckBox = nullptr;
+    bool fmHideFolders = false;
 
     QSplitter *fmLeftSplitter;   // Favorites | Folder tree
     QSplitter *fmRightSplitter;  // Views | Preview+Info panels
@@ -297,6 +307,8 @@ private:
     // Right pane
     QFileSystemModel *fmDirModel;
     QWidget *fmToolbar;
+    QToolButton *fmBackButton;
+    QToolButton *fmUpButton;
     QToolButton *fmViewModeButton;
     class QSlider *fmThumbnailSizeSlider;
     QToolButton *fmPreviewToggleButton;
@@ -304,6 +316,10 @@ private:
     QListView *fmGridView;
     class QTableView *fmListView;
     bool fmIsGridMode;
+
+    // Navigation history
+    QStringList fmNavigationHistory;
+    int fmNavigationIndex = -1;
 
     // Favorites persistence
     QStringList fmFavorites;

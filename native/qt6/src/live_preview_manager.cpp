@@ -188,6 +188,19 @@ int LivePreviewManager::maxCacheEntries() const
     return m_maxCacheEntries;
 }
 
+void LivePreviewManager::setSequenceDetectionEnabled(bool enabled)
+{
+    QMutexLocker locker(&m_mutex);
+    m_sequenceDetectionEnabled = enabled;
+    qInfo() << "[LivePreview] Sequence detection" << (enabled ? "ENABLED" : "DISABLED");
+}
+
+bool LivePreviewManager::sequenceDetectionEnabled() const
+{
+    QMutexLocker locker(&m_mutex);
+    return m_sequenceDetectionEnabled;
+}
+
 QString LivePreviewManager::makeCacheKey(const QString& filePath, const QSize& targetSize, qreal position) const
 {
     return QStringLiteral("%1|%2x%3|%4")
@@ -199,7 +212,13 @@ QString LivePreviewManager::makeCacheKey(const QString& filePath, const QSize& t
 
 void LivePreviewManager::enqueueDecode(const Request& request, const QString& cacheKey)
 {
-    if (isImageSequence(request.filePath)) {
+    bool seqDetectionEnabled = false;
+    {
+        QMutexLocker locker(&m_mutex);
+        seqDetectionEnabled = m_sequenceDetectionEnabled;
+    }
+
+    if (seqDetectionEnabled && isImageSequence(request.filePath)) {
         enqueueSequenceDecode(request, cacheKey);
         return;
     }
@@ -239,14 +258,23 @@ void LivePreviewManager::enqueueSequenceDecode(const Request& request, const QSt
 
 void LivePreviewManager::startDecodeTask(const Request& request, const QString& cacheKey, bool fromSequenceQueue)
 {
-    auto future = QtConcurrent::run([this, request, cacheKey, fromSequenceQueue]() {
+    // Capture sequence detection state at the time of task creation
+    bool seqDetectionEnabled = false;
+    {
+        QMutexLocker locker(&m_mutex);
+        seqDetectionEnabled = m_sequenceDetectionEnabled;
+    }
+
+    auto future = QtConcurrent::run([this, request, cacheKey, fromSequenceQueue, seqDetectionEnabled]() {
         QString error;
         QImage image;
 
-        const bool treatAsSequence = fromSequenceQueue || isImageSequence(request.filePath);
+        const bool treatAsSequence = fromSequenceQueue || (seqDetectionEnabled && isImageSequence(request.filePath));
         if (treatAsSequence) {
+            qDebug() << "[LivePreview] Loading as SEQUENCE:" << request.filePath << "seqDetection=" << seqDetectionEnabled;
             image = loadSequenceFrame(request, error);
         } else {
+            qDebug() << "[LivePreview] Loading as INDIVIDUAL:" << request.filePath << "seqDetection=" << seqDetectionEnabled;
             QFileInfo info(request.filePath);
             const QString suffix = info.suffix().toLower();
             if (isImageExtension(suffix) || isHdrExtension(suffix)) {
@@ -322,7 +350,7 @@ void LivePreviewManager::storeFrame(const QString& key, const QPixmap& pixmap, q
     m_cache.insert(key, entry);
 }
 
-bool LivePreviewManager::isImageSequence(const QString& filePath)
+bool LivePreviewManager::isImageSequence(const QString& filePath) const
 {
     QFileInfo info(filePath);
     const QString suffix = info.suffix().toLower();
@@ -520,6 +548,11 @@ QImage LivePreviewManager::loadSequenceFrame(const Request& request, QString& er
 
     Request frameRequest = request;
     frameRequest.filePath = meta.frames.at(frameIndex);
+
+    qDebug() << "[LivePreview] Sequence load: requested=" << request.filePath
+             << "position=" << request.position
+             << "frameIndex=" << frameIndex
+             << "actualFile=" << frameRequest.filePath;
 
     QString frameError;
     QImage image = loadImageFrame(frameRequest, frameError);
