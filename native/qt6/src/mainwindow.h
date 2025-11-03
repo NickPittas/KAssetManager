@@ -145,6 +145,7 @@ private slots:
 private:
     QString fmPathForIndex(const QModelIndex& idx) const;
     void releaseAnyPreviewLocksForPaths(const QStringList& paths);
+    void updateFmInfoPanel();
 
 
 protected:
@@ -287,7 +288,8 @@ private:
     bool fmGroupSequences = true;
 
     QSplitter *fmLeftSplitter;   // Favorites | Folder tree
-    QSplitter *fmRightSplitter;  // Views | Preview panel
+    QSplitter *fmRightSplitter;  // Views | Preview+Info panels
+    QSplitter *fmPreviewInfoSplitter; // Preview | Info (vertical)
     // Left pane
     QListWidget *fmFavoritesList;
     QTreeView *fmTree;
@@ -344,6 +346,17 @@ private:
     QSlider *fmPositionSlider;
     QLabel *fmTimeLabel;
     QSlider *fmVolumeSlider;
+
+    // Info panel (embedded, right side)
+    QWidget *fmInfoPanel = nullptr;
+    QLabel *fmInfoFileName = nullptr;
+    QLabel *fmInfoFilePath = nullptr;
+    QLabel *fmInfoFileSize = nullptr;
+    QLabel *fmInfoFileType = nullptr;
+    QLabel *fmInfoDimensions = nullptr;
+    QLabel *fmInfoCreated = nullptr;
+    QLabel *fmInfoModified = nullptr;
+    QLabel *fmInfoPermissions = nullptr;
 
     // File operations state
     QStringList fmClipboard;

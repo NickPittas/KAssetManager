@@ -2651,10 +2651,91 @@ void MainWindow::setupFileManagerUi()
 
     fmVolumeSlider->hide();
 
+    // Info panel (similar to Asset Manager's info panel)
+    fmInfoPanel = new QWidget(fmRightSplitter);
+    fmInfoPanel->setMinimumWidth(260);
+    fmInfoPanel->setStyleSheet("background-color:#121212; border-left:1px solid #222;");
+    QVBoxLayout *infoPanelLayout = new QVBoxLayout(fmInfoPanel);
+    infoPanelLayout->setContentsMargins(0, 0, 0, 0);
+    infoPanelLayout->setSpacing(0);
+
+    QLabel *infoTitle = new QLabel("File Info", fmInfoPanel);
+    infoTitle->setStyleSheet("font-size: 14px; font-weight: bold; color: #ffffff; padding: 8px; background-color: #1a1a1a;");
+    infoPanelLayout->addWidget(infoTitle);
+
+    // Scrollable area for metadata
+    QScrollArea *infoScrollArea = new QScrollArea(fmInfoPanel);
+    infoScrollArea->setWidgetResizable(true);
+    infoScrollArea->setFrameShape(QFrame::NoFrame);
+    infoScrollArea->setStyleSheet("QScrollArea { background-color: #121212; border: none; }");
+
+    QWidget *infoScrollWidget = new QWidget();
+    QVBoxLayout *infoLayout = new QVBoxLayout(infoScrollWidget);
+    infoLayout->setContentsMargins(8, 8, 8, 8);
+    infoLayout->setSpacing(4);
+
+    fmInfoFileName = new QLabel("No selection", fmInfoPanel);
+    fmInfoFileName->setStyleSheet("color: #ffffff; margin-top: 4px; font-weight: bold;");
+    fmInfoFileName->setWordWrap(true);
+    infoLayout->addWidget(fmInfoFileName);
+
+    fmInfoFilePath = new QLabel("", fmInfoPanel);
+    fmInfoFilePath->setStyleSheet("color: #999; font-size: 10px;");
+    fmInfoFilePath->setWordWrap(true);
+    infoLayout->addWidget(fmInfoFilePath);
+
+    // Add separator
+    QFrame *separator1 = new QFrame(fmInfoPanel);
+    separator1->setFrameShape(QFrame::HLine);
+    separator1->setStyleSheet("background-color: #333;");
+    separator1->setFixedHeight(1);
+    infoLayout->addWidget(separator1);
+
+    fmInfoFileSize = new QLabel("", fmInfoPanel);
+    fmInfoFileSize->setStyleSheet("color: #ccc; font-size: 11px;");
+    fmInfoFileSize->setWordWrap(true);
+    infoLayout->addWidget(fmInfoFileSize);
+
+    fmInfoFileType = new QLabel("", fmInfoPanel);
+    fmInfoFileType->setStyleSheet("color: #ccc; font-size: 11px;");
+    fmInfoFileType->setWordWrap(true);
+    infoLayout->addWidget(fmInfoFileType);
+
+    fmInfoDimensions = new QLabel("", fmInfoPanel);
+    fmInfoDimensions->setStyleSheet("color: #ccc; font-size: 11px;");
+    fmInfoDimensions->setWordWrap(true);
+    infoLayout->addWidget(fmInfoDimensions);
+
+    fmInfoCreated = new QLabel("", fmInfoPanel);
+    fmInfoCreated->setStyleSheet("color: #ccc; font-size: 11px;");
+    fmInfoCreated->setWordWrap(true);
+    infoLayout->addWidget(fmInfoCreated);
+
+    fmInfoModified = new QLabel("", fmInfoPanel);
+    fmInfoModified->setStyleSheet("color: #ccc; font-size: 11px;");
+    fmInfoModified->setWordWrap(true);
+    infoLayout->addWidget(fmInfoModified);
+
+    fmInfoPermissions = new QLabel("", fmInfoPanel);
+    fmInfoPermissions->setStyleSheet("color: #ccc; font-size: 11px;");
+    fmInfoPermissions->setWordWrap(true);
+    infoLayout->addWidget(fmInfoPermissions);
+
+    infoLayout->addStretch();
+    infoScrollWidget->setLayout(infoLayout);
+    infoScrollArea->setWidget(infoScrollWidget);
+    infoPanelLayout->addWidget(infoScrollArea);
+
+    // Create vertical splitter for Preview | Info
+    fmPreviewInfoSplitter = new QSplitter(Qt::Vertical, fmRightSplitter);
+    fmPreviewInfoSplitter->addWidget(fmPreviewPanel);
+    fmPreviewInfoSplitter->addWidget(fmInfoPanel);
+    fmPreviewInfoSplitter->setStretchFactor(0, 2);
+    fmPreviewInfoSplitter->setStretchFactor(1, 1);
 
     // Assemble right side
     fmRightSplitter->addWidget(viewContainer);
-    fmRightSplitter->addWidget(fmPreviewPanel);
+    fmRightSplitter->addWidget(fmPreviewInfoSplitter);
     fmRightSplitter->setStretchFactor(0, 3);
     fmRightSplitter->setStretchFactor(1, 1);
     rightLayout->addWidget(fmRightSplitter);
@@ -2794,6 +2875,15 @@ void MainWindow::setupFileManagerUi()
             s.sync();
         });
     }
+    if (fmPreviewInfoSplitter) {
+        connect(fmPreviewInfoSplitter, &QSplitter::splitterMoved, this, [this](int, int){
+            QSettings s("AugmentCode", "KAssetManager");
+            s.setValue("FileManager/PreviewInfoSplitter", fmPreviewInfoSplitter->saveState());
+            QVariantList sizes; for (int v : fmPreviewInfoSplitter->sizes()) sizes << v;
+            s.setValue("FileManager/PreviewInfoSplitterSizes", sizes);
+            s.sync();
+        });
+    }
 
     // Restore persisted workspace for File Manager (after widgets are shown)
     QTimer::singleShot(0, this, [this]{
@@ -2808,7 +2898,7 @@ void MainWindow::setupFileManagerUi()
         if (s.contains("FileManager/PreviewVisible")) {
             bool vis = s.value("FileManager/PreviewVisible").toBool();
             if (fmPreviewToggleButton) fmPreviewToggleButton->setChecked(vis);
-            if (fmPreviewPanel) fmPreviewPanel->setVisible(vis);
+            if (fmPreviewInfoSplitter) fmPreviewInfoSplitter->setVisible(vis);
         }
         // Group sequences toggle
         fmGroupSequences = s.value("FileManager/GroupSequences", true).toBool();
@@ -2819,6 +2909,7 @@ void MainWindow::setupFileManagerUi()
         if (fmSplitter && s.contains("FileManager/MainSplitter")) fmSplitter->restoreState(s.value("FileManager/MainSplitter").toByteArray());
         if (fmLeftSplitter && s.contains("FileManager/LeftSplitter")) fmLeftSplitter->restoreState(s.value("FileManager/LeftSplitter").toByteArray());
         if (fmRightSplitter && s.contains("FileManager/RightSplitter")) fmRightSplitter->restoreState(s.value("FileManager/RightSplitter").toByteArray());
+        if (fmPreviewInfoSplitter && s.contains("FileManager/PreviewInfoSplitter")) fmPreviewInfoSplitter->restoreState(s.value("FileManager/PreviewInfoSplitter").toByteArray());
         // Fallback: explicit sizes if present
         auto applySizes = [](QSplitter* sp, const QVariant& v) {
             if (!sp) return;
@@ -2831,6 +2922,7 @@ void MainWindow::setupFileManagerUi()
         applySizes(fmSplitter, s.value("FileManager/MainSplitterSizes"));
         applySizes(fmLeftSplitter, s.value("FileManager/LeftSplitterSizes"));
         applySizes(fmRightSplitter, s.value("FileManager/RightSplitterSizes"));
+        applySizes(fmPreviewInfoSplitter, s.value("FileManager/PreviewInfoSplitterSizes"));
 
         // Headers
         if (fmListView && fmListView->model()) {
@@ -3571,7 +3663,8 @@ void MainWindow::onFmThumbnailSizeChanged(int size)
         fmGridView->setIconSize(QSize(size, size));
         fmGridView->setGridSize(QSize(size + 24, size + 40));
         if (auto *d = dynamic_cast<FmItemDelegate*>(fmGridView->itemDelegate())) d->setThumbnailSize(size);
-        fmGridView->reset();
+        // Trigger viewport update without resetting view state (which would clear root index)
+        fmGridView->viewport()->update();
     }
     QSettings s("AugmentCode", "KAssetManager");
     s.setValue("FileManager/GridThumbSize", size);
@@ -6802,13 +6895,14 @@ void MainWindow::onFmSelectionChanged()
         if (!sel.isEmpty()) idx = sel.first();
     }
     updateFmPreviewForIndex(idx);
+    updateFmInfoPanel();
 }
 
 void MainWindow::onFmTogglePreview()
 {
-    if (!fmPreviewPanel) return;
-    const bool show = fmPreviewToggleButton ? fmPreviewToggleButton->isChecked() : !fmPreviewPanel->isVisible();
-    fmPreviewPanel->setVisible(show);
+    if (!fmPreviewInfoSplitter) return;
+    const bool show = fmPreviewToggleButton ? fmPreviewToggleButton->isChecked() : !fmPreviewInfoSplitter->isVisible();
+    fmPreviewInfoSplitter->setVisible(show);
     if (!show) {
         if (fmMediaPlayer) { fmMediaPlayer->stop(); fmMediaPlayer->setSource(QUrl()); }
     } else {
@@ -6817,6 +6911,233 @@ void MainWindow::onFmTogglePreview()
     // Persist immediately
     QSettings s("AugmentCode", "KAssetManager");
     s.setValue("FileManager/PreviewVisible", show);
+}
+
+void MainWindow::updateFmInfoPanel()
+{
+    if (!fmInfoPanel || !fmInfoPanel->isVisible()) return;
+
+    // Get current selection
+    QModelIndex idx;
+    if (fmGridView && fmGridView->hasFocus()) {
+        idx = fmGridView->currentIndex();
+    } else if (fmListView && fmListView->hasFocus()) {
+        idx = fmListView->currentIndex();
+    }
+    if (!idx.isValid()) {
+        auto sel = fmGridView->selectionModel()->selectedIndexes();
+        if (!sel.isEmpty()) idx = sel.first();
+    }
+    if (!idx.isValid()) {
+        auto sel = fmListView->selectionModel()->selectedIndexes();
+        if (!sel.isEmpty()) idx = sel.first();
+    }
+
+    if (!idx.isValid()) {
+        // No selection - clear info panel
+        if (fmInfoFileName) fmInfoFileName->setText("No selection");
+        if (fmInfoFilePath) fmInfoFilePath->clear();
+        if (fmInfoFileSize) fmInfoFileSize->clear();
+        if (fmInfoFileType) fmInfoFileType->clear();
+        if (fmInfoDimensions) fmInfoDimensions->clear();
+        if (fmInfoCreated) fmInfoCreated->clear();
+        if (fmInfoModified) fmInfoModified->clear();
+        if (fmInfoPermissions) fmInfoPermissions->clear();
+        return;
+    }
+
+    // Map to source model if using proxy
+    QModelIndex srcIdx = idx;
+    if (fmProxyModel && idx.model() == fmProxyModel) {
+        srcIdx = fmProxyModel->mapToSource(idx);
+    }
+
+    // Get file path from model
+    QString filePath = fmDirModel ? fmDirModel->filePath(srcIdx) : QString();
+    if (filePath.isEmpty()) return;
+
+    QFileInfo fileInfo(filePath);
+    if (!fileInfo.exists()) return;
+
+    // Update file name
+    if (fmInfoFileName) {
+        fmInfoFileName->setText(fileInfo.fileName());
+    }
+
+    // Update file path
+    if (fmInfoFilePath) {
+        fmInfoFilePath->setText(fileInfo.absoluteFilePath());
+    }
+
+    // Update file size
+    if (fmInfoFileSize) {
+        qint64 fileSize = fileInfo.size();
+        QString sizeStr;
+        if (fileSize < 1024) {
+            sizeStr = QString::number(fileSize) + " B";
+        } else if (fileSize < 1024 * 1024) {
+            sizeStr = QString::number(fileSize / 1024.0, 'f', 1) + " KB";
+        } else if (fileSize < 1024 * 1024 * 1024) {
+            sizeStr = QString::number(fileSize / (1024.0 * 1024.0), 'f', 1) + " MB";
+        } else {
+            sizeStr = QString::number(fileSize / (1024.0 * 1024.0 * 1024.0), 'f', 2) + " GB";
+        }
+        fmInfoFileSize->setText("Size: " + sizeStr);
+    }
+
+    // Update file type
+    if (fmInfoFileType) {
+        QString fileType = fileInfo.suffix();
+        fmInfoFileType->setText("Type: " + fileType.toUpper());
+    }
+
+    // Update dimensions for images and videos
+    if (fmInfoDimensions) {
+        QString dimensionsStr;
+        QString ext = fileInfo.suffix().toLower();
+
+        QStringList imageExts = {"jpg", "jpeg", "png", "gif", "bmp", "tiff", "tif", "webp",
+                                 "exr", "hdr", "psd", "psb", "tga", "dng", "cr2", "cr3",
+                                 "nef", "arw", "orf", "rw2", "pef", "srw", "raf", "raw"};
+
+        if (imageExts.contains(ext)) {
+            QImageReader reader(filePath);
+            if (reader.canRead()) {
+                QSize size = reader.size();
+                QString format = reader.format();
+                dimensionsStr = QString("Dimensions: %1 x %2 (%3)")
+                    .arg(size.width()).arg(size.height()).arg(QString(format).toUpper());
+            } else {
+                dimensionsStr = "Dimensions: Unable to read";
+            }
+        } else {
+            QStringList videoExts = {"mp4", "mov", "avi", "mkv", "wmv", "flv", "webm",
+                                    "m4v", "mpg", "mpeg", "3gp", "mts", "m2ts"};
+            if (videoExts.contains(ext)) {
+                // Extract video metadata using QMediaPlayer
+                QMediaPlayer tempPlayer;
+                QAudioOutput tempAudio;
+                tempPlayer.setAudioOutput(&tempAudio);
+                tempPlayer.setSource(QUrl::fromLocalFile(filePath));
+
+                // Wait briefly for metadata to load
+                QEventLoop loop;
+                QTimer timeout;
+                timeout.setSingleShot(true);
+                timeout.setInterval(1000); // 1 second timeout
+
+                bool metadataLoaded = false;
+                connect(&tempPlayer, &QMediaPlayer::metaDataChanged, &loop, [&]() {
+                    metadataLoaded = true;
+                    loop.quit();
+                });
+                connect(&tempPlayer, &QMediaPlayer::mediaStatusChanged, &loop, [&](QMediaPlayer::MediaStatus status) {
+                    if (status == QMediaPlayer::LoadedMedia) {
+                        metadataLoaded = true;
+                        loop.quit();
+                    }
+                });
+                connect(&timeout, &QTimer::timeout, &loop, &QEventLoop::quit);
+
+                timeout.start();
+                loop.exec();
+
+                QStringList videoInfo;
+
+                // Try to get codec information from all available metadata
+                QMediaMetaData metadata = tempPlayer.metaData();
+
+                // Video codec
+                QString videoCodec;
+                if (metadata.value(QMediaMetaData::VideoCodec).isValid()) {
+                    videoCodec = metadata.value(QMediaMetaData::VideoCodec).toString();
+                }
+                if (videoCodec.isEmpty() && metadata.stringValue(QMediaMetaData::VideoCodec).length() > 0) {
+                    videoCodec = metadata.stringValue(QMediaMetaData::VideoCodec);
+                }
+                // Treat "UNSPECIFIED" / "UNKNOWN" as missing
+                if (!videoCodec.isEmpty()) {
+                    const QString vc = videoCodec.trimmed();
+                    if (vc.compare("UNSPECIFIED", Qt::CaseInsensitive) == 0 ||
+                        vc.compare("UNKNOWN", Qt::CaseInsensitive) == 0) {
+                        videoCodec.clear();
+                    }
+                }
+
+                // Resolution
+                bool hasResolution = false;
+                QSize resolution;
+                QVariant resVar = metadata.value(QMediaMetaData::Resolution);
+                if (resVar.isValid() && resVar.canConvert<QSize>()) {
+                    resolution = resVar.toSize();
+                    if (resolution.width() > 0 && resolution.height() > 0) {
+                        hasResolution = true;
+                    }
+                }
+
+                // FFmpeg probing for reliable codecs, profiles, and details
+#ifdef HAVE_FFMPEG
+                MediaInfo::VideoMetadata ff;
+                QString ffErr;
+                if (MediaInfo::probeVideoFile(filePath, ff, &ffErr)) {
+                    // Fill missing resolution
+                    if (!hasResolution && ff.width > 0 && ff.height > 0) {
+                        resolution = QSize(ff.width, ff.height);
+                        hasResolution = true;
+                    }
+                    // Use FFmpeg codec if Qt didn't provide one
+                    if (videoCodec.isEmpty() && !ff.videoCodec.isEmpty()) {
+                        videoCodec = ff.videoCodec;
+                    }
+                    // Append profile if available
+                    if (!ff.videoProfile.isEmpty()) {
+                        videoCodec = QString("%1 %2").arg(videoCodec, ff.videoProfile);
+                    }
+                }
+#endif
+
+                // Build dimensions string: "Resolution Codec" format
+                if (hasResolution && !videoCodec.isEmpty()) {
+                    dimensionsStr = QString("%1x%2 %3")
+                        .arg(resolution.width())
+                        .arg(resolution.height())
+                        .arg(videoCodec.toUpper());
+                } else if (hasResolution) {
+                    dimensionsStr = QString("%1x%2")
+                        .arg(resolution.width())
+                        .arg(resolution.height());
+                } else if (!videoCodec.isEmpty()) {
+                    dimensionsStr = QString("Video: %1").arg(videoCodec.toUpper());
+                } else {
+                    dimensionsStr = "Video file";
+                }
+            }
+        }
+
+        fmInfoDimensions->setText(dimensionsStr);
+    }
+
+    // Update created date
+    if (fmInfoCreated) {
+        QDateTime created = fileInfo.birthTime();
+        if (!created.isValid()) created = fileInfo.metadataChangeTime();
+        fmInfoCreated->setText("Created: " + created.toString("yyyy-MM-dd hh:mm:ss"));
+    }
+
+    // Update modified date
+    if (fmInfoModified) {
+        QDateTime modified = fileInfo.lastModified();
+        fmInfoModified->setText("Modified: " + modified.toString("yyyy-MM-dd hh:mm:ss"));
+    }
+
+    // Update permissions
+    if (fmInfoPermissions) {
+        QStringList perms;
+        if (fileInfo.isReadable()) perms << "Read";
+        if (fileInfo.isWritable()) perms << "Write";
+        if (fileInfo.isExecutable()) perms << "Execute";
+        fmInfoPermissions->setText("Permissions: " + perms.join(", "));
+    }
 }
 
 void MainWindow::onFmOpenOverlay()
@@ -6954,8 +7275,12 @@ void MainWindow::closeEvent(QCloseEvent* event)
         s.setValue("FileManager/RightSplitter", fmRightSplitter->saveState());
         QVariantList sizes; for (int v : fmRightSplitter->sizes()) sizes << v; s.setValue("FileManager/RightSplitterSizes", sizes);
     }
+    if (fmPreviewInfoSplitter) {
+        s.setValue("FileManager/PreviewInfoSplitter", fmPreviewInfoSplitter->saveState());
+        QVariantList sizes; for (int v : fmPreviewInfoSplitter->sizes()) sizes << v; s.setValue("FileManager/PreviewInfoSplitterSizes", sizes);
+    }
     s.setValue("FileManager/ViewMode", fmIsGridMode);
-    if (fmPreviewPanel) s.setValue("FileManager/PreviewVisible", fmPreviewPanel->isVisible());
+    if (fmPreviewInfoSplitter) s.setValue("FileManager/PreviewVisible", fmPreviewInfoSplitter->isVisible());
     s.setValue("FileManager/GroupSequences", fmGroupSequences);
     if (fmListView && fmListView->model()) {
         auto hh = fmListView->horizontalHeader();
