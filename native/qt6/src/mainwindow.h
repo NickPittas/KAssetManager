@@ -132,6 +132,10 @@ private slots:
     void onFmBackToParent();
     void onFmGroupSequencesToggled(bool checked);
 
+    // Everything Search
+    void onEverythingSearchAssetManager();
+    void onEverythingSearchFileManager();
+    void onEverythingImportRequested(const QStringList& paths);
 
     // File Manager preview
     void onFmSelectionChanged();
@@ -140,7 +144,6 @@ private slots:
     void changeFmPreview(int delta); // Navigate in File Manager overlay
 private:
     QString fmPathForIndex(const QModelIndex& idx) const;
-    void setFmRootPath(const QString& path);
     void releaseAnyPreviewLocksForPaths(const QStringList& paths);
 
 

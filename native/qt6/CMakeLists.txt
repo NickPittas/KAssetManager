@@ -165,6 +165,8 @@ qt_add_executable(kassetmanagerqt WIN32
     src/bulk_rename_dialog.cpp
     src/everything_search.h
     src/everything_search.cpp
+    src/everything_search_dialog.h
+    src/everything_search_dialog.cpp
     ${APP_RESOURCES}
 )
 

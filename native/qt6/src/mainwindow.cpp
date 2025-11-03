@@ -22,6 +22,7 @@
 #include "database_health_agent.h"
 #include "database_health_dialog.h"
 #include "bulk_rename_dialog.h"
+#include "everything_search_dialog.h"
 
 #include "office_preview.h"
 
@@ -1588,6 +1589,15 @@ void MainWindow::setupUi()
     connect(refreshButton, &QPushButton::clicked, this, &MainWindow::onRefreshAssets);
     toolbarLayout->addWidget(refreshButton);
 
+    // Everything Search button
+    QPushButton* searchButton = new QPushButton(this);
+    searchButton->setIcon(style()->standardIcon(QStyle::SP_FileDialogContentsView));
+    searchButton->setToolTip("Everything Search - Search entire disk");
+    searchButton->setFixedSize(28, 28);
+    searchButton->setFlat(true);
+    searchButton->setStyleSheet("QPushButton{background:transparent;border:none;}");
+    connect(searchButton, &QPushButton::clicked, this, &MainWindow::onEverythingSearchAssetManager);
+    toolbarLayout->addWidget(searchButton);
 
     centerLayout->addWidget(toolbar);
 
@@ -2267,6 +2277,15 @@ void MainWindow::setupFileManagerUi()
     fmGroupSequencesCheckBox->setStyleSheet("QCheckBox { color:#9aa0a6; } QCheckBox::indicator { width: 16px; height: 16px; }");
     connect(fmGroupSequencesCheckBox, &QCheckBox::toggled, this, &MainWindow::onFmGroupSequencesToggled);
     tb->addWidget(fmGroupSequencesCheckBox);
+
+    // Everything Search button
+    QToolButton* fmSearchButton = new QToolButton(fmToolbar);
+    fmSearchButton->setIcon(style()->standardIcon(QStyle::SP_FileDialogContentsView));
+    fmSearchButton->setToolTip("Everything Search - Search entire disk");
+    fmSearchButton->setAutoRaise(true);
+    fmSearchButton->setIconSize(QSize(20,20));
+    connect(fmSearchButton, &QToolButton::clicked, this, &MainWindow::onEverythingSearchFileManager);
+    tb->addWidget(fmSearchButton);
 
     fmPreviewToggleButton = new QToolButton(fmToolbar);
     fmPreviewToggleButton->setIcon(icoEye());
@@ -6994,4 +7013,117 @@ void MainWindow::showDatabaseHealthDialog()
 {
     DatabaseHealthDialog dialog(this);
     dialog.exec();
+}
+
+void MainWindow::onEverythingSearchAssetManager()
+{
+    EverythingSearchDialog dialog(EverythingSearchDialog::AssetManagerMode, this);
+    connect(&dialog, &EverythingSearchDialog::importRequested, this, &MainWindow::onEverythingImportRequested);
+    dialog.exec();
+}
+
+void MainWindow::onEverythingSearchFileManager()
+{
+    EverythingSearchDialog dialog(EverythingSearchDialog::FileManagerMode, this);
+    if (dialog.exec() == QDialog::Accepted) {
+        QStringList selectedPaths = dialog.getSelectedPaths();
+        if (!selectedPaths.isEmpty() && fmDirModel) {
+            // Navigate to the first selected file's directory
+            QString firstPath = selectedPaths.first();
+            QFileInfo fi(firstPath);
+            if (fi.exists()) {
+                QString dirPath = fi.absolutePath();
+
+                // Set the root path in the file manager
+                fmDirModel->setRootPath(dirPath);
+                QModelIndex srcRoot = fmDirModel->index(dirPath);
+                if (fmProxyModel) {
+                    fmProxyModel->rebuildForRoot(dirPath);
+                    QModelIndex proxyRoot = fmProxyModel->mapFromSource(srcRoot);
+                    if (fmGridView) fmGridView->setRootIndex(proxyRoot);
+                    if (fmListView) fmListView->setRootIndex(proxyRoot);
+                }
+
+                // Update tree selection
+                if (fmTreeModel && fmTree) {
+                    QModelIndex idx = fmTreeModel->index(dirPath);
+                    if (idx.isValid()) fmTree->setCurrentIndex(idx);
+                }
+
+                // Select the files in the view
+                QTimer::singleShot(100, this, [this, selectedPaths]() {
+                    // TODO: Select the files in fmGridView/fmListView
+                    statusBar()->showMessage(QString("Found %1 file(s)").arg(selectedPaths.size()), 3000);
+                });
+            }
+        }
+    }
+}
+
+void MainWindow::onEverythingImportRequested(const QStringList& paths)
+{
+    if (paths.isEmpty()) {
+        return;
+    }
+
+    // Import files into the asset library
+    int successCount = 0;
+    int failCount = 0;
+
+    QProgressDialog progress("Importing files...", "Cancel", 0, paths.size(), this);
+    progress.setWindowModality(Qt::WindowModal);
+    progress.setMinimumDuration(0);
+
+    for (int i = 0; i < paths.size(); ++i) {
+        if (progress.wasCanceled()) {
+            break;
+        }
+
+        progress.setValue(i);
+        progress.setLabelText(QString("Importing %1 of %2:\n%3")
+            .arg(i + 1)
+            .arg(paths.size())
+            .arg(QFileInfo(paths[i]).fileName()));
+
+        QApplication::processEvents();
+
+        // Import the file
+        QString filePath = paths[i];
+        QFileInfo fi(filePath);
+
+        if (fi.exists() && fi.isFile()) {
+            // Get or create root folder
+            int rootFolderId = DB::instance().ensureRootFolder();
+
+            // Add asset to database using fast metadata insert
+            int assetId = DB::instance().insertAssetMetadataFast(filePath, rootFolderId);
+            if (assetId > 0) {
+                successCount++;
+            } else {
+                failCount++;
+            }
+        } else {
+            failCount++;
+        }
+    }
+
+    progress.setValue(paths.size());
+
+    // Refresh asset view
+    if (assetsModel) {
+        assetsModel->reload();
+    }
+
+    // Show result
+    QString message = QString("Import complete:\n%1 succeeded, %2 failed")
+        .arg(successCount)
+        .arg(failCount);
+
+    if (successCount > 0) {
+        QMessageBox::information(this, "Import Complete", message);
+    } else {
+        QMessageBox::warning(this, "Import Failed", message);
+    }
+
+    statusBar()->showMessage(QString("Imported %1 file(s)").arg(successCount), 5000);
 }
