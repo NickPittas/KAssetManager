@@ -3,6 +3,7 @@
 #include <QFileInfo>
 #include <QDir>
 #include <QDebug>
+#include <QCoreApplication>
 #include <windows.h>
 
 // Everything SDK function pointer typedefs
@@ -90,25 +91,38 @@ bool EverythingSearch::initialize() {
 }
 
 bool EverythingSearch::loadDLL() {
+    // Get application directory
+    QString appDir = QCoreApplication::applicationDirPath();
+
     // Try to load Everything64.dll from multiple locations
     QStringList searchPaths = {
+        appDir + "/Everything64.dll",                // Application directory (FIRST!)
         "Everything64.dll",                          // Current directory
-        "Everything.dll",                            // 32-bit fallback
         QDir::currentPath() + "/Everything64.dll",  // Explicit current path
+        appDir + "/Everything.dll",                  // 32-bit in app dir
+        "Everything.dll",                            // 32-bit fallback
         "third_party/everything/Everything64.dll",   // Third-party directory
         "C:/Program Files/Everything/Everything64.dll" // Default installation
     };
-    
+
+    qDebug() << "[EverythingSearch] Application directory:" << appDir;
+    qDebug() << "[EverythingSearch] Current directory:" << QDir::currentPath();
+    qDebug() << "[EverythingSearch] Searching for Everything DLL in" << searchPaths.size() << "locations...";
+
     for (const QString& path : searchPaths) {
+        qDebug() << "[EverythingSearch] Trying:" << path;
         m_library = new QLibrary(path);
         if (m_library->load()) {
-            qInfo() << "[EverythingSearch] Loaded DLL from:" << path;
+            qInfo() << "[EverythingSearch] SUCCESS! Loaded DLL from:" << path;
             return true;
+        } else {
+            qDebug() << "[EverythingSearch] Failed to load:" << path << "Error:" << m_library->errorString();
         }
         delete m_library;
         m_library = nullptr;
     }
-    
+
+    qWarning() << "[EverythingSearch] Failed to load Everything DLL from any location";
     return false;
 }
 
