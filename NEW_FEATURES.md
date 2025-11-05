@@ -1,11 +1,11 @@
 # KAssetManager - New Features Roadmap
 
-**Version:** 0.3.0+
+**Version:** 1.0.5+
 **Status:** Implementation Phase - 5 Features Complete
-**Last Updated:** 2025-11-03
+**Last Updated:** 2025-11-05
 **Target:** Post Phase 1 & 2 Completion
 
-## ✅ Completed Features (v0.3.0)
+## ✅ Completed Features (v1.0.5)
 
 The following intelligent features have been implemented and are available in the current build:
 
@@ -243,6 +243,6 @@ cd native/qt6 && mkdir -p src/integrity
 
 ---
 
-**Status:** ✅ Ready for Implementation  
-**Next Review:** After Feature 1 completion  
-**Version:** 1.0.0
+**Status:** ✅ Ready for Implementation
+**Next Review:** After Feature 1 completion
+**Version:** 1.0.5

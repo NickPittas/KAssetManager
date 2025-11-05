@@ -661,7 +661,7 @@ void mousePressEvent(QMouseEvent *event) {
 **Key Settings:**
 ```cmake
 cmake_minimum_required(VERSION 3.21)
-project(KAssetManagerQt VERSION 1.0.0 LANGUAGES CXX)
+project(KAssetManagerQt VERSION 1.0.5 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

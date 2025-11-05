@@ -374,7 +374,21 @@ CREATE INDEX idx_asset_versions_asset_id ON asset_versions(asset_id);
 
 ## Version History
 
-### v0.1.0 (Current)
+### v1.0.5 (Current)
+
+- Database persistence fix (survives app updates)
+- Database stored in `AppData/Roaming/KAsset/KAsset Manager Qt/`
+- Automatic migration from old location
+- Crash dump location moved to persistent directory
+
+### v0.2.0
+
+- File Manager improvements
+- Folder hierarchy preservation
+- Folders-first sorting
+- Preview overlay focus improvements
+
+### v0.1.0
 
 - Initial Qt Widgets implementation
 - Folder tree navigation

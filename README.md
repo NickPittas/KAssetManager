@@ -128,12 +128,14 @@ KAssetManager/
 
 ## Database Schema
 
-SQLite database stored in `data/kasset.db`:
+SQLite database stored in persistent user data location (see [INSTALL.md](INSTALL.md) for exact path):
 
 - **virtual_folders** - Folder hierarchy
 - **assets** - Asset metadata (file path, size, type, rating, etc.)
 - **tags** - Tag definitions
 - **asset_tags** - Many-to-many relationship between assets and tags
+- **asset_versions** - Version history for assets
+- **project_folders** - Watched project folders
 
 ## Troubleshooting
 

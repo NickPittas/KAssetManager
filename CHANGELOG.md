@@ -16,6 +16,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Undo/redo system
 - Crash reporting
 
+## [1.0.5] - 2025-11-05
+
+### Fixed
+- **Critical**: Database persistence issue where database was deleted during app updates
+  - Database now stored in persistent user data location (`AppData/Roaming/KAsset/KAsset Manager Qt/`)
+  - Database survives app updates and reinstallations
+  - Automatic migration from old location (`appDir/data/`) to new persistent location
+  - Old database preserved for safety during migration
+
+### Changed
+- Crash dump location moved to persistent user data directory
+- Updated all documentation to reflect new database location
+
+### Technical
+- Changed database storage from `applicationDirPath() + "/data/"` to `QStandardPaths::AppDataLocation`
+- Added migration logic in `main.cpp` to detect and copy existing databases
+- Updated Windows resource file version to 1.0.5.0
+
 ## [0.2.0] - 2025-10-29
 
 ### Added
@@ -247,7 +265,7 @@ For maintainers preparing a release:
 
 ## Credits
 
-Developed by [Your Name/Team]
+Developed by Nick Pittas
 
 Special thanks to:
 - Qt Company for the excellent framework

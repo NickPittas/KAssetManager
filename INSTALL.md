@@ -10,11 +10,11 @@ The easiest way to install KAsset Manager is using the official Windows installe
 
 Download the latest installer from:
 - **GitHub Releases**: https://github.com/yourusername/KAssetManager/releases
-- **File**: `KAssetManager-Setup-0.1.0.exe`
+- **File**: `KAssetManager-Setup-1.0.5.exe`
 
 #### Installation Steps
 
-1. **Download the installer** (`KAssetManager-Setup-0.1.0.exe`)
+1. **Download the installer** (`KAssetManager-Setup-1.0.5.exe`)
 2. **Right-click** the installer and select **"Run as administrator"**
 3. **Follow the installation wizard**:
    - Click "Next" on the welcome screen
@@ -110,7 +110,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-windows.ps1
 After successful build:
 
 - **Executable**: `dist/portable/bin/kassetmanagerqt.exe`
-- **Package**: `native/qt6/build/ninja/KAsset Manager Qt-1.0.0-win64.zip`
+- **Package**: `native/qt6/build/ninja/KAsset Manager Qt-1.0.5-win64.zip`
 - **Build files**: `native/qt6/build/ninja/`
 
 ### 4. Run the Application
@@ -290,9 +290,20 @@ Users can extract and run without installation.
 
 ## Database Location
 
-The SQLite database is created at:
-- **Portable**: `<app_directory>/data/kasset.db`
-- **Installed**: `%APPDATA%/KAsset/data/kasset.db`
+The SQLite database and user data are stored in a persistent location that survives app updates:
+
+**Windows**: `C:\Users\[YourUsername]\AppData\Roaming\KAsset\KAsset Manager Qt\`
+
+This directory contains:
+- `kasset.db` - Main SQLite database with all asset metadata, tags, and folder structure
+- `versions/` - Asset version history files
+- `crash.dmp` / `crash.log` - Crash dumps and logs (if any crashes occur)
+
+**Note**: Logs (`app.log`, `debug.log`) are stored in the application installation directory for debugging purposes.
+
+### Migration from Old Versions
+
+If you're upgrading from a version that stored the database in the application directory, the database will be automatically migrated to the new persistent location on first run. The old database will be preserved for safety.
 
 ## Updating
 
@@ -300,13 +311,20 @@ To update to a new version:
 
 1. Pull latest changes: `git pull`
 2. Clean build: `powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-windows.ps1 -Clean -Package`
-3. Database migrations are applied automatically on first run
+3. Your database and user data will be preserved automatically
+4. Database schema migrations are applied automatically on first run
 
 ## Uninstalling
 
-For portable version:
-- Delete the application folder
-- Optionally delete `data/kasset.db` to remove all data
+To uninstall KAsset Manager:
+
+1. Run the uninstaller from Start Menu or Add/Remove Programs
+2. The uninstaller will ask if you want to delete your database and user data
+3. Choose "No" to preserve your data for future installations
+4. Choose "Yes" to completely remove all data
+
+**Manual data removal**: If you want to manually delete all user data, remove the directory:
+`C:\Users\[YourUsername]\AppData\Roaming\KAsset\KAsset Manager Qt\`
 
 ## Support
 

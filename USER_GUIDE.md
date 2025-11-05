@@ -45,7 +45,7 @@ KAsset Manager is a professional Windows desktop application for organizing and 
 ### First Launch
 
 1. **Launch the application** by running `kassetmanagerqt.exe`
-2. **The database is created automatically** in `data/kasset.db`
+2. **The database is created automatically** in your user data folder (see [INSTALL.md](../INSTALL.md) for location)
 3. **A "Root" folder is created** as the top-level container
 4. **You're ready to import assets!**
 
