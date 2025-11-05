@@ -19,7 +19,7 @@ installer/
 *.swp
 *.swo
 *~
-
+.kilocode/
 # OS
 .DS_Store
 Thumbs.db
@@ -51,7 +51,6 @@ temp/
 
 # Local runtime binaries
 resources/ffmpeg/
-*.exe
 *.dll
 *.pdb
 
