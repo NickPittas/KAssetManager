@@ -53,4 +53,5 @@ temp/
 resources/ffmpeg/
 *.dll
 *.pdb
+*.exe
 
