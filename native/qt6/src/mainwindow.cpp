@@ -1966,12 +1966,30 @@ void MainWindow::setupUi()
     filtersTitle->setStyleSheet("font-size: 14px; font-weight: bold; color: #ffffff;");
     filtersLayout->addWidget(filtersTitle);
 
+    // Search box with button
+    QHBoxLayout *searchLayout = new QHBoxLayout();
+
     searchBox = new QLineEdit(this);
-    searchBox->setPlaceholderText("Search...");
+    searchBox->setPlaceholderText("Search... (Press Enter)");
     searchBox->setStyleSheet(
         "QLineEdit { background-color: #1a1a1a; color: #ffffff; border: 1px solid #333; padding: 6px; border-radius: 4px; }"
     );
-    filtersLayout->addWidget(searchBox);
+    searchLayout->addWidget(searchBox);
+
+    QPushButton *filterSearchButton = new QPushButton(this);
+    filterSearchButton->setIcon(style()->standardIcon(QStyle::SP_FileDialogContentsView));
+    filterSearchButton->setToolTip("Search assets");
+    filterSearchButton->setFixedSize(28, 28);
+    filterSearchButton->setStyleSheet(
+        "QPushButton { background-color: #58a6ff; color: #ffffff; border: none; border-radius: 4px; }"
+        "QPushButton:hover { background-color: #4a8fd9; }"
+    );
+    connect(filterSearchButton, &QPushButton::clicked, this, [this]() {
+        onSearchTextChanged(searchBox->text());
+    });
+    searchLayout->addWidget(filterSearchButton);
+
+    filtersLayout->addLayout(searchLayout);
 
     QLabel *ratingLabel = new QLabel("Rating:", this);
     ratingLabel->setStyleSheet("color: #ffffff; margin-top: 8px;");
@@ -2006,19 +2024,7 @@ void MainWindow::setupUi()
 
     filtersLayout->addLayout(tagsHeaderLayout);
 
-    tagsListView = new QListView(filtersPanel);
-    tagsModel = new TagsModel(this);
-    tagsListView->setModel(tagsModel);
-    tagsListView->setSelectionMode(QAbstractItemView::MultiSelection);
-    tagsListView->setContextMenuPolicy(Qt::CustomContextMenu);
-    tagsListView->setStyleSheet("");
-    tagsListView->setMaximumHeight(150);
-
-    // Enable drops on tags list for assigning tags to assets
-    tagsListView->setAcceptDrops(true);
-    tagsListView->setDropIndicatorShown(true);
-    tagsListView->setDragDropMode(QAbstractItemView::DropOnly);
-    // Tag action buttons
+    // Tag action buttons (moved before tags list)
     QHBoxLayout *tagButtonsLayout = new QHBoxLayout();
 
     applyTagsBtn = new QPushButton("Apply", this);
@@ -2055,6 +2061,22 @@ void MainWindow::setupUi()
     tagButtonsLayout->addWidget(tagFilterModeCombo);
 
     filtersLayout->addLayout(tagButtonsLayout);
+
+    // Tags list view (moved after tag buttons)
+    tagsListView = new QListView(filtersPanel);
+    tagsModel = new TagsModel(this);
+    tagsListView->setModel(tagsModel);
+    tagsListView->setSelectionMode(QAbstractItemView::MultiSelection);
+    tagsListView->setContextMenuPolicy(Qt::CustomContextMenu);
+    tagsListView->setStyleSheet("");
+    tagsListView->setMaximumHeight(150);
+
+    // Enable drops on tags list for assigning tags to assets
+    tagsListView->setAcceptDrops(true);
+    tagsListView->setDropIndicatorShown(true);
+    tagsListView->setDragDropMode(QAbstractItemView::DropOnly);
+
+    filtersLayout->addWidget(tagsListView);
 
     QPushButton *applyFiltersBtn = new QPushButton("Apply Filters", this);
     applyFiltersBtn->setStyleSheet(
@@ -2897,7 +2919,7 @@ void MainWindow::setupFileManagerUi()
 
     // Simple media controls
     QHBoxLayout *mc = new QHBoxLayout();
-    fmPlayPauseBtn = new QPushButton("Play", fmPreviewPanel);
+    fmPlayPauseBtn = new QPushButton("▶", fmPreviewPanel);
     fmPositionSlider = new QSlider(Qt::Horizontal, fmPreviewPanel);
     fmPositionSlider->setMinimum(0); fmPositionSlider->setMaximum(1000);
     fmTimeLabel = new QLabel("00:00 / 00:00", fmPreviewPanel);
@@ -2906,7 +2928,7 @@ void MainWindow::setupFileManagerUi()
     mc->addWidget(fmPlayPauseBtn); mc->addWidget(fmPositionSlider); mc->addWidget(fmTimeLabel); mc->addWidget(fmVolumeSlider);
 
     connect(fmPlayPauseBtn, &QPushButton::clicked, this, [this]{
-        if (!fmMediaPlayer) return; if (fmMediaPlayer->playbackState() == QMediaPlayer::PlayingState) { fmMediaPlayer->pause(); fmPlayPauseBtn->setText("Play"); } else { fmMediaPlayer->play(); fmPlayPauseBtn->setText("Pause"); }
+        if (!fmMediaPlayer) return; if (fmMediaPlayer->playbackState() == QMediaPlayer::PlayingState) { fmMediaPlayer->pause(); fmPlayPauseBtn->setText("▶"); } else { fmMediaPlayer->play(); fmPlayPauseBtn->setText("⏸"); }
     });
     connect(fmMediaPlayer, &QMediaPlayer::positionChanged, this, [this](qint64 pos){ if (fmMediaPlayer && fmMediaPlayer->duration()>0){ fmPositionSlider->blockSignals(true); fmPositionSlider->setValue(int(pos*1000/fmMediaPlayer->duration())); fmPositionSlider->blockSignals(false); fmTimeLabel->setText(QString("%1 / %2").arg(QTime::fromMSecsSinceStartOfDay(int(pos)).toString("mm:ss")).arg(QTime::fromMSecsSinceStartOfDay(int(fmMediaPlayer->duration())).toString("mm:ss"))); }});
     connect(fmPositionSlider, &QSlider::sliderMoved, this, [this](int v){ if (fmMediaPlayer && fmMediaPlayer->duration()>0) fmMediaPlayer->setPosition(qint64(v) * fmMediaPlayer->duration() / 1000); });
@@ -4229,8 +4251,10 @@ void MainWindow::setupConnections()
     }
 
 
-    // Connect search box for real-time filtering
-    connect(searchBox, &QLineEdit::textChanged, this, &MainWindow::onSearchTextChanged);
+    // Connect search box for manual search (Enter key)
+    connect(searchBox, &QLineEdit::returnPressed, this, [this]() {
+        onSearchTextChanged(searchBox->text());
+    });
 
     // Visible-only live preview progress wiring
     connect(assetsModel, &QAbstractItemModel::modelReset, this, &MainWindow::scheduleVisibleThumbProgressUpdate);
@@ -7196,7 +7220,7 @@ if (isExcelFile(ext)) {
         if (fmMediaPlayer) {
             fmMediaPlayer->setSource(QUrl::fromLocalFile(path));
             fmMediaPlayer->pause();
-            if (fmPlayPauseBtn) fmPlayPauseBtn->setText("Play");
+            if (fmPlayPauseBtn) fmPlayPauseBtn->setText("▶");
         }
         return;
     }

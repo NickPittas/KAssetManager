@@ -113,7 +113,6 @@ private:
     QSlider *positionSlider;
     QLabel *timeLabel;
     QSlider *volumeSlider;
-    QCheckBox *liveScrubCheck;
     QPushButton *closeBtn;
     QLabel *fileNameLabel;
     QComboBox *colorSpaceCombo;
@@ -148,7 +147,6 @@ private:
     bool userSeeking = false;
     bool wasPlayingBeforeSeek = false;
     double detectedFps = 0.0;
-    bool liveScrubEnabled = false;
 
     // Image zoom/pan state
     double currentZoom;

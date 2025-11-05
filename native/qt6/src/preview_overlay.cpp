@@ -193,20 +193,6 @@ PreviewOverlay::PreviewOverlay(QWidget *parent)
     setupUi();
     setFocusPolicy(Qt::StrongFocus);
 
-    // Load persisted settings
-    {
-        QSettings s("AugmentCode", "KAssetManager");
-        liveScrubEnabled = s.value("Preview/LiveScrub", false).toBool();
-        if (liveScrubCheck) liveScrubCheck->setChecked(liveScrubEnabled);
-        if (liveScrubCheck) {
-            connect(liveScrubCheck, &QCheckBox::toggled, this, [this](bool on){
-                liveScrubEnabled = on;
-                QSettings s("AugmentCode", "KAssetManager");
-                s.setValue("Preview/LiveScrub", on);
-            });
-        }
-    }
-
     // Auto-hide controls timer
     controlsTimer = new QTimer(this);
     controlsTimer->setSingleShot(true);
@@ -256,6 +242,7 @@ void PreviewOverlay::setupUi()
 
     // Alpha toggle (for images with alpha)
     alphaCheck = new QCheckBox("Alpha", this);
+    alphaCheck->setFocusPolicy(Qt::NoFocus);
     alphaCheck->setToolTip("Show alpha channel (grayscale)");
     alphaCheck->setStyleSheet("QCheckBox { color: white; }");
     alphaCheck->hide();
@@ -284,6 +271,7 @@ void PreviewOverlay::setupUi()
     topLayout->addStretch();
 
     closeBtn = new QPushButton("✕", this);
+    closeBtn->setFocusPolicy(Qt::NoFocus);
     closeBtn->setStyleSheet(
         "QPushButton { background-color: transparent; color: white; font-size: 24px; "
         "border: none; padding: 10px 20px; }"
@@ -348,6 +336,7 @@ void PreviewOverlay::setupUi()
 
     // Video widget (for videos)
     videoWidget = new QVideoWidget(this);
+    videoWidget->installEventFilter(this);
     videoWidget->hide();
     contentLayout->addWidget(videoWidget);
 
@@ -357,6 +346,7 @@ void PreviewOverlay::setupUi()
     controlsWidget = new QWidget(this);
     controlsWidget->setStyleSheet("QWidget { background-color: rgba(0, 0, 0, 180); }");
     controlsWidget->setFixedHeight(80);
+    controlsWidget->installEventFilter(this);
     controlsWidget->hide();
 
     QVBoxLayout *controlsLayout = new QVBoxLayout(controlsWidget);
@@ -364,6 +354,7 @@ void PreviewOverlay::setupUi()
 
     // Position slider
     positionSlider = new QSlider(Qt::Horizontal, this);
+    positionSlider->setFocusPolicy(Qt::NoFocus);
     positionSlider->setStyleSheet(
         "QSlider::groove:horizontal { background: #555; height: 4px; }"
         "QSlider::handle:horizontal { background: #58a6ff; width: 12px; margin: -4px 0; border-radius: 6px; }"
@@ -378,6 +369,7 @@ void PreviewOverlay::setupUi()
 
     playPauseBtn = new QPushButton("▶", this);
     playPauseBtn->setFixedSize(40, 40);
+    playPauseBtn->setFocusPolicy(Qt::NoFocus);
     playPauseBtn->setStyleSheet(
         "QPushButton { background-color: #58a6ff; color: white; font-size: 18px; "
         "border-radius: 20px; border: none; }"
@@ -388,6 +380,7 @@ void PreviewOverlay::setupUi()
     // Frame step buttons
     prevFrameBtn = new QPushButton("‹", this);
     prevFrameBtn->setFixedSize(36, 36);
+    prevFrameBtn->setFocusPolicy(Qt::NoFocus);
     prevFrameBtn->setToolTip("Previous frame (,)");
     prevFrameBtn->setStyleSheet(
         "QPushButton { background-color: #444; color: white; font-size: 16px; border-radius: 18px; border: none; }"
@@ -398,6 +391,7 @@ void PreviewOverlay::setupUi()
 
     nextFrameBtn = new QPushButton("›", this);
     nextFrameBtn->setFixedSize(36, 36);
+    nextFrameBtn->setFocusPolicy(Qt::NoFocus);
     nextFrameBtn->setToolTip("Next frame (.)");
     nextFrameBtn->setStyleSheet(
         "QPushButton { background-color: #444; color: white; font-size: 16px; border-radius: 18px; border: none; }"
@@ -424,6 +418,7 @@ void PreviewOverlay::setupUi()
     colorSpaceCombo->addItem("sRGB");
     colorSpaceCombo->addItem("Rec.709");
     colorSpaceCombo->setCurrentIndex(1); // Default to sRGB
+    colorSpaceCombo->setFocusPolicy(Qt::NoFocus);
     colorSpaceCombo->setStyleSheet(
         "QComboBox { background-color: #333; color: white; border: 1px solid #555; "
         "padding: 5px; border-radius: 3px; min-width: 100px; }"
@@ -448,14 +443,10 @@ void PreviewOverlay::setupUi()
     volumeSlider->setFixedWidth(100);
     volumeSlider->setRange(0, 100);
     volumeSlider->setValue(50);
+    volumeSlider->setFocusPolicy(Qt::NoFocus);
     volumeSlider->setStyleSheet(positionSlider->styleSheet());
     connect(volumeSlider, &QSlider::valueChanged, this, &PreviewOverlay::onVolumeChanged);
     buttonsLayout->addWidget(volumeSlider);
-
-    // Live scrubbing toggle
-    liveScrubCheck = new QCheckBox("Live Scrub", this);
-    liveScrubCheck->setToolTip("Seek continuously while dragging the timeline slider");
-    buttonsLayout->addWidget(liveScrubCheck);
 
     controlsLayout->addLayout(buttonsLayout);
 
@@ -816,14 +807,13 @@ void PreviewOverlay::onSliderMoved(int position)
     }
 #ifdef HAVE_FFMPEG
     if (usingFallbackVideo) {
-        // Update time label while dragging
+        // Update time label and seek continuously while dragging (live scrubbing)
         if (fallbackDurationMs > 0) {
             timeLabel->setText(QString("%1 / %2").arg(formatTime(position)).arg(formatTime(fallbackDurationMs)));
         } else {
             timeLabel->setText(QString("%1 / --:--").arg(formatTime(position)));
         }
-        // Live scrubbing: issue seeks as the slider moves
-        if (liveScrubEnabled && fallbackReader) {
+        if (fallbackReader) {
             QMetaObject::invokeMethod(fallbackReader, "seekToMs", Qt::QueuedConnection, Q_ARG(qint64, static_cast<qint64>(position)));
             QMetaObject::invokeMethod(fallbackReader, "stepOnce", Qt::QueuedConnection);
         }
@@ -831,18 +821,10 @@ void PreviewOverlay::onSliderMoved(int position)
         return;
     }
 #endif
-    // QMediaPlayer path
-    if (liveScrubEnabled) {
-        mediaPlayer->setPosition(position);
-        qint64 duration = mediaPlayer->duration();
-        timeLabel->setText(QString("%1 / %2").arg(formatTime(position)).arg(formatTime(duration)));
-    } else if (userSeeking) {
-        // Update label only; we'll seek on release to avoid choppy updates
-        qint64 duration = mediaPlayer->duration();
-        timeLabel->setText(QString("%1 / %2").arg(formatTime(position)).arg(formatTime(duration)));
-    } else {
-        mediaPlayer->setPosition(position);
-    }
+    // QMediaPlayer path - always do live scrubbing
+    mediaPlayer->setPosition(position);
+    qint64 duration = mediaPlayer->duration();
+    timeLabel->setText(QString("%1 / %2").arg(formatTime(position)).arg(formatTime(duration)));
     controlsTimer->start();
 }
 
@@ -912,11 +894,11 @@ void PreviewOverlay::onSliderReleased()
 void PreviewOverlay::onStepNextFrame()
 {
     if (isSequence) {
-        bool was = sequencePlaying;
-        if (was) pauseSequence();
+        // Always pause playback when stepping frames
+        if (sequencePlaying) pauseSequence();
         int nextIdx = qMin(positionSlider->value() + 1, positionSlider->maximum());
         loadSequenceFrame(nextIdx);
-        if (was) playSequence();
+        // Keep paused after stepping
         return;
     }
 #ifdef HAVE_FFMPEG
@@ -935,30 +917,28 @@ void PreviewOverlay::onStepNextFrame()
         return;
     }
 #endif
-    // QMediaPlayer path
-    bool was = (mediaPlayer->playbackState() == QMediaPlayer::PlayingState);
+    // QMediaPlayer path - always pause when stepping frames
     mediaPlayer->pause();
     qint64 pos = mediaPlayer->position();
     qint64 dt = static_cast<qint64>(qRound64(frameDurationMs()));
     qint64 target = qMin(pos + dt, mediaPlayer->duration());
     mediaPlayer->setPosition(target);
-    if (!was) {
-        mediaPlayer->play();
-        QTimer::singleShot(30, this, [this]() { mediaPlayer->pause(); updatePlayPauseButton(); });
-    } else {
-        mediaPlayer->play();
-    }
-    updatePlayPauseButton();
+    // Use play/pause trick to force frame update, then keep paused
+    mediaPlayer->play();
+    QTimer::singleShot(30, this, [this]() {
+        mediaPlayer->pause();
+        updatePlayPauseButton();
+    });
 }
 
 void PreviewOverlay::onStepPrevFrame()
 {
     if (isSequence) {
-        bool was = sequencePlaying;
-        if (was) pauseSequence();
+        // Always pause playback when stepping frames
+        if (sequencePlaying) pauseSequence();
         int prevIdx = qMax(positionSlider->value() - 1, positionSlider->minimum());
         loadSequenceFrame(prevIdx);
-        if (was) playSequence();
+        // Keep paused after stepping
         return;
     }
 #ifdef HAVE_FFMPEG
@@ -976,19 +956,18 @@ void PreviewOverlay::onStepPrevFrame()
         return;
     }
 #endif
-    bool was = (mediaPlayer->playbackState() == QMediaPlayer::PlayingState);
+    // QMediaPlayer path - always pause when stepping frames
     mediaPlayer->pause();
     qint64 pos = mediaPlayer->position();
     qint64 dt = static_cast<qint64>(qRound64(frameDurationMs()));
     qint64 target = pos - dt; if (target < 0) target = 0;
     mediaPlayer->setPosition(target);
-    if (!was) {
-        mediaPlayer->play();
-        QTimer::singleShot(30, this, [this]() { mediaPlayer->pause(); updatePlayPauseButton(); });
-    } else {
-        mediaPlayer->play();
-    }
-    updatePlayPauseButton();
+    // Use play/pause trick to force frame update, then keep paused
+    mediaPlayer->play();
+    QTimer::singleShot(30, this, [this]() {
+        mediaPlayer->pause();
+        updatePlayPauseButton();
+    });
 }
 
 double PreviewOverlay::frameDurationMs() const
@@ -1125,11 +1104,21 @@ void PreviewOverlay::keyPressEvent(QKeyEvent *event)
             emit closed();
             break;
         case Qt::Key_Left:
+            // CTRL+Left: Step backward one frame
+            if (event->modifiers() & Qt::ControlModifier) {
+                if (isVideo || isSequence) { onStepPrevFrame(); return; }
+                break;
+            }
             // Always stop any playback before navigating to avoid mixing
             stopPlayback();
             navigatePrevious();
             break;
         case Qt::Key_Right:
+            // CTRL+Right: Step forward one frame
+            if (event->modifiers() & Qt::ControlModifier) {
+                if (isVideo || isSequence) { onStepNextFrame(); return; }
+                break;
+            }
             // Always stop any playback before navigating to avoid mixing
             stopPlayback();
             navigateNext();
@@ -1211,8 +1200,8 @@ void PreviewOverlay::wheelEvent(QWheelEvent *event)
 
 bool PreviewOverlay::eventFilter(QObject* watched, QEvent* event)
 {
+    // Handle wheel events for image zoom
     if ((watched == imageView || (imageView && watched == imageView->viewport())) && event->type() == QEvent::Wheel) {
-
         if (!isVideo && !originalPixmap.isNull()) {
             QWheelEvent* wheel = static_cast<QWheelEvent*>(event);
             double factor = wheel->angleDelta().y() > 0 ? 1.15 : 0.85;
@@ -1221,6 +1210,38 @@ bool PreviewOverlay::eventFilter(QObject* watched, QEvent* event)
             return true; // consume to prevent any scrolling
         }
     }
+
+    // Handle keyboard events from child widgets (videoWidget, imageView, etc.)
+    if (event->type() == QEvent::KeyPress) {
+        QKeyEvent* keyEvent = static_cast<QKeyEvent*>(event);
+
+        // Forward CTRL+Left/Right for frame stepping
+        if (keyEvent->modifiers() & Qt::ControlModifier) {
+            if (keyEvent->key() == Qt::Key_Left) {
+                if (isVideo || isSequence) {
+                    onStepPrevFrame();
+                    return true; // consume event
+                }
+            } else if (keyEvent->key() == Qt::Key_Right) {
+                if (isVideo || isSequence) {
+                    onStepNextFrame();
+                    return true; // consume event
+                }
+            }
+        }
+
+        // Forward other important keys to the overlay's keyPressEvent
+        if (keyEvent->key() == Qt::Key_Escape ||
+            keyEvent->key() == Qt::Key_Space ||
+            keyEvent->key() == Qt::Key_Left ||
+            keyEvent->key() == Qt::Key_Right ||
+            keyEvent->key() == Qt::Key_Period ||
+            keyEvent->key() == Qt::Key_Comma) {
+            keyPressEvent(keyEvent);
+            return true; // consume event
+        }
+    }
+
     return QWidget::eventFilter(watched, event);
 }
 
