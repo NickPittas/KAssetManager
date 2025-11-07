@@ -9,7 +9,7 @@ if(NOT DEFINED CMAKE_TOOLCHAIN_FILE AND EXISTS "C:/vcpkg/scripts/buildsystems/vc
     message(STATUS "Using vcpkg triplet: ${VCPKG_TARGET_TRIPLET}")
 endif()
 
-project(KAssetManagerQt VERSION 1.0.5 LANGUAGES CXX)
+project(KAssetManagerQt VERSION 1.0.6 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -242,6 +242,15 @@ if (WIN32)
 endif()
 # Install rules
 install(TARGETS kassetmanagerqt RUNTIME DESTINATION bin)
+
+# Install icons folder
+set(_ICONS_DIR "${CMAKE_SOURCE_DIR}/../../icons")
+if(EXISTS "${_ICONS_DIR}")
+  install(DIRECTORY "${_ICONS_DIR}" DESTINATION bin)
+  message(STATUS "Icons folder will be installed to bin/icons directory")
+else()
+  message(WARNING "Icons folder not found at ${_ICONS_DIR}")
+endif()
 
 # Packaging: deploy Qt runtime. Prefer Qt6DeploySupport if available.
 if (WIN32)

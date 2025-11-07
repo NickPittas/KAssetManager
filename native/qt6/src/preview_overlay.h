@@ -24,8 +24,159 @@
 #include <QPlainTextEdit>
 #include <QTableView>
 #include <QStandardItemModel>
+#include <QCache>
+#include <QMutex>
+#include <QThreadPool>
+#include <QRunnable>
+#include <QPainter>
+#include <QStyleOptionSlider>
+#include <QSet>
 
 #include "oiio_image_loader.h"
+
+// Forward declarations
+class SequenceFrameCache;
+
+/**
+ * @brief Custom timeline slider with visual cache indicators for image sequences
+ *
+ * CachedFrameSlider extends QSlider to provide visual feedback about which frames
+ * are currently loaded in the RAM cache. This is essential for professional video
+ * playback workflows where users need to know which frames can play back smoothly.
+ *
+ * Visual Design:
+ * - Draws a thin red line (3px height) above the timeline groove
+ * - Cached frames are shown as continuous red segments
+ * - Adjacent cached frames are merged for clean appearance
+ * - Matches the visual style of After Effects, Nuke, and DaVinci Resolve
+ *
+ * Usage:
+ * 1. Connect to SequenceFrameCache::frameCached signal
+ * 2. Call markFrameCached() when frames are loaded into cache
+ * 3. Call clearCachedFrames() when loading a new sequence
+ *
+ * Technical Details:
+ * - Uses QSet for O(1) frame lookup
+ * - Sorts frames and merges ranges for efficient painting
+ * - Updates automatically via update() calls
+ * - Thread-safe when called from main thread (Qt signal/slot mechanism)
+ */
+class CachedFrameSlider : public QSlider
+{
+    Q_OBJECT
+
+public:
+    explicit CachedFrameSlider(Qt::Orientation orientation, QWidget *parent = nullptr)
+        : QSlider(orientation, parent)
+    {
+    }
+
+    /**
+     * @brief Set all cached frames at once (bulk update)
+     * @param frames Set of frame indices that are currently cached
+     */
+    void setCachedFrames(const QSet<int> &frames)
+    {
+        m_cachedFrames = frames;
+        update(); // Trigger repaint
+    }
+
+    /**
+     * @brief Mark a single frame as cached (incremental update)
+     * @param frameIndex The frame index to mark as cached
+     *
+     * This is called by the SequenceFrameCache::frameCached signal
+     * as frames are loaded in the background.
+     */
+    void markFrameCached(int frameIndex)
+    {
+        m_cachedFrames.insert(frameIndex);
+        update(); // Trigger repaint
+    }
+
+    /**
+     * @brief Clear all cached frame indicators
+     *
+     * Should be called when loading a new sequence or clearing the cache.
+     */
+    void clearCachedFrames()
+    {
+        m_cachedFrames.clear();
+        update(); // Trigger repaint
+    }
+
+protected:
+    // Custom paint event to draw cached frame indicators
+    // Draws a thin red line above the timeline groove showing which frames are in cache
+    void paintEvent(QPaintEvent *event) override
+    {
+        // First, let the base QSlider paint itself
+        QSlider::paintEvent(event);
+
+        // Don't draw cache indicators if there are no cached frames
+        if (m_cachedFrames.isEmpty() || maximum() <= 0) {
+            return;
+        }
+
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing);
+
+        // Get the groove rect (the track area where the slider moves)
+        QStyleOptionSlider opt;
+        initStyleOption(&opt);
+        QRect grooveRect = style()->subControlRect(QStyle::CC_Slider, &opt, QStyle::SC_SliderGroove, this);
+
+        // Draw cached frame indicator as a thin red line above the groove
+        // This matches the visual style of professional video editing applications
+        const int lineHeight = 3; // Height of the cache indicator line
+        const int lineY = grooveRect.top() - lineHeight - 2; // Position above groove with 2px gap
+
+        // Calculate the width per frame for positioning
+        const int totalFrames = maximum() - minimum() + 1;
+        const double pixelsPerFrame = static_cast<double>(grooveRect.width()) / totalFrames;
+
+        // Sort cached frames to find continuous ranges for efficient drawing
+        QVector<int> sortedFrames = m_cachedFrames.values();
+        std::sort(sortedFrames.begin(), sortedFrames.end());
+
+        if (sortedFrames.isEmpty()) {
+            return;
+        }
+
+        // Draw cached frames as red line segments
+        // Adjacent cached frames are merged into continuous segments for clean appearance
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(QColor(220, 50, 50)); // Bright red color
+
+        int rangeStart = sortedFrames[0];
+        int rangeEnd = sortedFrames[0];
+
+        for (int i = 1; i <= sortedFrames.size(); ++i) {
+            if (i < sortedFrames.size() && sortedFrames[i] == rangeEnd + 1) {
+                // Continue the current range
+                rangeEnd = sortedFrames[i];
+            } else {
+                // Draw the current range as a red line segment
+                const int startOffset = rangeStart - minimum();
+                const int endOffset = rangeEnd - minimum();
+                const int x = grooveRect.left() + static_cast<int>(startOffset * pixelsPerFrame);
+                const int width = std::max(1, static_cast<int>((endOffset - startOffset + 1) * pixelsPerFrame));
+
+                QRect cacheRect(x, lineY, width, lineHeight);
+                painter.drawRect(cacheRect);
+
+                // Start a new range
+                if (i < sortedFrames.size()) {
+                    rangeStart = sortedFrames[i];
+                    rangeEnd = sortedFrames[i];
+                }
+            }
+        }
+    }
+
+private:
+    QSet<int> m_cachedFrames;
+};
 
 class PreviewOverlay : public QWidget
 {
@@ -110,7 +261,7 @@ private:
     QPushButton *playPauseBtn;
     QPushButton *prevFrameBtn;
     QPushButton *nextFrameBtn;
-    QSlider *positionSlider;
+    CachedFrameSlider *positionSlider;
     QLabel *timeLabel;
     QSlider *volumeSlider;
     QPushButton *closeBtn;
@@ -162,6 +313,8 @@ private:
     int sequenceEndFrame;
     QTimer *sequenceTimer;
     bool sequencePlaying;
+    SequenceFrameCache *frameCache;
+    bool useCacheForSequences; // Flag to enable/disable cache (disabled by default)
 
     // Fallback (software) video playback state for unsupported codecs (e.g., PNG-in-MOV)
     bool usingFallbackVideo = false;
@@ -179,6 +332,76 @@ private:
     // Alpha channel toggle state
     bool alphaOnlyMode = false;
     bool previewHasAlpha = false;
+};
+
+// ============================================================================
+// SequenceFrameCache: RAM-based pre-fetch cache for image sequence playback
+// ============================================================================
+class SequenceFrameCache : public QObject
+{
+    Q_OBJECT
+
+public:
+    explicit SequenceFrameCache(QObject *parent = nullptr);
+    ~SequenceFrameCache();
+
+    // Cache operations
+    void setSequence(const QStringList &framePaths, OIIOImageLoader::ColorSpace colorSpace);
+    void clearCache();
+    QPixmap getFrame(int frameIndex);
+    bool hasFrame(int frameIndex) const;
+
+    // Pre-fetching control
+    void startPrefetch(int currentFrame);
+    void stopPrefetch();
+    void setCurrentFrame(int frameIndex);
+
+    // Configuration
+    void setMaxCacheSize(int maxFrames); // Default: 100 frames
+    int maxCacheSize() const { return m_maxCacheSize; }
+    int cachedFrameCount() const;
+    qint64 currentMemoryUsageMB() const; // Returns current cache memory usage in MB
+
+    // Calculate optimal cache size based on available RAM
+    static int calculateOptimalCacheSize(int percentOfFreeRAM = 70);
+    static qint64 getAvailableRAM(); // Returns available RAM in MB
+
+signals:
+    void frameCached(int frameIndex);
+
+private:
+    void prefetchFrames(int startFrame);
+    QPixmap loadFrame(int frameIndex);
+
+    QStringList m_framePaths;
+    OIIOImageLoader::ColorSpace m_colorSpace;
+    QCache<int, QPixmap> m_cache;
+    mutable QRecursiveMutex m_mutex; // Use recursive mutex to allow same thread to lock multiple times
+    QThreadPool *m_threadPool;
+    int m_maxCacheSize;
+    int m_currentFrame;
+    bool m_prefetchActive;
+    QSet<int> m_pendingFrames; // Track frames being loaded
+};
+
+// Worker for loading frames in background
+class FrameLoaderWorker : public QObject, public QRunnable
+{
+    Q_OBJECT
+
+public:
+    FrameLoaderWorker(SequenceFrameCache *cache, int frameIndex, const QString &framePath,
+                      OIIOImageLoader::ColorSpace colorSpace);
+    void run() override;
+
+signals:
+    void frameLoaded(int frameIndex, QPixmap pixmap);
+
+private:
+    SequenceFrameCache *m_cache;
+    int m_frameIndex;
+    QString m_framePath;
+    OIIOImageLoader::ColorSpace m_colorSpace;
 };
 
 #endif // PREVIEW_OVERLAY_H

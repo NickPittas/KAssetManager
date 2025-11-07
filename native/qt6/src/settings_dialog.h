@@ -27,6 +27,7 @@ private slots:
     void onExportDatabase();
     void onImportDatabase();
     void saveSettings();
+    void updateSequenceCacheMemoryLabel();
 
 private:
     void setupGeneralTab();
@@ -44,6 +45,12 @@ private:
     QLabel* cacheSizeLabel;
     QPushButton* clearCacheBtn;
     QSpinBox* maxCacheSizeSpin;
+
+    // Sequence cache settings
+    QSpinBox* sequenceCacheSizeSpin;
+    QLabel* sequenceCacheMemoryLabel;
+    QCheckBox* autoSequenceCacheCheck;
+    QSpinBox* autoSequenceCachePercentSpin;
 
     // View tab
     QComboBox* viewModeCombo;

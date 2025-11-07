@@ -10,6 +10,10 @@
 #include <QSettings>
 #include <QHeaderView>
 
+#ifdef Q_OS_WIN
+#include <windows.h>
+#endif
+
 SettingsDialog::SettingsDialog(QWidget* parent)
     : QDialog(parent, Qt::Window | Qt::WindowTitleHint | Qt::WindowCloseButtonHint)
 {
@@ -134,6 +138,87 @@ void SettingsDialog::setupCacheTab()
     cacheLayout->addWidget(clearCacheBtn);
 
     layout->addWidget(cacheGroup);
+
+    // Sequence Cache settings
+    QGroupBox* seqCacheGroup = new QGroupBox("Image Sequence Cache", cacheTab);
+    seqCacheGroup->setStyleSheet("QGroupBox { color: #ffffff; border: 1px solid #333; padding: 10px; margin-top: 10px; } QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; }");
+    QVBoxLayout* seqCacheLayout = new QVBoxLayout(seqCacheGroup);
+
+    // Auto cache size checkbox
+    QSettings s("AugmentCode", "KAssetManager");
+    bool autoCache = s.value("SequenceCache/AutoSize", true).toBool();
+    int autoPercent = s.value("SequenceCache/AutoPercent", 70).toInt();
+    int manualSize = s.value("SequenceCache/ManualSize", 100).toInt();
+
+    autoSequenceCacheCheck = new QCheckBox("Automatically calculate cache size based on available RAM", seqCacheGroup);
+    autoSequenceCacheCheck->setChecked(autoCache);
+    autoSequenceCacheCheck->setStyleSheet("QCheckBox { color: #ffffff; }");
+    seqCacheLayout->addWidget(autoSequenceCacheCheck);
+
+    // Auto cache percentage
+    QHBoxLayout* autoPercentLayout = new QHBoxLayout();
+    QLabel* autoPercentLabel = new QLabel("Use", seqCacheGroup);
+    autoPercentLabel->setStyleSheet("color: #ffffff;");
+    autoPercentLayout->addWidget(autoPercentLabel);
+
+    autoSequenceCachePercentSpin = new QSpinBox(seqCacheGroup);
+    autoSequenceCachePercentSpin->setMinimum(10);
+    autoSequenceCachePercentSpin->setMaximum(90);
+    autoSequenceCachePercentSpin->setSingleStep(5);
+    autoSequenceCachePercentSpin->setValue(autoPercent);
+    autoSequenceCachePercentSpin->setSuffix("%");
+    autoSequenceCachePercentSpin->setEnabled(autoCache);
+    autoSequenceCachePercentSpin->setStyleSheet("QSpinBox { background-color: #1e1e1e; color: #ffffff; border: 1px solid #333; padding: 4px; }");
+    autoPercentLayout->addWidget(autoSequenceCachePercentSpin);
+
+    QLabel* autoPercentLabel2 = new QLabel("of available RAM", seqCacheGroup);
+    autoPercentLabel2->setStyleSheet("color: #ffffff;");
+    autoPercentLayout->addWidget(autoPercentLabel2);
+    autoPercentLayout->addStretch();
+    seqCacheLayout->addLayout(autoPercentLayout);
+
+    // Manual cache size
+    QHBoxLayout* manualSizeLayout = new QHBoxLayout();
+    QLabel* manualSizeLabel = new QLabel("Manual cache size:", seqCacheGroup);
+    manualSizeLabel->setStyleSheet("color: #ffffff;");
+    manualSizeLayout->addWidget(manualSizeLabel);
+
+    sequenceCacheSizeSpin = new QSpinBox(seqCacheGroup);
+    sequenceCacheSizeSpin->setMinimum(10);
+    sequenceCacheSizeSpin->setMaximum(1000);
+    sequenceCacheSizeSpin->setSingleStep(10);
+    sequenceCacheSizeSpin->setValue(manualSize);
+    sequenceCacheSizeSpin->setEnabled(!autoCache);
+    sequenceCacheSizeSpin->setStyleSheet("QSpinBox { background-color: #1e1e1e; color: #ffffff; border: 1px solid #333; padding: 4px; }");
+    manualSizeLayout->addWidget(sequenceCacheSizeSpin);
+
+    QLabel* framesLabel = new QLabel("frames", seqCacheGroup);
+    framesLabel->setStyleSheet("color: #ffffff;");
+    manualSizeLayout->addWidget(framesLabel);
+    manualSizeLayout->addStretch();
+    seqCacheLayout->addLayout(manualSizeLayout);
+
+    // Memory usage label
+    sequenceCacheMemoryLabel = new QLabel("Estimated memory usage: calculating...", seqCacheGroup);
+    sequenceCacheMemoryLabel->setStyleSheet("color: #aaaaaa; font-style: italic;");
+    seqCacheLayout->addWidget(sequenceCacheMemoryLabel);
+
+    // Connect signals to update UI
+    connect(autoSequenceCacheCheck, &QCheckBox::toggled, [this](bool checked) {
+        autoSequenceCachePercentSpin->setEnabled(checked);
+        sequenceCacheSizeSpin->setEnabled(!checked);
+        updateSequenceCacheMemoryLabel();
+    });
+
+    connect(autoSequenceCachePercentSpin, QOverload<int>::of(&QSpinBox::valueChanged),
+            this, &SettingsDialog::updateSequenceCacheMemoryLabel);
+    connect(sequenceCacheSizeSpin, QOverload<int>::of(&QSpinBox::valueChanged),
+            this, &SettingsDialog::updateSequenceCacheMemoryLabel);
+
+    // Initial update
+    updateSequenceCacheMemoryLabel();
+
+    layout->addWidget(seqCacheGroup);
 
     // Database management
     QGroupBox* dbGroup = new QGroupBox("Database", cacheTab);
@@ -431,12 +516,24 @@ void SettingsDialog::onImportDatabase()
 
 void SettingsDialog::saveSettings()
 {
+    QSettings s("AugmentCode", "KAssetManager");
+
     // Save cache size setting
     if (maxCacheSizeSpin) {
         int cacheSize = maxCacheSizeSpin->value();
         LivePreviewManager::instance().setMaxCacheEntries(cacheSize);
-        QSettings s("AugmentCode", "KAssetManager");
         s.setValue("LivePreview/MaxCacheEntries", cacheSize);
+    }
+
+    // Save sequence cache settings
+    if (autoSequenceCacheCheck) {
+        s.setValue("SequenceCache/AutoSize", autoSequenceCacheCheck->isChecked());
+    }
+    if (autoSequenceCachePercentSpin) {
+        s.setValue("SequenceCache/AutoPercent", autoSequenceCachePercentSpin->value());
+    }
+    if (sequenceCacheSizeSpin) {
+        s.setValue("SequenceCache/ManualSize", sequenceCacheSizeSpin->value());
     }
 
     // Persist File Manager shortcuts
@@ -478,6 +575,57 @@ void SettingsDialog::saveSettings()
 
     QMessageBox::information(this, "Settings Saved", "Settings have been saved successfully.");
     accept();
+}
+
+void SettingsDialog::updateSequenceCacheMemoryLabel()
+{
+    if (!sequenceCacheMemoryLabel || !autoSequenceCacheCheck ||
+        !autoSequenceCachePercentSpin || !sequenceCacheSizeSpin) {
+        return;
+    }
+
+    int cacheFrames = 0;
+    QString source;
+
+    if (autoSequenceCacheCheck->isChecked()) {
+        // Calculate based on available RAM
+        int percent = autoSequenceCachePercentSpin->value();
+
+        // Get available RAM (use a simple estimate for now)
+        #ifdef Q_OS_WIN
+        MEMORYSTATUSEX memInfo;
+        memInfo.dwLength = sizeof(MEMORYSTATUSEX);
+        qint64 availableRAM = 8192; // Default 8GB
+        if (GlobalMemoryStatusEx(&memInfo)) {
+            availableRAM = static_cast<qint64>(memInfo.ullAvailPhys / (1024 * 1024));
+        }
+        #else
+        qint64 availableRAM = 8192; // Default 8GB for non-Windows
+        #endif
+
+        // Calculate cache size
+        const int avgFrameSizeMB = 30;
+        qint64 cacheRAM = (availableRAM * percent) / 100;
+        cacheFrames = static_cast<int>(cacheRAM / avgFrameSizeMB);
+        cacheFrames = qMax(10, qMin(500, cacheFrames));
+
+        source = QString("Auto: %1% of %2 GB RAM").arg(percent).arg(availableRAM / 1024.0, 0, 'f', 1);
+    } else {
+        // Use manual size
+        cacheFrames = sequenceCacheSizeSpin->value();
+        source = "Manual";
+    }
+
+    // Calculate memory usage
+    int memoryMB = cacheFrames * 30; // 30MB average per frame
+    double memoryGB = memoryMB / 1024.0;
+
+    QString text = QString("Estimated memory usage: %1 frames (~%2 GB) - %3")
+                       .arg(cacheFrames)
+                       .arg(memoryGB, 0, 'f', 2)
+                       .arg(source);
+
+    sequenceCacheMemoryLabel->setText(text);
 }
 
 

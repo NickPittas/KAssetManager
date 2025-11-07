@@ -291,10 +291,10 @@ private:
     QSplitter *fmSplitter;
     // Sequence grouping
     SequenceGroupingProxyModel *fmProxyModel = nullptr;
-    QCheckBox *fmGroupSequencesCheckBox = nullptr;
+    QToolButton *fmGroupSequencesCheckBox = nullptr;
     bool fmGroupSequences = true;
     // Hide folders in grid view
-    QCheckBox *fmHideFoldersCheckBox = nullptr;
+    QToolButton *fmHideFoldersCheckBox = nullptr;
     bool fmHideFolders = false;
 
     QSplitter *fmLeftSplitter;   // Favorites | Folder tree

@@ -167,71 +167,94 @@ static QIcon mkIcon(const std::function<void(QPainter&, const QRectF&)>& draw)
     return QIcon(pm);
 }
 
-static QIcon icoFolderNew() { return mkIcon([](QPainter& p, const QRectF& r){
-    QRectF body(r.x()+3, r.y()+6, r.width()-6, r.height()-9);
-    p.drawRoundedRect(body, 2, 2);
-    QRectF tab(r.x()+5, r.y()+3, r.width()*0.35, 6);
-    p.drawRoundedRect(tab, 2, 2);
-    QPointF c(r.right()-6, r.top()+8);
-    p.drawLine(QPointF(c.x()-3, c.y()), QPointF(c.x()+3, c.y()));
-    p.drawLine(QPointF(c.x(), c.y()-3), QPointF(c.x(), c.y()+3));
-}); }
+// Helper to load PNG icons from the icons folder
+static QIcon loadPngIcon(const QString& filename, bool recolorToWhite = true)
+{
+    // Try multiple possible locations for the icons folder
+    QStringList searchPaths = {
+        QCoreApplication::applicationDirPath() + "/icons/" + filename,
+        QCoreApplication::applicationDirPath() + "/../icons/" + filename,
+        QCoreApplication::applicationDirPath() + "/../../icons/" + filename
+    };
 
-static QIcon icoCopy() { return mkIcon([](QPainter& p, const QRectF& r){
-    QRectF a(r.x()+5, r.y()+6, r.width()-10, r.height()-10); p.drawRoundedRect(a,2,2);
-    QRectF b = a.translated(-4,-4); p.drawRoundedRect(b,2,2);
-}); }
-
-static QIcon icoCut() { return mkIcon([](QPainter& p, const QRectF& r){
-    p.drawLine(QPointF(r.left()+4, r.bottom()-6), QPointF(r.right()-4, r.top()+6));
-    p.drawLine(QPointF(r.left()+4, r.top()+6), QPointF(r.right()-4, r.bottom()-6));
-    QPointF c1(r.center().x()-3, r.center().y()-2), c2(r.center().x()+3, r.center().y()+2);
-    p.drawEllipse(c1, 2.5, 2.5); p.drawEllipse(c2, 2.5, 2.5);
-}); }
-
-static QIcon icoPaste() { return mkIcon([](QPainter& p, const QRectF& r){
-    QRectF clip(r.x()+5, r.y()+6, r.width()-10, r.height()-8); p.drawRoundedRect(clip,2,2);
-    QRectF head(r.center().x()-6, r.y()+2, 12, 6); p.drawRoundedRect(head,2,2);
-}); }
-
-static QIcon icoDelete() { return mkIcon([](QPainter& p, const QRectF& r){
-    QRectF bin(r.x()+6, r.y()+7, r.width()-12, r.height()-9); p.drawRoundedRect(bin,2,2);
-    p.drawLine(QPointF(r.x()+4, r.y()+7), QPointF(r.right()-4, r.y()+7));
-    QRectF lid(r.x()+8, r.y()+4, r.width()-16, 4); p.drawRoundedRect(lid,1,1);
-}); }
-
-static QIcon icoRename() { return mkIcon([](QPainter& p, const QRectF& r){
-    QPainterPath pencil; QPointF a(r.x()+6, r.bottom()-7), b(r.right()-6, r.y()+7);
-    QPointF c(b.x()-3, b.y()-3), d(a.x()+3, a.y()+3);
-    pencil.moveTo(a); pencil.lineTo(c); pencil.lineTo(b); pencil.lineTo(d); pencil.closeSubpath();
-    p.drawPath(pencil);
-}); }
-
-static QIcon icoAdd() { return mkIcon([](QPainter& p, const QRectF& r){
-    QPointF c = r.center(); p.drawEllipse(QRectF(c.x()-7,c.y()-7,14,14));
-    p.drawLine(QPointF(c.x()-4,c.y()), QPointF(c.x()+4,c.y()));
-    p.drawLine(QPointF(c.x(), c.y()-4), QPointF(c.x(), c.y()+4));
-}); }
-
-static QIcon icoGrid() { return mkIcon([](QPainter& p, const QRectF& r){
-    const qreal s = (r.width()-6)/3.0;
-    for (int i=0;i<3;i++) for (int j=0;j<3;j++) {
-        QRectF cell(r.x()+3+i*s, r.y()+3+j*s, s-2, s-2); p.drawRect(cell);
+    QString foundPath;
+    for (const QString& path : searchPaths) {
+        if (QFile::exists(path)) {
+            foundPath = path;
+            break;
+        }
     }
-}); }
 
-static QIcon icoList() { return mkIcon([](QPainter& p, const QRectF& r){
-    for (int i=0;i<3;i++) {
-        qreal y = r.y()+4+i*6; p.drawRect(QRectF(r.x()+3, y, 3, 3));
-        p.drawLine(QPointF(r.x()+10, y+1.5), QPointF(r.right()-3, y+1.5));
+    if (foundPath.isEmpty()) {
+        qWarning() << "Failed to find icon:" << filename << "- searched paths:" << searchPaths;
+        // Return a fallback empty icon
+        return QIcon();
     }
-}); }
 
-static QIcon icoGroup() { return mkIcon([](QPainter& p, const QRectF& r){
-    QRectF a(r.x()+4, r.center().y()-5, 10, 10);
-    QRectF b(r.center().x()-1, r.center().y()-5, 10, 10);
-    p.drawArc(a, 45*16, 270*16); p.drawArc(b, 225*16, 270*16);
-}); }
+    // Load the image and scale it to appropriate size (32x32 for toolbar icons)
+    QPixmap pixmap(foundPath);
+    if (pixmap.isNull()) {
+        qWarning() << "Failed to load icon pixmap:" << foundPath;
+        return QIcon();
+    }
+
+    // Scale to 32x32 if needed (smooth scaling)
+    if (pixmap.width() != 32 || pixmap.height() != 32) {
+        pixmap = pixmap.scaled(32, 32, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    }
+
+    // Recolor black pixels to white if requested
+    if (recolorToWhite) {
+        QImage img = pixmap.toImage().convertToFormat(QImage::Format_ARGB32);
+        for (int y = 0; y < img.height(); ++y) {
+            for (int x = 0; x < img.width(); ++x) {
+                QColor pixel = img.pixelColor(x, y);
+                // If pixel is dark (closer to black), convert to white while preserving alpha
+                if (pixel.alpha() > 0) {
+                    // Calculate brightness (0-255)
+                    int brightness = (pixel.red() + pixel.green() + pixel.blue()) / 3;
+                    // If it's dark (less than 128), make it white
+                    if (brightness < 128) {
+                        img.setPixelColor(x, y, QColor(255, 255, 255, pixel.alpha()));
+                    }
+                }
+            }
+        }
+        pixmap = QPixmap::fromImage(img);
+    }
+
+    // Create QIcon and explicitly set pixmaps for all states to prevent Qt from auto-generating grey disabled versions
+    QIcon icon;
+    icon.addPixmap(pixmap, QIcon::Normal, QIcon::Off);
+    icon.addPixmap(pixmap, QIcon::Normal, QIcon::On);
+    icon.addPixmap(pixmap, QIcon::Active, QIcon::Off);
+    icon.addPixmap(pixmap, QIcon::Active, QIcon::On);
+    // For disabled state, use the same pixmap to prevent grey-out (user can see button is disabled by other means)
+    icon.addPixmap(pixmap, QIcon::Disabled, QIcon::Off);
+    icon.addPixmap(pixmap, QIcon::Disabled, QIcon::On);
+
+    return icon;
+}
+
+static QIcon icoFolderNew() { return loadPngIcon("Add to library2.png"); }
+
+static QIcon icoCopy() { return loadPngIcon("Copy.png"); }
+
+static QIcon icoCut() { return loadPngIcon("Cut.png"); }
+
+static QIcon icoPaste() { return loadPngIcon("Paste.png"); }
+
+static QIcon icoDelete() { return loadPngIcon("Delete.png"); }
+
+static QIcon icoRename() { return loadPngIcon("Rename.png"); }
+
+static QIcon icoAdd() { return loadPngIcon("Add to Library1.png"); }
+
+static QIcon icoGrid() { return loadPngIcon("Grid View.png"); }
+
+static QIcon icoList() { return loadPngIcon("List View.png"); }
+
+static QIcon icoGroup() { return loadPngIcon("Group Sequences.png"); }
 
 static QIcon icoEye() { return mkIcon([](QPainter& p, const QRectF& r){
     QPainterPath path; QPointF c = r.center(); qreal rx = r.width()/2 - 2; qreal ry = r.height()/3;
@@ -241,48 +264,15 @@ static QIcon icoEye() { return mkIcon([](QPainter& p, const QRectF& r){
     p.drawPath(path); p.drawEllipse(QRectF(c.x()-3, c.y()-3, 6, 6));
 }); }
 
-static QIcon icoBack() { return mkIcon([](QPainter& p, const QRectF& r){
-    QPainterPath arrow;
-    QPointF tip(r.x()+4, r.center().y());
-    QPointF top(r.center().x(), r.y()+4);
-    QPointF bottom(r.center().x(), r.bottom()-4);
-    QPointF tail(r.right()-4, r.center().y());
-    arrow.moveTo(tip);
-    arrow.lineTo(top);
-    arrow.lineTo(QPointF(r.center().x(), r.center().y()-2));
-    arrow.lineTo(tail);
-    arrow.lineTo(QPointF(r.center().x(), r.center().y()+2));
-    arrow.lineTo(bottom);
-    arrow.closeSubpath();
-    p.drawPath(arrow);
-}); }
+static QIcon icoBack() { return loadPngIcon("Back.png"); }
 
-static QIcon icoUp() { return mkIcon([](QPainter& p, const QRectF& r){
-    QPainterPath arrow;
-    QPointF tip(r.center().x(), r.y()+4);
-    QPointF left(r.x()+4, r.center().y());
-    QPointF right(r.right()-4, r.center().y());
-    QPointF tail(r.center().x(), r.bottom()-4);
-    arrow.moveTo(tip);
-    arrow.lineTo(left);
-    arrow.lineTo(QPointF(r.center().x()-2, r.center().y()));
-    arrow.lineTo(tail);
-    arrow.lineTo(QPointF(r.center().x()+2, r.center().y()));
-    arrow.lineTo(right);
-    arrow.closeSubpath();
-    p.drawPath(arrow);
-}); }
+static QIcon icoUp() { return loadPngIcon("Up.png"); }
 
+static QIcon icoRefresh() { return loadPngIcon("Refresh.png"); }
 
-static QIcon icoRefresh() { return mkIcon([](QPainter& p, const QRectF& r){
-    QPointF c = r.center(); qreal rad = r.width()/2 - 4;
-    QPainterPath path; path.moveTo(c.x()+rad, c.y());
-    path.arcTo(QRectF(c.x()-rad, c.y()-rad, 2*rad, 2*rad), 0, 270);
-    p.drawPath(path);
-    QPointF a(c.x()-rad, c.y()-rad+2);
-    p.drawLine(QPointF(a.x(), a.y()), QPointF(a.x()-4, a.y()+2));
-    p.drawLine(QPointF(a.x(), a.y()), QPointF(a.x()+2, a.y()+4));
-}); }
+static QIcon icoHide() { return loadPngIcon("Hide.png"); }
+
+static QIcon icoSearch() { return loadPngIcon("Search.png"); }
 
 // File type icons for File Manager
 static QIcon icoFilePdf() { return mkIcon([](QPainter& p, const QRectF& r){
@@ -1152,7 +1142,7 @@ public:
 
         // Videos can always be scrubbed
         if (suffix == "mp4" || suffix == "mov" || suffix == "avi" ||
-            suffix == "mkv" || suffix == "webm" || suffix == "m4v") {
+            suffix == "mkv" || suffix == "webm" || suffix == "m4v" || suffix == "mxf") {
             return true;
         }
 
@@ -1841,7 +1831,7 @@ void MainWindow::setupUi()
 
     // Everything Search button
     QPushButton* searchButton = new QPushButton(this);
-    searchButton->setIcon(style()->standardIcon(QStyle::SP_FileDialogContentsView));
+    searchButton->setIcon(icoSearch());
     searchButton->setToolTip("Everything Search - Search entire disk");
     searchButton->setFixedSize(28, 28);
     searchButton->setFlat(true);
@@ -1977,7 +1967,7 @@ void MainWindow::setupUi()
     searchLayout->addWidget(searchBox);
 
     QPushButton *filterSearchButton = new QPushButton(this);
-    filterSearchButton->setIcon(style()->standardIcon(QStyle::SP_FileDialogContentsView));
+    filterSearchButton->setIcon(icoSearch());
     filterSearchButton->setToolTip("Search assets");
     filterSearchButton->setFixedSize(28, 28);
     filterSearchButton->setStyleSheet(
@@ -2559,21 +2549,27 @@ void MainWindow::setupFileManagerUi()
     // Right-aligned controls
     tb->addStretch();
 
-    fmGroupSequencesCheckBox = new QCheckBox("Group sequences", fmToolbar);
+    fmGroupSequencesCheckBox = new QToolButton(fmToolbar);
+    fmGroupSequencesCheckBox->setIcon(icoGroup());
     fmGroupSequencesCheckBox->setToolTip("Group image sequences into single entries");
-    fmGroupSequencesCheckBox->setStyleSheet("QCheckBox { color:#9aa0a6; } QCheckBox::indicator { width: 16px; height: 16px; }");
-    connect(fmGroupSequencesCheckBox, &QCheckBox::toggled, this, &MainWindow::onFmGroupSequencesToggled);
+    fmGroupSequencesCheckBox->setCheckable(true);
+    fmGroupSequencesCheckBox->setAutoRaise(true);
+    fmGroupSequencesCheckBox->setIconSize(QSize(28,28));
+    connect(fmGroupSequencesCheckBox, &QToolButton::toggled, this, &MainWindow::onFmGroupSequencesToggled);
     tb->addWidget(fmGroupSequencesCheckBox);
 
-    fmHideFoldersCheckBox = new QCheckBox("Hide folders", fmToolbar);
+    fmHideFoldersCheckBox = new QToolButton(fmToolbar);
+    fmHideFoldersCheckBox->setIcon(icoHide());
     fmHideFoldersCheckBox->setToolTip("Hide folders in Grid view (show files only)");
-    fmHideFoldersCheckBox->setStyleSheet("QCheckBox { color:#9aa0a6; } QCheckBox::indicator { width: 16px; height: 16px; }");
-    connect(fmHideFoldersCheckBox, &QCheckBox::toggled, this, &MainWindow::onFmHideFoldersToggled);
+    fmHideFoldersCheckBox->setCheckable(true);
+    fmHideFoldersCheckBox->setAutoRaise(true);
+    fmHideFoldersCheckBox->setIconSize(QSize(28,28));
+    connect(fmHideFoldersCheckBox, &QToolButton::toggled, this, &MainWindow::onFmHideFoldersToggled);
     tb->addWidget(fmHideFoldersCheckBox);
 
     // Everything Search button
     QToolButton* fmSearchButton = new QToolButton(fmToolbar);
-    fmSearchButton->setIcon(style()->standardIcon(QStyle::SP_FileDialogContentsView));
+    fmSearchButton->setIcon(icoSearch());
     fmSearchButton->setToolTip("Everything Search - Search entire disk");
     fmSearchButton->setAutoRaise(true);
     fmSearchButton->setIconSize(QSize(28,28));
@@ -4885,7 +4881,7 @@ void MainWindow::updateInfoPanel()
             // Check if it's a video
             else {
                 QStringList videoExts = {"mp4", "mov", "avi", "mkv", "wmv", "flv", "webm",
-                                        "m4v", "mpg", "mpeg", "3gp", "mts", "m2ts"};
+                                        "m4v", "mpg", "mpeg", "3gp", "mts", "m2ts", "mxf"};
                 if (videoExts.contains(fileType.toLower())) {
                     // Extract video metadata using QMediaPlayer
                     QMediaPlayer tempPlayer;
@@ -6802,7 +6798,7 @@ static inline bool isImageFile(const QString &ext)
 }
 static inline bool isVideoFile(const QString &ext)
 {
-    static const QSet<QString> exts = {"mp4","mov","avi","mkv","wmv","m4v","mpg","mpeg"};
+    static const QSet<QString> exts = {"mp4","mov","avi","mkv","wmv","m4v","mpg","mpeg","mxf"};
     return exts.contains(ext.toLower());
 }
 static inline bool isAudioFile(const QString &ext)
@@ -7425,7 +7421,7 @@ void MainWindow::updateFmInfoPanel()
             }
         } else {
             QStringList videoExts = {"mp4", "mov", "avi", "mkv", "wmv", "flv", "webm",
-                                    "m4v", "mpg", "mpeg", "3gp", "mts", "m2ts"};
+                                    "m4v", "mpg", "mpeg", "3gp", "mts", "m2ts", "mxf"};
             if (videoExts.contains(ext)) {
                 // Extract video metadata using QMediaPlayer
                 QMediaPlayer tempPlayer;

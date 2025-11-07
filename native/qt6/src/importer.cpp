@@ -19,7 +19,7 @@ static QString norm(const QString& p){ return QFileInfo(p).absoluteFilePath(); }
 bool Importer::isMediaFile(const QString& path){
     static const char* exts[] = {
         // Video formats
-        ".mp4",".mov",".avi",".mkv",".wmv",".flv",".webm",".m4v",".mpg",".mpeg",".3gp",".mts",".m2ts",".ts",".vob",".ogv",
+        ".mp4",".mov",".avi",".mkv",".wmv",".flv",".webm",".m4v",".mpg",".mpeg",".3gp",".mts",".m2ts",".ts",".vob",".ogv",".mxf",
         // Common image formats
         ".jpg",".jpeg",".png",".gif",".bmp",".tiff",".tif",".webp",".svg",".ico",
         // RAW formats

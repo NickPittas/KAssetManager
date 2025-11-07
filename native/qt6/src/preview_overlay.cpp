@@ -22,12 +22,17 @@
 #include <QTextOption>
 
 #include <QVector>
+#include <QSettings>
 
 #include "office_preview.h"
 
 #include <QGraphicsSvgItem>
 #if defined(Q_OS_WIN) && defined(HAVE_QT_AX)
 #include <QAxObject>
+#endif
+
+#ifdef Q_OS_WIN
+#include <windows.h>
 #endif
 
 #include <atomic>
@@ -189,6 +194,7 @@ PreviewOverlay::PreviewOverlay(QWidget *parent)
     , sequencePlaying(false)
     , currentColorSpace(OIIOImageLoader::ColorSpace::sRGB)
     , isHDRImage(false)
+    , useCacheForSequences(true) // ENABLED - using QRecursiveMutex to fix deadlock
 {
     setupUi();
     setFocusPolicy(Qt::StrongFocus);
@@ -203,6 +209,10 @@ PreviewOverlay::PreviewOverlay(QWidget *parent)
     sequenceTimer = new QTimer(this);
     sequenceTimer->setInterval(1000 / 24); // 24 fps
     connect(sequenceTimer, &QTimer::timeout, this, &PreviewOverlay::onSequenceTimerTick);
+
+    // Initialize frame cache for image sequence playback
+    frameCache = new SequenceFrameCache(this);
+    qDebug() << "[PreviewOverlay] Frame cache initialized with QRecursiveMutex (deadlock fix)";
 }
 
 PreviewOverlay::~PreviewOverlay()
@@ -217,6 +227,11 @@ PreviewOverlay::~PreviewOverlay()
 #endif
     if (sequenceTimer) {
         sequenceTimer->stop();
+    }
+
+    // Stop frame cache pre-fetching
+    if (frameCache) {
+        frameCache->stopPrefetch();
     }
 }
 
@@ -352,8 +367,8 @@ void PreviewOverlay::setupUi()
     QVBoxLayout *controlsLayout = new QVBoxLayout(controlsWidget);
     controlsLayout->setContentsMargins(20, 10, 20, 10);
 
-    // Position slider
-    positionSlider = new QSlider(Qt::Horizontal, this);
+    // Position slider with cached frame visualization
+    positionSlider = new CachedFrameSlider(Qt::Horizontal, this);
     positionSlider->setFocusPolicy(Qt::NoFocus);
     positionSlider->setStyleSheet(
         "QSlider::groove:horizontal { background: #555; height: 4px; }"
@@ -542,7 +557,7 @@ void PreviewOverlay::showAsset(const QString &filePath, const QString &fileName,
     fileNameLabel->setText(fileName);
 
     // Determine content type and route
-    QStringList videoFormats = {"mp4", "avi", "mov", "mkv", "webm", "flv", "wmv", "m4v"};
+    QStringList videoFormats = {"mp4", "avi", "mov", "mkv", "webm", "flv", "wmv", "m4v", "mxf"};
     isVideo = videoFormats.contains(currentFileType);
 
     // Make sure widget is shown and sized before loading content
@@ -1338,9 +1353,48 @@ void PreviewOverlay::showSequence(const QStringList &framePaths, const QString &
         colorSpaceCombo->hide();
     }
 
-    // Load first frame
+    // Clear cached frame visualization
+    positionSlider->clearCachedFrames();
+
+    // Initialize frame cache for this sequence (only if enabled)
+    if (frameCache && useCacheForSequences) {
+        frameCache->setSequence(framePaths, currentColorSpace);
+        qDebug() << "[PreviewOverlay] Frame cache initialized for sequence with" << framePaths.size() << "frames";
+
+        // Connect cache signal to update slider visualization
+        // Note: Cannot use Qt::UniqueConnection with lambdas, so we disconnect first to avoid duplicates
+        disconnect(frameCache, &SequenceFrameCache::frameCached, nullptr, nullptr);
+        connect(frameCache, &SequenceFrameCache::frameCached, this, [this](int frameIndex) {
+            positionSlider->markFrameCached(frameIndex);
+        });
+
+        // Start pre-fetching immediately (this will load frames in background)
+        frameCache->startPrefetch(0);
+        qDebug() << "[PreviewOverlay] Started pre-fetching frames from index 0";
+    }
+
+    // Load first frame (synchronously for immediate display)
     if (!sequenceFramePaths.isEmpty()) {
-        loadSequenceFrame(0);
+        // For the first frame, load it directly (not from cache) to ensure immediate display
+        QString framePath = sequenceFramePaths[0];
+        QImage image;
+        if (OIIOImageLoader::isOIIOSupported(framePath)) {
+            image = OIIOImageLoader::loadImage(framePath, 0, 0, currentColorSpace);
+            if (!image.isNull()) {
+                originalPixmap = QPixmap::fromImage(image);
+            }
+        }
+        if (originalPixmap.isNull()) {
+            originalPixmap = QPixmap(framePath);
+        }
+
+        // Display the first frame
+        if (!originalPixmap.isNull()) {
+            imageScene->clear();
+            imageItem = imageScene->addPixmap(originalPixmap);
+            imageScene->setSceneRect(originalPixmap.rect());
+            fitImageToView();
+        }
     }
 
     // Update slider for sequence
@@ -1366,24 +1420,68 @@ void PreviewOverlay::loadSequenceFrame(int frameIndex)
     }
 
     currentSequenceFrame = frameIndex;
-    QString framePath = sequenceFramePaths[frameIndex];
+    QPixmap newPixmap;
 
-    // Load frame with OpenImageIO if supported
-    QImage image;
-    if (OIIOImageLoader::isOIIOSupported(framePath)) {
-        image = OIIOImageLoader::loadImage(framePath, 0, 0, currentColorSpace);
-        if (!image.isNull()) {
-            originalPixmap = QPixmap::fromImage(image);
-        } else {
-            qWarning() << "[PreviewOverlay::loadSequenceFrame] OIIO failed to load frame";
+    // Try to get frame from cache first (only if cache is enabled)
+    if (frameCache && useCacheForSequences) {
+        newPixmap = frameCache->getFrame(frameIndex);
+
+        // Update cache's current frame position for pre-fetching
+        frameCache->setCurrentFrame(frameIndex);
+
+        // If cache returned empty pixmap (frame not ready), pause playback and wait
+        if (newPixmap.isNull()) {
+            // Pause playback (professional RAM player behavior)
+            if (sequencePlaying) {
+                sequenceTimer->stop();
+            }
+
+            // Keep showing previous frame
+            // Update slider and time label anyway
+            positionSlider->blockSignals(true);
+            positionSlider->setValue(frameIndex);
+            positionSlider->blockSignals(false);
+            int actualFrame = sequenceStartFrame + frameIndex;
+            timeLabel->setText(QString("Frame %1 / %2 [CACHING...]").arg(actualFrame).arg(sequenceEndFrame));
+
+            // Schedule a retry after a short delay to check if frame is ready
+            QTimer::singleShot(50, this, [this, frameIndex]() {
+                if (frameCache && frameCache->hasFrame(frameIndex)) {
+                    // Resume playback
+                    if (sequencePlaying) {
+                        sequenceTimer->start();
+                    }
+                    // Load the frame now that it's ready
+                    loadSequenceFrame(frameIndex);
+                } else {
+                    // Frame still not ready, schedule another retry
+                    loadSequenceFrame(frameIndex);
+                }
+            });
+            return;
         }
-    }
 
-    // Fall back to Qt loader
-    if (originalPixmap.isNull()) {
-        originalPixmap = QPixmap(framePath);
+        // Frame is ready from cache, use it
+        originalPixmap = newPixmap;
+    } else {
+        // Original implementation: load directly from disk
+        QString framePath = sequenceFramePaths[frameIndex];
+        QImage image;
+        if (OIIOImageLoader::isOIIOSupported(framePath)) {
+            image = OIIOImageLoader::loadImage(framePath, 0, 0, currentColorSpace);
+            if (!image.isNull()) {
+                originalPixmap = QPixmap::fromImage(image);
+            } else {
+                qWarning() << "[PreviewOverlay::loadSequenceFrame] OIIO failed to load frame";
+            }
+        }
+
+        // Fall back to Qt loader
         if (originalPixmap.isNull()) {
-            qWarning() << "[PreviewOverlay::loadSequenceFrame] Qt failed to load frame";
+            originalPixmap = QPixmap(framePath);
+            if (originalPixmap.isNull()) {
+                qWarning() << "[PreviewOverlay::loadSequenceFrame] Qt failed to load frame";
+            }
         }
     }
 
@@ -1419,7 +1517,14 @@ void PreviewOverlay::playSequence()
     sequencePlaying = true;
     sequenceTimer->start();
     updatePlayPauseButton();
-    qDebug() << "[PreviewOverlay] Playing sequence at 24 fps";
+
+    // Start pre-fetching frames ahead of current position (only if cache is enabled)
+    if (frameCache && useCacheForSequences) {
+        frameCache->startPrefetch(currentSequenceFrame);
+        qDebug() << "[PreviewOverlay] Playing sequence at 24 fps with pre-fetching enabled";
+    } else {
+        qDebug() << "[PreviewOverlay] Playing sequence at 24 fps (cache disabled)";
+    }
 }
 
 void PreviewOverlay::pauseSequence()
@@ -1427,6 +1532,10 @@ void PreviewOverlay::pauseSequence()
     sequencePlaying = false;
     sequenceTimer->stop();
     updatePlayPauseButton();
+
+    // Keep pre-fetching running when paused so frames continue to load in background
+    // This allows smooth scrubbing and instant resume
+
     qDebug() << "[PreviewOverlay] Paused sequence";
 }
 
@@ -1435,6 +1544,12 @@ void PreviewOverlay::stopSequence()
     sequencePlaying = false;
     sequenceTimer->stop();
     currentSequenceFrame = 0;
+
+    // Stop pre-fetching when stopped (only if cache is enabled)
+    if (frameCache && useCacheForSequences) {
+        frameCache->stopPrefetch();
+    }
+
     loadSequenceFrame(0);
     updatePlayPauseButton();
 }
@@ -1451,6 +1566,12 @@ void PreviewOverlay::onSequenceTimerTick()
     // Loop back to start if at end
     if (currentSequenceFrame >= sequenceFramePaths.size()) {
         currentSequenceFrame = 0;
+
+        // When looping, restart prefetch from frame 0 to ensure smooth playback
+        if (frameCache && useCacheForSequences) {
+            qDebug() << "[PreviewOverlay] Sequence looped to start, restarting prefetch";
+            frameCache->startPrefetch(0);
+        }
     }
 
     loadSequenceFrame(currentSequenceFrame);
@@ -1482,6 +1603,12 @@ void PreviewOverlay::onColorSpaceChanged(int index)
     // Reload current frame/image with new color space
     if (isSequence) {
         qDebug() << "[PreviewOverlay] Reloading sequence frame with new color space";
+
+        // Clear cache and reinitialize with new color space (only if cache is enabled)
+        if (frameCache && useCacheForSequences) {
+            frameCache->setSequence(sequenceFramePaths, currentColorSpace);
+        }
+
         loadSequenceFrame(currentSequenceFrame);
     } else if (!currentFilePath.isEmpty() && isHDRImage) {
         qDebug() << "[PreviewOverlay] Reloading image with new color space";
@@ -1508,6 +1635,11 @@ void PreviewOverlay::stopPlayback()
     // Stop sequence playback
     if (sequencePlaying) {
         pauseSequence();
+    }
+
+    // Stop pre-fetching but keep cache intact (only if cache is enabled)
+    if (frameCache && useCacheForSequences) {
+        frameCache->stopPrefetch();
     }
 
     // Clear the media source to release the file
@@ -1922,6 +2054,380 @@ void PreviewOverlay::moveEvent(QMoveEvent *event)
 {
     QWidget::moveEvent(event);
     if (navContainer) positionNavButtons(navContainer);
+}
+
+// ============================================================================
+// SequenceFrameCache Implementation
+// ============================================================================
+
+SequenceFrameCache::SequenceFrameCache(QObject *parent)
+    : QObject(parent)
+    , m_colorSpace(OIIOImageLoader::ColorSpace::sRGB)
+    , m_cache(100 * 50 * 1024) // Max cost in KB: will be updated based on settings
+    , m_threadPool(new QThreadPool(this))
+    , m_maxCacheSize(100)
+    , m_currentFrame(0)
+    , m_prefetchActive(false)
+{
+    // Use 4 threads for faster background loading
+    m_threadPool->setMaxThreadCount(4);
+
+    // Load cache size from settings
+    QSettings s("AugmentCode", "KAssetManager");
+    bool autoSize = s.value("SequenceCache/AutoSize", true).toBool();
+
+    if (autoSize) {
+        // Calculate based on available RAM
+        int autoPercent = s.value("SequenceCache/AutoPercent", 70).toInt();
+        m_maxCacheSize = calculateOptimalCacheSize(autoPercent);
+    } else {
+        // Use manual size
+        m_maxCacheSize = s.value("SequenceCache/ManualSize", 100).toInt();
+    }
+
+    // Update cache max cost based on calculated size
+    // Assume 50MB per frame average
+    int maxCostKB = m_maxCacheSize * 50 * 1024;
+    m_cache.setMaxCost(maxCostKB);
+
+    qDebug() << "[SequenceFrameCache] ========================================";
+    qDebug() << "[SequenceFrameCache] INITIALIZATION:";
+    qDebug() << "[SequenceFrameCache]   Max cache size:" << m_maxCacheSize << "frames";
+    qDebug() << "[SequenceFrameCache]   Max cost:" << maxCostKB << "KB (" << (maxCostKB / 1024) << "MB)";
+    qDebug() << "[SequenceFrameCache]   Worker threads:" << m_threadPool->maxThreadCount();
+    qDebug() << "[SequenceFrameCache]   Auto-size:" << (autoSize ? "YES" : "NO");
+    if (autoSize) {
+        int autoPercent = s.value("SequenceCache/AutoPercent", 70).toInt();
+        qDebug() << "[SequenceFrameCache]   RAM percentage:" << autoPercent << "%";
+    }
+    qDebug() << "[SequenceFrameCache] ========================================";
+}
+
+SequenceFrameCache::~SequenceFrameCache()
+{
+    stopPrefetch();
+    m_threadPool->waitForDone(3000);
+    clearCache();
+}
+
+void SequenceFrameCache::setSequence(const QStringList &framePaths, OIIOImageLoader::ColorSpace colorSpace)
+{
+    QMutexLocker locker(&m_mutex);
+    stopPrefetch();
+    clearCache();
+    m_framePaths = framePaths;
+    m_colorSpace = colorSpace;
+    m_currentFrame = 0;
+    qDebug() << "[SequenceFrameCache] Set sequence with" << framePaths.size() << "frames";
+}
+
+void SequenceFrameCache::clearCache()
+{
+    QMutexLocker locker(&m_mutex);
+    m_cache.clear();
+    m_pendingFrames.clear();
+}
+
+QPixmap SequenceFrameCache::getFrame(int frameIndex)
+{
+    QMutexLocker locker(&m_mutex);
+
+    if (frameIndex < 0 || frameIndex >= m_framePaths.size()) {
+        qWarning() << "[SequenceFrameCache::getFrame] Invalid frame index:" << frameIndex;
+        return QPixmap();
+    }
+
+    // Check if frame is in cache
+    QPixmap *cached = m_cache.object(frameIndex);
+    if (cached) {
+        // Cache hit - return the frame
+        return *cached;
+    }
+
+    // Cache miss - return empty pixmap (non-blocking)
+    // The pre-fetcher will load this frame in the background
+    return QPixmap();
+}
+
+bool SequenceFrameCache::hasFrame(int frameIndex) const
+{
+    QMutexLocker locker(&m_mutex);
+    return m_cache.contains(frameIndex);
+}
+
+void SequenceFrameCache::startPrefetch(int currentFrame)
+{
+    QMutexLocker locker(&m_mutex);
+    m_prefetchActive = true;
+    m_currentFrame = currentFrame;
+    locker.unlock();
+
+    prefetchFrames(currentFrame);
+}
+
+void SequenceFrameCache::stopPrefetch()
+{
+    QMutexLocker locker(&m_mutex);
+    m_prefetchActive = false;
+    m_pendingFrames.clear();
+}
+
+void SequenceFrameCache::setCurrentFrame(int frameIndex)
+{
+    QMutexLocker locker(&m_mutex);
+
+    // Detect if we've jumped backwards significantly (e.g., looping from end to start)
+    bool hasLooped = (m_currentFrame > frameIndex) && (m_currentFrame - frameIndex > 50);
+
+    if (hasLooped) {
+        // Don't clear cache on loop - just let it continue with existing frames
+        // The prefetch will load any missing frames from the new position
+    }
+
+    // Only clean up cache if it's getting close to the limit
+    // This prevents aggressive cleanup during normal playback
+    int currentCacheSize = m_cache.count();
+    int cacheThreshold = static_cast<int>(m_maxCacheSize * 0.9); // 90% of max
+
+    if (currentCacheSize >= cacheThreshold) {
+        // Remove frames that are too far behind the current position (sliding window)
+        // Scale the window based on max cache size
+        // Keep 40% of cache behind, 60% ahead for smooth forward playback
+        const int behindWindow = static_cast<int>(m_maxCacheSize * 0.4);
+        const int aheadWindow = static_cast<int>(m_maxCacheSize * 0.6);
+
+        // Remove frames that are outside the window
+        QList<int> keysToRemove;
+        for (int i = 0; i < m_framePaths.size(); ++i) {
+            if (m_cache.contains(i)) {
+                // Remove if too far behind or too far ahead
+                if (i < frameIndex - behindWindow || i > frameIndex + aheadWindow) {
+                    keysToRemove.append(i);
+                }
+            }
+        }
+
+        // Remove old frames
+        for (int key : keysToRemove) {
+            m_cache.remove(key);
+        }
+
+        // Frames removed silently to avoid log spam
+        Q_UNUSED(keysToRemove);
+    }
+
+    m_currentFrame = frameIndex;
+
+    if (m_prefetchActive) {
+        locker.unlock();
+        prefetchFrames(frameIndex);
+    }
+}
+
+void SequenceFrameCache::setMaxCacheSize(int maxFrames)
+{
+    QMutexLocker locker(&m_mutex);
+    m_maxCacheSize = maxFrames;
+    m_cache.setMaxCost(maxFrames * 50 * 1024); // Assume ~50MB per frame (4K images can be large)
+}
+
+qint64 SequenceFrameCache::currentMemoryUsageMB() const
+{
+    QMutexLocker locker(&m_mutex);
+    // Estimate memory usage: number of cached frames * average frame size (30MB)
+    return static_cast<qint64>(m_cache.count() * 30);
+}
+
+int SequenceFrameCache::cachedFrameCount() const
+{
+    QMutexLocker locker(&m_mutex);
+    return m_cache.count();
+}
+
+void SequenceFrameCache::prefetchFrames(int startFrame)
+{
+    QMutexLocker locker(&m_mutex);
+
+    if (!m_prefetchActive || m_framePaths.isEmpty()) {
+        return;
+    }
+
+    // Pre-fetch frames ahead of current position for smooth playback
+    // Scale prefetch count based on max cache size (60% of cache for forward playback)
+    const int prefetchCount = static_cast<int>(m_maxCacheSize * 0.6);
+
+    for (int i = 0; i <= prefetchCount; ++i) {
+        int frameIndex = startFrame + i;
+
+        // Stop if we've reached the end
+        if (frameIndex >= m_framePaths.size()) {
+            break;
+        }
+
+        // Skip if already cached or being loaded
+        if (m_cache.contains(frameIndex) || m_pendingFrames.contains(frameIndex)) {
+            continue;
+        }
+
+        // Mark as pending
+        m_pendingFrames.insert(frameIndex);
+
+        // Create worker to load frame in background
+        QString framePath = m_framePaths[frameIndex];
+        FrameLoaderWorker *worker = new FrameLoaderWorker(this, frameIndex, framePath, m_colorSpace);
+
+        // Use Qt::AutoConnection - Qt will automatically choose the right connection type
+        // This ensures proper thread safety without blocking
+        connect(worker, &FrameLoaderWorker::frameLoaded, this, [this](int idx, QPixmap pixmap) {
+            QMutexLocker locker(&m_mutex);
+            m_pendingFrames.remove(idx);
+
+            if (!pixmap.isNull() && m_prefetchActive) {
+                // Insert into cache
+                int cost = pixmap.width() * pixmap.height() * 4 / 1024; // Cost in KB
+
+                // Check if cache is full before inserting
+                int currentCost = m_cache.totalCost();
+                int maxCost = m_cache.maxCost();
+                m_cache.insert(idx, new QPixmap(pixmap), cost);
+                emit frameCached(idx);
+            } else if (pixmap.isNull()) {
+                qWarning() << "[SequenceFrameCache] Failed to load frame" << idx;
+            }
+        }, Qt::AutoConnection);
+
+        m_threadPool->start(worker);
+    }
+}
+
+QPixmap SequenceFrameCache::loadFrame(int frameIndex)
+{
+    if (frameIndex < 0 || frameIndex >= m_framePaths.size()) {
+        return QPixmap();
+    }
+
+    QString framePath = m_framePaths[frameIndex];
+    QImage image;
+
+    // Try OpenImageIO first for supported formats
+    if (OIIOImageLoader::isOIIOSupported(framePath)) {
+        image = OIIOImageLoader::loadImage(framePath, 0, 0, m_colorSpace);
+    }
+
+    // Fall back to Qt loader
+    if (image.isNull()) {
+        image.load(framePath);
+    }
+
+    if (image.isNull()) {
+        qWarning() << "[SequenceFrameCache] Failed to load frame:" << framePath;
+        return QPixmap();
+    }
+
+    return QPixmap::fromImage(image);
+}
+
+// ============================================================================
+// FrameLoaderWorker Implementation
+// ============================================================================
+
+FrameLoaderWorker::FrameLoaderWorker(SequenceFrameCache *cache, int frameIndex,
+                                     const QString &framePath, OIIOImageLoader::ColorSpace colorSpace)
+    : m_cache(cache)
+    , m_frameIndex(frameIndex)
+    , m_framePath(framePath)
+    , m_colorSpace(colorSpace)
+{
+    setAutoDelete(true);
+}
+
+void FrameLoaderWorker::run()
+{
+    QImage image;
+
+    // Try OpenImageIO first for supported formats
+    if (OIIOImageLoader::isOIIOSupported(m_framePath)) {
+        image = OIIOImageLoader::loadImage(m_framePath, 0, 0, m_colorSpace);
+    }
+
+    // Fall back to Qt loader
+    if (image.isNull()) {
+        image.load(m_framePath);
+    }
+
+    if (!image.isNull()) {
+        QPixmap pixmap = QPixmap::fromImage(image);
+        emit frameLoaded(m_frameIndex, pixmap);
+    } else {
+        qWarning() << "[FrameLoaderWorker] Failed to load frame:" << m_framePath;
+        emit frameLoaded(m_frameIndex, QPixmap());
+    }
+}
+
+// ============================================================================
+// Static helper functions for cache size calculation
+// ============================================================================
+
+qint64 SequenceFrameCache::getAvailableRAM()
+{
+#ifdef Q_OS_WIN
+    // Windows: Use GlobalMemoryStatusEx
+    MEMORYSTATUSEX memInfo;
+    memInfo.dwLength = sizeof(MEMORYSTATUSEX);
+    if (GlobalMemoryStatusEx(&memInfo)) {
+        // Return available physical memory in MB
+        return static_cast<qint64>(memInfo.ullAvailPhys / (1024 * 1024));
+    }
+#elif defined(Q_OS_LINUX)
+    // Linux: Read from /proc/meminfo
+    QFile file("/proc/meminfo");
+    if (file.open(QIODevice::ReadOnly)) {
+        QTextStream in(&file);
+        while (!in.atEnd()) {
+            QString line = in.readLine();
+            if (line.startsWith("MemAvailable:")) {
+                QStringList parts = line.split(QRegularExpression("\\s+"));
+                if (parts.size() >= 2) {
+                    qint64 kb = parts[1].toLongLong();
+                    return kb / 1024; // Convert KB to MB
+                }
+            }
+        }
+    }
+#elif defined(Q_OS_MAC)
+    // macOS: Use sysctl
+    int mib[2] = {CTL_HW, HW_MEMSIZE};
+    uint64_t memsize;
+    size_t len = sizeof(memsize);
+    if (sysctl(mib, 2, &memsize, &len, NULL, 0) == 0) {
+        return static_cast<qint64>(memsize / (1024 * 1024));
+    }
+#endif
+
+    // Fallback: return 8GB as a conservative estimate
+    qWarning() << "[SequenceFrameCache] Could not detect available RAM, using 8GB default";
+    return 8192;
+}
+
+int SequenceFrameCache::calculateOptimalCacheSize(int percentOfFreeRAM)
+{
+    qint64 availableRAM = getAvailableRAM();
+    qDebug() << "[SequenceFrameCache] Available RAM:" << availableRAM << "MB";
+
+    // Calculate cache size based on percentage of available RAM
+    // Assume average frame size of 30MB (conservative for 4K EXR)
+    const int avgFrameSizeMB = 30;
+    qint64 cacheRAM = (availableRAM * percentOfFreeRAM) / 100;
+    int cacheFrames = static_cast<int>(cacheRAM / avgFrameSizeMB);
+
+    // Clamp to reasonable range: 10-500 frames
+    cacheFrames = qMax(10, qMin(500, cacheFrames));
+
+    qDebug() << "[SequenceFrameCache] Calculated optimal cache size:" << cacheFrames
+             << "frames (" << (cacheFrames * avgFrameSizeMB) << "MB) using"
+             << percentOfFreeRAM << "% of available RAM";
+
+    return cacheFrames;
 }
 
 
