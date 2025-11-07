@@ -113,9 +113,13 @@ private:
         QString prefix;
         QString suffix;
         int padding = 0;
-        QStringList frames;
+        QStringList frames; // Optional: may be empty when using fast detection
+        qint64 firstFrame = -1;
+        qint64 lastFrame = -1;
         QElapsedTimer lastScan;
-        bool isValid() const { return !frames.isEmpty(); }
+        bool isValid() const {
+            return !frames.isEmpty() || (padding > 0 && firstFrame >= 0 && lastFrame >= firstFrame);
+        }
     };
 
     mutable QMutex m_mutex;

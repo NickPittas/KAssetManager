@@ -170,7 +170,7 @@ void AssetsModel::setSearchQuery(const QString& query) {
     if (normalized == m_searchQuery)
         return;
     m_searchQuery = normalized;
-    // If search is active, broaden query across all assets so tag name search works globally
+    // Reload; scope (folder vs global) is controlled by m_searchEntireDatabase
     reload();
     emit searchQueryChanged();
 }
@@ -226,6 +226,13 @@ void AssetsModel::setRecursiveMode(bool recursive) {
     emit recursiveModeChanged();
 }
 
+void AssetsModel::setSearchEntireDatabase(bool enabled) {
+    if (m_searchEntireDatabase == enabled) return;
+    m_searchEntireDatabase = enabled;
+    scheduleReload();
+    emit searchEntireDatabaseChanged();
+}
+
 void AssetsModel::reload(){
     QElapsedTimer t; t.start();
 
@@ -245,7 +252,7 @@ void AssetsModel::reload(){
 void AssetsModel::query(){
     m_rows.clear();
 
-    const bool globalScope = !m_selectedTagNames.isEmpty() || !m_searchQuery.trimmed().isEmpty();
+    const bool globalScope = !m_selectedTagNames.isEmpty() || (m_searchEntireDatabase && !m_searchQuery.trimmed().isEmpty());
 
     QSqlQuery q(DB::instance().database());
     if (globalScope) {

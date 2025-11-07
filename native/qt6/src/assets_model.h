@@ -36,6 +36,7 @@ class AssetsModel : public QAbstractListModel {
     Q_PROPERTY(QStringList selectedTagNames READ selectedTagNames WRITE setSelectedTagNames NOTIFY selectedTagNamesChanged)
     Q_PROPERTY(int tagFilterMode READ tagFilterMode WRITE setTagFilterMode NOTIFY tagFilterModeChanged)
     Q_PROPERTY(bool recursiveMode READ recursiveMode WRITE setRecursiveMode NOTIFY recursiveModeChanged)
+    Q_PROPERTY(bool searchEntireDatabase READ searchEntireDatabase WRITE setSearchEntireDatabase NOTIFY searchEntireDatabaseChanged)
 public:
     enum Roles {
         IdRole = Qt::UserRole + 1,
@@ -90,6 +91,9 @@ public:
     bool recursiveMode() const { return m_recursiveMode; }
     void setRecursiveMode(bool recursive);
 
+    bool searchEntireDatabase() const { return m_searchEntireDatabase; }
+    void setSearchEntireDatabase(bool enabled);
+
     Q_INVOKABLE bool moveAssetToFolder(int assetId, int folderId);
     Q_INVOKABLE bool moveAssetsToFolder(const QVariantList& assetIds, int folderId);
     Q_INVOKABLE bool removeAssets(const QVariantList& assetIds);
@@ -108,6 +112,7 @@ signals:
     void selectedTagNamesChanged();
     void tagFilterModeChanged();
     void recursiveModeChanged();
+    void searchEntireDatabaseChanged();
     void tagsChangedForAsset(int assetId);
 
 private slots:
@@ -128,6 +133,7 @@ private:
     QStringList m_selectedTagNames;
     int m_tagFilterMode = And;
     bool m_recursiveMode = false;
+    bool m_searchEntireDatabase = false;
     QVector<int> m_filteredRowIndexes;
 
     // Guard to avoid emitting dataChanged while the model is resetting

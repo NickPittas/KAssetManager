@@ -5,6 +5,7 @@
 #include <QTemporaryFile>
 #include <QTextStream>
 #include <QRegularExpression>
+#include <QSet>
 
 
 #include <algorithm>
@@ -96,6 +97,28 @@ void MediaConverterWorker::startNext()
         return;
     }
 
+    // Estimate total frames for frame-based progress when possible
+    m_estTotalFrames = 0;
+    if (t.target == TargetKind::VideoMP4 || t.target == TargetKind::VideoMOV) {
+        QFileInfo inFi(t.sourcePath);
+        static QRegularExpression rxDigits("(\\d+)(?!.*\\d)");
+        QRegularExpressionMatch mm = rxDigits.match(inFi.fileName());
+        const QString ext = inFi.suffix().toLower();
+        static const QSet<QString> imgExts = {"png","jpg","jpeg","tif","tiff","exr","iff","psd","bmp","tga","dds","webp"};
+        if (mm.hasMatch() && imgExts.contains(ext)) {
+            const int pad = mm.captured(1).length();
+            m_estTotalFrames = countSequenceFrames(inFi, mm, pad);
+        } else if (durMs > 0) {
+            const double fps = probeAvgFps(m_ffmpegPath, t.sourcePath);
+            if (fps > 0.0) m_estTotalFrames = qMax<qint64>(1, qint64((durMs/1000.0) * fps + 0.5));
+        }
+    } else if (t.target == TargetKind::JpgSequence || t.target == TargetKind::PngSequence || t.target == TargetKind::TifSequence) {
+        if (durMs > 0) {
+            const double fps = probeAvgFps(m_ffmpegPath, t.sourcePath);
+            if (fps > 0.0) m_estTotalFrames = qMax<qint64>(1, qint64((durMs/1000.0) * fps + 0.5));
+        }
+    }
+
     m_curDurationMs = durMs;
 
     emit fileStarted(m_index, t.sourcePath, outPath, durMs);
@@ -119,8 +142,25 @@ void MediaConverterWorker::onReadyStdOut()
     emit logLine(s);
 
     // Parse -progress output
-    // Expect lines like: out_time_ms=123456, progress=continue
+    // Prefer frame-based progress when total frames are known; otherwise fall back to time-based.
+    static QRegularExpression rxFrame("frame=([0-9]+)");
     static QRegularExpression rxTime("out_time_ms=([0-9]+)");
+
+    int latestFrame = -1;
+    auto it = rxFrame.globalMatch(s);
+    while (it.hasNext()) {
+        const QRegularExpressionMatch mm = it.next();
+        latestFrame = mm.captured(1).toInt();
+    }
+
+    if (latestFrame >= 0 && m_estTotalFrames > 0) {
+        int percent = int(std::min<qint64>(qint64(latestFrame) * 100 / m_estTotalFrames, 100));
+        emit currentFileProgress(m_index, percent, latestFrame, m_estTotalFrames);
+        int overall = int(((double(m_index) + (percent/100.0)) / double(m_tasks.size())) * 100.0);
+        emit overallProgress(std::clamp(overall, 0, 100));
+        return;
+    }
+
     QRegularExpressionMatch m = rxTime.match(s);
     if (m.hasMatch() && m_curDurationMs > 0) {
         qint64 outMs = m.captured(1).toLongLong();
@@ -191,6 +231,100 @@ bool MediaConverterWorker::probeDurationMs(const QString& ffmpeg, const QString&
         if (ok && sec > 0.0) durMs = qint64(sec * 1000.0);
     }
     return true;
+}
+
+double MediaConverterWorker::probeAvgFps(const QString& ffmpeg, const QString& input)
+{
+    // Use ffprobe to fetch avg_frame_rate as a rational (e.g., 30000/1001)
+    QString ffprobe = QFileInfo(ffmpeg).dir().filePath("ffprobe.exe");
+    if (!QFileInfo::exists(ffprobe)) ffprobe = "ffprobe";
+    QProcess p; QStringList a;
+    a << "-v" << "error" << "-select_streams" << "v:0" << "-show_entries" << "stream=avg_frame_rate" << "-of" << "default=nw=1:nk=1" << input;
+    p.start(ffprobe, a); p.waitForFinished(5000);
+    if (p.exitStatus() == QProcess::NormalExit && p.exitCode() == 0) {
+        const QString line = QString::fromUtf8(p.readAllStandardOutput()).trimmed();
+        const QStringList parts = line.split('/');
+        bool ok1=false, ok2=false;
+        if (parts.size() == 2) {
+            const double num = parts[0].toDouble(&ok1);
+            const double den = parts[1].toDouble(&ok2);
+            if (ok1 && ok2 && den > 0.0) return num / den;
+        }
+        double val = line.toDouble(&ok1);
+        if (ok1 && val > 0.0) return val;
+    }
+    return 0.0;
+}
+
+qint64 MediaConverterWorker::countSequenceFrames(const QFileInfo& inFi, const QRegularExpressionMatch& mm, int pad)
+{
+    // Optimized: find first and last existing frame using existence checks only
+    // Assumes gaps are acceptable for progress estimation. Prioritizes speed over perfect accuracy.
+    const QString name = inFi.fileName();
+    const QString pre = name.left(mm.capturedStart(1));
+    const QString post = name.mid(mm.capturedEnd(1));
+    QDir dir = inFi.dir();
+
+    auto existsFrame = [&](qint64 n) -> bool {
+        if (n < 0) return false;
+        const QString digits = QString::number(n).rightJustified(pad, QLatin1Char('0'));
+        const QString fileName = pre + digits + post;
+        return QFileInfo(dir.filePath(fileName)).exists();
+    };
+
+    // Current file's frame number is a known existing anchor
+    const qint64 curN = mm.captured(1).toLongLong();
+
+    // 1) Find first frame: binary search in [0, curN]
+    qint64 low = -1;              // known non-existing (virtual)
+    qint64 high = curN;           // known existing
+    while (high - low > 1) {
+        qint64 mid = low + (high - low) / 2;
+        if (existsFrame(mid)) high = mid; else low = mid;
+    }
+    const qint64 first = high;
+
+    // 2) Find last frame using high-start halving then binary search
+    const qint64 START_HUGE = 10000000; // 10M
+    qint64 lastKnownExist = curN;
+    qint64 lastKnownNonExist = -1;
+
+    // Halve down from a huge number until an existing frame is found (or we drop below current)
+    qint64 probe = START_HUGE;
+    while (probe > lastKnownExist) {
+        if (existsFrame(probe)) { lastKnownExist = probe; break; }
+        lastKnownNonExist = probe;
+        probe /= 2;
+    }
+    // If we never found an existing above curN, use curN as existing and set a non-existing above it
+    if (lastKnownExist == curN) {
+        // Find a non-existing number just above current by doubling until not found
+        qint64 up = std::max<qint64>(curN + 1, 2 * curN);
+        // Cap to avoid extremely large paths; we just need one non-existing
+        for (int i = 0; i < 32; ++i) {
+            if (!existsFrame(up)) { lastKnownNonExist = up; break; }
+            if (up > 100000000) { lastKnownNonExist = up + 1; break; } // force a non-existing cap
+            up *= 2;
+        }
+        if (lastKnownNonExist < 0) lastKnownNonExist = curN + 1; // fallback
+    } else {
+        // Ensure lastKnownNonExist is set (should be from the halving loop)
+        if (lastKnownNonExist < 0) lastKnownNonExist = lastKnownExist + 1;
+    }
+
+    // Now binary search between [lastKnownExist, lastKnownNonExist] to find the maximum existing frame
+    qint64 lo = lastKnownExist;          // exists
+    qint64 hi = lastKnownNonExist;       // does not exist
+    // Guard against degenerate cases
+    if (hi <= lo) hi = lo + 1;
+    while (hi - lo > 1) {
+        qint64 mid = lo + (hi - lo) / 2;
+        if (existsFrame(mid)) lo = mid; else hi = mid;
+    }
+    const qint64 last = lo;
+
+    const qint64 total = (last >= first) ? (last - first + 1) : 1;
+    return total;
 }
 
 QString MediaConverterWorker::scaleFilterFor(const Task& t, bool isVideo)
@@ -269,7 +403,36 @@ bool MediaConverterWorker::buildCommand(const Task& t, QString& program, QString
     // Input
     args << "-hide_banner" << "-nostdin" << "-y"; // allow overwrite handling below
     args << "-progress" << "pipe:1"; // progress to stdout
-    args << "-i" << inFi.absoluteFilePath();
+
+    // If converting to video and the input path looks like an image sequence (e.g., contains a trailing number),
+    // construct a printf-style pattern and supply -start_number and -framerate before -i.
+    bool usedSequenceInput = false;
+    if (isVideo) {
+        const QString name = inFi.fileName();
+        static QRegularExpression rxDigits("(\\d+)(?!.*\\d)"); // last run of digits
+        QRegularExpressionMatch mm = rxDigits.match(name);
+        // Consider common image extensions
+        const QString ext = inFi.suffix().toLower();
+        static const QSet<QString> imgExts = {"png","jpg","jpeg","tif","tiff","exr","iff","psd","bmp","tga","dds","webp"};
+        if (mm.hasMatch() && imgExts.contains(ext)) {
+            const QString digits = mm.captured(1);
+            const int pad = digits.length();
+            const int startNum = digits.toInt();
+            QString pattFile = name;
+            pattFile.replace(mm.capturedStart(1), pad, QString("%") + QString("0%1d").arg(pad));
+            const QString pattPath = QDir(inFi.dir().absolutePath()).filePath(pattFile);
+            // -framerate must appear before -i
+            int fps = (t.target == TargetKind::VideoMP4) ? t.mp4.fps : t.mov.fps;
+            if (fps <= 0) fps = 24;
+            args << "-framerate" << QString::number(fps);
+            args << "-start_number" << QString::number(std::max(0, startNum));
+            args << "-i" << pattPath;
+            usedSequenceInput = true;
+        }
+    }
+    if (!usedSequenceInput) {
+        args << "-i" << inFi.absoluteFilePath();
+    }
 
     // Scaling
     const QString scaleF = scaleFilterFor(t, isVideo);
@@ -298,24 +461,52 @@ bool MediaConverterWorker::buildCommand(const Task& t, QString& program, QString
         if (vcodec.startsWith("prores")) vcodec = "prores_ks";
         args << "-c:v" << (vcodec.isEmpty() ? "prores_ks" : vcodec);
         if (vcodec == "prores_ks") args << "-profile:v" << QString::number(t.mov.proresProfile);
+
+        // Determine if we should preserve alpha and set appropriate pixel format
+        auto ffprobeHasAlpha = [&](const QString& inputPath)->bool {
+            QString ffprobe = QFileInfo(m_ffmpegPath).dir().filePath("ffprobe.exe");
+            if (!QFileInfo::exists(ffprobe)) ffprobe = "ffprobe";
+            QProcess p; QStringList a;
+            a << "-v" << "error" << "-select_streams" << "v:0" << "-show_entries" << "stream=pix_fmt" << "-of" << "default=nw=1:nk=1" << inputPath;
+            p.start(ffprobe, a); p.waitForFinished(4000);
+            if (p.exitStatus() == QProcess::NormalExit && p.exitCode() == 0) {
+                const QString pf = QString::fromUtf8(p.readAllStandardOutput()).trimmed().toLower();
+                if (pf.contains("rgba") || pf.contains("bgra") || pf.contains("argb") || pf.contains("abgr") || pf.contains("yuva") || pf.startsWith("ya")) return true;
+            }
+            return false;
+        };
+        bool inputHasAlpha = false;
+        if (usedSequenceInput) {
+            const QString ext = inFi.suffix().toLower();
+            static const QSet<QString> alphaImgs = {"png","tif","tiff","exr","psd"};
+            inputHasAlpha = alphaImgs.contains(ext);
+        } else {
+            inputHasAlpha = ffprobeHasAlpha(inFi.absoluteFilePath());
+        }
+        const bool alphaCapable = ((vcodec == "prores_ks" && t.mov.proresProfile == 4) || (vcodec == "qtrle"));
+        if (alphaCapable && inputHasAlpha) {
+            if (vcodec == "prores_ks") args << "-pix_fmt" << "yuva444p10le"; // ProRes 4444 with alpha
+            else if (vcodec == "qtrle") args << "-pix_fmt" << "argb";        // Animation (QuickTime RLE) with alpha
+        }
+
         outPath = QDir(outDir).filePath(baseName + ".mov");
     } else if (t.target == TargetKind::JpgSequence) {
         // Create subfolder
         QString seqDir = QDir(outDir).filePath(baseName + "_jpg_seq"); QDir().mkpath(seqDir);
-        const QString pat = QString("%%0%1d").arg(std::clamp(t.jpgSeq.padDigits,1,8));
+        const QString pat = QString("%") + QString("0%1d").arg(std::clamp(t.jpgSeq.padDigits,1,8));
         outPath = QDir(seqDir).filePath(baseName + "_" + pat + ".jpg");
         args << "-start_number" << QString::number(std::max(0, t.jpgSeq.startNumber));
         args << "-qscale:v" << QString::number(std::clamp(t.jpgSeq.qscale, 2, 31));
     } else if (t.target == TargetKind::PngSequence) {
         QString seqDir = QDir(outDir).filePath(baseName + "_png_seq"); QDir().mkpath(seqDir);
-        const QString pat = QString("%%0%1d").arg(std::clamp(t.pngSeq.padDigits,1,8));
+        const QString pat = QString("%") + QString("0%1d").arg(std::clamp(t.pngSeq.padDigits,1,8));
         outPath = QDir(seqDir).filePath(baseName + "_" + pat + ".png");
         args << "-start_number" << QString::number(std::max(0, t.pngSeq.startNumber));
         if (t.pngSeq.includeAlpha) args << "-pix_fmt" << "rgba"; else args << "-pix_fmt" << "rgb24";
         args << "-compression_level" << "9";
     } else if (t.target == TargetKind::TifSequence) {
         QString seqDir = QDir(outDir).filePath(baseName + "_tif_seq"); QDir().mkpath(seqDir);
-        const QString pat = QString("%%0%1d").arg(std::clamp(t.tifSeq.padDigits,1,8));
+        const QString pat = QString("%") + QString("0%1d").arg(std::clamp(t.tifSeq.padDigits,1,8));
         outPath = QDir(seqDir).filePath(baseName + "_" + pat + ".tif");
         args << "-start_number" << QString::number(std::max(0, t.tifSeq.startNumber));
         args << "-c:v" << "tiff";
@@ -323,7 +514,12 @@ bool MediaConverterWorker::buildCommand(const Task& t, QString& program, QString
         if (t.tifSeq.includeAlpha) args << "-pix_fmt" << "rgba"; else args << "-pix_fmt" << "rgb24";
     }
 
-    if (t.conflict == ConflictAction::AutoRename) outPath = uniqueOutPath(outPath);
+    // Only auto-rename non-sequence outputs. For image sequences, FFmpeg requires
+    // an exact printf-style pattern like filename_%05d.ext; adding suffixes breaks it.
+    if (t.conflict == ConflictAction::AutoRename) {
+        const bool isSeq = (t.target == TargetKind::JpgSequence || t.target == TargetKind::PngSequence || t.target == TargetKind::TifSequence);
+        if (!isSeq) outPath = uniqueOutPath(outPath);
+    }
     // For Overwrite we rely on -y above; for Skip handled earlier
 
     args << outPath;

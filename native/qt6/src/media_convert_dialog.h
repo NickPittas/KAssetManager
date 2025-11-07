@@ -28,6 +28,7 @@ private slots:
     void onTargetChanged(int idx);
     void onStart();
     void onCancel();
+    void onVerifySequence();
 
     // Worker feedback
     void onQueueStarted(int total);
@@ -58,12 +59,13 @@ private:
     QLineEdit* m_outputDir = nullptr;
     QToolButton* m_browseBtn = nullptr;
     QComboBox* m_targetCombo = nullptr;
+    QToolButton* m_verifyBtn = nullptr;
     QStackedWidget* m_settingsStack = nullptr;
 
     // MP4 panel
-    QWidget* m_mp4Panel = nullptr; QComboBox* m_mp4Codec = nullptr; QComboBox* m_mp4RateMode = nullptr; QSpinBox* m_mp4Bitrate = nullptr;
+    QWidget* m_mp4Panel = nullptr; QComboBox* m_mp4Codec = nullptr; QComboBox* m_mp4RateMode = nullptr; QSpinBox* m_mp4Bitrate = nullptr; QSpinBox* m_mp4Fps = nullptr;
     // MOV panel
-    QWidget* m_movPanel = nullptr; QComboBox* m_movCodec = nullptr; QComboBox* m_movProresProf = nullptr;
+    QWidget* m_movPanel = nullptr; QComboBox* m_movCodec = nullptr; QComboBox* m_movProresProf = nullptr; QSpinBox* m_movFps = nullptr;
     // JPG seq
     QWidget* m_jpgSeqPanel = nullptr; QSpinBox* m_jpgQscale = nullptr; QSpinBox* m_jpgSeqPadDigits = nullptr; QSpinBox* m_jpgSeqStart = nullptr;
     // PNG seq

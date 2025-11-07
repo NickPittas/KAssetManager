@@ -481,33 +481,63 @@ LivePreviewManager::SequenceMeta LivePreviewManager::sequenceMetaFor(const QStri
     meta.padding = match.capturedLength();
 
     QDir dir(meta.directory);
-    QStringList entries = dir.entryList(QDir::Files, QDir::Name);
-    if (entries.isEmpty()) {
-        error = QStringLiteral("Sequence directory empty");
-        return meta;
+
+    auto existsFrame = [&](qint64 n) -> bool {
+        if (n < 0) return false;
+        const QString digits = QString::number(n).rightJustified(meta.padding, QLatin1Char('0'));
+        const QString fileName = meta.prefix + digits + meta.suffix;
+        return QFileInfo(dir.filePath(fileName)).exists();
+    };
+
+    // Use the current file's number as an anchor
+    const qint64 curN = match.captured(1).toLongLong();
+
+    // 1) Find first frame via binary search in [0, curN]
+    qint64 low = -1;           // known non-existing (virtual)
+    qint64 high = curN;        // known existing
+    while (high - low > 1) {
+        const qint64 mid = low + (high - low) / 2;
+        if (existsFrame(mid)) high = mid; else low = mid;
+    }
+    meta.firstFrame = high;
+
+    // 2) Find last frame using halving from a large bound then binary search
+    const qint64 START_HUGE = 10000000; // 10M
+    qint64 lastKnownExist = curN;
+    qint64 lastKnownNonExist = -1;
+
+    qint64 probe = START_HUGE;
+    while (probe > lastKnownExist) {
+        if (existsFrame(probe)) { lastKnownExist = probe; break; }
+        lastKnownNonExist = probe;
+        probe /= 2;
+    }
+    if (lastKnownExist == curN) {
+        qint64 up = std::max<qint64>(curN + 1, 2 * curN);
+        for (int i = 0; i < 32; ++i) {
+            if (!existsFrame(up)) { lastKnownNonExist = up; break; }
+            if (up > 100000000) { lastKnownNonExist = up + 1; break; }
+            up *= 2;
+        }
+        if (lastKnownNonExist < 0) lastKnownNonExist = curN + 1;
+    } else {
+        if (lastKnownNonExist < 0) lastKnownNonExist = lastKnownExist + 1;
     }
 
-    QRegularExpression sequencePattern(
-        QStringLiteral("^%1(\\d+)%2$")
-            .arg(QRegularExpression::escape(meta.prefix),
-                 QRegularExpression::escape(meta.suffix))
-    );
-
-    for (const QString& entry : entries) {
-        QRegularExpressionMatch m = sequencePattern.match(entry);
-        if (!m.hasMatch()) {
-            continue;
-        }
-        const QString digitsPart = m.captured(1);
-        if (meta.padding > 0 && digitsPart.length() < meta.padding) {
-            continue;
-        }
-        meta.frames.append(dir.absoluteFilePath(entry));
+    qint64 lo = lastKnownExist;
+    qint64 hi = lastKnownNonExist;
+    if (hi <= lo) hi = lo + 1;
+    while (hi - lo > 1) {
+        const qint64 mid = lo + (hi - lo) / 2;
+        if (existsFrame(mid)) lo = mid; else hi = mid;
     }
+    meta.lastFrame = lo;
 
     if (meta.frames.isEmpty()) {
-        error = QStringLiteral("No sequence frames detected");
-        return meta;
+        if (!(meta.padding > 0 && meta.firstFrame >= 0 && meta.lastFrame >= meta.firstFrame)) {
+            error = QStringLiteral("No sequence frames detected");
+            return meta;
+        }
     }
 
     meta.lastScan.start();
@@ -531,7 +561,12 @@ QImage LivePreviewManager::loadSequenceFrame(const Request& request, QString& er
         return {};
     }
 
-    const int frameCount = meta.frames.size();
+    int frameCount = meta.frames.size();
+    if (frameCount <= 0) {
+        if (meta.firstFrame >= 0 && meta.lastFrame >= meta.firstFrame) {
+            frameCount = int(meta.lastFrame - meta.firstFrame + 1);
+        }
+    }
     if (frameCount <= 0) {
         error = QStringLiteral("Sequence has no frames");
         return {};
@@ -547,7 +582,13 @@ QImage LivePreviewManager::loadSequenceFrame(const Request& request, QString& er
     }
 
     Request frameRequest = request;
-    frameRequest.filePath = meta.frames.at(frameIndex);
+    if (!meta.frames.isEmpty()) {
+        frameRequest.filePath = meta.frames.at(frameIndex);
+    } else {
+        const qint64 frameNumber = meta.firstFrame + frameIndex;
+        const QString digits = QString::number(frameNumber).rightJustified(meta.padding, QLatin1Char('0'));
+        frameRequest.filePath = QDir(meta.directory).filePath(meta.prefix + digits + meta.suffix);
+    }
 
     qDebug() << "[LivePreview] Sequence load: requested=" << request.filePath
              << "position=" << request.position

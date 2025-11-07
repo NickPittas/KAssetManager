@@ -8,6 +8,9 @@
 #include <QWaitCondition>
 #include <QElapsedTimer>
 
+class QFileInfo;
+class QRegularExpressionMatch;
+
 class MediaConverterWorker : public QObject {
     Q_OBJECT
 public:
@@ -19,10 +22,12 @@ public:
         QString codec;            // "h264" or "hevc"
         RateMode rateMode = RateMode::VBR;
         int bitrateMbps = 8;      // for CBR/VBR target average
+        int fps = 24;             // input frame rate for image sequences
     };
     struct OptionsMOV {
         QString codec;            // "h264", "prores_ks", "qtrle" (Animation)
         int proresProfile = 2;    // 0 proxy,1 lt,2 422,3 hq,4 4444
+        int fps = 24;             // input frame rate for image sequences
     };
     struct OptionsJPGSeq { int qscale = 5; int padDigits = 4; int startNumber = 1; };
     struct OptionsPNGSeq { bool includeAlpha = true; int padDigits = 4; int startNumber = 1; };
@@ -85,6 +90,8 @@ private:
     static bool probeDurationMs(const QString& ffmpeg, const QString& input, qint64& durMs, int& width, int& height, QString& err);
     static QString uniqueOutPath(const QString& basePath);
     static QString scaleFilterFor(const Task& t, bool isVideo);
+    static double probeAvgFps(const QString& ffmpeg, const QString& input);
+    static qint64 countSequenceFrames(const QFileInfo& inFi, const QRegularExpressionMatch& mm, int pad);
 
 
     void startNext();
@@ -100,6 +107,7 @@ private:
     bool m_cancelling = false;
     bool m_waitingOnError = false;
     qint64 m_curDurationMs = 0;
+    qint64 m_estTotalFrames = 0;
     QElapsedTimer m_timer;
 };
 

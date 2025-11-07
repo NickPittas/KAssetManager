@@ -9,6 +9,8 @@
 #include <QStyle>
 #include <QMessageBox>
 
+#include "sequence_detector.h"
+
 #include <algorithm>
 
 static QString extOf(const QString& path){ return QFileInfo(path).suffix().toLower(); }
@@ -60,6 +62,23 @@ void MediaConvertDialog::buildUi()
     QHBoxLayout* formatRow = new QHBoxLayout();
     m_targetCombo = new QComboBox(this);
     formatRow->addWidget(new QLabel("Target format:")); formatRow->addWidget(m_targetCombo, 1);
+    // Optional verification: full directory scan on demand
+    m_verifyBtn = new QToolButton(this);
+    m_verifyBtn->setToolTip("Verify sequence (full directory scan)");
+    {
+        QStringList paths = {
+            QCoreApplication::applicationDirPath() + "/icons/Verify.png",
+            QCoreApplication::applicationDirPath() + "/../icons/Verify.png",
+            QCoreApplication::applicationDirPath() + "/../../icons/Verify.png",
+            QStringLiteral("e:/KAssetManager/Icons/Verify.png")
+        };
+        for (const QString& p : paths) {
+            if (QFile::exists(p)) { m_verifyBtn->setIcon(QIcon(p)); break; }
+        }
+    }
+    m_verifyBtn->setAutoRaise(true);
+    formatRow->addWidget(m_verifyBtn);
+    connect(m_verifyBtn, &QToolButton::clicked, this, &MediaConvertDialog::onVerifySequence);
 
     // Scaling row
     QHBoxLayout* scaleRow = new QHBoxLayout();
@@ -86,9 +105,11 @@ void MediaConvertDialog::buildUi()
         m_mp4Codec = new QComboBox(m_mp4Panel); m_mp4Codec->addItems({"h264","hevc"});
         m_mp4RateMode = new QComboBox(m_mp4Panel); m_mp4RateMode->addItems({"VBR","CBR"});
         m_mp4Bitrate = new QSpinBox(m_mp4Panel); m_mp4Bitrate->setRange(1, 200); m_mp4Bitrate->setSuffix(" Mbps"); m_mp4Bitrate->setValue(8);
+        m_mp4Fps = new QSpinBox(m_mp4Panel); m_mp4Fps->setRange(1, 240); m_mp4Fps->setValue(24); m_mp4Fps->setSuffix(" fps");
         h->addWidget(new QLabel("Codec:")); h->addWidget(m_mp4Codec);
         h->addWidget(new QLabel("Rate:")); h->addWidget(m_mp4RateMode);
         h->addWidget(new QLabel("Bitrate:")); h->addWidget(m_mp4Bitrate);
+        h->addWidget(new QLabel("FPS:")); h->addWidget(m_mp4Fps);
         h->addStretch();
     }
     // MOV panel
@@ -96,8 +117,10 @@ void MediaConvertDialog::buildUi()
         QHBoxLayout* h = new QHBoxLayout(m_movPanel);
         m_movCodec = new QComboBox(m_movPanel); m_movCodec->addItems({"prores_ks","h264","Animation"});
         m_movProresProf = new QComboBox(m_movPanel); m_movProresProf->addItems({"Proxy","LT","422","HQ","4444"});
+        m_movFps = new QSpinBox(m_movPanel); m_movFps->setRange(1, 240); m_movFps->setValue(24); m_movFps->setSuffix(" fps");
         h->addWidget(new QLabel("Codec:")); h->addWidget(m_movCodec);
         h->addWidget(new QLabel("ProRes profile:")); h->addWidget(m_movProresProf);
+        h->addWidget(new QLabel("FPS:")); h->addWidget(m_movFps);
         h->addStretch();
     }
     // JPG seq panel
@@ -158,15 +181,23 @@ void MediaConvertDialog::buildUi()
     for (QWidget* w : {m_mp4Panel,m_movPanel,m_jpgSeqPanel,m_pngSeqPanel,m_tifSeqPanel,m_jpgPanel,m_pngPanel,m_tifPanel}) m_settingsStack->addWidget(w);
 
     // Decide available targets by inspecting selection
-    bool hasVideo=false, hasImage=false;
+    bool hasVideo=false, hasImage=false, hasSequence=false;
+    QRegularExpression rxDigits("(\\d+)(?!.*\\d)");
     for (const QString& s : m_sources) {
-        const QString e = extOf(s);
+        const QFileInfo fi(s);
+        const QString e = fi.suffix().toLower();
         hasVideo = hasVideo || isVideoExt(e);
         hasImage = hasImage || isImageExt(e);
+        if (isImageExt(e)) {
+            QRegularExpressionMatch m = rxDigits.match(fi.baseName());
+            if (m.hasMatch() && m.captured(1).length() >= 2) hasSequence = true;
+        }
     }
-    if (hasVideo) {
+    if (hasVideo || hasSequence) {
         m_targetCombo->addItem("MP4 (H.264/H.265)", (int)MediaConverterWorker::TargetKind::VideoMP4);
         m_targetCombo->addItem("MOV (H.264/ProRes/Animation)", (int)MediaConverterWorker::TargetKind::VideoMOV);
+    }
+    if (hasVideo) {
         m_targetCombo->addItem("JPG Sequence", (int)MediaConverterWorker::TargetKind::JpgSequence);
         m_targetCombo->addItem("PNG Sequence", (int)MediaConverterWorker::TargetKind::PngSequence);
         m_targetCombo->addItem("TIF Sequence", (int)MediaConverterWorker::TargetKind::TifSequence);
@@ -225,11 +256,24 @@ void MediaConvertDialog::buildUi()
 void MediaConvertDialog::loadSettings()
 {
     QSettings s("AugmentCode","KAssetManager");
-    m_outputDir->setText(s.value("MediaConvert/OutputDir", QDir::homePath()).toString());
+    // Default to the parent directory of the first source, falling back to last used, then home
+    QString outToSet;
+    if (!m_sources.isEmpty()) {
+        QFileInfo fi(m_sources.first());
+        if (fi.exists()) outToSet = fi.dir().absolutePath();
+    }
+    if (outToSet.isEmpty()) {
+        const QString last = s.value("MediaConvert/OutputDir").toString();
+        outToSet = last.isEmpty() ? QDir::homePath() : last;
+    }
+    m_outputDir->setText(outToSet);
     m_scaleW->setValue(s.value("MediaConvert/ScaleW", 0).toInt());
     m_scaleH->setValue(s.value("MediaConvert/ScaleH", 0).toInt());
     m_lockAspect->setChecked(s.value("MediaConvert/LockAspect", true).toBool());
     m_conflictCombo->setCurrentIndex(s.value("MediaConvert/Conflict", 0).toInt());
+    // Video FPS defaults (persisted if present)
+    int mp4Fps = s.value("MediaConvert/MP4/Fps", 24).toInt(); if (m_mp4Fps) m_mp4Fps->setValue(mp4Fps);
+    int movFps = s.value("MediaConvert/MOV/Fps", 24).toInt(); if (m_movFps) m_movFps->setValue(movFps);
 }
 
 void MediaConvertDialog::saveSettings()
@@ -240,6 +284,8 @@ void MediaConvertDialog::saveSettings()
     s.setValue("MediaConvert/ScaleH", m_scaleH->value());
     s.setValue("MediaConvert/LockAspect", m_lockAspect->isChecked());
     s.setValue("MediaConvert/Conflict", m_conflictCombo->currentIndex());
+    if (m_mp4Fps) s.setValue("MediaConvert/MP4/Fps", m_mp4Fps->value());
+    if (m_movFps) s.setValue("MediaConvert/MOV/Fps", m_movFps->value());
 }
 
 QString MediaConvertDialog::locateFfmpeg() const
@@ -377,9 +423,11 @@ bool MediaConvertDialog::validateAndBuildTasks(QVector<MediaConverterWorker::Tas
             t.mp4.codec = m_mp4Codec->currentText();
             t.mp4.rateMode = (m_mp4RateMode->currentText()=="CBR")? MediaConverterWorker::RateMode::CBR: MediaConverterWorker::RateMode::VBR;
             t.mp4.bitrateMbps = m_mp4Bitrate->value();
+            if (m_mp4Fps) t.mp4.fps = m_mp4Fps->value();
         } else if (target == MediaConverterWorker::TargetKind::VideoMOV) {
             t.mov.codec = m_movCodec->currentText();
             t.mov.proresProfile = m_movProresProf->currentIndex();
+            if (m_movFps) t.mov.fps = m_movFps->value();
         } else if (target == MediaConverterWorker::TargetKind::JpgSequence) {
             t.jpgSeq.qscale = m_jpgQscale->value();
             t.jpgSeq.padDigits = m_jpgSeqPadDigits->value();
@@ -466,7 +514,7 @@ void MediaConvertDialog::onLogLine(const QString& line)
 
 void MediaConvertDialog::onCurProgress(int, int percent, qint64, qint64)
 {
-    if (m_fileBar->maximum() == 0) return; // indeterminate for images/unknown
+    if (m_fileBar->maximum() == 0) m_fileBar->setRange(0, 100);
     m_fileBar->setValue(percent);
 }
 
@@ -509,5 +557,65 @@ void MediaConvertDialog::onQueueFinished(bool allSuccess)
         // Auto-close on success to avoid lingering dialog after single-image conversions
         QMetaObject::invokeMethod(this, [this](){ this->accept(); }, Qt::QueuedConnection);
     }
+}
+
+void MediaConvertDialog::onVerifySequence()
+{
+    // Find first image sequence among sources and perform a thorough scan
+    QRegularExpression re = SequenceDetector::mainPattern();
+    for (const QString& s : m_sources) {
+        QFileInfo fi(s);
+        if (!fi.exists()) continue;
+        const QString ext = fi.suffix().toLower();
+        if (!isImageExt(ext)) continue;
+        QRegularExpressionMatch m = re.match(fi.fileName());
+        if (!m.hasMatch()) continue;
+
+        // Scan directory for all frames of the same head (base+ext)
+        QDir dir = fi.dir();
+        const auto list = dir.entryInfoList(QDir::Files | QDir::NoDotAndDotDot, QDir::Name);
+        const QString base = m.captured(1);
+        const QString extLower = m.captured(4).toLower();
+        QVector<int> frames; frames.reserve(1024);
+        int pad = m.captured(3).length();
+        QFileInfo firstFi;
+        for (const QFileInfo& f : list) {
+            QRegularExpressionMatch m2 = re.match(f.fileName());
+            if (!m2.hasMatch()) continue;
+            if (m2.captured(1) == base && m2.captured(4).toLower() == extLower) {
+                int n = m2.captured(3).toInt();
+                if (frames.isEmpty()) firstFi = f;
+                frames.push_back(n);
+            }
+        }
+        std::sort(frames.begin(), frames.end());
+        frames.erase(std::unique(frames.begin(), frames.end()), frames.end());
+        if (frames.isEmpty()) {
+            m_status->setText("Verify: no frames found in directory");
+            return;
+        }
+        int start = frames.first();
+        int end = frames.last();
+        // Detect gaps
+        QSet<int> frameSet = QSet<int>(frames.begin(), frames.end());
+        QVector<int> missing;
+        for (int i = start; i <= end; ++i) if (!frameSet.contains(i)) missing.push_back(i);
+        QString startStr = QString("%1").arg(start, pad, 10, QLatin1Char('0'));
+        QString endStr = QString("%1").arg(end, pad, 10, QLatin1Char('0'));
+        const QString msg = QString("Verified %1.[%2-%3].%4 — frames: %5, gaps: %6")
+            .arg(base, startStr, endStr, extLower)
+            .arg(frames.size())
+            .arg(missing.size());
+        m_log->appendPlainText(msg);
+        if (!missing.isEmpty()) {
+            if (missing.size() <= 20) {
+                QStringList ms; for (int n : missing) ms << QString::number(n);
+                m_log->appendPlainText(QString("Missing frames: %1").arg(ms.join(", ")));
+            }
+        }
+        m_status->setText("Verify completed");
+        return; // only verify the first detected sequence
+    }
+    m_status->setText("Verify: no image sequence in selection");
 }
 

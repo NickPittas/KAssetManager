@@ -78,6 +78,8 @@ static size_t currentWorkingSetMB() {
 #include <QAction>
 
 #include <QFutureWatcher>
+#include <QFileSystemWatcher>
+
 #include <QTimer>
 #include <QScrollBar>
 #include <QTableView>
@@ -429,44 +431,103 @@ public:
         QDir d(dirPath);
         // Only files are considered for sequences
         const auto files = d.entryInfoList(QDir::Files | QDir::NoDotAndDotDot, QDir::Name);
-        QHash<QString, QList<QFileInfo>> buckets;
+
+        // Map (dir|base|ext) -> representative file and count (to detect actual sequences)
+        QHash<QString, QFileInfo> headRepr;
+        QHash<QString, int> headCount;
         for (const QFileInfo &fi : files) {
             const QString name = fi.fileName();
             auto m = SequenceDetector::mainPattern().match(name);
             if (!m.hasMatch()) continue;
             const QString base = m.captured(1);
-            const QString digits = m.captured(3);
             const QString ext = m.captured(4).toLower();
-            // images only
             if (!isImageFile(ext)) continue;
             const QString key = fi.absolutePath() + "|" + base + "|" + ext;
-            buckets[key].append(fi);
+            headCount[key] += 1;
+            if (!headRepr.contains(key)) headRepr.insert(key, fi);
         }
-        for (auto it = buckets.begin(); it != buckets.end(); ++it) {
-            if (it->size() <= 1) continue; // not a sequence
-            // compute range and representative
-            int start = std::numeric_limits<int>::max();
-            int end = std::numeric_limits<int>::min();
-            QFileInfo repr;
-            for (const QFileInfo &fi : it.value()) {
-                auto m = SequenceDetector::mainPattern().match(fi.fileName());
-                int f = m.captured(3).toInt();
-                if (f < start) { start = f; repr = fi; }
-                if (f > end) end = f;
+
+        // For each head that appears more than once, compute start/end using O(log m) existence checks
+        for (auto it = headRepr.begin(); it != headRepr.end(); ++it) {
+            const QString key = it.key();
+            const int count = headCount.value(key, 0);
+            if (count <= 1) continue; // not a sequence
+
+            const QFileInfo repr = it.value();
+            const QString name = repr.fileName();
+            auto mm = SequenceDetector::mainPattern().match(name);
+            const int pad = mm.captured(3).length();
+
+            // Build pre/post around the digits to probe existence without listing files
+            const int digitsStart = mm.capturedStart(3);
+            const int digitsEnd = mm.capturedEnd(3);
+            const QString pre = name.left(digitsStart);
+            const QString post = name.mid(digitsEnd);
+            QDir dir = repr.dir();
+            auto existsFrame = [&](qint64 n)->bool{
+                if (n < 0) return false;
+                const QString digits = QString::number(n).rightJustified(pad, QLatin1Char('0'));
+                return QFileInfo(dir.filePath(pre + digits + post)).exists();
+            };
+
+            const qint64 curN = mm.captured(3).toLongLong();
+            // Find first in [0, curN]
+            qint64 low = -1, high = curN; // low: non-exist, high: exist
+            while (high - low > 1) {
+                qint64 mid = low + (high - low) / 2;
+                if (existsFrame(mid)) high = mid; else low = mid;
             }
+            const qint64 first = high;
+
+            // Find last using halving from a huge bound then binary search
+            const qint64 START_HUGE = 10000000;
+            qint64 lastKnownExist = curN;
+            qint64 lastKnownNonExist = -1;
+            qint64 probe = START_HUGE;
+            while (probe > lastKnownExist) {
+                if (existsFrame(probe)) { lastKnownExist = probe; break; }
+                lastKnownNonExist = probe; probe /= 2;
+            }
+            if (lastKnownExist == curN) {
+                qint64 up = std::max<qint64>(curN + 1, 2 * curN);
+                for (int i = 0; i < 32; ++i) {
+                    if (!existsFrame(up)) { lastKnownNonExist = up; break; }
+                    if (up > 100000000) { lastKnownNonExist = up + 1; break; }
+                    up *= 2;
+                }
+                if (lastKnownNonExist < 0) lastKnownNonExist = curN + 1;
+            } else {
+                if (lastKnownNonExist < 0) lastKnownNonExist = lastKnownExist + 1;
+            }
+            qint64 lo = lastKnownExist, hi = lastKnownNonExist;
+            if (hi <= lo) hi = lo + 1;
+            while (hi - lo > 1) {
+                qint64 mid = lo + (hi - lo) / 2;
+                if (existsFrame(mid)) lo = mid; else hi = mid;
+            }
+            const qint64 last = lo;
+
             Info info;
             info.dir = repr.absolutePath();
-            auto reprMatch = SequenceDetector::mainPattern().match(repr.fileName());
-            info.base = reprMatch.captured(1);
-            info.ext = reprMatch.captured(4).toLower();
-            info.start = start; info.end = end; info.count = it->size();
+            info.base = mm.captured(1);
+            info.ext = mm.captured(4).toLower();
+            info.start = (int)first; info.end = (int)last; info.count = count; // count is list occurrences, fast estimate
             info.reprPath = repr.absoluteFilePath();
-            const QString key = it.key();
             m_infoByRepr.insert(info.reprPath, info);
             m_keyByRepr.insert(info.reprPath, key);
-            // hide all non-representatives
-            for (const QFileInfo &fi : it.value()) {
-                if (fi.absoluteFilePath() == info.reprPath) continue;
+        }
+
+        // Hide non-representatives: single pass over listed files
+        for (const QFileInfo &fi : files) {
+            const QString name = fi.fileName();
+            auto m = SequenceDetector::mainPattern().match(name);
+            if (!m.hasMatch()) continue;
+            const QString base = m.captured(1);
+            const QString ext = m.captured(4).toLower();
+            if (!isImageFile(ext)) continue;
+            const QString key = fi.absolutePath() + "|" + base + "|" + ext;
+            const QString reprPath = headRepr.value(key).absoluteFilePath();
+            if (!reprPath.isEmpty() && fi.absoluteFilePath() != reprPath && headCount.value(key,0) > 1) {
                 m_hidden.insert(fi.absoluteFilePath());
             }
         }
@@ -1505,6 +1566,7 @@ MainWindow::MainWindow(QWidget *parent)
     , importer(nullptr)
     , projectFolderWatcher(nullptr)
     , assetsLocked(true) // Locked by default
+    , assetsModel(nullptr)
 {
     fileOpsDialog = nullptr;
     LogManager::instance().addLog("[MAINWINDOW] ctor begin");
@@ -1575,6 +1637,14 @@ MainWindow::MainWindow(QWidget *parent)
     statusBar()->addPermanentWidget(thumbnailProgressBar);
 
     // Debounced timer for visible-only preview progress
+
+    // File Manager auto-refresh: watch current directory and debounce refreshes
+    fmDirectoryWatcher = new QFileSystemWatcher(this);
+    fmDirChangeTimer.setSingleShot(true);
+    connect(&fmDirChangeTimer, &QTimer::timeout, this, &MainWindow::onFmRefresh);
+    connect(fmDirectoryWatcher, &QFileSystemWatcher::directoryChanged,
+            this, [this](const QString&){ fmDirChangeTimer.start(200); });
+
     visibleThumbTimer.setSingleShot(true);
     connect(&visibleThumbTimer, &QTimer::timeout, this, &MainWindow::updateVisibleThumbProgress);
 
@@ -1721,7 +1791,6 @@ void MainWindow::setupUi()
 
     // Recursive checkbox at bottom of folder pane
     recursiveCheckBox = new QCheckBox("Include subfolder contents", leftPanel);
-    recursiveCheckBox->setChecked(false);
     recursiveCheckBox->setStyleSheet(
         "QCheckBox { color: #ffffff; font-size: 11px; padding: 4px 8px; background-color: #1a1a1a; }"
         "QCheckBox::indicator { width: 14px; height: 14px; }"
@@ -1729,8 +1798,16 @@ void MainWindow::setupUi()
         "QCheckBox::indicator:unchecked { background-color: #2a2a2a; border: 1px solid #666; }"
     );
     recursiveCheckBox->setToolTip("When checked, shows assets from selected folder and all its subfolders");
+    {
+        QSettings s("AugmentCode","KAssetManager");
+        const bool saved = s.value("AssetManager/IncludeSubfolders", false).toBool();
+        recursiveCheckBox->setChecked(saved);
+        if (assetsModel) assetsModel->setRecursiveMode(saved);
+    }
     connect(recursiveCheckBox, &QCheckBox::toggled, this, [this](bool checked) {
-        assetsModel->setRecursiveMode(checked);
+        if (assetsModel) assetsModel->setRecursiveMode(checked);
+        QSettings s("AugmentCode","KAssetManager");
+        s.setValue("AssetManager/IncludeSubfolders", checked);
     });
 
     leftLayout->addWidget(recursiveCheckBox);
@@ -1932,6 +2009,7 @@ void MainWindow::setupUi()
     assetGridView->viewport()->installEventFilter(this);
     assetTableView->viewport()->installEventFilter(this);
 
+
     assetScrubController = new GridScrubController(
         assetGridView,
         [this](const QModelIndex& idx) -> QString {
@@ -1982,6 +2060,36 @@ void MainWindow::setupUi()
     searchLayout->addWidget(filterSearchButton);
 
     filtersLayout->addLayout(searchLayout);
+
+    // Search scope override: Search Entire Database
+    searchEntireDbCheckBox = new QCheckBox("Search Entire Database", filtersPanel);
+    searchEntireDbCheckBox->setStyleSheet(
+        "QCheckBox { color: #ffffff; font-size: 11px; padding: 4px 2px; }"
+        "QCheckBox:disabled { color: #7f7f7f; }"
+        "QCheckBox::indicator { width: 16px; height: 16px; border-radius: 3px; }"
+        "QCheckBox::indicator:unchecked { background-color: #1e1e1e; border: 1px solid #666; }"
+        "QCheckBox::indicator:checked { background-color: #58a6ff; border: 1px solid #58a6ff; }"
+        "QCheckBox::indicator:disabled { background-color: #2a2a2a; border: 1px solid #555; }"
+    );
+    searchEntireDbCheckBox->setCheckable(true);
+    searchEntireDbCheckBox->setEnabled(true);
+    searchEntireDbCheckBox->setAttribute(Qt::WA_TransparentForMouseEvents, false);
+    searchEntireDbCheckBox->setFocusPolicy(Qt::StrongFocus);
+    {
+        QSettings s("AugmentCode","KAssetManager");
+        const bool saved = s.value("AssetManager/SearchEntireDatabase", false).toBool();
+        searchEntireDbCheckBox->setChecked(saved);
+        if (assetsModel) assetsModel->setSearchEntireDatabase(saved);
+    }
+    connect(searchEntireDbCheckBox, &QCheckBox::toggled, this, [this](bool on){
+        if (assetsModel) assetsModel->setSearchEntireDatabase(on);
+
+        QSettings s("AugmentCode","KAssetManager");
+        s.setValue("AssetManager/SearchEntireDatabase", on);
+    });
+    filtersLayout->addWidget(searchEntireDbCheckBox);
+
+    searchEntireDbCheckBox->setEnabled(true);
 
     QLabel *ratingLabel = new QLabel("Rating:", this);
     ratingLabel->setStyleSheet("color: #ffffff; margin-top: 8px;");
@@ -3488,16 +3596,14 @@ void MainWindow::onFmDelete()
     }
     QStringList paths = getSelectedFileManagerPaths(fmDirModel, fmGridView, fmListView, fmViewStack);
     if (paths.isEmpty()) return;
-    const auto ret = QMessageBox::question(this, "Move to Recycle Bin", QString("Delete %1 item(s)? They will be moved to Recycle Bin.").arg(paths.size()));
-    if (ret != QMessageBox::Yes) return;
+
 
     // Ensure any preview locks are released before file ops
     releaseAnyPreviewLocksForPaths(paths);
     // Enqueue async delete
     auto &q = FileOpsQueue::instance();
     q.enqueueDelete(paths);
-    if (!fileOpsDialog) fileOpsDialog = new FileOpsProgressDialog(this);
-    fileOpsDialog->show(); fileOpsDialog->raise(); fileOpsDialog->activateWindow();
+
 }
 
 
@@ -3509,17 +3615,13 @@ void MainWindow::onFmDeletePermanent()
     }
     QStringList paths = getSelectedFileManagerPaths(fmDirModel, fmGridView, fmListView, fmViewStack);
     if (paths.isEmpty()) return;
-    const auto ret = QMessageBox::warning(this, "Permanent Delete",
-        QString("PERMANENTLY delete %1 item(s)? This action cannot be undone!").arg(paths.size()),
-        QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
-    if (ret != QMessageBox::Yes) return;
+
 
     // Ensure any preview locks are released before file ops
     releaseAnyPreviewLocksForPaths(paths);
     auto &q = FileOpsQueue::instance();
     q.enqueueDeletePermanent(paths);
-    if (!fileOpsDialog) fileOpsDialog = new FileOpsProgressDialog(this);
-    fileOpsDialog->show(); fileOpsDialog->raise(); fileOpsDialog->activateWindow();
+
 }
 
 void MainWindow::onFmBackToParent()
@@ -3585,6 +3687,7 @@ void MainWindow::onFmRename()
         if (fw && (qobject_cast<QLineEdit*>(fw) || fw->inherits("QTextEdit") || fw->inherits("QPlainTextEdit"))) return;
     }
     QStringList paths = getSelectedFileManagerPaths(fmDirModel, fmGridView, fmListView, fmViewStack);
+
     if (paths.size() != 1) return;
     QString p = paths.first();
     releaseAnyPreviewLocksForPaths(QStringList{p});
@@ -3605,6 +3708,7 @@ void MainWindow::onFmBulkRename()
 {
     QStringList paths = getSelectedFileManagerPaths(fmDirModel, fmGridView, fmListView, fmViewStack);
     if (paths.size() < 2) return;
+
 
     releaseAnyPreviewLocksForPaths(paths);
 
@@ -3781,6 +3885,8 @@ void MainWindow::onFmShowContextMenu(const QPoint &pos)
         releaseAnyPreviewLocksForPaths(selectedPaths);
         auto *dlg = new MediaConvertDialog(selectedPaths, this);
         dlg->setAttribute(Qt::WA_DeleteOnClose);
+        connect(dlg, &QDialog::accepted, this, &MainWindow::onFmRefresh);
+        connect(dlg, &QObject::destroyed, this, [this](){ QTimer::singleShot(100, this, &MainWindow::onFmRefresh); });
         dlg->show(); dlg->raise(); dlg->activateWindow();
         return;
     }
@@ -3860,13 +3966,10 @@ void MainWindow::onFmTreeContextMenu(const QPoint &pos)
     } else if (chosen == delA) {
         QStringList paths = getSelectedFmTreePaths();
         if (paths.isEmpty()) return;
-        auto ret = QMessageBox::question(this, "Move to Recycle Bin",
-            QString("Delete %1 item(s)? They will be moved to Recycle Bin.").arg(paths.size()));
-        if (ret != QMessageBox::Yes) return;
+
         releaseAnyPreviewLocksForPaths(paths);
         FileOpsQueue::instance().enqueueDelete(paths);
-        if (!fileOpsDialog) fileOpsDialog = new FileOpsProgressDialog(this);
-        fileOpsDialog->show(); fileOpsDialog->raise(); fileOpsDialog->activateWindow();
+
     } else if (chosen == permDelA) {
         QStringList paths = getSelectedFmTreePaths();
         releaseAnyPreviewLocksForPaths(paths);
@@ -3941,15 +4044,10 @@ void MainWindow::onFmPasteInto(const QString& destDir)
 void MainWindow::doPermanentDelete(const QStringList& paths)
 {
     if (paths.isEmpty()) return;
-    const auto ret = QMessageBox::warning(this, "Permanent Delete",
-        QString("PERMANENTLY delete %1 item(s)? This action cannot be undone!").arg(paths.size()),
-        QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
-    if (ret != QMessageBox::Yes) return;
     // Ensure any preview locks are released before file ops
     releaseAnyPreviewLocksForPaths(paths);
     FileOpsQueue::instance().enqueueDeletePermanent(paths);
-    if (!fileOpsDialog) fileOpsDialog = new FileOpsProgressDialog(this);
-    fileOpsDialog->show(); fileOpsDialog->raise(); fileOpsDialog->activateWindow();
+
 }
 
 
@@ -4274,6 +4372,7 @@ void MainWindow::setupConnections()
     connect(assetTableView->horizontalScrollBar(), &QScrollBar::valueChanged, this, &MainWindow::scheduleVisibleThumbProgressUpdate);
     connect(viewStack, &QStackedWidget::currentChanged, this, &MainWindow::scheduleVisibleThumbProgressUpdate);
     connect(&ProgressManager::instance(), &ProgressManager::isActiveChanged, this, [this]() {
+
         if (ProgressManager::instance().isActive()) {
             // Hide our visible-only progress while an import/global progress is active
             thumbnailProgressLabel->setVisible(false);
@@ -4286,7 +4385,14 @@ void MainWindow::setupConnections()
     connect(&DB::instance(), &DB::assetVersionsChanged,
             this, &MainWindow::onAssetVersionsChanged);
 
+    // Auto-refresh File Manager after file operations complete
+    connect(&FileOpsQueue::instance(), &FileOpsQueue::itemFinished,
+            this, [this](int, bool success, const QString&){
+                if (success) QTimer::singleShot(100, this, &MainWindow::onFmRefresh);
+            });
+
 }
+
 
 void MainWindow::onFolderSelected(const QModelIndex &index)
 {
@@ -4430,6 +4536,8 @@ void MainWindow::onAssetContextMenu(const QPoint &pos)
             releaseAnyPreviewLocksForPaths(selectedAssetFilePaths);
             auto *dlg = new MediaConvertDialog(selectedAssetFilePaths, this);
             dlg->setAttribute(Qt::WA_DeleteOnClose);
+            connect(dlg, &QDialog::accepted, this, &MainWindow::onFmRefresh);
+            connect(dlg, &QObject::destroyed, this, [this](){ QTimer::singleShot(100, this, &MainWindow::onFmRefresh); });
             dlg->show(); dlg->raise(); dlg->activateWindow();
 
         } else if (selected && assignTagMenu->actions().contains(selected)) {
@@ -8116,6 +8224,14 @@ void MainWindow::fmNavigateToPath(const QString& path, bool addToHistory)
 
     // Navigate to the new path
     fmDirModel->setRootPath(path);
+
+    // Update directory watcher to current path
+    if (fmDirectoryWatcher) {
+        const QStringList watched = fmDirectoryWatcher->directories();
+        if (!watched.isEmpty()) fmDirectoryWatcher->removePaths(watched);
+        fmDirectoryWatcher->addPath(path);
+    }
+
     QModelIndex srcRoot = fmDirModel->index(path);
     if (fmProxyModel) {
         fmProxyModel->rebuildForRoot(path);

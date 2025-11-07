@@ -25,6 +25,8 @@
 #include <QFileSystemModel>
 #include <QListWidget>
 
+#include <QFileSystemWatcher>
+
 #include <QToolButton>
 
 class VirtualFolderTreeModel;
@@ -146,6 +148,7 @@ private slots:
     void onFmTogglePreview(); // toolbar toggle
     void onFmOpenOverlay();   // Space: toggle full-screen overlay
     void changeFmPreview(int delta); // Navigate in File Manager overlay
+
 private:
     QString fmPathForIndex(const QModelIndex& idx) const;
     void releaseAnyPreviewLocksForPaths(const QStringList& paths);
@@ -233,6 +236,7 @@ private:
     bool isGridMode;
     class QCheckBox *lockCheckBox;
     class QCheckBox *recursiveCheckBox;
+    class QCheckBox *searchEntireDbCheckBox;
     QPushButton *refreshButton;
 
     // Info panel labels
@@ -316,6 +320,10 @@ private:
     QListView *fmGridView;
     class QTableView *fmListView;
     bool fmIsGridMode;
+
+    // Auto-refresh watchers for File Manager
+    QFileSystemWatcher *fmDirectoryWatcher = nullptr;
+    QTimer fmDirChangeTimer;
 
     // Navigation history
     QStringList fmNavigationHistory;
