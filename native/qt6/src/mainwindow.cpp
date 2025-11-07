@@ -5793,7 +5793,19 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
         if (event->type() == QEvent::DragEnter) {
             QDragEnterEvent *dragEvent = static_cast<QDragEnterEvent*>(event);
             if (dragEvent->mimeData()->hasUrls() || dragEvent->mimeData()->hasFormat("application/x-kasset-asset-ids")) {
-                const QString destDir = fmDirModel ? fmDirModel->rootPath() : QString();
+                // Determine destination: subfolder under cursor (if any and is a folder), otherwise current root
+                QAbstractItemView* view = (fmGridView && watched == fmGridView->viewport())
+                                            ? static_cast<QAbstractItemView*>(fmGridView)
+                                            : static_cast<QAbstractItemView*>(fmListView);
+                QPoint pos = dragEvent->position().toPoint();
+                QModelIndex idx = view ? view->indexAt(pos) : QModelIndex();
+                QModelIndex srcIdx = idx;
+                if (idx.isValid() && fmProxyModel && idx.model() == fmProxyModel) srcIdx = fmProxyModel->mapToSource(idx);
+
+                QString destDir;
+                if (idx.isValid() && fmDirModel && fmDirModel->isDir(srcIdx)) destDir = fmDirModel->filePath(srcIdx);
+                else destDir = fmDirModel ? fmDirModel->rootPath() : QString();
+
                 bool sameFolderOnly = false;
                 if (!destDir.isEmpty()) {
                     QStringList tmpSources;
@@ -5815,7 +5827,6 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
                 if (sameFolderOnly) {
                     dragEvent->setDropAction(Qt::IgnoreAction);
                     dragEvent->accept();
-                    statusBar()->showMessage("Drop ignored (same folder)", 2000);
                     return true;
                 }
                 const bool shift = dragEvent->keyboardModifiers().testFlag(Qt::ShiftModifier);
@@ -5826,7 +5837,18 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
         } else if (event->type() == QEvent::DragMove) {
             QDragMoveEvent *dragEvent = static_cast<QDragMoveEvent*>(event);
             if (dragEvent->mimeData()->hasUrls() || dragEvent->mimeData()->hasFormat("application/x-kasset-asset-ids")) {
-                const QString destDir = fmDirModel ? fmDirModel->rootPath() : QString();
+                QAbstractItemView* view = (fmGridView && watched == fmGridView->viewport())
+                                            ? static_cast<QAbstractItemView*>(fmGridView)
+                                            : static_cast<QAbstractItemView*>(fmListView);
+                QPoint pos = dragEvent->position().toPoint();
+                QModelIndex idx = view ? view->indexAt(pos) : QModelIndex();
+                QModelIndex srcIdx = idx;
+                if (idx.isValid() && fmProxyModel && idx.model() == fmProxyModel) srcIdx = fmProxyModel->mapToSource(idx);
+
+                QString destDir;
+                if (idx.isValid() && fmDirModel && fmDirModel->isDir(srcIdx)) destDir = fmDirModel->filePath(srcIdx);
+                else destDir = fmDirModel ? fmDirModel->rootPath() : QString();
+
                 bool sameFolderOnly = false;
                 if (!destDir.isEmpty()) {
                     QStringList tmpSources;
@@ -5858,7 +5880,20 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
         } else if (event->type() == QEvent::Drop) {
             QDropEvent *dropEvent = static_cast<QDropEvent*>(event);
             const QMimeData *mimeData = dropEvent->mimeData();
-            const QString destDir = fmDirModel ? fmDirModel->rootPath() : QString();
+
+            // Determine destination: subfolder under cursor (if any and is a folder), otherwise current root
+            QAbstractItemView* view = (fmGridView && watched == fmGridView->viewport())
+                                        ? static_cast<QAbstractItemView*>(fmGridView)
+                                        : static_cast<QAbstractItemView*>(fmListView);
+            QPoint pos = dropEvent->position().toPoint();
+            QModelIndex idx = view ? view->indexAt(pos) : QModelIndex();
+            QModelIndex srcIdx = idx;
+            if (idx.isValid() && fmProxyModel && idx.model() == fmProxyModel) srcIdx = fmProxyModel->mapToSource(idx);
+
+            QString destDir;
+            if (idx.isValid() && fmDirModel && fmDirModel->isDir(srcIdx)) destDir = fmDirModel->filePath(srcIdx);
+            else destDir = fmDirModel ? fmDirModel->rootPath() : QString();
+
             if (destDir.isEmpty()) return false;
             QStringList sources;
             if (mimeData->hasUrls()) {
