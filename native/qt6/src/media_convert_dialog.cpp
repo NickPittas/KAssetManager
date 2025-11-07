@@ -182,15 +182,22 @@ void MediaConvertDialog::buildUi()
 
     // Decide available targets by inspecting selection
     bool hasVideo=false, hasImage=false, hasSequence=false;
-    QRegularExpression rxDigits("(\\d+)(?!.*\\d)");
+    const QRegularExpression &mainSeq = SequenceDetector::mainPattern();
+    const QRegularExpression &lastDigits = SequenceDetector::lastFramePattern();
     for (const QString& s : m_sources) {
         const QFileInfo fi(s);
         const QString e = fi.suffix().toLower();
         hasVideo = hasVideo || isVideoExt(e);
         hasImage = hasImage || isImageExt(e);
         if (isImageExt(e)) {
-            QRegularExpressionMatch m = rxDigits.match(fi.baseName());
-            if (m.hasMatch() && m.captured(1).length() >= 2) hasSequence = true;
+            // Prefer robust detection: name.[##].ext or name_##.ext
+            if (mainSeq.match(fi.fileName()).hasMatch()) {
+                hasSequence = true;
+            } else {
+                // Fallback: any trailing digit run (>=2) anywhere in the name
+                QRegularExpressionMatch m = lastDigits.match(fi.completeBaseName());
+                if (m.hasMatch() && m.captured(1).length() >= 2) hasSequence = true;
+            }
         }
     }
     if (hasVideo || hasSequence) {
