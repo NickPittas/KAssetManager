@@ -14,7 +14,7 @@
 
 ; Name and file
 Name "KAsset Manager"
-OutFile "..\dist\KAssetManager-Setup-1.0.6.exe"
+OutFile "..\dist\KAssetManager-Setup-1.0.8.exe"
 
 ; Default installation folder (user-writable location)
 InstallDir "$LOCALAPPDATA\KAsset Manager"
@@ -29,13 +29,13 @@ RequestExecutionLevel user
 SetCompressor /SOLID lzma
 
 ; Version Information
-VIProductVersion "1.0.6.0"
+VIProductVersion "1.0.8.0"
 VIAddVersionKey "ProductName" "KAsset Manager"
 VIAddVersionKey "CompanyName" "Your Company Name"
 VIAddVersionKey "LegalCopyright" "Copyright (C) 2024"
 VIAddVersionKey "FileDescription" "KAsset Manager Installer"
-VIAddVersionKey "FileVersion" "1.0.6.0"
-VIAddVersionKey "ProductVersion" "1.0.6.0"
+VIAddVersionKey "FileVersion" "1.0.8.0"
+VIAddVersionKey "ProductVersion" "1.0.8.0"
 
 ;--------------------------------
 ; Interface Settings
@@ -100,7 +100,7 @@ Section "KAsset Manager" SecMain
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\KAssetManager" "UninstallString" "$INSTDIR\Uninstall.exe"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\KAssetManager" "DisplayIcon" "$INSTDIR\bin\kassetmanagerqt.exe"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\KAssetManager" "Publisher" "Your Company Name"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\KAssetManager" "DisplayVersion" "1.0.6"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\KAssetManager" "DisplayVersion" "1.0.8"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\KAssetManager" "URLInfoAbout" "https://github.com/yourusername/KAssetManager"
   WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\KAssetManager" "NoModify" 1
   WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\KAssetManager" "NoRepair" 1
