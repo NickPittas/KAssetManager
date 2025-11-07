@@ -27,6 +27,8 @@
 #include "office_preview.h"
 
 
+#include "media_convert_dialog.h"
+
 #include <QHeaderView>
 #include <QStyledItemDelegate>
 #include <QPainter>
@@ -3767,10 +3769,38 @@ void MainWindow::onFmShowContextMenu(const QPoint &pos)
     createFolderWithSel->setEnabled(hasSel);
     openInExplorerA->setEnabled(selCount == 1);
     propertiesA->setEnabled(selCount == 1);
+    // Add Convert to Format... when selection are supported media files
+    QAction *convertA = nullptr;
+    if (hasSel) {
+        auto isSupportedExt = [](const QString &ext){
+            static const QSet<QString> img{ "png","jpg","jpeg","tif","tiff","exr","iff","psd" };
+            static const QSet<QString> vid{ "mov","mxf","mp4","avi","mp5" };
+            return img.contains(ext) || vid.contains(ext);
+        };
+        bool allSupported = true;
+        for (const QString &p : selectedPaths) {
+            QFileInfo fi(p);
+            if (!fi.exists() || fi.isDir()) { allSupported = false; break; }
+            if (!isSupportedExt(fi.suffix().toLower())) { allSupported = false; break; }
+        }
+        if (allSupported) {
+            convertA = menu.addAction("Convert to Format...");
+        }
+    }
+
     openWithA->setEnabled(selCount == 1);
 
     QAction *chosen = menu.exec(globalPos);
     if (!chosen) return;
+    if (chosen == convertA) {
+        // Non-modal conversion dialog
+        releaseAnyPreviewLocksForPaths(selectedPaths);
+        auto *dlg = new MediaConvertDialog(selectedPaths, this);
+        dlg->setAttribute(Qt::WA_DeleteOnClose);
+        dlg->show(); dlg->raise(); dlg->activateWindow();
+        return;
+    }
+
 
     // Handle new context menu actions
     if (chosen == openInExplorerA && selCount == 1) {
@@ -4339,6 +4369,7 @@ void MainWindow::onAssetContextMenu(const QPoint &pos)
         }
         if (tags.isEmpty()) {
             QAction *noTagsAction = assignTagMenu->addAction("(No tags available)");
+
             noTagsAction->setEnabled(false);
         }
 
@@ -4369,6 +4400,36 @@ void MainWindow::onAssetContextMenu(const QPoint &pos)
             bulkRenameAction = menu.addAction(QString("Bulk Rename (%1 assets)...").arg(selectedIds.size()));
         }
 
+
+        // Convert to Format... only when all selected assets are supported media files
+        QAction *convertAction = nullptr; QStringList selectedAssetFilePaths;
+        {
+            QSet<int> ids = getSelectedAssetIds();
+            if (!ids.isEmpty() && assetsModel) {
+                const int rows = assetsModel->rowCount(QModelIndex());
+                for (int r=0; r<rows; ++r) {
+                    QModelIndex mi = assetsModel->index(r,0);
+                    int id = mi.data(AssetsModel::IdRole).toInt();
+                    if (ids.contains(id)) {
+                        const QString fp = mi.data(AssetsModel::FilePathRole).toString();
+
+                        if (!fp.isEmpty()) selectedAssetFilePaths << fp;
+                    }
+                }
+                auto isSupportedExt = [](const QString &ext){
+                    static const QSet<QString> img{ "png","jpg","jpeg","tif","tiff","exr","iff","psd" };
+                    static const QSet<QString> vid{ "mov","mxf","mp4","avi","mp5" };
+                    return img.contains(ext) || vid.contains(ext);
+                };
+                bool allSupported = !selectedAssetFilePaths.isEmpty();
+                for (const QString &p : selectedAssetFilePaths) {
+                    QFileInfo fi(p);
+                    if (!fi.exists() || fi.isDir() || !isSupportedExt(fi.suffix().toLower())) { allSupported = false; break; }
+                }
+                if (allSupported) convertAction = menu.addAction("Convert to Format...");
+            }
+        }
+
         QAction *removeAction = menu.addAction("Remove from App");
 
         QAction *selected = menu.exec(assetGridView->mapToGlobal(pos));
@@ -4381,6 +4442,12 @@ void MainWindow::onAssetContextMenu(const QPoint &pos)
             QStringList args;
             args << "/select," + QDir::toNativeSeparators(fileInfo.absoluteFilePath());
             QProcess::startDetached("explorer", args);
+        } else if (selected == convertAction) {
+            releaseAnyPreviewLocksForPaths(selectedAssetFilePaths);
+            auto *dlg = new MediaConvertDialog(selectedAssetFilePaths, this);
+            dlg->setAttribute(Qt::WA_DeleteOnClose);
+            dlg->show(); dlg->raise(); dlg->activateWindow();
+
         } else if (selected && assignTagMenu->actions().contains(selected)) {
             // Assign tag action
             int tagId = selected->data().toInt();

@@ -167,6 +167,10 @@ qt_add_executable(kassetmanagerqt WIN32
     src/everything_search.cpp
     src/everything_search_dialog.h
     src/everything_search_dialog.cpp
+    src/media_convert_dialog.h
+    src/media_convert_dialog.cpp
+    src/media_converter_worker.h
+    src/media_converter_worker.cpp
     ${APP_RESOURCES}
 )
 
