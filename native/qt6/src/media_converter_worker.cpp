@@ -6,11 +6,6 @@
 #include <QTextStream>
 #include <QRegularExpression>
 
-#ifdef Q_OS_WIN
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-#include <tlhelp32.h>
-#endif
 
 #include <algorithm>
 
@@ -35,26 +30,14 @@ void MediaConverterWorker::start(const QVector<Task>& tasks)
 
 void MediaConverterWorker::pause()
 {
-#ifdef Q_OS_WIN
-    if (suspendProcess()) {
-        m_paused = true;
-        emit logLine("[Paused]");
-    }
-#else
-    m_paused = true;
-#endif
+    // Disabled globally per user request to avoid OS-level thread suspension risks
+    emit logLine("[Pause disabled]");
 }
 
 void MediaConverterWorker::resume()
 {
-#ifdef Q_OS_WIN
-    if (resumeProcess()) {
-        m_paused = false;
-        emit logLine("[Resumed]");
-    }
-#else
-    m_paused = false;
-#endif
+    // Disabled globally per user request to avoid OS-level thread suspension risks
+    emit logLine("[Resume disabled]");
 }
 
 void MediaConverterWorker::cancelAll()
@@ -97,8 +80,8 @@ void MediaConverterWorker::startNext()
 
     const Task& t = m_tasks[m_index];
 
-    QString err, outPath; QStringList args; qint64 durMs = 0;
-    if (!buildCommand(t, outPath, args, durMs, err)) {
+    QString err, program, outPath; QStringList args; qint64 durMs = 0;
+    if (!buildCommand(t, program, outPath, args, durMs, err)) {
         emit logLine(QString("[ERROR] %1").arg(err));
         emit fileFinished(m_index, false, err);
         startNext();
@@ -122,15 +105,9 @@ void MediaConverterWorker::startNext()
     connect(m_proc, &QProcess::readyReadStandardError, this, &MediaConverterWorker::onReadyStdErr);
     connect(m_proc, qOverload<int,QProcess::ExitStatus>(&QProcess::finished), this, &MediaConverterWorker::onFinished);
 
-#if defined(Q_OS_WIN)
-    // Ensure paths with spaces work
-    m_proc->setProgram(m_ffmpegPath);
+    m_proc->setProgram(program);
     m_proc->setArguments(args);
-#else
-    m_proc->setProgram(m_ffmpegPath);
-    m_proc->setArguments(args);
-#endif
-    emit logLine(QString("ffmpeg %1").arg(args.join(' ')));
+    emit logLine(QString("%1 %2").arg(QFileInfo(program).fileName(), args.join(' ')));
     m_timer.restart();
     m_proc->start();
 }
@@ -230,10 +207,9 @@ QString MediaConverterWorker::scaleFilterFor(const Task& t, bool isVideo)
     return f;
 }
 
-bool MediaConverterWorker::buildCommand(const Task& t, QString& outPath, QStringList& args, qint64& estDurationMs, QString& err) const
+bool MediaConverterWorker::buildCommand(const Task& t, QString& program, QString& outPath, QStringList& args, qint64& estDurationMs, QString& err) const
 {
     args.clear(); err.clear(); estDurationMs = 0;
-    if (m_ffmpegPath.isEmpty()) { err = "FFmpeg path not set"; return false; }
 
     const QFileInfo inFi(t.sourcePath);
     if (!inFi.exists()) { err = QString("Source not found: %1").arg(t.sourcePath); return false; }
@@ -243,21 +219,52 @@ bool MediaConverterWorker::buildCommand(const Task& t, QString& outPath, QString
     const QString outDir = t.outputDir.isEmpty() ? inFi.dir().absolutePath() : t.outputDir;
     QDir().mkpath(outDir);
 
-    QString ext;
-    bool isVideo = false;
-    switch (t.target) {
-        case TargetKind::VideoMP4: ext = "mp4"; isVideo = true; break;
-        case TargetKind::VideoMOV: ext = "mov"; isVideo = true; break;
-        case TargetKind::JpgSequence: ext = "jpg"; break;
-        case TargetKind::PngSequence: ext = "png"; break;
-        case TargetKind::TifSequence: ext = "tif"; break;
-        case TargetKind::ImageJpg: ext = "jpg"; break;
-        case TargetKind::ImagePng: ext = "png"; break;
-        case TargetKind::ImageTif: ext = "tif"; break;
+    // Decide by target which external tool to use
+    const bool isSingleImage = (t.target == TargetKind::ImageJpg || t.target == TargetKind::ImagePng || t.target == TargetKind::ImageTif);
+
+    if (isSingleImage) {
+        // Use ImageMagick (magick.exe)
+        if (m_magickPath.isEmpty()) { err = "ImageMagick (magick) path not set"; return false; }
+        program = m_magickPath;
+
+        // Input first for ImageMagick
+        args << inFi.absoluteFilePath();
+
+        // Scaling (preserve aspect by default): WxH, Wx, or xH
+        const int W = t.scaleWidth, H = t.scaleHeight;
+        QString resizeSpec;
+        if (W > 0 && H > 0) resizeSpec = QString("%1x%2").arg(W).arg(H);
+        else if (W > 0) resizeSpec = QString("%1x").arg(W);
+        else if (H > 0) resizeSpec = QString("x%1").arg(H);
+        if (!resizeSpec.isEmpty()) args << "-resize" << resizeSpec;
+
+        // Per-target settings
+        if (t.target == TargetKind::ImageJpg) {
+            outPath = QDir(outDir).filePath(baseName + ".jpg");
+            args << "-quality" << QString::number(t.jpg.quality);
+        } else if (t.target == TargetKind::ImagePng) {
+            outPath = QDir(outDir).filePath(baseName + ".png");
+            if (!t.png.includeAlpha) args << "-alpha" << "off";
+        } else if (t.target == TargetKind::ImageTif) {
+            outPath = QDir(outDir).filePath(baseName + ".tif");
+            QString comp = t.tif.compression.toUpper();
+            if (!comp.isEmpty()) args << "-compress" << comp;
+            if (!t.tif.includeAlpha) args << "-alpha" << "off";
+        }
+
+        if (t.conflict == ConflictAction::AutoRename) outPath = uniqueOutPath(outPath);
+        args << outPath;
+        return true;
     }
 
+    // Otherwise, use FFmpeg for video and image sequences
+    if (m_ffmpegPath.isEmpty()) { err = "FFmpeg path not set"; return false; }
+    program = m_ffmpegPath;
+
+    bool isVideo = (t.target == TargetKind::VideoMP4 || t.target == TargetKind::VideoMOV);
+
     // Probe duration for progress (videos)
-    int inW=0, inH=0; probeDurationMs(m_ffmpegPath, t.sourcePath, estDurationMs, inW, inH, err);
+    int inW = 0, inH = 0; probeDurationMs(m_ffmpegPath, t.sourcePath, estDurationMs, inW, inH, err);
 
     // Input
     args << "-hide_banner" << "-nostdin" << "-y"; // allow overwrite handling below
@@ -295,31 +302,25 @@ bool MediaConverterWorker::buildCommand(const Task& t, QString& outPath, QString
     } else if (t.target == TargetKind::JpgSequence) {
         // Create subfolder
         QString seqDir = QDir(outDir).filePath(baseName + "_jpg_seq"); QDir().mkpath(seqDir);
-        outPath = QDir(seqDir).filePath(baseName + "_%04d.jpg");
+        const QString pat = QString("%%0%1d").arg(std::clamp(t.jpgSeq.padDigits,1,8));
+        outPath = QDir(seqDir).filePath(baseName + "_" + pat + ".jpg");
+        args << "-start_number" << QString::number(std::max(0, t.jpgSeq.startNumber));
         args << "-qscale:v" << QString::number(std::clamp(t.jpgSeq.qscale, 2, 31));
     } else if (t.target == TargetKind::PngSequence) {
         QString seqDir = QDir(outDir).filePath(baseName + "_png_seq"); QDir().mkpath(seqDir);
-        outPath = QDir(seqDir).filePath(baseName + "_%04d.png");
+        const QString pat = QString("%%0%1d").arg(std::clamp(t.pngSeq.padDigits,1,8));
+        outPath = QDir(seqDir).filePath(baseName + "_" + pat + ".png");
+        args << "-start_number" << QString::number(std::max(0, t.pngSeq.startNumber));
         if (t.pngSeq.includeAlpha) args << "-pix_fmt" << "rgba"; else args << "-pix_fmt" << "rgb24";
         args << "-compression_level" << "9";
     } else if (t.target == TargetKind::TifSequence) {
         QString seqDir = QDir(outDir).filePath(baseName + "_tif_seq"); QDir().mkpath(seqDir);
-        outPath = QDir(seqDir).filePath(baseName + "_%04d.tif");
+        const QString pat = QString("%%0%1d").arg(std::clamp(t.tifSeq.padDigits,1,8));
+        outPath = QDir(seqDir).filePath(baseName + "_" + pat + ".tif");
+        args << "-start_number" << QString::number(std::max(0, t.tifSeq.startNumber));
         args << "-c:v" << "tiff";
         if (!t.tifSeq.compression.isEmpty()) args << "-compression_algo" << t.tifSeq.compression.toLower();
         if (t.tifSeq.includeAlpha) args << "-pix_fmt" << "rgba"; else args << "-pix_fmt" << "rgb24";
-    } else if (t.target == TargetKind::ImageJpg) {
-        outPath = QDir(outDir).filePath(baseName + ".jpg");
-        args << "-frames:v" << "1" << "-qscale:v" << QString::number(std::clamp(31 - (t.jpg.quality/4), 2, 31));
-    } else if (t.target == TargetKind::ImagePng) {
-        outPath = QDir(outDir).filePath(baseName + ".png");
-        if (t.png.includeAlpha) args << "-pix_fmt" << "rgba"; else args << "-pix_fmt" << "rgb24";
-        args << "-frames:v" << "1";
-    } else if (t.target == TargetKind::ImageTif) {
-        outPath = QDir(outDir).filePath(baseName + ".tif");
-        args << "-frames:v" << "1" << "-c:v" << "tiff";
-        if (!t.tif.compression.isEmpty()) args << "-compression_algo" << t.tif.compression.toLower();
-        if (t.tif.includeAlpha) args << "-pix_fmt" << "rgba"; else args << "-pix_fmt" << "rgb24";
     }
 
     if (t.conflict == ConflictAction::AutoRename) outPath = uniqueOutPath(outPath);
@@ -329,39 +330,4 @@ bool MediaConverterWorker::buildCommand(const Task& t, QString& outPath, QString
     return true;
 }
 
-#ifdef Q_OS_WIN
-bool MediaConverterWorker::suspendProcess()
-{
-    if (!m_proc) return false; DWORD pid = m_proc->processId();
-    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
-    if (snap == INVALID_HANDLE_VALUE) return false;
-    THREADENTRY32 te; te.dwSize = sizeof(te);
-    if (!Thread32First(snap, &te)) { CloseHandle(snap); return false; }
-    do {
-        if (te.th32OwnerProcessID == pid) {
-            HANDLE hThread = OpenThread(THREAD_SUSPEND_RESUME, FALSE, te.th32ThreadID);
-            if (hThread) { SuspendThread(hThread); CloseHandle(hThread); }
-        }
-    } while (Thread32Next(snap, &te));
-    CloseHandle(snap);
-    return true;
-}
-
-bool MediaConverterWorker::resumeProcess()
-{
-    if (!m_proc) return false; DWORD pid = m_proc->processId();
-    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
-    if (snap == INVALID_HANDLE_VALUE) return false;
-    THREADENTRY32 te; te.dwSize = sizeof(te);
-    if (!Thread32First(snap, &te)) { CloseHandle(snap); return false; }
-    do {
-        if (te.th32OwnerProcessID == pid) {
-            HANDLE hThread = OpenThread(THREAD_SUSPEND_RESUME, FALSE, te.th32ThreadID);
-            if (hThread) { ResumeThread(hThread); CloseHandle(hThread); }
-        }
-    } while (Thread32Next(snap, &te));
-    CloseHandle(snap);
-    return true;
-}
-#endif
 

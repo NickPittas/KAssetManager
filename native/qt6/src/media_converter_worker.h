@@ -24,9 +24,9 @@ public:
         QString codec;            // "h264", "prores_ks", "qtrle" (Animation)
         int proresProfile = 2;    // 0 proxy,1 lt,2 422,3 hq,4 4444
     };
-    struct OptionsJPGSeq { int qscale = 5; };
-    struct OptionsPNGSeq { bool includeAlpha = true; };
-    struct OptionsTIFSeq { QString compression; bool includeAlpha = true; };
+    struct OptionsJPGSeq { int qscale = 5; int padDigits = 4; int startNumber = 1; };
+    struct OptionsPNGSeq { bool includeAlpha = true; int padDigits = 4; int startNumber = 1; };
+    struct OptionsTIFSeq { QString compression; bool includeAlpha = true; int padDigits = 4; int startNumber = 1; };
     struct OptionsJPG { int quality = 90; };
     struct OptionsPNG { bool includeAlpha = true; };
     struct OptionsTIF { QString compression; bool includeAlpha = true; };
@@ -54,6 +54,8 @@ public:
     explicit MediaConverterWorker(QObject* parent=nullptr);
 
     void setFfmpegPath(const QString& path) { m_ffmpegPath = path; }
+    void setMagickPath(const QString& path) { m_magickPath = path; }
+
 
 signals:
     void queueStarted(int total);
@@ -78,18 +80,16 @@ private slots:
     void onFinished(int exitCode, QProcess::ExitStatus status);
 
 private:
-    // Build ffmpeg arguments and compute output path for given task
-    bool buildCommand(const Task& t, QString& outPath, QStringList& args, qint64& estDurationMs, QString& err) const;
+    // Build external command (ffmpeg or ImageMagick) and compute output path for given task
+    bool buildCommand(const Task& t, QString& program, QString& outPath, QStringList& args, qint64& estDurationMs, QString& err) const;
     static bool probeDurationMs(const QString& ffmpeg, const QString& input, qint64& durMs, int& width, int& height, QString& err);
     static QString uniqueOutPath(const QString& basePath);
     static QString scaleFilterFor(const Task& t, bool isVideo);
 
-#ifdef Q_OS_WIN
-    bool suspendProcess();
-    bool resumeProcess();
-#endif
 
     void startNext();
+
+    QString m_magickPath;
 
 private:
     QString m_ffmpegPath;

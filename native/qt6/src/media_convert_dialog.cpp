@@ -25,10 +25,11 @@ MediaConvertDialog::MediaConvertDialog(const QStringList& sourcePaths, QWidget* 
     loadSettings();
 
     m_ffmpeg = locateFfmpeg();
-    if (m_ffmpeg.isEmpty()) {
-        m_status->setText("FFmpeg not found. Please install or set FFMPEG_ROOT.");
-        m_startBtn->setEnabled(false);
-    }
+    m_magick = locateMagick();
+    QStringList notices;
+    if (m_ffmpeg.isEmpty()) notices << "FFmpeg not found (video/sequence conversions unavailable)";
+    if (m_magick.isEmpty()) notices << "ImageMagick not found (single-image conversions unavailable)";
+    if (!notices.isEmpty()) m_status->setText(notices.join(" · "));
 }
 
 MediaConvertDialog::~MediaConvertDialog()
@@ -103,20 +104,35 @@ void MediaConvertDialog::buildUi()
     m_jpgSeqPanel = new QWidget(this); {
         QHBoxLayout* h = new QHBoxLayout(m_jpgSeqPanel);
         m_jpgQscale = new QSpinBox(m_jpgSeqPanel); m_jpgQscale->setRange(2,31); m_jpgQscale->setValue(5);
-        h->addWidget(new QLabel("Qscale (2=best,31=worst):")); h->addWidget(m_jpgQscale); h->addStretch();
+        m_jpgSeqPadDigits = new QSpinBox(m_jpgSeqPanel); m_jpgSeqPadDigits->setRange(1,8); m_jpgSeqPadDigits->setValue(4);
+        m_jpgSeqStart = new QSpinBox(m_jpgSeqPanel); m_jpgSeqStart->setRange(0, 9999999); m_jpgSeqStart->setValue(1);
+        h->addWidget(new QLabel("Qscale (2=best,31=worst):")); h->addWidget(m_jpgQscale);
+        h->addWidget(new QLabel("Padding:")); h->addWidget(m_jpgSeqPadDigits);
+        h->addWidget(new QLabel("Start:")); h->addWidget(m_jpgSeqStart);
+        h->addStretch();
     }
     // PNG seq
     m_pngSeqPanel = new QWidget(this); {
         QHBoxLayout* h = new QHBoxLayout(m_pngSeqPanel);
         m_pngAlpha = new QCheckBox("Include alpha", m_pngSeqPanel); m_pngAlpha->setChecked(true);
-        h->addWidget(m_pngAlpha); h->addStretch();
+        m_pngSeqPadDigits = new QSpinBox(m_pngSeqPanel); m_pngSeqPadDigits->setRange(1,8); m_pngSeqPadDigits->setValue(4);
+        m_pngSeqStart = new QSpinBox(m_pngSeqPanel); m_pngSeqStart->setRange(0, 9999999); m_pngSeqStart->setValue(1);
+        h->addWidget(m_pngAlpha);
+        h->addWidget(new QLabel("Padding:")); h->addWidget(m_pngSeqPadDigits);
+        h->addWidget(new QLabel("Start:")); h->addWidget(m_pngSeqStart);
+        h->addStretch();
     }
     // TIF seq
     m_tifSeqPanel = new QWidget(this); {
         QHBoxLayout* h = new QHBoxLayout(m_tifSeqPanel);
         m_tifComp = new QComboBox(m_tifSeqPanel); m_tifComp->addItems({"none","lzw","zip","packbits"});
         m_tifAlpha = new QCheckBox("Include alpha", m_tifSeqPanel); m_tifAlpha->setChecked(true);
-        h->addWidget(new QLabel("Compression:")); h->addWidget(m_tifComp); h->addWidget(m_tifAlpha); h->addStretch();
+        m_tifSeqPadDigits = new QSpinBox(m_tifSeqPanel); m_tifSeqPadDigits->setRange(1,8); m_tifSeqPadDigits->setValue(4);
+        m_tifSeqStart = new QSpinBox(m_tifSeqPanel); m_tifSeqStart->setRange(0, 9999999); m_tifSeqStart->setValue(1);
+        h->addWidget(new QLabel("Compression:")); h->addWidget(m_tifComp); h->addWidget(m_tifAlpha);
+        h->addWidget(new QLabel("Padding:")); h->addWidget(m_tifSeqPadDigits);
+        h->addWidget(new QLabel("Start:")); h->addWidget(m_tifSeqStart);
+        h->addStretch();
     }
     // JPG
     m_jpgPanel = new QWidget(this); {
@@ -163,6 +179,9 @@ void MediaConvertDialog::buildUi()
 
     connect(m_targetCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, &MediaConvertDialog::onTargetChanged);
 
+    // Ensure the settings panel matches the initial target selection on first show
+    onTargetChanged(m_targetCombo->currentIndex());
+
     // Right side layout
     tgt->addLayout(outRow);
     tgt->addLayout(formatRow);
@@ -188,18 +207,18 @@ void MediaConvertDialog::buildUi()
     // Buttons
     QHBoxLayout* btns = new QHBoxLayout();
     m_startBtn = new QPushButton(style()->standardIcon(QStyle::SP_MediaPlay), "Start", this);
-    m_pauseBtn = new QPushButton(style()->standardIcon(QStyle::SP_MediaPause), "Pause", this);
     m_cancelBtn = new QPushButton("Cancel", this);
     m_closeBtn = new QPushButton("Close", this);
-    m_pauseBtn->setEnabled(false); m_cancelBtn->setEnabled(false);
+    m_cancelBtn->setEnabled(false);
 
     connect(m_startBtn, &QPushButton::clicked, this, &MediaConvertDialog::onStart);
-    connect(m_pauseBtn, &QPushButton::clicked, this, &MediaConvertDialog::onPauseResume);
     connect(m_cancelBtn, &QPushButton::clicked, this, &MediaConvertDialog::onCancel);
     connect(m_closeBtn, &QPushButton::clicked, this, &QDialog::close);
 
-    btns->addWidget(m_startBtn); btns->addWidget(m_pauseBtn); btns->addWidget(m_cancelBtn);
-    btns->addStretch(); btns->addWidget(m_closeBtn);
+    btns->addWidget(m_startBtn);
+    btns->addWidget(m_cancelBtn);
+    btns->addStretch();
+    btns->addWidget(m_closeBtn);
     v->addLayout(btns);
 }
 
@@ -240,7 +259,51 @@ QString MediaConvertDialog::locateFfmpeg() const
     }
     // 4) PATH
     return "ffmpeg";
+
 }
+
+
+QString MediaConvertDialog::locateMagick() const
+{
+    // 1) Next to app
+    QString d = QCoreApplication::applicationDirPath();
+#ifdef Q_OS_WIN
+    QString cand = QDir(d).filePath("magick.exe"); if (QFileInfo::exists(cand)) return cand;
+#endif
+    // 2) third_party common layouts (dev checkout)
+    {
+        const QString tp = QDir(QCoreApplication::applicationDirPath()).filePath("../../third_party");
+        // a) third_party/imagemagick/bin
+        QString p1 = QDir(tp).filePath("imagemagick/bin/magick.exe");
+        if (QFileInfo::exists(p1)) return QFileInfo(p1).absoluteFilePath();
+        // b) third_party/ImageMagick-*/magick.exe or .../bin/magick.exe
+        QDir tpd(tp);
+        if (tpd.exists()) {
+            const QStringList dirs = tpd.entryList(QStringList() << "ImageMagick*", QDir::Dirs | QDir::NoDotAndDotDot);
+            for (const QString& dn : dirs) {
+                QString root = tpd.filePath(dn);
+                QString pRoot = QDir(root).filePath("magick.exe"); if (QFileInfo::exists(pRoot)) return QFileInfo(pRoot).absoluteFilePath();
+                QString pBin  = QDir(root).filePath("bin/magick.exe"); if (QFileInfo::exists(pBin)) return QFileInfo(pBin).absoluteFilePath();
+            }
+        }
+    }
+    // 3) Environment variables (MAGICK_ROOT / IMAGEMAGICK_ROOT)
+    {
+        QString env = qEnvironmentVariable("MAGICK_ROOT");
+        if (!env.isEmpty()) {
+            QString pRoot = QDir(env).filePath("magick.exe"); if (QFileInfo::exists(pRoot)) return QFileInfo(pRoot).absoluteFilePath();
+            QString pBin  = QDir(env).filePath("bin/magick.exe"); if (QFileInfo::exists(pBin)) return QFileInfo(pBin).absoluteFilePath();
+        }
+        QString env2 = qEnvironmentVariable("IMAGEMAGICK_ROOT");
+        if (!env2.isEmpty()) {
+            QString pRoot = QDir(env2).filePath("magick.exe"); if (QFileInfo::exists(pRoot)) return QFileInfo(pRoot).absoluteFilePath();
+            QString pBin  = QDir(env2).filePath("bin/magick.exe"); if (QFileInfo::exists(pBin)) return QFileInfo(pBin).absoluteFilePath();
+        }
+    }
+    // 4) PATH
+    return "magick";
+}
+
 
 bool MediaConvertDialog::isVideoExt(const QString& e)
 {
@@ -287,6 +350,17 @@ bool MediaConvertDialog::validateAndBuildTasks(QVector<MediaConverterWorker::Tas
     const int targetData = m_targetCombo->currentData().toInt();
     const auto target = static_cast<MediaConverterWorker::TargetKind>(targetData);
 
+    // Validate external tool availability for the selected target
+    if ((target == MediaConverterWorker::TargetKind::VideoMP4 || target == MediaConverterWorker::TargetKind::VideoMOV ||
+         target == MediaConverterWorker::TargetKind::JpgSequence || target == MediaConverterWorker::TargetKind::PngSequence ||
+         target == MediaConverterWorker::TargetKind::TifSequence) && m_ffmpeg.isEmpty()) {
+        error = "FFmpeg not found. Install it or set FFMPEG_ROOT to convert videos/sequences."; return false;
+    }
+    if ((target == MediaConverterWorker::TargetKind::ImageJpg || target == MediaConverterWorker::TargetKind::ImagePng ||
+         target == MediaConverterWorker::TargetKind::ImageTif) && m_magick.isEmpty()) {
+        error = "ImageMagick (magick) not found. Bundle it in third_party or set MAGICK_ROOT to convert single images."; return false;
+    }
+
     int W = m_scaleW->value(); int H = m_scaleH->value();
     if (m_lockAspect->isChecked()) {
         if (W > 0 && H > 0) H = 0; // keep width, infer height to preserve AR
@@ -308,11 +382,17 @@ bool MediaConvertDialog::validateAndBuildTasks(QVector<MediaConverterWorker::Tas
             t.mov.proresProfile = m_movProresProf->currentIndex();
         } else if (target == MediaConverterWorker::TargetKind::JpgSequence) {
             t.jpgSeq.qscale = m_jpgQscale->value();
+            t.jpgSeq.padDigits = m_jpgSeqPadDigits->value();
+            t.jpgSeq.startNumber = m_jpgSeqStart->value();
         } else if (target == MediaConverterWorker::TargetKind::PngSequence) {
             t.pngSeq.includeAlpha = m_pngAlpha->isChecked();
+            t.pngSeq.padDigits = m_pngSeqPadDigits->value();
+            t.pngSeq.startNumber = m_pngSeqStart->value();
         } else if (target == MediaConverterWorker::TargetKind::TifSequence) {
             t.tifSeq.compression = m_tifComp->currentText();
             t.tifSeq.includeAlpha = m_tifAlpha->isChecked();
+            t.tifSeq.padDigits = m_tifSeqPadDigits->value();
+            t.tifSeq.startNumber = m_tifSeqStart->value();
         } else if (target == MediaConverterWorker::TargetKind::ImageJpg) {
             t.jpg.quality = m_jpgQuality->value();
         } else if (target == MediaConverterWorker::TargetKind::ImagePng) {
@@ -350,26 +430,16 @@ void MediaConvertDialog::onStart()
     if (!m_thread.isRunning()) m_thread.start(QThread::LowPriority);
 
     m_worker->setFfmpegPath(m_ffmpeg);
+    m_worker->setMagickPath(m_magick);
 
     // invoke start on worker's thread
     QMetaObject::invokeMethod(m_worker, [this, tasks](){ m_worker->start(tasks); }, Qt::QueuedConnection);
 
     m_running = true;
-    m_startBtn->setEnabled(false); m_pauseBtn->setEnabled(true); m_cancelBtn->setEnabled(true);
+    m_startBtn->setEnabled(false); m_cancelBtn->setEnabled(true);
     m_status->setText("Starting...");
 }
 
-void MediaConvertDialog::onPauseResume()
-{
-    if (!m_worker) return;
-    if (m_pauseBtn->text() == "Pause") {
-        QMetaObject::invokeMethod(m_worker, &MediaConverterWorker::pause, Qt::QueuedConnection);
-        m_pauseBtn->setText("Resume");
-    } else {
-        QMetaObject::invokeMethod(m_worker, &MediaConverterWorker::resume, Qt::QueuedConnection);
-        m_pauseBtn->setText("Pause");
-    }
-}
 
 void MediaConvertDialog::onCancel()
 {
@@ -434,6 +504,10 @@ void MediaConvertDialog::onQueueFinished(bool allSuccess)
 {
     m_status->setText(allSuccess ? "All conversions completed" : "Conversion finished with errors/cancelled");
     m_running = false;
-    m_startBtn->setEnabled(true); m_pauseBtn->setEnabled(false); m_cancelBtn->setEnabled(false);
+    m_startBtn->setEnabled(true); m_cancelBtn->setEnabled(false);
+    if (allSuccess) {
+        // Auto-close on success to avoid lingering dialog after single-image conversions
+        QMetaObject::invokeMethod(this, [this](){ this->accept(); }, Qt::QueuedConnection);
+    }
 }
 

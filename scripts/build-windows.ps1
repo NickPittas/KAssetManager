@@ -120,6 +120,35 @@ if (-not $env:FFMPEG_ROOT -and (Test-Path $defaultFfmpeg)) {
     Write-Host "Using third_party/ffmpeg as FFMPEG_ROOT: $env:FFMPEG_ROOT" -ForegroundColor Green
 }
 
+# Auto-load custom ImageMagick root if present
+# Prefer explicitly provided MAGICK_ROOT/IMAGEMAGICK_ROOT, otherwise try common third_party layouts
+$defaultMagick = Join-Path $repoRoot "third_party/imagemagick"
+if (-not $env:IMAGEMAGICK_ROOT -and $env:MAGICK_ROOT) {
+    $env:IMAGEMAGICK_ROOT = $env:MAGICK_ROOT
+    Write-Host "Using MAGICK_ROOT as IMAGEMAGICK_ROOT: $env:IMAGEMAGICK_ROOT" -ForegroundColor Green
+}
+if (-not $env:IMAGEMAGICK_ROOT -and (Test-Path $defaultMagick)) {
+    $env:IMAGEMAGICK_ROOT = (Resolve-Path $defaultMagick).Path
+    Write-Host "Using third_party/imagemagick as IMAGEMAGICK_ROOT: $env:IMAGEMAGICK_ROOT" -ForegroundColor Green
+}
+# Also look for portable ImageMagick folders like 'third_party/ImageMagick-*-portable-*'
+if (-not $env:IMAGEMAGICK_ROOT) {
+    $tp = Join-Path $repoRoot "third_party"
+    if (Test-Path $tp) {
+        $candidates = Get-ChildItem -Path $tp -Directory -Filter "ImageMagick*" -ErrorAction SilentlyContinue
+        foreach ($c in $candidates) {
+            $rootCand = $c.FullName
+            $exeInRoot = Join-Path $rootCand 'magick.exe'
+            $exeInBin  = Join-Path (Join-Path $rootCand 'bin') 'magick.exe'
+            if ((Test-Path $exeInRoot) -or (Test-Path $exeInBin)) {
+                $env:IMAGEMAGICK_ROOT = $rootCand
+                Write-Host "Using $rootCand as IMAGEMAGICK_ROOT" -ForegroundColor Green
+                break
+            }
+        }
+    }
+}
+
 if (-not $QtPrefix) { $QtPrefix = Find-QtPrefix -Hint $QtPrefix }
 Write-Host "Using Qt prefix: $QtPrefix"
 Initialize-MSVC -Generator $Generator
@@ -190,14 +219,38 @@ if ($Package) {
                 Write-Host "Copying custom FFmpeg runtime from $ffmpegBin" -ForegroundColor Cyan
                 $stageBinDir = Join-Path $stage 'bin'
                 $ffmpegDlls = Get-ChildItem -Path $ffmpegBin -Filter "*.dll" -ErrorAction SilentlyContinue
+                $ffmpegExe  = Join-Path $ffmpegBin 'ffmpeg.exe'
+                $ffprobeExe = Join-Path $ffmpegBin 'ffprobe.exe'
                 $ffmpegCount = 0
                 foreach ($dll in $ffmpegDlls) {
                     Copy-Item $dll.FullName -Destination $stageBinDir -Force
                     $ffmpegCount++
                 }
+                if (Test-Path $ffmpegExe)  { Copy-Item $ffmpegExe  -Destination $stageBinDir -Force }
+                if (Test-Path $ffprobeExe) { Copy-Item $ffprobeExe -Destination $stageBinDir -Force }
                 Write-Host "Copied $ffmpegCount FFmpeg DLL files" -ForegroundColor Green
             } else {
                 Write-Warning "FFMPEG_ROOT specified ($ffmpegRoot) but bin/ not found. Skipping custom FFmpeg copy."
+            }
+        }
+
+        # Optional: copy custom ImageMagick runtime if IMAGEMAGICK_ROOT is provided
+        $magickRoot = $env:IMAGEMAGICK_ROOT
+        if ($magickRoot) {
+            $stageBinDir = Join-Path $stage 'bin'
+            $magickBin = Join-Path $magickRoot 'bin'
+            $copyFrom = $null
+            if (Test-Path (Join-Path $magickBin 'magick.exe')) { $copyFrom = $magickBin }
+            elseif (Test-Path (Join-Path $magickRoot 'magick.exe')) { $copyFrom = $magickRoot }
+
+            if ($copyFrom) {
+                Write-Host "Copying ImageMagick runtime from $copyFrom" -ForegroundColor Cyan
+                $magickExe   = Join-Path $copyFrom 'magick.exe'
+                $magickDlls  = Get-ChildItem -Path $copyFrom -Filter "*.dll" -ErrorAction SilentlyContinue
+                foreach ($f in $magickDlls) { Copy-Item $f.FullName -Destination $stageBinDir -Force }
+                if (Test-Path $magickExe) { Copy-Item $magickExe -Destination $stageBinDir -Force }
+            } else {
+                Write-Warning "IMAGEMAGICK_ROOT specified ($magickRoot) but magick.exe not found in root or bin/. Skipping ImageMagick copy."
             }
         }
 

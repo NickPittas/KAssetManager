@@ -27,7 +27,6 @@ private slots:
     void onBrowseOutputDir();
     void onTargetChanged(int idx);
     void onStart();
-    void onPauseResume();
     void onCancel();
 
     // Worker feedback
@@ -44,6 +43,8 @@ private:
     void loadSettings();
     void saveSettings();
     QString locateFfmpeg() const;
+    QString locateMagick() const;
+
     bool validateAndBuildTasks(QVector<MediaConverterWorker::Task>& outTasks, QString& error);
     static bool isVideoExt(const QString& ext);
     static bool isImageExt(const QString& ext);
@@ -64,11 +65,11 @@ private:
     // MOV panel
     QWidget* m_movPanel = nullptr; QComboBox* m_movCodec = nullptr; QComboBox* m_movProresProf = nullptr;
     // JPG seq
-    QWidget* m_jpgSeqPanel = nullptr; QSpinBox* m_jpgQscale = nullptr;
+    QWidget* m_jpgSeqPanel = nullptr; QSpinBox* m_jpgQscale = nullptr; QSpinBox* m_jpgSeqPadDigits = nullptr; QSpinBox* m_jpgSeqStart = nullptr;
     // PNG seq
-    QWidget* m_pngSeqPanel = nullptr; QCheckBox* m_pngAlpha = nullptr;
+    QWidget* m_pngSeqPanel = nullptr; QCheckBox* m_pngAlpha = nullptr; QSpinBox* m_pngSeqPadDigits = nullptr; QSpinBox* m_pngSeqStart = nullptr;
     // TIF seq
-    QWidget* m_tifSeqPanel = nullptr; QComboBox* m_tifComp = nullptr; QCheckBox* m_tifAlpha = nullptr;
+    QWidget* m_tifSeqPanel = nullptr; QComboBox* m_tifComp = nullptr; QCheckBox* m_tifAlpha = nullptr; QSpinBox* m_tifSeqPadDigits = nullptr; QSpinBox* m_tifSeqStart = nullptr;
     // JPG
     QWidget* m_jpgPanel = nullptr; QSpinBox* m_jpgQuality = nullptr;
     // PNG
@@ -86,11 +87,12 @@ private:
     QProgressBar* m_overallBar = nullptr; QProgressBar* m_fileBar = nullptr; QLabel* m_status = nullptr; QPlainTextEdit* m_log = nullptr;
 
     // Buttons
-    QPushButton* m_startBtn = nullptr; QPushButton* m_pauseBtn = nullptr; QPushButton* m_cancelBtn = nullptr; QPushButton* m_closeBtn = nullptr;
+    QPushButton* m_startBtn = nullptr; QPushButton* m_cancelBtn = nullptr; QPushButton* m_closeBtn = nullptr;
 
     // Worker
     QThread m_thread; MediaConverterWorker* m_worker = nullptr;
     QString m_ffmpeg;
+    QString m_magick;
     int m_total = 0;
     bool m_running = false;
 };

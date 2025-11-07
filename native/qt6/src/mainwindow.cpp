@@ -3288,27 +3288,11 @@ void MainWindow::setupFileManagerUi()
                 if (v.isValid()) th->resizeSection(c, v.toInt());
             }
         }
-        // Restore current navigation path
+        // Restore current navigation path (use unified navigator to keep buttons/history consistent)
         if (s.contains("FileManager/CurrentPath")) {
             QString savedPath = s.value("FileManager/CurrentPath").toString();
             if (QFileInfo::exists(savedPath)) {
-                if (fmTreeModel && fmTree) {
-                    QModelIndex idx = fmTreeModel->index(savedPath);
-                    if (idx.isValid()) fmTree->setCurrentIndex(idx);
-                }
-                if (fmDirModel) {
-                    fmDirModel->setRootPath(savedPath);
-                    QModelIndex srcRoot = fmDirModel->index(savedPath);
-                    if (fmProxyModel) {
-                        fmProxyModel->rebuildForRoot(savedPath);
-                        QModelIndex proxyRoot = fmProxyModel->mapFromSource(srcRoot);
-                        if (fmGridView) fmGridView->setRootIndex(proxyRoot);
-                        if (fmListView) fmListView->setRootIndex(proxyRoot);
-                    } else {
-                        if (fmGridView) fmGridView->setRootIndex(srcRoot);
-                        if (fmListView) fmListView->setRootIndex(srcRoot);
-                    }
-                }
+                fmNavigateToPath(savedPath, false);
             }
         }
     });
@@ -5809,6 +5793,31 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
         if (event->type() == QEvent::DragEnter) {
             QDragEnterEvent *dragEvent = static_cast<QDragEnterEvent*>(event);
             if (dragEvent->mimeData()->hasUrls() || dragEvent->mimeData()->hasFormat("application/x-kasset-asset-ids")) {
+                const QString destDir = fmDirModel ? fmDirModel->rootPath() : QString();
+                bool sameFolderOnly = false;
+                if (!destDir.isEmpty()) {
+                    QStringList tmpSources;
+                    if (dragEvent->mimeData()->hasUrls()) {
+                        for (const QUrl &url : dragEvent->mimeData()->urls()) if (url.isLocalFile()) tmpSources << url.toLocalFile();
+                    } else {
+                        QByteArray encodedData = dragEvent->mimeData()->data("application/x-kasset-asset-ids");
+                        QDataStream stream(&encodedData, QIODevice::ReadOnly);
+                        QList<int> assetIds; stream >> assetIds;
+                        for (int id : assetIds) { const QString src = DB::instance().getAssetFilePath(id); if (!src.isEmpty()) tmpSources << src; }
+                    }
+                    if (!tmpSources.isEmpty()) {
+                        const QString normDest = QDir(QDir::cleanPath(destDir)).absolutePath().toLower();
+                        sameFolderOnly = std::all_of(tmpSources.cbegin(), tmpSources.cend(), [&](const QString &s){
+                            QString parent = QFileInfo(s).absoluteDir().absolutePath(); parent = QDir::cleanPath(parent).toLower();
+                            return parent == normDest; });
+                    }
+                }
+                if (sameFolderOnly) {
+                    dragEvent->setDropAction(Qt::IgnoreAction);
+                    dragEvent->accept();
+                    statusBar()->showMessage("Drop ignored (same folder)", 2000);
+                    return true;
+                }
                 const bool shift = dragEvent->keyboardModifiers().testFlag(Qt::ShiftModifier);
                 dragEvent->setDropAction(shift ? Qt::MoveAction : Qt::CopyAction);
                 dragEvent->accept();
@@ -5817,6 +5826,30 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
         } else if (event->type() == QEvent::DragMove) {
             QDragMoveEvent *dragEvent = static_cast<QDragMoveEvent*>(event);
             if (dragEvent->mimeData()->hasUrls() || dragEvent->mimeData()->hasFormat("application/x-kasset-asset-ids")) {
+                const QString destDir = fmDirModel ? fmDirModel->rootPath() : QString();
+                bool sameFolderOnly = false;
+                if (!destDir.isEmpty()) {
+                    QStringList tmpSources;
+                    if (dragEvent->mimeData()->hasUrls()) {
+                        for (const QUrl &url : dragEvent->mimeData()->urls()) if (url.isLocalFile()) tmpSources << url.toLocalFile();
+                    } else {
+                        QByteArray encodedData = dragEvent->mimeData()->data("application/x-kasset-asset-ids");
+                        QDataStream stream(&encodedData, QIODevice::ReadOnly);
+                        QList<int> assetIds; stream >> assetIds;
+                        for (int id : assetIds) { const QString src = DB::instance().getAssetFilePath(id); if (!src.isEmpty()) tmpSources << src; }
+                    }
+                    if (!tmpSources.isEmpty()) {
+                        const QString normDest = QDir(QDir::cleanPath(destDir)).absolutePath().toLower();
+                        sameFolderOnly = std::all_of(tmpSources.cbegin(), tmpSources.cend(), [&](const QString &s){
+                            QString parent = QFileInfo(s).absoluteDir().absolutePath(); parent = QDir::cleanPath(parent).toLower();
+                            return parent == normDest; });
+                    }
+                }
+                if (sameFolderOnly) {
+                    dragEvent->setDropAction(Qt::IgnoreAction);
+                    dragEvent->accept();
+                    return true;
+                }
                 const bool shift = dragEvent->keyboardModifiers().testFlag(Qt::ShiftModifier);
                 dragEvent->setDropAction(shift ? Qt::MoveAction : Qt::CopyAction);
                 dragEvent->accept();
@@ -5843,6 +5876,17 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
             }
 
             if (!sources.isEmpty()) {
+                const QString normDest = QDir(QDir::cleanPath(destDir)).absolutePath().toLower();
+                const bool sameFolderOnly = std::all_of(sources.cbegin(), sources.cend(), [&](const QString &s){
+                    QString parent = QFileInfo(s).absoluteDir().absolutePath(); parent = QDir::cleanPath(parent).toLower();
+                    return parent == normDest; });
+                if (sameFolderOnly) {
+                    dropEvent->setDropAction(Qt::IgnoreAction);
+                    dropEvent->accept();
+                    statusBar()->showMessage("Drop ignored (same folder)", 2000);
+                    return true;
+                }
+
                 const bool shift = dropEvent->keyboardModifiers().testFlag(Qt::ShiftModifier);
                 // Ensure any preview locks are released before file ops
                 if (fmMediaPlayer) { fmMediaPlayer->stop(); fmMediaPlayer->setSource(QUrl()); }
@@ -5876,6 +5920,33 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
                 if (idx.isValid()) {
                     fmTree->selectionModel()->select(idx, QItemSelectionModel::ClearAndSelect);
                 }
+                // Prevent dropping into the same folder as the sources
+                QString destDir = (idx.isValid() && fmTreeModel) ? fmTreeModel->filePath(idx) : QString();
+                bool sameFolderOnly = false;
+                if (!destDir.isEmpty()) {
+                    QStringList tmpSources;
+                    const QMimeData* md = dragEvent->mimeData();
+                    if (md->hasUrls()) {
+                        for (const QUrl &url : md->urls()) if (url.isLocalFile()) tmpSources << url.toLocalFile();
+                    }
+                    if (md->hasFormat("application/x-kasset-asset-ids")) {
+                        QByteArray encodedData = md->data("application/x-kasset-asset-ids");
+                        QDataStream stream(&encodedData, QIODevice::ReadOnly);
+                        QList<int> assetIds; stream >> assetIds;
+                        for (int id : assetIds) { const QString src = DB::instance().getAssetFilePath(id); if (!src.isEmpty()) tmpSources << src; }
+                    }
+                    if (!tmpSources.isEmpty()) {
+                        const QString normDest = QDir(QDir::cleanPath(destDir)).absolutePath().toLower();
+                        sameFolderOnly = std::all_of(tmpSources.cbegin(), tmpSources.cend(), [&](const QString &s){
+                            QString parent = QFileInfo(s).absoluteDir().absolutePath(); parent = QDir::cleanPath(parent).toLower();
+                            return parent == normDest; });
+                    }
+                }
+                if (sameFolderOnly) {
+                    dragEvent->setDropAction(Qt::IgnoreAction);
+                    dragEvent->accept();
+                    return true;
+                }
                 const bool shift = dragEvent->keyboardModifiers().testFlag(Qt::ShiftModifier);
                 dragEvent->setDropAction(shift ? Qt::MoveAction : Qt::CopyAction);
                 dragEvent->accept();
@@ -5905,6 +5976,17 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
                 }
             }
             if (!sources.isEmpty()) {
+                const QString normDest = QDir(QDir::cleanPath(destDir)).absolutePath().toLower();
+                const bool sameFolderOnly = std::all_of(sources.cbegin(), sources.cend(), [&](const QString &s){
+                    QString parent = QFileInfo(s).absoluteDir().absolutePath(); parent = QDir::cleanPath(parent).toLower();
+                    return parent == normDest; });
+                if (sameFolderOnly) {
+                    dropEvent->setDropAction(Qt::IgnoreAction);
+                    dropEvent->accept();
+                    statusBar()->showMessage("Drop ignored (same folder)", 2000);
+                    return true;
+                }
+
                 const bool shift = dropEvent->keyboardModifiers().testFlag(Qt::ShiftModifier);
                 // Ensure any preview locks are released before file ops
                 if (fmMediaPlayer) { fmMediaPlayer->stop(); fmMediaPlayer->setSource(QUrl()); }
