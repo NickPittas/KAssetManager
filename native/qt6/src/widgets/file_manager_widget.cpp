@@ -35,6 +35,11 @@
 #include <QMessageBox>
 #include <QProcess>
 #include <QSortFilterProxyModel>
+#include "media_convert_dialog.h"
+#ifdef Q_OS_WIN
+#include <Windows.h>
+#include <shellapi.h>
+#endif
 
 static QString fm_uniqueNameInDir(const QString &dirPath, const QString &baseName);
 FileManagerWidget::FileManagerWidget(MainWindow* host, QWidget* parent)
@@ -271,6 +276,7 @@ void FileManagerWidget::setupUi()
     fmGridView->setDragDropMode(QAbstractItemView::DragDrop);
     if (fmGridView->viewport()) fmGridView->viewport()->installEventFilter(this);
     if (m_host) connect(fmGridView, &QListView::doubleClicked, m_host, &MainWindow::onFmItemDoubleClicked);
+    connect(fmGridView, &QListView::customContextMenuRequested, this, &FileManagerWidget::onFmShowContextMenu);
     fmViewStack->addWidget(fmGridView);
 
     // List view
@@ -280,6 +286,7 @@ void FileManagerWidget::setupUi()
     fmListView->setSelectionMode(QAbstractItemView::ExtendedSelection);
     fmListView->setContextMenuPolicy(Qt::CustomContextMenu);
     if (m_host) connect(fmListView, &QTableView::doubleClicked, m_host, &MainWindow::onFmItemDoubleClicked);
+    connect(fmListView, &QTableView::customContextMenuRequested, this, &FileManagerWidget::onFmShowContextMenu);
     fmViewStack->addWidget(fmListView);
 
     rightLayout->addWidget(fmViewStack);
@@ -596,6 +603,110 @@ void FileManagerWidget::onFmTreeContextMenu(const QPoint &pos)
         FileOpsQueue::instance().enqueueMove(files, folderPath);
         if (!fileOpsDialog) fileOpsDialog = new FileOpsProgressDialog(this);
         fileOpsDialog->show(); fileOpsDialog->raise(); fileOpsDialog->activateWindow();
+    }
+}
+
+void FileManagerWidget::onFmShowContextMenu(const QPoint &pos)
+{
+    QWidget *senderW = qobject_cast<QWidget*>(sender());
+    if (!senderW || !fmDirModel || !fmViewStack) return;
+    QPoint globalPos = senderW->mapToGlobal(pos);
+
+    QMenu menu;
+    QAction *refreshA = menu.addAction("Refresh", this, &FileManagerWidget::onFmRefresh, QKeySequence(Qt::Key_F5));
+    menu.addSeparator();
+    QAction *copyA = menu.addAction("Copy", this, &FileManagerWidget::onFmCopy, QKeySequence::Copy);
+    QAction *cutA = menu.addAction("Cut", this, &FileManagerWidget::onFmCut, QKeySequence::Cut);
+    QAction *pasteA = menu.addAction("Paste", this, &FileManagerWidget::onFmPaste, QKeySequence::Paste);
+    menu.addSeparator();
+    QAction *renameA = menu.addAction("Rename", this, &FileManagerWidget::onFmRename, QKeySequence(Qt::Key_F2));
+    QAction *bulkRenameA = menu.addAction("Bulk Rename...");
+    QAction *delA = menu.addAction("Delete", this, &FileManagerWidget::onFmDelete, QKeySequence::Delete);
+    QAction *createFolderWithSel = menu.addAction("Create Folder with Selected Files", this, &FileManagerWidget::onFmCreateFolderWithSelected);
+    menu.addSeparator();
+    QAction *addLibA = nullptr;
+    if (m_host)
+        addLibA = menu.addAction("Add to Asset Library", m_host, &MainWindow::onAddSelectionToAssetLibrary);
+
+    QAction *favA = menu.addAction("Add to Favorites", this, &FileManagerWidget::onFmAddToFavorites);
+
+    menu.addSeparator();
+    QAction *openInExplorerA = menu.addAction("Open in Explorer");
+    QAction *propertiesA = menu.addAction("Properties");
+    QAction *openWithA = menu.addAction("Open With...");
+
+    // Enable/disable depending on selection
+    QStringList selectedPaths = fm_selectedPaths(fmDirModel, reinterpret_cast<QListView*>(fmGridView), reinterpret_cast<QTableView*>(fmListView), fmViewStack);
+    bool hasSel = !selectedPaths.isEmpty();
+    int selCount = selectedPaths.size();
+
+    copyA->setEnabled(hasSel);
+    cutA->setEnabled(hasSel);
+    renameA->setEnabled(selCount == 1);
+    bulkRenameA->setEnabled(selCount >= 2);
+    delA->setEnabled(hasSel);
+    pasteA->setEnabled(!fmClipboard.isEmpty());
+    if (addLibA) addLibA->setEnabled(hasSel);
+    favA->setEnabled(hasSel);
+    createFolderWithSel->setEnabled(hasSel);
+    openInExplorerA->setEnabled(selCount == 1);
+    propertiesA->setEnabled(selCount == 1);
+
+    // Optional conversion action if all selected are supported media
+    QAction *convertA = nullptr;
+    if (hasSel) {
+        auto isSupportedExt = [](const QString &ext){
+            static const QSet<QString> img{ "png","jpg","jpeg","tif","tiff","exr","iff","psd" };
+            static const QSet<QString> vid{ "mov","mxf","mp4","avi","mp5" };
+            return img.contains(ext) || vid.contains(ext);
+        };
+        bool allSupported = true;
+        for (const QString &p : selectedPaths) {
+            QFileInfo fi(p);
+            if (!fi.exists() || fi.isDir()) { allSupported = false; break; }
+            if (!isSupportedExt(fi.suffix().toLower())) { allSupported = false; break; }
+        }
+        if (allSupported) convertA = menu.addAction("Convert to Format...");
+    }
+
+    QAction *chosen = menu.exec(globalPos);
+    if (!chosen) return;
+
+    if (chosen == convertA) {
+        if (m_host) m_host->releaseAnyPreviewLocksForPaths(selectedPaths);
+        auto *dlg = new MediaConvertDialog(selectedPaths, this);
+        dlg->setAttribute(Qt::WA_DeleteOnClose);
+        connect(dlg, &QDialog::accepted, this, &FileManagerWidget::onFmRefresh);
+        connect(dlg, &QObject::destroyed, this, [this](){ QTimer::singleShot(100, this, &FileManagerWidget::onFmRefresh); });
+        dlg->show(); dlg->raise(); dlg->activateWindow();
+        return;
+    }
+
+    if (chosen == openInExplorerA && selCount == 1) {
+        QString path = selectedPaths.first();
+        QProcess::startDetached("explorer.exe", QStringList() << "/select," << QDir::toNativeSeparators(path));
+    } else if (chosen == propertiesA && selCount == 1) {
+        QString path = selectedPaths.first();
+#ifdef Q_OS_WIN
+        std::wstring wpath = path.toStdWString();
+        SHELLEXECUTEINFOW sei = { sizeof(sei) };
+        sei.lpVerb = L"properties";
+        sei.lpFile = wpath.c_str();
+        sei.nShow = SW_SHOW;
+        sei.fMask = SEE_MASK_INVOKEIDLIST;
+        ShellExecuteExW(&sei);
+#endif
+    } else if (chosen == openWithA && selCount == 1) {
+        QString path = selectedPaths.first();
+#ifdef Q_OS_WIN
+        std::wstring wpath = path.toStdWString();
+        SHELLEXECUTEINFOW sei = { sizeof(sei) };
+        sei.lpVerb = L"openas";
+        sei.lpFile = wpath.c_str();
+        sei.nShow = SW_SHOW;
+        sei.fMask = SEE_MASK_INVOKEIDLIST;
+        ShellExecuteExW(&sei);
+#endif
     }
 }
 
