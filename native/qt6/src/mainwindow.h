@@ -370,6 +370,8 @@ private:
     QSlider *fmPositionSlider;
     QLabel *fmTimeLabel;
     QSlider *fmVolumeSlider;
+    QPushButton *fmMuteBtn;
+
 
     // Info panel (embedded, right side)
     QWidget *fmInfoPanel = nullptr;

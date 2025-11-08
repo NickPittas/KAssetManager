@@ -7,6 +7,8 @@
 #include <QScrollArea>
 #include <QStyle>
 #include <QApplication>
+#include <QCoreApplication>
+
 #include <QWheelEvent>
 #include <QMouseEvent>
 #include <QDebug>
@@ -40,6 +42,25 @@
 
 #include <QSettings>
 
+
+// Load media icons from disk without recoloring; search common install paths
+static QIcon loadMediaIcon(const QString& relative)
+{
+    const QString appDir = QCoreApplication::applicationDirPath();
+    const QStringList searchPaths = {
+        appDir + "/icons/" + relative,
+        appDir + "/../icons/" + relative,
+        appDir + "/../../icons/" + relative,
+        appDir + "/../Resources/icons/" + relative
+    };
+    for (const QString& p : searchPaths) {
+        if (QFileInfo::exists(p)) {
+            return QIcon(p);
+        }
+    }
+    qWarning() << "[PreviewOverlay] Icon not found:" << relative;
+    return QIcon();
+}
 
 #ifdef HAVE_FFMPEG
 extern "C" {
@@ -381,8 +402,19 @@ void PreviewOverlay::setupUi()
 
     // Control buttons row
     QHBoxLayout *buttonsLayout = new QHBoxLayout();
+    // Load media control icons (from icons/media)
+    playIcon = loadMediaIcon("media/Play.png");
+    pauseIcon = loadMediaIcon("media/Pause.png");
+    prevFrameIcon = loadMediaIcon("media/Previous Frame.png");
+    nextFrameIcon = loadMediaIcon("media/Next Frame.png");
+    audioIcon = loadMediaIcon("media/Audio.png");
+    muteIcon = loadMediaIcon("media/Mute.png");
+    noAudioIcon = loadMediaIcon("media/No Audio.png");
 
-    playPauseBtn = new QPushButton("▶", this);
+
+    playPauseBtn = new QPushButton(this);
+    playPauseBtn->setIcon(playIcon);
+    playPauseBtn->setIconSize(QSize(24, 24));
     playPauseBtn->setFixedSize(40, 40);
     playPauseBtn->setFocusPolicy(Qt::NoFocus);
     playPauseBtn->setStyleSheet(
@@ -393,7 +425,9 @@ void PreviewOverlay::setupUi()
     connect(playPauseBtn, &QPushButton::clicked, this, &PreviewOverlay::onPlayPauseClicked);
     buttonsLayout->addWidget(playPauseBtn);
     // Frame step buttons
-    prevFrameBtn = new QPushButton("‹", this);
+    prevFrameBtn = new QPushButton(this);
+    prevFrameBtn->setIcon(prevFrameIcon);
+    prevFrameBtn->setIconSize(QSize(20, 20));
     prevFrameBtn->setFixedSize(36, 36);
     prevFrameBtn->setFocusPolicy(Qt::NoFocus);
     prevFrameBtn->setToolTip("Previous frame (,)");
@@ -404,7 +438,9 @@ void PreviewOverlay::setupUi()
     connect(prevFrameBtn, &QPushButton::clicked, this, &PreviewOverlay::onStepPrevFrame);
     buttonsLayout->addWidget(prevFrameBtn);
 
-    nextFrameBtn = new QPushButton("›", this);
+    nextFrameBtn = new QPushButton(this);
+    nextFrameBtn->setIcon(nextFrameIcon);
+    nextFrameBtn->setIconSize(QSize(20, 20));
     nextFrameBtn->setFixedSize(36, 36);
     nextFrameBtn->setFocusPolicy(Qt::NoFocus);
     nextFrameBtn->setToolTip("Next frame (.)");
@@ -450,9 +486,15 @@ void PreviewOverlay::setupUi()
     buttonsLayout->addSpacing(20);
 
     // Volume control
-    QLabel *volumeIcon = new QLabel("🔊", this);
-    volumeIcon->setStyleSheet("QLabel { color: white; font-size: 16px; }");
-    buttonsLayout->addWidget(volumeIcon);
+    muteBtn = new QPushButton(this);
+    muteBtn->setIcon(audioIcon);
+    muteBtn->setIconSize(QSize(18, 18));
+    muteBtn->setFlat(true);
+    muteBtn->setStyleSheet("QPushButton { color: white; }");
+    muteBtn->setFocusPolicy(Qt::NoFocus);
+    muteBtn->setToolTip("Mute/Unmute");
+    connect(muteBtn, &QPushButton::clicked, this, &PreviewOverlay::onToggleMute);
+    buttonsLayout->addWidget(muteBtn);
 
     volumeSlider = new QSlider(Qt::Horizontal, this);
     volumeSlider->setFixedWidth(100);
@@ -741,6 +783,14 @@ void PreviewOverlay::showVideo(const QString &filePath)
     // Anchor nav arrows to the video widget when showing video (handles native window stacking)
     positionNavButtons(videoWidget);
     controlsWidget->show();
+    // Enable audio controls for video
+    if (muteBtn) {
+        muteBtn->setEnabled(true);
+        const bool m = (audioOutput && audioOutput->isMuted());
+        muteBtn->setIcon(m ? muteIcon : audioIcon);
+    }
+    if (volumeSlider) volumeSlider->setEnabled(true);
+
 
     // Hide alpha toggle for videos
     if (alphaCheck) alphaCheck->hide();
@@ -846,6 +896,18 @@ void PreviewOverlay::onVolumeChanged(int value)
     audioOutput->setVolume(value / 100.0);
     controlsTimer->start();
 }
+
+void PreviewOverlay::onToggleMute()
+{
+    if (!audioOutput) return;
+    const bool newMuted = !audioOutput->isMuted();
+    audioOutput->setMuted(newMuted);
+    if (muteBtn) {
+        muteBtn->setIcon(newMuted ? muteIcon : audioIcon);
+    }
+    controlsTimer->start();
+}
+
 void PreviewOverlay::onSliderPressed()
 {
     userSeeking = true;
@@ -1024,14 +1086,14 @@ void PreviewOverlay::updatePlayPauseButton()
 {
 #ifdef HAVE_FFMPEG
     if (usingFallbackVideo) {
-        playPauseBtn->setText(fallbackPaused ? "▶" : "⏸");
+        playPauseBtn->setIcon(fallbackPaused ? playIcon : pauseIcon);
         return;
     }
 #endif
     if (mediaPlayer->playbackState() == QMediaPlayer::PlayingState) {
-        playPauseBtn->setText("⏸");
+        playPauseBtn->setIcon(pauseIcon);
     } else {
-        playPauseBtn->setText("▶");
+        playPauseBtn->setIcon(playIcon);
     }
 }
 void PreviewOverlay::positionNavButtons(QWidget* container)
@@ -1332,6 +1394,10 @@ void PreviewOverlay::showSequence(const QStringList &framePaths, const QString &
     videoWidget->hide();
     imageView->show();
     controlsWidget->show();
+    // Disable audio controls for image sequences (no audio)
+    if (muteBtn) { muteBtn->setEnabled(false); muteBtn->setIcon(noAudioIcon); }
+    if (volumeSlider) volumeSlider->setEnabled(false);
+
 
     // Stop video player if running
     if (mediaPlayer->playbackState() != QMediaPlayer::StoppedState) {

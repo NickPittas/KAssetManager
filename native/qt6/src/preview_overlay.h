@@ -22,6 +22,8 @@
 #include <QPdfView>
 #endif
 #include <QPlainTextEdit>
+#include <QIcon>
+
 #include <QTableView>
 #include <QStandardItemModel>
 #include <QCache>
@@ -215,6 +217,8 @@ private slots:
     void onStepPrevFrame();
     void onStepNextFrame();
     void onVolumeChanged(int value);
+    void onToggleMute();
+
     void hideControls();
     void onSequenceTimerTick();
     void onColorSpaceChanged(int index);
@@ -264,12 +268,23 @@ private:
     CachedFrameSlider *positionSlider;
     QLabel *timeLabel;
     QSlider *volumeSlider;
+    QPushButton *muteBtn;
+
     QPushButton *closeBtn;
     QLabel *fileNameLabel;
     QComboBox *colorSpaceCombo;
     QLabel *colorSpaceLabel;
     QCheckBox *alphaCheck;
     QPlainTextEdit *textView;
+
+    // Media icons
+    QIcon playIcon;
+    QIcon pauseIcon;
+    QIcon prevFrameIcon;
+    QIcon nextFrameIcon;
+    QIcon audioIcon;
+    QIcon muteIcon;
+    QIcon noAudioIcon;
 
     QTableView *tableView;
     QStandardItemModel *tableModel;

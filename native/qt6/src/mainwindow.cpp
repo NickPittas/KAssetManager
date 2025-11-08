@@ -278,6 +278,17 @@ static QIcon icoHide() { return loadPngIcon("Hide.png"); }
 
 static QIcon icoSearch() { return loadPngIcon("Search.png"); }
 
+// Media control icons from icons/media
+static QIcon icoMediaPlay() { return loadPngIcon("media/Play.png"); }
+static QIcon icoMediaPause() { return loadPngIcon("media/Pause.png"); }
+static QIcon icoMediaStop() { return loadPngIcon("media/Stop.png"); }
+static QIcon icoMediaNextFrame() { return loadPngIcon("media/Next Frame.png"); }
+static QIcon icoMediaPrevFrame() { return loadPngIcon("media/Previous Frame.png"); }
+static QIcon icoMediaAudio() { return loadPngIcon("media/Audio.png"); }
+static QIcon icoMediaNoAudio() { return loadPngIcon("media/No Audio.png"); }
+static QIcon icoMediaMute() { return loadPngIcon("media/Mute.png"); }
+
+
 // File type icons for File Manager
 static QIcon icoFilePdf() { return mkIcon([](QPainter& p, const QRectF& r){
     // PDF document icon - page with folded corner
@@ -3025,20 +3036,43 @@ void MainWindow::setupFileManagerUi()
 
     // Simple media controls
     QHBoxLayout *mc = new QHBoxLayout();
-    fmPlayPauseBtn = new QPushButton("▶", fmPreviewPanel);
+    fmPlayPauseBtn = new QPushButton(fmPreviewPanel);
+    fmPlayPauseBtn->setIcon(icoMediaPlay());
+    fmPlayPauseBtn->setIconSize(QSize(18,18));
     fmPositionSlider = new QSlider(Qt::Horizontal, fmPreviewPanel);
     fmPositionSlider->setMinimum(0); fmPositionSlider->setMaximum(1000);
     fmTimeLabel = new QLabel("00:00 / 00:00", fmPreviewPanel);
     fmVolumeSlider = new QSlider(Qt::Horizontal, fmPreviewPanel);
+    fmMuteBtn = new QPushButton(fmPreviewPanel);
+    fmMuteBtn->setIcon(icoMediaAudio());
+    fmMuteBtn->setFlat(true);
+    fmMuteBtn->setIconSize(QSize(16,16));
+    fmMuteBtn->setFocusPolicy(Qt::NoFocus);
+    fmMuteBtn->setToolTip("Mute/Unmute");
+
     fmVolumeSlider->setRange(0, 100); fmVolumeSlider->setValue(50);
-    mc->addWidget(fmPlayPauseBtn); mc->addWidget(fmPositionSlider); mc->addWidget(fmTimeLabel); mc->addWidget(fmVolumeSlider);
+    mc->addWidget(fmPlayPauseBtn); mc->addWidget(fmPositionSlider); mc->addWidget(fmTimeLabel); mc->addWidget(fmMuteBtn); mc->addWidget(fmVolumeSlider);
 
     connect(fmPlayPauseBtn, &QPushButton::clicked, this, [this]{
-        if (!fmMediaPlayer) return; if (fmMediaPlayer->playbackState() == QMediaPlayer::PlayingState) { fmMediaPlayer->pause(); fmPlayPauseBtn->setText("▶"); } else { fmMediaPlayer->play(); fmPlayPauseBtn->setText("⏸"); }
+        if (!fmMediaPlayer) return;
+        if (fmMediaPlayer->playbackState() == QMediaPlayer::PlayingState) {
+            fmMediaPlayer->pause();
+            fmPlayPauseBtn->setIcon(icoMediaPlay());
+        } else {
+            fmMediaPlayer->play();
+            fmPlayPauseBtn->setIcon(icoMediaPause());
+        }
     });
     connect(fmMediaPlayer, &QMediaPlayer::positionChanged, this, [this](qint64 pos){ if (fmMediaPlayer && fmMediaPlayer->duration()>0){ fmPositionSlider->blockSignals(true); fmPositionSlider->setValue(int(pos*1000/fmMediaPlayer->duration())); fmPositionSlider->blockSignals(false); fmTimeLabel->setText(QString("%1 / %2").arg(QTime::fromMSecsSinceStartOfDay(int(pos)).toString("mm:ss")).arg(QTime::fromMSecsSinceStartOfDay(int(fmMediaPlayer->duration())).toString("mm:ss"))); }});
     connect(fmPositionSlider, &QSlider::sliderMoved, this, [this](int v){ if (fmMediaPlayer && fmMediaPlayer->duration()>0) fmMediaPlayer->setPosition(qint64(v) * fmMediaPlayer->duration() / 1000); });
     connect(fmVolumeSlider, &QSlider::valueChanged, this, [this](int v){ if (fmAudioOutput) fmAudioOutput->setVolume(v/100.0); });
+    connect(fmMuteBtn, &QPushButton::clicked, this, [this]{
+        if (!fmAudioOutput) return;
+        bool newMuted = !fmAudioOutput->isMuted();
+        fmAudioOutput->setMuted(newMuted);
+        fmMuteBtn->setIcon(newMuted ? icoMediaMute() : icoMediaAudio());
+    });
+
 
     // Center the preview content between title and controls
     QWidget *previewContent = new QWidget(fmPreviewPanel);
@@ -3063,6 +3097,8 @@ void MainWindow::setupFileManagerUi()
     pc->addWidget(fmSvgView, 1);
 
     fmVolumeSlider->hide();
+    if (fmMuteBtn) fmMuteBtn->hide();
+
 
     // Info panel (similar to Asset Manager's info panel)
     fmInfoPanel = new QWidget(fmRightSplitter);
@@ -7060,6 +7096,8 @@ void MainWindow::clearFmPreview()
     if (fmPositionSlider) fmPositionSlider->hide();
     if (fmTimeLabel) fmTimeLabel->hide();
     if (fmVolumeSlider) fmVolumeSlider->hide();
+    if (fmMuteBtn) fmMuteBtn->hide();
+
 
     if (fmTextView) { fmTextView->clear(); fmTextView->hide(); }
     if (fmCsvView) fmCsvView->hide();
@@ -7178,6 +7216,8 @@ void MainWindow::updateFmPreviewForIndex(const QModelIndex &idx)
         if (fmPositionSlider) fmPositionSlider->hide();
         if (fmTimeLabel) fmTimeLabel->hide();
         if (fmVolumeSlider) fmVolumeSlider->hide();
+        if (fmMuteBtn) fmMuteBtn->hide();
+
         fmCurrentPreviewPath = path;
         fmImageItem->setPixmap(px);
         fmImageItem->setTransformationMode(Qt::SmoothTransformation);
@@ -7216,6 +7256,8 @@ void MainWindow::updateFmPreviewForIndex(const QModelIndex &idx)
         if (fmPositionSlider) fmPositionSlider->hide();
         if (fmTimeLabel) fmTimeLabel->hide();
         if (fmVolumeSlider) fmVolumeSlider->hide();
+        if (fmMuteBtn) fmMuteBtn->hide();
+
         if (fmImageView) fmImageView->hide();
         if (fmAlphaCheck) fmAlphaCheck->hide();
     };
@@ -7505,10 +7547,12 @@ if (isExcelFile(ext)) {
         if (fmPositionSlider) fmPositionSlider->show();
         if (fmTimeLabel) fmTimeLabel->show();
         if (fmVolumeSlider) fmVolumeSlider->show();
+        if (fmMuteBtn) fmMuteBtn->show();
+
         if (fmMediaPlayer) {
             fmMediaPlayer->setSource(QUrl::fromLocalFile(path));
             fmMediaPlayer->pause();
-            if (fmPlayPauseBtn) fmPlayPauseBtn->setText("▶");
+            if (fmPlayPauseBtn) fmPlayPauseBtn->setIcon(icoMediaPlay());
         }
         return;
     }
