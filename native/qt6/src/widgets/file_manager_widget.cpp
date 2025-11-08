@@ -33,9 +33,10 @@
 #include <QVBoxLayout>
 #include <QInputDialog>
 #include <QMessageBox>
-#include <QProcess>#include <QSortFilterProxyModel>
-#include <QFileInfo>
+#include <QProcess>
+#include <QSortFilterProxyModel>
 
+static QString fm_uniqueNameInDir(const QString &dirPath, const QString &baseName);
 FileManagerWidget::FileManagerWidget(MainWindow* host, QWidget* parent)
     : QWidget(parent)
     , m_host(host)
@@ -132,7 +133,7 @@ void FileManagerWidget::setupUi()
     );
     if (m_host) {
         connect(fmTree, &QTreeView::clicked, this, &FileManagerWidget::onFmTreeActivated);
-        connect(fmTree, &QTreeView::customContextMenuRequested, m_host, &MainWindow::onFmTreeContextMenu);
+        connect(fmTree, &QTreeView::customContextMenuRequested, this, &FileManagerWidget::onFmTreeContextMenu);
     }
     fmTree->setDragEnabled(true);
     fmTree->setAcceptDrops(true);
@@ -498,6 +499,104 @@ void FileManagerWidget::onFmFavoriteActivated(QListWidgetItem* item)
     const QString path = item->data(Qt::UserRole).toString();
     if (path.isEmpty()) return;
     emit navigateToPathRequested(path, true);
+}
+
+void FileManagerWidget::onFmTreeContextMenu(const QPoint &pos)
+{
+    if (!fmTree || !fmTreeModel) return;
+    QModelIndex idx = fmTree->indexAt(pos);
+    if (!idx.isValid()) return;
+    const QString path = fmTreeModel->filePath(idx);
+    if (path.isEmpty()) return;
+
+    QMenu menu;
+    QAction *refreshA = menu.addAction("Refresh");
+    menu.addSeparator();
+    QAction *copyA = menu.addAction("Copy");
+    QAction *cutA = menu.addAction("Cut");
+    QAction *pasteA = menu.addAction("Paste");
+    menu.addSeparator();
+    QAction *renameA = menu.addAction("Rename");
+    QAction *delA = menu.addAction("Delete (Recycle Bin)");
+    QAction *permDelA = menu.addAction("Permanent Delete (Shift+Delete)");
+    QAction *newFolderA = menu.addAction("New Folder");
+    QAction *createFolderWithSelA = menu.addAction("Create Folder with Selected Files");
+
+    // Enable states
+    const bool hasClipboard = !fmClipboard.isEmpty();
+    pasteA->setEnabled(hasClipboard);
+
+    QAction *chosen = menu.exec(fmTree->viewport()->mapToGlobal(pos));
+    if (!chosen) return;
+
+    auto selectedTreePaths = [&]() {
+        QStringList out;
+        auto sel = fmTree->selectionModel();
+        if (!sel) return out;
+        const auto rows = sel->selectedRows();
+        for (const QModelIndex &r : rows) out << fmTreeModel->filePath(r);
+        out.removeDuplicates();
+        return out;
+    };
+
+    if (chosen == refreshA) {
+        onFmRefresh();
+    } else if (chosen == copyA) {
+        fmClipboard = selectedTreePaths();
+        fmClipboardCutMode = false;
+    } else if (chosen == cutA) {
+        fmClipboard = selectedTreePaths();
+        fmClipboardCutMode = true;
+    } else if (chosen == pasteA) {
+        // Paste into specific tree folder
+        if (!fmClipboard.isEmpty()) {
+            if (m_host) m_host->releaseAnyPreviewLocksForPaths(fmClipboard);
+            auto &q = FileOpsQueue::instance();
+            if (fmClipboardCutMode) q.enqueueMove(fmClipboard, path); else q.enqueueCopy(fmClipboard, path);
+            if (!fileOpsDialog) fileOpsDialog = new FileOpsProgressDialog(this);
+            fileOpsDialog->show(); fileOpsDialog->raise(); fileOpsDialog->activateWindow();
+            fmClipboard.clear(); fmClipboardCutMode = false;
+        }
+    } else if (chosen == delA) {
+        QStringList paths = selectedTreePaths();
+        if (paths.isEmpty()) return;
+        if (m_host) m_host->releaseAnyPreviewLocksForPaths(paths);
+        FileOpsQueue::instance().enqueueDelete(paths);
+    } else if (chosen == permDelA) {
+        QStringList paths = selectedTreePaths();
+        if (paths.isEmpty()) return;
+        if (m_host) m_host->doPermanentDelete(paths);
+    } else if (chosen == renameA) {
+        QStringList paths = selectedTreePaths();
+        if (paths.size() != 1) return;
+        QFileInfo fi(paths.first());
+        bool ok=false;
+        QString newName = QInputDialog::getText(this, "Rename", "New name:", QLineEdit::Normal, fi.fileName(), &ok);
+        if (!ok || newName.trimmed().isEmpty()) return;
+        QDir parent(fi.absolutePath());
+        parent.rename(fi.fileName(), newName.trimmed());
+    } else if (chosen == newFolderA) {
+        QDir dir(path);
+        QString newPath = fm_uniqueNameInDir(path, "New Folder");
+        dir.mkpath(newPath);
+    } else if (chosen == createFolderWithSelA) {
+        // Use selection from main view, create folder inside tree path
+        const QStringList files = fm_selectedPaths(fmDirModel, reinterpret_cast<QListView*>(fmGridView), reinterpret_cast<QTableView*>(fmListView), fmViewStack);
+        if (files.isEmpty()) return;
+        bool ok=false;
+        QString folderName = QInputDialog::getText(this, "Create Folder", "Enter folder name:", QLineEdit::Normal, "New Folder", &ok);
+        if (!ok) return;
+        folderName = folderName.trimmed();
+        if (folderName.isEmpty()) return;
+        QDir dd(path);
+        QString folderPath = dd.filePath(folderName);
+        if (QFileInfo::exists(folderPath)) { int i=2; QString base = folderName; while (QFileInfo::exists(folderPath)) { folderName = QString("%1 (%2)").arg(base).arg(i++); folderPath = dd.filePath(folderName);} }
+        if (!dd.mkpath(folderPath)) { QMessageBox::warning(this, "Error", QString("Failed to create folder: %1").arg(folderPath)); return; }
+        if (m_host) m_host->releaseAnyPreviewLocksForPaths(files);
+        FileOpsQueue::instance().enqueueMove(files, folderPath);
+        if (!fileOpsDialog) fileOpsDialog = new FileOpsProgressDialog(this);
+        fileOpsDialog->show(); fileOpsDialog->raise(); fileOpsDialog->activateWindow();
+    }
 }
 
 
