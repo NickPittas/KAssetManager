@@ -26,9 +26,9 @@
 #include <QListWidget>
 
 #include <QFileSystemWatcher>
-
 #include <QToolButton>
 
+class FileManagerWidget;
 class VirtualFolderTreeModel;
 class AssetsModel;
 class TagsModel;
@@ -42,6 +42,7 @@ class ProjectFolderWatcher;
 class MainWindow : public QMainWindow
 {
     Q_OBJECT
+    friend class FileManagerWidget;
 
 public:
     explicit MainWindow(QWidget *parent = nullptr);
@@ -196,6 +197,7 @@ private:
     QTabWidget *mainTabs;
     QWidget *assetManagerPage;
     QWidget *fileManagerPage;
+    FileManagerWidget *fileManagerWidget = nullptr;
 
     // UI Components
     QSplitter *mainSplitter;
