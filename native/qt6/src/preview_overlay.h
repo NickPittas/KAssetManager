@@ -33,6 +33,9 @@
 #include <QPainter>
 #include <QStyleOptionSlider>
 #include <QSet>
+#include <QPointer>
+#include <atomic>
+
 
 #include "oiio_image_loader.h"
 
@@ -452,6 +455,10 @@ public:
     static int calculateOptimalCacheSize(int percentOfFreeRAM = 70);
     static qint64 getAvailableRAM(); // Returns available RAM in MB
 
+    // Cancellation epoch (thread-safe)
+    quint64 currentEpoch() const { return m_epoch.load(); }
+    bool isEpochCurrent(quint64 epoch) const { return m_epoch.load() == epoch; }
+
 signals:
     void frameCached(int frameIndex);
 
@@ -468,6 +475,7 @@ private:
     int m_currentFrame;
     bool m_prefetchActive;
     QSet<int> m_pendingFrames; // Track frames being loaded
+    std::atomic<quint64> m_epoch; // cancellation epoch; increment to invalidate in-flight workers
 };
 
 // Worker for loading frames in background
@@ -477,17 +485,18 @@ class FrameLoaderWorker : public QObject, public QRunnable
 
 public:
     FrameLoaderWorker(SequenceFrameCache *cache, int frameIndex, const QString &framePath,
-                      OIIOImageLoader::ColorSpace colorSpace);
+                      OIIOImageLoader::ColorSpace colorSpace, quint64 epoch);
     void run() override;
 
 signals:
     void frameLoaded(int frameIndex, QPixmap pixmap);
 
 private:
-    SequenceFrameCache *m_cache;
+    QPointer<SequenceFrameCache> m_cache;
     int m_frameIndex;
     QString m_framePath;
     OIIOImageLoader::ColorSpace m_colorSpace;
+    quint64 m_epoch;
 };
 
 #endif // PREVIEW_OVERLAY_H

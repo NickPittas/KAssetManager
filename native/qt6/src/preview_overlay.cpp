@@ -2319,13 +2319,13 @@ SequenceFrameCache::SequenceFrameCache(QObject *parent)
     : QObject(parent)
     , m_colorSpace(OIIOImageLoader::ColorSpace::sRGB)
     , m_cache(100 * 50 * 1024) // Max cost in KB: will be updated based on settings
-    , m_threadPool(new QThreadPool(this))
+    , m_threadPool(QThreadPool::globalInstance())
     , m_maxCacheSize(100)
     , m_currentFrame(0)
     , m_prefetchActive(false)
+    , m_epoch(1)
 {
-    // Use 4 threads for faster background loading
-    m_threadPool->setMaxThreadCount(4);
+    // Using global thread pool; do not modify its thread count here to avoid side effects.
 
     // Load cache size from settings
     QSettings s("AugmentCode", "KAssetManager");
@@ -2360,8 +2360,9 @@ SequenceFrameCache::SequenceFrameCache(QObject *parent)
 
 SequenceFrameCache::~SequenceFrameCache()
 {
+    // Do not block UI waiting for worker threads. Mark all in-flight tasks as cancelled
+    // and let them wind down naturally.
     stopPrefetch();
-    m_threadPool->waitForDone(3000);
     clearCache();
 }
 
@@ -2422,9 +2423,11 @@ void SequenceFrameCache::startPrefetch(int currentFrame)
 
 void SequenceFrameCache::stopPrefetch()
 {
+    // Mark prefetch as inactive and invalidate all in-flight workers by bumping the epoch
     QMutexLocker locker(&m_mutex);
     m_prefetchActive = false;
     m_pendingFrames.clear();
+    m_epoch.fetch_add(1, std::memory_order_relaxed);
 }
 
 void SequenceFrameCache::setCurrentFrame(int frameIndex)
@@ -2502,6 +2505,7 @@ int SequenceFrameCache::cachedFrameCount() const
 void SequenceFrameCache::prefetchFrames(int startFrame)
 {
     QMutexLocker locker(&m_mutex);
+    const quint64 epoch = m_epoch.load(std::memory_order_relaxed);
 
     if (!m_prefetchActive || m_framePaths.isEmpty()) {
         return;
@@ -2529,7 +2533,7 @@ void SequenceFrameCache::prefetchFrames(int startFrame)
 
         // Create worker to load frame in background
         QString framePath = m_framePaths[frameIndex];
-        FrameLoaderWorker *worker = new FrameLoaderWorker(this, frameIndex, framePath, m_colorSpace);
+        FrameLoaderWorker *worker = new FrameLoaderWorker(this, frameIndex, framePath, m_colorSpace, epoch);
 
         // Use Qt::AutoConnection - Qt will automatically choose the right connection type
         // This ensures proper thread safety without blocking
@@ -2587,35 +2591,65 @@ QPixmap SequenceFrameCache::loadFrame(int frameIndex)
 // ============================================================================
 
 FrameLoaderWorker::FrameLoaderWorker(SequenceFrameCache *cache, int frameIndex,
-                                     const QString &framePath, OIIOImageLoader::ColorSpace colorSpace)
+                                     const QString &framePath, OIIOImageLoader::ColorSpace colorSpace, quint64 epoch)
     : m_cache(cache)
     , m_frameIndex(frameIndex)
     , m_framePath(framePath)
     , m_colorSpace(colorSpace)
+    , m_epoch(epoch)
 {
     setAutoDelete(true);
 }
 
 void FrameLoaderWorker::run()
 {
+    // Capture cache pointer; it may be deleted while we run
+    SequenceFrameCache* cache = m_cache.data();
+    if (!cache) {
+        return;
+    }
+
+    // If this worker belongs to an older epoch, exit early
+    if (!cache->isEpochCurrent(m_epoch)) {
+        return;
+    }
+
     QImage image;
 
     // Try OpenImageIO first for supported formats
     if (OIIOImageLoader::isOIIOSupported(m_framePath)) {
         image = OIIOImageLoader::loadImage(m_framePath, 0, 0, m_colorSpace);
+        // Re-check cancellation after potentially expensive I/O
+        if (!cache->isEpochCurrent(m_epoch)) {
+            return;
+        }
     }
 
-    // Fall back to Qt loader
+    // Fall back to Qt loader if needed
     if (image.isNull()) {
         image.load(m_framePath);
+        if (!cache->isEpochCurrent(m_epoch)) {
+            return;
+        }
+    }
+
+    if (!cache->isEpochCurrent(m_epoch)) {
+        return;
     }
 
     if (!image.isNull()) {
         QPixmap pixmap = QPixmap::fromImage(image);
-        emit frameLoaded(m_frameIndex, pixmap);
+        // Final check before emitting to avoid enqueuing into a stale cache
+        if (cache->isEpochCurrent(m_epoch)) {
+            emit frameLoaded(m_frameIndex, pixmap);
+        }
     } else {
         qWarning() << "[FrameLoaderWorker] Failed to load frame:" << m_framePath;
-        emit frameLoaded(m_frameIndex, QPixmap());
+        // Only notify failure if still current; otherwise earlier stopPrefetch()
+        // already cleared pending state for this frame.
+        if (cache->isEpochCurrent(m_epoch)) {
+            emit frameLoaded(m_frameIndex, QPixmap());
+        }
     }
 }
 
