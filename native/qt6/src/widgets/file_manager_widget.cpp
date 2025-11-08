@@ -172,11 +172,11 @@ void FileManagerWidget::setupUi()
     };
 
     fmBackButton = mkTb(icoBack(), "Back");
-    if (m_host) connect(fmBackButton, &QToolButton::clicked, m_host, &MainWindow::onFmNavigateBack);
+    if (m_host) connect(fmBackButton, &QToolButton::clicked, this, &FileManagerWidget::onFmNavigateBack);
     tb->addWidget(fmBackButton);
 
     fmUpButton = mkTb(icoUp(), "Up");
-    if (m_host) connect(fmUpButton, &QToolButton::clicked, m_host, &MainWindow::onFmNavigateUp);
+    if (m_host) connect(fmUpButton, &QToolButton::clicked, this, &FileManagerWidget::onFmNavigateUp);
     tb->addWidget(fmUpButton);
 
     QToolButton *refreshButton = mkTb(icoRefresh(), "Refresh");
@@ -839,4 +839,15 @@ void FileManagerWidget::onFmCreateFolderWithSelected()
     FileOpsQueue::instance().enqueueMove(paths, folderPath);
     if (!fileOpsDialog) fileOpsDialog = new FileOpsProgressDialog(this);
     fileOpsDialog->show(); fileOpsDialog->raise(); fileOpsDialog->activateWindow();
+}
+
+
+void FileManagerWidget::onFmNavigateBack()
+{
+    if (m_host) m_host->onFmNavigateBack();
+}
+
+void FileManagerWidget::onFmNavigateUp()
+{
+    if (m_host) m_host->onFmNavigateUp();
 }

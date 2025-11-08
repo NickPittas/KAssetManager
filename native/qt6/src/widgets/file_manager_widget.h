@@ -199,6 +199,8 @@ public slots:
     void onFmDelete();
     void onFmDeletePermanent();
     void onFmCreateFolderWithSelected();
+    void onFmNavigateBack();
+    void onFmNavigateUp();
 };
 
 
