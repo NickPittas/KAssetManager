@@ -77,6 +77,9 @@ signals:
 private:
     void setupUi();
     void bindHostPointers();
+    void navigateToPath(const QString& path, bool addToHistory);
+    void scrollTreeToPath(const QString& path);
+    void updateNavigationButtons();
 
     MainWindow* m_host = nullptr;
 

@@ -112,7 +112,6 @@ private slots:
 
     // File Manager slots
     void onFmTreeActivated(const QModelIndex &index);
-    void onFmTreeContextMenu(const QPoint &pos);
     void onFmItemDoubleClicked(const QModelIndex &index);
     void onFmViewModeToggled();
     void onFmThumbnailSizeChanged(int size);
@@ -133,7 +132,6 @@ private slots:
     void onFmBulkRename();
     void onFmNewFolder();
     void onFmCreateFolderWithSelected();
-    void onFmShowContextMenu(const QPoint &pos);
     void onFmBackToParent();
     void onFmRefresh();
     void onFmGroupSequencesToggled(bool checked);
