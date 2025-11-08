@@ -387,6 +387,10 @@ private:
     QPoint lastPanPoint;
     bool isPanning;
 
+
+	    // Drag from overlay preview (image/video)
+	    QPoint overlayDragStartPos; bool overlayDragPending = false;
+
     // Image sequence playback state
     bool isSequence;
     QStringList sequenceFramePaths;

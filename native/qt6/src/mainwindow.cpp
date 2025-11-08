@@ -46,6 +46,7 @@
 #include <QDropEvent>
 #include <QMimeData>
 #include <QUrl>
+#include <QDataStream>
 #include <cmath>
 #include <limits>
 #include <QProgressDialog>
@@ -651,6 +652,11 @@ private:
 
 
 #include "video_metadata.h"
+#include "drag_utils.h"
+#include <QSet>
+
+
+#include "virtual_drag.h"
 
 // Custom QListView with compact drag pixmap
 class AssetGridView : public QListView
@@ -666,48 +672,56 @@ protected:
             return;
         }
 
-        // Create mime data
-        QMimeData *mimeData = model()->mimeData(indexes);
-        if (!mimeData) {
-            return;
+        // Build adaptive payloads from selected assets using model roles
+        QVector<QString> frameVec; // expanded frames + single files
+        QSet<QString> folderSet;   // sequence folders + single files (for DCCs)
+        auto buildSeq = [](const QString& reprPath, int start, int end){
+            QStringList out; if (reprPath.isEmpty() || start > end) return out;
+            QFileInfo fi(reprPath); QString name = fi.fileName();
+            int pos=-1, pad=0; for(int i=name.size()-1;i>=0;--i){ if (name[i].isDigit()){ int j=i; while(j>=0 && name[j].isDigit()) --j; pos=j+1; pad=(i-j); break; } }
+            if (pos<0||pad<=0) return out; QString base=name.left(pos), suf=name.mid(pos+pad);
+            for (int f=start; f<=end; ++f){ QString num=QString("%1").arg(f, pad, 10, QLatin1Char('0')); QString p=QDir(fi.absolutePath()).filePath(base+num+suf); if (FileUtils::fileExists(p)) out<<p; }
+            return out;
+        };
+        for (const QModelIndex &idx : indexes) {
+            const bool isSeq = idx.data(AssetsModel::IsSequenceRole).toBool();
+            const QString firstPath = idx.data(AssetsModel::FilePathRole).toString();
+            if (firstPath.isEmpty()) continue;
+            if (isSeq) {
+                const int start = idx.data(AssetsModel::SequenceStartFrameRole).toInt();
+                const int end   = idx.data(AssetsModel::SequenceEndFrameRole).toInt();
+                const QStringList frames = buildSeq(firstPath, start, end);
+                for (const QString &p : frames) frameVec.push_back(p);
+                if (!frames.isEmpty()) folderSet.insert(QFileInfo(frames.first()).absolutePath());
+            } else {
+                frameVec.push_back(firstPath);
+                folderSet.insert(firstPath); // direct file for DCCs
+            }
         }
 
         // Create a compact drag pixmap showing count
         int count = indexes.size();
         QPixmap pixmap(80, 80);
         pixmap.fill(Qt::transparent);
-
         QPainter painter(&pixmap);
         painter.setRenderHint(QPainter::Antialiasing);
-
-        // Draw a rounded rectangle background
         painter.setBrush(QColor(88, 166, 255, 200));
-
         painter.setPen(QPen(QColor(255, 255, 255), 2));
         painter.drawRoundedRect(5, 5, 70, 70, 8, 8);
-
-        // Draw count text
         painter.setPen(Qt::white);
         QFont font = painter.font();
         font.setPixelSize(32);
         font.setBold(true);
         painter.setFont(font);
         painter.drawText(QRect(5, 5, 70, 70), Qt::AlignCenter, QString::number(count));
-
         painter.end();
 
-        // Start the drag with custom pixmap
-        QDrag *drag = new QDrag(this);
-        drag->setMimeData(mimeData);
-        drag->setPixmap(pixmap);
-        drag->setHotSpot(QPoint(40, 40)); // Center of the pixmap
-
-        Qt::DropAction defaultAction = Qt::MoveAction;
-        if (supportedActions & Qt::MoveAction) {
-            defaultAction = Qt::MoveAction;
+        // Begin native drag (pixmap purely cosmetic)
+        QVector<QString> folderVec = QVector<QString>(folderSet.cbegin(), folderSet.cend());
+        if (!frameVec.isEmpty() || !folderVec.isEmpty()) {
+            VirtualDrag::startAdaptivePathsDrag(frameVec, folderVec);
         }
-
-        drag->exec(supportedActions, defaultAction);
+        return;
     }
 
 };
@@ -1575,9 +1589,13 @@ protected:
     void startDrag(Qt::DropActions supported) override {
         QModelIndexList sel = selectionModel() ? selectionModel()->selectedIndexes() : QModelIndexList{};
         if (sel.isEmpty()) return;
-        QList<QUrl> urls;
-        urls.reserve(sel.size());
-        auto appendPath = [&urls](const QString& p){ if(!p.isEmpty()) urls.append(QUrl::fromLocalFile(p)); };
+        // Build payloads
+        QStringList dccTextLines; // sequence-notation Windows paths
+        QStringList dccUriLines;  // sequence-notation file:/// URIs
+        QList<QUrl> repUrls;      // for non-sequences
+        QStringList fullPaths;    // expanded frames for internal ops
+
+        auto appendRep = [&repUrls](const QString& p){ if(!p.isEmpty()) repUrls.append(QUrl::fromLocalFile(p)); };
         auto buildSeq = [](const QString& reprPath, int start, int end){
             QStringList out; if (reprPath.isEmpty() || start> end) return out;
             QFileInfo fi(reprPath); QString name = fi.fileName();
@@ -1592,25 +1610,55 @@ protected:
             if (m_proxy && proxyIdx.model()==m_proxy && m_proxy->isRepresentativeProxyIndex(proxyIdx)) {
                 auto inf = m_proxy->infoForProxyIndex(proxyIdx);
                 const QStringList frames = buildSeq(inf.reprPath, inf.start, inf.end);
-                for (const QString& fp: frames) appendPath(fp);
+                if (!frames.isEmpty()) {
+                    // External: provide only the folder path for sequences (mitigate Nuke)
+                    const QString dirPath = QFileInfo(frames.first()).absolutePath();
+                    appendRep(dirPath);
+                    // Also provide the folder path as text/URI for DCCs
+                    dccTextLines << QDir::toNativeSeparators(dirPath);
+                    dccUriLines  << QUrl::fromLocalFile(dirPath).toString(QUrl::FullyEncoded);
+                    // Internal: full frame list retained for our own ops
+                    fullPaths.append(frames);
+                }
             } else {
                 QModelIndex srcIdx = proxyIdx;
                 if (m_proxy && proxyIdx.model()==m_proxy) srcIdx = m_proxy->mapToSource(proxyIdx);
                 const QString p = m_dirModel ? m_dirModel->filePath(srcIdx) : QString();
-                appendPath(p);
+                if (!p.isEmpty()) { appendRep(p); fullPaths.append(p); }
             }
         }
-        if (urls.isEmpty()) return;
+
+        // Use adaptive native drag for sequences/non-seqs combined: frames for Explorer/self, folders for DCCs
+        QVector<QString> frameVec;
+        frameVec.reserve(fullPaths.size());
+        for (const QString &p : fullPaths) frameVec.push_back(p);
+        QSet<QString> folderSet;
+        for (const QUrl &u : repUrls) if (u.isLocalFile()) folderSet.insert(QFileInfo(u.toLocalFile()).absoluteFilePath());
+        QVector<QString> folderVec = QVector<QString>(folderSet.cbegin(), folderSet.cend());
+        if (!frameVec.isEmpty() || !folderVec.isEmpty()) {
+            VirtualDrag::startAdaptivePathsDrag(frameVec, folderVec);
+        }
+        return;
         QMimeData* mime = new QMimeData();
-        mime->setUrls(urls);
+        if (!dccTextLines.isEmpty()) {
+            mime->setText(dccTextLines.join("\r\n"));
+            QByteArray uriData = dccUriLines.join("\r\n").toUtf8();
+            mime->setData("text/uri-list", uriData);
+        }
+        if (!repUrls.isEmpty()) mime->setUrls(repUrls);
+        if (!fullPaths.isEmpty()) {
+            QByteArray enc; QDataStream ds(&enc, QIODevice::WriteOnly); ds << fullPaths;
+            mime->setData("application/x-kasset-sequence-urls", enc);
+        }
         QDrag* drag = new QDrag(this);
         drag->setMimeData(mime);
-        // Simple badge pixmap with item count
+        // Simple badge pixmap with item count (use total count we expose internally)
+        const int itemCount = fullPaths.size();
         QPixmap pm(60, 60); pm.fill(Qt::transparent);
         QPainter pr(&pm); pr.setRenderHint(QPainter::Antialiasing);
         pr.setBrush(QColor(88,166,255,200)); pr.setPen(Qt::NoPen); pr.drawRoundedRect(0,0,60,60,8,8);
         pr.setPen(Qt::white); QFont f=pr.font(); f.setPixelSize(20); f.setBold(true); pr.setFont(f);
-        pr.drawText(QRect(0,0,60,60), Qt::AlignCenter, QString::number(urls.size())); pr.end();
+        pr.drawText(QRect(0,0,60,60), Qt::AlignCenter, QString::number(itemCount)); pr.end();
         drag->setPixmap(pm); drag->setHotSpot(QPoint(30,30));
         drag->exec(supported, Qt::CopyAction);
     }
@@ -1627,8 +1675,13 @@ protected:
         if (!selectionModel()) return;
         QModelIndexList sel = selectionModel()->selectedIndexes();
         if (sel.isEmpty()) return;
-        QList<QUrl> urls; urls.reserve(sel.size());
-        auto appendPath = [&urls](const QString& p){ if(!p.isEmpty()) urls.append(QUrl::fromLocalFile(p)); };
+        // Build payloads
+        QStringList dccTextLines; // sequence-notation Windows paths
+        QStringList dccUriLines;  // sequence-notation file:/// URIs
+        QList<QUrl> repUrls;      // for non-sequences
+        QStringList fullPaths;    // expanded frames for internal ops
+
+        auto appendRep = [&repUrls](const QString& p){ if(!p.isEmpty()) repUrls.append(QUrl::fromLocalFile(p)); };
         auto buildSeq = [](const QString& reprPath, int start, int end){
             QStringList out; if (reprPath.isEmpty() || start> end) return out;
             QFileInfo fi(reprPath); QString name = fi.fileName();
@@ -1644,18 +1697,33 @@ protected:
             if (m_proxy && proxyIdx.model()==m_proxy && m_proxy->isRepresentativeProxyIndex(proxyIdx)) {
                 auto inf = m_proxy->infoForProxyIndex(proxyIdx);
                 const QStringList frames = buildSeq(inf.reprPath, inf.start, inf.end);
-                for (const QString& fp: frames) appendPath(fp);
+                if (!frames.isEmpty()) {
+                    // External: provide only the folder path for sequences (mitigate Nuke)
+                    const QString dirPath = QFileInfo(frames.first()).absolutePath();
+                    appendRep(dirPath);
+                    // Also provide the folder path as text/URI for DCCs
+                    dccTextLines << QDir::toNativeSeparators(dirPath);
+                    dccUriLines  << QUrl::fromLocalFile(dirPath).toString(QUrl::FullyEncoded);
+                    // Internal: full frame list retained for our own ops
+                    fullPaths.append(frames);
+                }
             } else {
                 QModelIndex srcIdx = proxyIdx;
                 if (m_proxy && proxyIdx.model()==m_proxy) srcIdx = m_proxy->mapToSource(proxyIdx);
                 const QString p = m_dirModel ? m_dirModel->filePath(srcIdx) : QString();
-                appendPath(p);
+                if (!p.isEmpty()) { appendRep(p); fullPaths.append(p); }
             }
         }
-        if (urls.isEmpty()) return;
-        QMimeData* mime = new QMimeData(); mime->setUrls(urls);
-        QDrag* drag = new QDrag(this); drag->setMimeData(mime);
-        drag->exec(supported, Qt::CopyAction);
+        // Use adaptive native drag for sequences/non-seqs combined: frames for Explorer/self, folders/files for DCCs
+        QVector<QString> frameVec; frameVec.reserve(fullPaths.size());
+        for (const QString &p : fullPaths) frameVec.push_back(p);
+        QSet<QString> folderSet;
+        for (const QUrl &u : repUrls) if (u.isLocalFile()) folderSet.insert(QFileInfo(u.toLocalFile()).absoluteFilePath());
+        QVector<QString> folderVec = QVector<QString>(folderSet.cbegin(), folderSet.cend());
+        if (!frameVec.isEmpty() || !folderVec.isEmpty()) {
+            VirtualDrag::startAdaptivePathsDrag(frameVec, folderVec);
+        }
+        return;
     }
 private:
     SequenceGroupingProxyModel* m_proxy=nullptr; QFileSystemModel* m_dirModel=nullptr;
@@ -2099,6 +2167,12 @@ void MainWindow::setupUi()
     assetGridView->setDragDropMode(QAbstractItemView::DragOnly);
     assetGridView->setDefaultDropAction(Qt::MoveAction);
     assetGridView->setSelectionRectVisible(false);
+
+    // Asset table view drag (list mode)
+    assetTableView->setDragEnabled(true);
+    assetTableView->setAcceptDrops(false);
+    assetTableView->setDragDropMode(QAbstractItemView::DragOnly);
+    assetTableView->setDefaultDropAction(Qt::MoveAction);
 
     // Enable drag-and-drop on folder tree for moving assets to folders AND reorganizing folders
     folderTreeView->setDragEnabled(true);
@@ -6082,6 +6156,45 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
         }
         return true;
     }
+
+    // Start drag from File Manager preview pane (image/video): include full sequence if present
+    if (((fmImageView && (watched == fmImageView || watched == fmImageView->viewport())) || (fmVideoWidget && watched == fmVideoWidget))) {
+        if (event->type() == QEvent::MouseButtonPress) {
+            QMouseEvent *me = static_cast<QMouseEvent*>(event);
+            if (me->button() == Qt::LeftButton) {
+                fmPreviewDragStartPos = me->pos();
+                fmPreviewDragPending = true;
+            }
+        } else if (event->type() == QEvent::MouseMove) {
+            QMouseEvent *me = static_cast<QMouseEvent*>(event);
+            if (fmPreviewDragPending && (me->buttons() & Qt::LeftButton)) {
+                if ((me->pos() - fmPreviewDragStartPos).manhattanLength() >= QApplication::startDragDistance()) {
+                    // Build adaptive native drag: frames for Explorer/self, folder for sequences in DCCs
+                    QVector<QString> frameVec;
+                    QVector<QString> folderVec;
+                    if (fmIsSequence && !fmSequenceFramePaths.isEmpty()) {
+                        for (const QString &p : fmSequenceFramePaths) frameVec.push_back(p);
+                        const QString dirPath = QFileInfo(fmSequenceFramePaths.first()).absolutePath();
+                        folderVec.push_back(dirPath);
+                    } else if (!fmCurrentPreviewPath.isEmpty()) {
+                        frameVec.push_back(fmCurrentPreviewPath);
+                        folderVec.push_back(fmCurrentPreviewPath); // allow direct file drop to DCCs
+                    }
+                    if (!frameVec.isEmpty() || !folderVec.isEmpty()) {
+                        VirtualDrag::startAdaptivePathsDrag(frameVec, folderVec);
+                    }
+                    fmPreviewDragPending = false;
+                    return true;
+                }
+            }
+        } else if (event->type() == QEvent::MouseButtonRelease) {
+            QMouseEvent *me = static_cast<QMouseEvent*>(event);
+            if (me->button() == Qt::LeftButton) {
+                fmPreviewDragPending = false;
+            }
+        }
+    }
+
     // Keep image fitted on view resize if auto-fit is active
     if ((watched == fmImageView || (fmImageView && watched == fmImageView->viewport())) && event->type() == QEvent::Resize) {
         if (fmImageFitToView && fmImageView && fmImageItem && !fmImageItem->pixmap().isNull()) {
@@ -6093,7 +6206,7 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
     if ((fmGridView && watched == fmGridView->viewport()) || (fmListView && watched == fmListView->viewport())) {
         if (event->type() == QEvent::DragEnter) {
             QDragEnterEvent *dragEvent = static_cast<QDragEnterEvent*>(event);
-            if (dragEvent->mimeData()->hasUrls() || dragEvent->mimeData()->hasFormat("application/x-kasset-asset-ids")) {
+            if (dragEvent->mimeData()->hasUrls() || dragEvent->mimeData()->hasFormat("application/x-kasset-asset-ids") || dragEvent->mimeData()->hasFormat("application/x-kasset-sequence-urls")) {
                 // Determine destination: subfolder under cursor (if any and is a folder), otherwise current root
                 QAbstractItemView* view = (fmGridView && watched == fmGridView->viewport())
                                             ? static_cast<QAbstractItemView*>(fmGridView)
@@ -6110,10 +6223,15 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
                 bool sameFolderOnly = false;
                 if (!destDir.isEmpty()) {
                     QStringList tmpSources;
-                    if (dragEvent->mimeData()->hasUrls()) {
-                        for (const QUrl &url : dragEvent->mimeData()->urls()) if (url.isLocalFile()) tmpSources << url.toLocalFile();
-                    } else {
-                        QByteArray encodedData = dragEvent->mimeData()->data("application/x-kasset-asset-ids");
+                    const QMimeData* md = dragEvent->mimeData();
+                    if (md->hasFormat("application/x-kasset-sequence-urls")) {
+                        QByteArray enc = md->data("application/x-kasset-sequence-urls");
+                        QDataStream ds(&enc, QIODevice::ReadOnly);
+                        ds >> tmpSources;
+                    } else if (md->hasUrls()) {
+                        for (const QUrl &url : md->urls()) if (url.isLocalFile()) tmpSources << url.toLocalFile();
+                    } else if (md->hasFormat("application/x-kasset-asset-ids")) {
+                        QByteArray encodedData = md->data("application/x-kasset-asset-ids");
                         QDataStream stream(&encodedData, QIODevice::ReadOnly);
                         QList<int> assetIds; stream >> assetIds;
                         for (int id : assetIds) { const QString src = DB::instance().getAssetFilePath(id); if (!src.isEmpty()) tmpSources << src; }
@@ -6137,7 +6255,7 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
             }
         } else if (event->type() == QEvent::DragMove) {
             QDragMoveEvent *dragEvent = static_cast<QDragMoveEvent*>(event);
-            if (dragEvent->mimeData()->hasUrls() || dragEvent->mimeData()->hasFormat("application/x-kasset-asset-ids")) {
+            if (dragEvent->mimeData()->hasUrls() || dragEvent->mimeData()->hasFormat("application/x-kasset-asset-ids") || dragEvent->mimeData()->hasFormat("application/x-kasset-sequence-urls")) {
                 QAbstractItemView* view = (fmGridView && watched == fmGridView->viewport())
                                             ? static_cast<QAbstractItemView*>(fmGridView)
                                             : static_cast<QAbstractItemView*>(fmListView);
@@ -6153,10 +6271,15 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
                 bool sameFolderOnly = false;
                 if (!destDir.isEmpty()) {
                     QStringList tmpSources;
-                    if (dragEvent->mimeData()->hasUrls()) {
-                        for (const QUrl &url : dragEvent->mimeData()->urls()) if (url.isLocalFile()) tmpSources << url.toLocalFile();
-                    } else {
-                        QByteArray encodedData = dragEvent->mimeData()->data("application/x-kasset-asset-ids");
+                    const QMimeData* md = dragEvent->mimeData();
+                    if (md->hasFormat("application/x-kasset-sequence-urls")) {
+                        QByteArray enc = md->data("application/x-kasset-sequence-urls");
+                        QDataStream ds(&enc, QIODevice::ReadOnly);
+                        ds >> tmpSources;
+                    } else if (md->hasUrls()) {
+                        for (const QUrl &url : md->urls()) if (url.isLocalFile()) tmpSources << url.toLocalFile();
+                    } else if (md->hasFormat("application/x-kasset-asset-ids")) {
+                        QByteArray encodedData = md->data("application/x-kasset-asset-ids");
                         QDataStream stream(&encodedData, QIODevice::ReadOnly);
                         QList<int> assetIds; stream >> assetIds;
                         for (int id : assetIds) { const QString src = DB::instance().getAssetFilePath(id); if (!src.isEmpty()) tmpSources << src; }
@@ -6197,7 +6320,11 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
 
             if (destDir.isEmpty()) return false;
             QStringList sources;
-            if (mimeData->hasUrls()) {
+            if (mimeData->hasFormat("application/x-kasset-sequence-urls")) {
+                QByteArray enc = mimeData->data("application/x-kasset-sequence-urls");
+                QDataStream ds(&enc, QIODevice::ReadOnly);
+                ds >> sources;
+            } else if (mimeData->hasUrls()) {
                 for (const QUrl &url : mimeData->urls()) {
                     if (url.isLocalFile()) sources << url.toLocalFile();
                 }
@@ -6241,7 +6368,7 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
     if (fmTree && watched == fmTree->viewport()) {
         if (event->type() == QEvent::DragEnter) {
             QDragEnterEvent *dragEvent = static_cast<QDragEnterEvent*>(event);
-            if (dragEvent->mimeData()->hasUrls() || dragEvent->mimeData()->hasFormat("application/x-kasset-asset-ids")) {
+            if (dragEvent->mimeData()->hasUrls() || dragEvent->mimeData()->hasFormat("application/x-kasset-asset-ids") || dragEvent->mimeData()->hasFormat("application/x-kasset-sequence-urls")) {
                 const bool shift = dragEvent->keyboardModifiers().testFlag(Qt::ShiftModifier);
                 dragEvent->setDropAction(shift ? Qt::MoveAction : Qt::CopyAction);
                 dragEvent->accept();
@@ -6249,7 +6376,7 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
             }
         } else if (event->type() == QEvent::DragMove) {
             QDragMoveEvent *dragEvent = static_cast<QDragMoveEvent*>(event);
-            if (dragEvent->mimeData()->hasUrls() || dragEvent->mimeData()->hasFormat("application/x-kasset-asset-ids")) {
+            if (dragEvent->mimeData()->hasUrls() || dragEvent->mimeData()->hasFormat("application/x-kasset-asset-ids") || dragEvent->mimeData()->hasFormat("application/x-kasset-sequence-urls")) {
                 // Highlight folder under cursor
                 QPoint pos = dragEvent->position().toPoint();
                 QModelIndex idx = fmTree->indexAt(pos);
@@ -6262,10 +6389,13 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
                 if (!destDir.isEmpty()) {
                     QStringList tmpSources;
                     const QMimeData* md = dragEvent->mimeData();
-                    if (md->hasUrls()) {
+                    if (md->hasFormat("application/x-kasset-sequence-urls")) {
+                        QByteArray enc = md->data("application/x-kasset-sequence-urls");
+                        QDataStream ds(&enc, QIODevice::ReadOnly);
+                        ds >> tmpSources;
+                    } else if (md->hasUrls()) {
                         for (const QUrl &url : md->urls()) if (url.isLocalFile()) tmpSources << url.toLocalFile();
-                    }
-                    if (md->hasFormat("application/x-kasset-asset-ids")) {
+                    } else if (md->hasFormat("application/x-kasset-asset-ids")) {
                         QByteArray encodedData = md->data("application/x-kasset-asset-ids");
                         QDataStream stream(&encodedData, QIODevice::ReadOnly);
                         QList<int> assetIds; stream >> assetIds;
@@ -6297,12 +6427,15 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
             const QString destDir = fmTreeModel ? fmTreeModel->filePath(idx) : QString();
             if (destDir.isEmpty()) return false;
             QStringList sources;
-            if (mimeData->hasUrls()) {
+            if (mimeData->hasFormat("application/x-kasset-sequence-urls")) {
+                QByteArray enc = mimeData->data("application/x-kasset-sequence-urls");
+                QDataStream ds(&enc, QIODevice::ReadOnly);
+                ds >> sources;
+            } else if (mimeData->hasUrls()) {
                 for (const QUrl &url : mimeData->urls()) {
                     if (url.isLocalFile()) sources << url.toLocalFile();
                 }
-            }
-            if (mimeData->hasFormat("application/x-kasset-asset-ids")) {
+            } else if (mimeData->hasFormat("application/x-kasset-asset-ids")) {
                 QByteArray encodedData = mimeData->data("application/x-kasset-asset-ids");
                 QDataStream stream(&encodedData, QIODevice::ReadOnly);
                 QList<int> assetIds; stream >> assetIds;

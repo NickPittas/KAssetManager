@@ -8,6 +8,8 @@
 #include <QStyle>
 #include <QApplication>
 #include <QGridLayout>
+#include "virtual_drag.h"
+
 
 #include <QCoreApplication>
 
@@ -47,6 +49,11 @@
 
 #include <QRegularExpression>
 #include "video_metadata.h"
+#include "drag_utils.h"
+#include "sequence_detector.h"
+#include <QDrag>
+#include <QMimeData>
+#include <QUrl>
 
 // Load media icons from disk without recoloring; search common install paths
 static QIcon loadMediaIcon(const QString& relative)
@@ -1426,6 +1433,43 @@ bool PreviewOverlay::eventFilter(QObject* watched, QEvent* event)
             zoomImage(factor);
             wheel->accept();
             return true; // consume to prevent any scrolling
+        }
+    }
+
+    // Start drag from overlay preview (image/video)
+    if (((imageView && (watched == imageView || watched == imageView->viewport())) || (videoWidget && watched == videoWidget))) {
+        if (event->type() == QEvent::MouseButtonPress) {
+            QMouseEvent *me = static_cast<QMouseEvent*>(event);
+            if (me->button() == Qt::LeftButton) {
+                overlayDragStartPos = me->pos();
+                overlayDragPending = true;
+            }
+        } else if (event->type() == QEvent::MouseMove) {
+            QMouseEvent *me = static_cast<QMouseEvent*>(event);
+            if (overlayDragPending && (me->buttons() & Qt::LeftButton)) {
+                if ((me->pos() - overlayDragStartPos).manhattanLength() >= QApplication::startDragDistance()) {
+                    // Begin adaptive native drag: frames for Explorer/self; folder for sequences to DCCs
+                    QVector<QString> frameVec; QVector<QString> folderVec;
+                    if (isSequence && !sequenceFramePaths.isEmpty()) {
+                        for (const QString &p : sequenceFramePaths) frameVec.push_back(p);
+                        const QString dirPath = QFileInfo(sequenceFramePaths.first()).absolutePath();
+                        folderVec.push_back(dirPath);
+                    } else if (!currentFilePath.isEmpty()) {
+                        frameVec.push_back(currentFilePath);
+                        folderVec.push_back(currentFilePath); // allow direct file to DCCs
+                    }
+                    if (!frameVec.isEmpty() || !folderVec.isEmpty()) {
+                        VirtualDrag::startAdaptivePathsDrag(frameVec, folderVec);
+                    }
+                    overlayDragPending = false;
+                    return true;
+                }
+            }
+        } else if (event->type() == QEvent::MouseButtonRelease) {
+            QMouseEvent *me = static_cast<QMouseEvent*>(event);
+            if (me->button() == Qt::LeftButton) {
+                overlayDragPending = false;
+            }
         }
     }
 

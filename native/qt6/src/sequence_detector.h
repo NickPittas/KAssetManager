@@ -5,6 +5,8 @@
 #include <QHash>
 #include <QVector>
 #include <QHashFunctions>
+#include <QFileInfo>
+#include <QDir>
 
 struct ImageSequence {
     QString pattern;           // e.g., "render.####.exr"
@@ -55,6 +57,31 @@ public:
 
     // Extract version string from base name (e.g., "v01", "v02")
     static QString extractVersion(const QString& baseName);
+
+    // Build a full file path with the frame number replaced by #### (preserves original separators)
+    static inline QString toHashPatternPath(const QString& filePath) {
+        QFileInfo fi(filePath);
+        QString name = fi.fileName();
+        QRegularExpression re("(\\d{2,})(?!.*\\d)");
+        QRegularExpressionMatch m = re.match(name);
+        if (!m.hasMatch()) return filePath; // Not a sequence-like name
+        const int pad = m.capturedLength(1);
+        name.replace(m.capturedStart(1), m.capturedLength(1), QString(pad, QLatin1Char('#')));
+        return fi.absoluteDir().filePath(name);
+    }
+
+    // Build a full file path with the frame number replaced by %0Nd (printf-style)
+    static inline QString toPrintfPatternPath(const QString& filePath) {
+        QFileInfo fi(filePath);
+        QString name = fi.fileName();
+        QRegularExpression re("(\\d{2,})(?!.*\\d)");
+        QRegularExpressionMatch m = re.match(name);
+        if (!m.hasMatch()) return filePath; // Not a sequence-like name
+        const int pad = m.capturedLength(1);
+        const QString fmt = QString("%%0%1d").arg(pad);
+        name.replace(m.capturedStart(1), m.capturedLength(1), fmt);
+        return fi.absoluteDir().filePath(name);
+    }
 
 public:
     struct SequenceKey {

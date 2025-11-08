@@ -2,6 +2,8 @@
 #include <QAbstractTableModel>
 #include <QDateTime>
 #include "assets_model.h"
+#include <QMimeData>
+#include <QSet>
 
 class AssetsTableModel : public QAbstractTableModel
 {
@@ -128,12 +130,32 @@ public:
         return Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsDragEnabled;
     }
 
+    QStringList mimeTypes() const override {
+        return QStringList() << "application/x-kasset-asset-ids" << "text/uri-list";
+    }
+
+    QMimeData *mimeData(const QModelIndexList &indexes) const override {
+        // Forward drag data generation to the underlying AssetsModel, but ensure unique rows
+        QSet<int> rows;
+        for (const QModelIndex &idx : indexes) {
+            if (idx.isValid()) rows.insert(idx.row());
+        }
+        QModelIndexList src;
+        src.reserve(rows.size());
+        for (int r : rows) src << m_sourceModel->index(r, 0);
+        return m_sourceModel->mimeData(src);
+    }
+
+    Qt::DropActions supportedDragActions() const override {
+        return m_sourceModel->supportedDragActions();
+    }
+
     void sort(int column, Qt::SortOrder order = Qt::AscendingOrder) override
     {
         // Store sort settings for future use
         m_sortColumn = column;
         m_sortOrder = order;
-        
+
         // Trigger re-sort by emitting layoutAboutToBeChanged/layoutChanged
         emit layoutAboutToBeChanged();
         // Note: Actual sorting would require access to the underlying data in AssetsModel

@@ -17,6 +17,7 @@
 #include <QTextStream>
 
 #include "file_utils.h"
+#include "sequence_detector.h"
 
 static QStringList buildSequencePaths(const QString& firstFramePath, int startFrame, int endFrame)
 {
@@ -159,39 +160,68 @@ Qt::ItemFlags AssetsModel::flags(const QModelIndex &index) const
 QMimeData *AssetsModel::mimeData(const QModelIndexList &indexes) const
 {
     QMimeData *mimeData = new QMimeData();
-    QByteArray encodedData;
-    QDataStream stream(&encodedData, QIODevice::WriteOnly);
 
-    // Encode asset IDs for internal drag-drop
+    // 1) Internal drag-drop: asset IDs
+    QByteArray encodedAssetIds;
+    QDataStream idStream(&encodedAssetIds, QIODevice::WriteOnly);
     QList<int> assetIds;
-    QList<QUrl> urls;
+
+    // 2) External apps (DCCs): sequence-notation strings (#### and %0Nd)
+    QStringList dccTextLines; // (unused for sequences now)
+    QStringList dccUriLines;  // (unused for sequences now)
+    QList<QUrl> repUrls;      // All external drops (sequences: full frame list; non-seq: single)
+
+    // 3) Internal copy/move helpers: full expanded file path list (sequences expanded)
+    QByteArray encodedSeqUrls;
+    QDataStream seqStream(&encodedSeqUrls, QIODevice::WriteOnly);
+    QStringList allPathsExpanded;
 
     for (const QModelIndex &index : indexes) {
         if (!index.isValid()) continue;
 
-        int assetId = data(index, IdRole).toInt();
+        const int assetId = data(index, IdRole).toInt();
         assetIds.append(assetId);
 
         const bool isSeq = data(index, IsSequenceRole).toBool();
-        const QString filePath = data(index, FilePathRole).toString(); // first frame path for sequences
-        if (filePath.isEmpty()) continue;
+        const QString firstPath = data(index, FilePathRole).toString(); // first frame path for sequences
+        if (firstPath.isEmpty()) continue;
 
         if (isSeq) {
             const int startFrame = data(index, SequenceStartFrameRole).toInt();
             const int endFrame   = data(index, SequenceEndFrameRole).toInt();
-            const QStringList frames = buildSequencePaths(filePath, startFrame, endFrame);
-            for (const QString& fp : frames) urls.append(QUrl::fromLocalFile(fp));
+            const QStringList frames = buildSequencePaths(firstPath, startFrame, endFrame);
+            // External apps (Explorer/Nuke/AE): prefer providing the folder path only
+            const QString dirPath = QFileInfo(frames.first()).absolutePath();
+            repUrls.append(QUrl::fromLocalFile(dirPath));
+            // Also provide folder as plain text/URI for DCCs that look at text first
+            dccTextLines << QDir::toNativeSeparators(dirPath);
+            dccUriLines  << QUrl::fromLocalFile(dirPath).toString(QUrl::FullyEncoded);
+            // Internal ops: keep full frames list
+            allPathsExpanded.append(frames);
         } else {
-            urls.append(QUrl::fromLocalFile(filePath));
+            // Non-sequence: expose as normal file URL
+            repUrls.append(QUrl::fromLocalFile(firstPath));
+            allPathsExpanded.append(firstPath);
         }
     }
 
-    stream << assetIds;
-    mimeData->setData("application/x-kasset-asset-ids", encodedData);
+    // Pack internal formats first (preferred by our targets)
+    idStream << assetIds;
+    mimeData->setData("application/x-kasset-asset-ids", encodedAssetIds);
 
-    // Add file URLs for external apps (Windows Explorer, Desktop, etc.)
-    if (!urls.isEmpty()) {
-        mimeData->setUrls(urls);
+    if (!allPathsExpanded.isEmpty()) {
+        seqStream << allPathsExpanded;
+        mimeData->setData("application/x-kasset-sequence-urls", encodedSeqUrls);
+    }
+
+    // External apps:
+    // Provide CF_HDROP-compatible urls (Qt will synthesize on Windows). For sequences we provide the folder path.
+    if (!repUrls.isEmpty()) mimeData->setUrls(repUrls);
+    // Additionally provide folder path as text and uri-list for DCCs that prefer textual drops
+    if (!dccTextLines.isEmpty()) {
+        mimeData->setText(dccTextLines.join("\r\n"));
+        QByteArray uriData = dccUriLines.join("\r\n").toUtf8();
+        mimeData->setData("text/uri-list", uriData);
     }
 
     return mimeData;

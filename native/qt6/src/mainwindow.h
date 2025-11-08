@@ -353,6 +353,7 @@ private:
     // State for image/alpha
     bool fmImageFitToView = true; // auto fit image to view and refit on resize until user zooms manually
     QImage fmOriginalImage; QString fmCurrentPreviewPath; bool fmPreviewHasAlpha = false; bool fmAlphaOnlyMode = false;
+    QPoint fmPreviewDragStartPos; bool fmPreviewDragPending = false;
     // Media
     class QMediaPlayer *fmMediaPlayer;
     class QAudioOutput *fmAudioOutput;

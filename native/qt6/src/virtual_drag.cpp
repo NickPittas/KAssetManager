@@ -319,6 +319,155 @@ public:
     HRESULT __stdcall EnumDAdvise(IEnumSTATDATA**) override { return OLE_E_ADVISENOTSUPPORTED; }
 };
 
+    // IDataObject that adapts CF_HDROP payload (frames vs folder) based on drop target process
+    class AdaptivePathsDataObject : public IDataObject {
+        LONG m_refs = 1;
+        QVector<QString> m_frames;       // expanded frame files
+        QVector<QString> m_folders;      // one or more folders (unique)
+        FORMATETC m_fmtHdrop = makeFormatEtc(CF_HDROP, TYMED_HGLOBAL);
+        FORMATETC m_fmtPrefEffect = makeFormatEtc(CF_PREFERREDDROPEFFECT_ID(), TYMED_HGLOBAL);
+
+        static bool processNameFromPoint(wchar_t outPath[MAX_PATH]) {
+            POINT pt; GetCursorPos(&pt);
+            HWND hwnd = WindowFromPoint(pt);
+            if (!hwnd) return false;
+            HWND root = GetAncestor(hwnd, GA_ROOT);
+            DWORD pid = 0; GetWindowThreadProcessId(root ? root : hwnd, &pid);
+            if (!pid) return false;
+            HANDLE hProc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+            if (!hProc) return false;
+            DWORD size = MAX_PATH;
+            BOOL ok = QueryFullProcessImageNameW(hProc, 0, outPath, &size);
+            CloseHandle(hProc);
+            return ok == TRUE;
+        }
+        static bool isExplorerOrSelf() {
+            // First, detect by window class of the root window under the cursor
+            POINT pt; GetCursorPos(&pt);
+            HWND hwnd = WindowFromPoint(pt);
+            if (!hwnd) return false; // default to DCC behavior (folders)
+            HWND root = GetAncestor(hwnd, GA_ROOT);
+            if (!root) root = hwnd;
+            wchar_t cls[64]{};
+            if (GetClassNameW(root, cls, (int)(sizeof(cls)/sizeof(cls[0])))) {
+                if (_wcsicmp(cls, L"CabinetWClass") == 0 || _wcsicmp(cls, L"WorkerW") == 0 || _wcsicmp(cls, L"Progman") == 0) {
+                    return true; // Explorer window, desktop, or worker window
+                }
+            }
+            // Fallback to process name check
+            DWORD pid = 0; GetWindowThreadProcessId(root, &pid);
+            if (pid) {
+                HANDLE hProc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+                if (hProc) {
+                    wchar_t procPath[MAX_PATH]{}; DWORD size = MAX_PATH;
+                    if (QueryFullProcessImageNameW(hProc, 0, procPath, &size)) {
+                        const wchar_t *base = wcsrchr(procPath, L'\\'); base = base ? base + 1 : procPath;
+                        if (_wcsicmp(base, L"explorer.exe") == 0 || _wcsicmp(base, L"FileExplorer.exe") == 0) {
+                            CloseHandle(hProc);
+                            return true;
+                        }
+                        // Our own exe
+                        wchar_t selfPath[MAX_PATH]{}; GetModuleFileNameW(nullptr, selfPath, MAX_PATH);
+                        const wchar_t *selfBase = wcsrchr(selfPath, L'\\'); selfBase = selfBase ? selfBase + 1 : selfPath;
+                        if (_wcsicmp(base, selfBase) == 0) { CloseHandle(hProc); return true; }
+                    }
+                    CloseHandle(hProc);
+                }
+            }
+            return false;
+        }
+        static HGLOBAL makeHdrop(const QVector<QString>& paths) {
+            // Compute wchar buffer size for all paths + final terminator
+            size_t totalChars = 0;
+            for (const auto &p : paths) totalChars += (size_t)p.toStdWString().size() + 1;
+            totalChars += 1;
+            SIZE_T bytes = sizeof(DROPFILES) + totalChars * sizeof(wchar_t);
+            HGLOBAL h = GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, bytes);
+            if (!h) return nullptr;
+            auto *df = static_cast<DROPFILES*>(GlobalLock(h));
+            df->pFiles = sizeof(DROPFILES);
+            df->pt.x = 0; df->pt.y = 0; df->fNC = FALSE; df->fWide = TRUE;
+            wchar_t *dst = reinterpret_cast<wchar_t*>(reinterpret_cast<BYTE*>(df) + sizeof(DROPFILES));
+            for (const auto &p : paths) {
+                const std::wstring w = p.toStdWString();
+                memcpy(dst, w.c_str(), (w.size() + 1) * sizeof(wchar_t));
+                dst += w.size() + 1;
+            }
+            *dst = L'\0';
+            GlobalUnlock(h);
+            return h;
+        }
+    public:
+        AdaptivePathsDataObject(const QVector<QString>& frames, const QVector<QString>& folders)
+            : m_frames(frames), m_folders(folders) {}
+        // IUnknown
+        HRESULT __stdcall QueryInterface(REFIID riid, void **ppv) override {
+            if (riid == IID_IUnknown || riid == IID_IDataObject) { *ppv = static_cast<IDataObject*>(this); AddRef(); return S_OK; }
+            *ppv = nullptr; return E_NOINTERFACE;
+        }
+        ULONG __stdcall AddRef() override { return InterlockedIncrement(&m_refs); }
+        ULONG __stdcall Release() override { ULONG r = InterlockedDecrement(&m_refs); if (!r) delete this; return r; }
+        // IDataObject
+        HRESULT __stdcall GetData(FORMATETC *pformatetcIn, STGMEDIUM *pmedium) override {
+            if (!pformatetcIn || !pmedium) return E_INVALIDARG;
+            if (pformatetcIn->cfFormat == m_fmtHdrop.cfFormat && (pformatetcIn->tymed & TYMED_HGLOBAL)) {
+                const bool framesMode = isExplorerOrSelf();
+                const QVector<QString>& out = framesMode ? m_frames : (!m_folders.isEmpty() ? m_folders : m_frames);
+                if (out.isEmpty()) return DV_E_FORMATETC;
+                HGLOBAL h = makeHdrop(out);
+                if (!h) return E_OUTOFMEMORY;
+                pmedium->tymed = TYMED_HGLOBAL; pmedium->hGlobal = h; pmedium->pUnkForRelease = nullptr;
+                return S_OK;
+            }
+            if (pformatetcIn->cfFormat == m_fmtPrefEffect.cfFormat && (pformatetcIn->tymed & TYMED_HGLOBAL)) {
+                HGLOBAL h = GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, sizeof(DWORD));
+                if (!h) return E_OUTOFMEMORY;
+                auto *p = static_cast<DWORD*>(GlobalLock(h));
+                *p = DROPEFFECT_COPY;
+                GlobalUnlock(h);
+                pmedium->tymed = TYMED_HGLOBAL; pmedium->hGlobal = h; pmedium->pUnkForRelease = nullptr;
+                return S_OK;
+            }
+            return DV_E_FORMATETC;
+        }
+        HRESULT __stdcall GetDataHere(FORMATETC*, STGMEDIUM*) override { return DATA_E_FORMATETC; }
+        HRESULT __stdcall QueryGetData(FORMATETC *pformatetc) override {
+            if (!pformatetc) return E_INVALIDARG;
+            if ((pformatetc->cfFormat == m_fmtHdrop.cfFormat && (pformatetc->tymed & TYMED_HGLOBAL)) ||
+                (pformatetc->cfFormat == m_fmtPrefEffect.cfFormat && (pformatetc->tymed & TYMED_HGLOBAL))) return S_OK;
+            return DV_E_FORMATETC;
+        }
+        HRESULT __stdcall GetCanonicalFormatEtc(FORMATETC*, FORMATETC *pformatetcOut) override { if (pformatetcOut) pformatetcOut->ptd = nullptr; return E_NOTIMPL; }
+        HRESULT __stdcall SetData(FORMATETC*, STGMEDIUM*, BOOL) override { return E_NOTIMPL; }
+        HRESULT __stdcall EnumFormatEtc(DWORD dwDirection, IEnumFORMATETC **ppenumFormatEtc) override {
+            if (!ppenumFormatEtc) return E_POINTER;
+            *ppenumFormatEtc = nullptr;
+            if (dwDirection != DATADIR_GET) return E_NOTIMPL;
+            FORMATETC f[2] = { m_fmtHdrop, m_fmtPrefEffect };
+            auto *e = new FormatEtcEnum(f, 2);
+            *ppenumFormatEtc = e;
+            return S_OK;
+        }
+        HRESULT __stdcall DAdvise(FORMATETC*, DWORD, IAdviseSink*, DWORD*) override { return OLE_E_ADVISENOTSUPPORTED; }
+        HRESULT __stdcall DUnadvise(DWORD) override { return OLE_E_ADVISENOTSUPPORTED; }
+        HRESULT __stdcall EnumDAdvise(IEnumSTATDATA**) override { return OLE_E_ADVISENOTSUPPORTED; }
+    };
+
+    bool startAdaptivePathsDrag(const QVector<QString> &framePaths, const QVector<QString> &folderPaths) {
+        if (framePaths.isEmpty() && folderPaths.isEmpty()) return false;
+        HRESULT hr = OleInitialize(nullptr);
+        auto *obj = new AdaptivePathsDataObject(framePaths, folderPaths);
+        IDataObject *pDataObject = static_cast<IDataObject*>(obj);
+        IDropSource *pDropSource = new SimpleDropSource();
+        DWORD effect = DROPEFFECT_COPY;
+        HRESULT r = DoDragDrop(pDataObject, pDropSource, DROPEFFECT_COPY, &effect);
+        pDropSource->Release();
+        pDataObject->Release();
+        if (SUCCEEDED(hr)) OleUninitialize();
+        return r == DRAGDROP_S_DROP || r == DRAGDROP_S_CANCEL || r == S_OK;
+    }
+
+
 bool startRealPathsDrag(const QVector<QString> &paths) {
     if (paths.isEmpty()) return false;
     HRESULT hr = OleInitialize(nullptr);

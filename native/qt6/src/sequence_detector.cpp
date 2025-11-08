@@ -2,6 +2,7 @@
 #include <QFileInfo>
 #include <QDebug>
 #include <QHash>
+#include <QDir>
 
 // Centralized regex patterns for sequence detection
 const QRegularExpression& SequenceDetector::mainPattern()
@@ -96,14 +97,14 @@ QVector<ImageSequence> SequenceDetector::detectSequences(const QStringList& file
             nonSequenceFiles.append(filePath);
         }
     }
-    
+
     // Build sequence objects
     QVector<ImageSequence> sequences;
-    
+
     for (auto it = sequenceGroups.begin(); it != sequenceGroups.end(); ++it) {
         const SequenceKey& key = it.key();
         QVector<FrameInfo>& frames = it.value();
-        
+
         // Only treat as sequence if we have 2+ frames
         if (frames.size() < 2) {
             // Single frame, treat as regular file
@@ -112,12 +113,12 @@ QVector<ImageSequence> SequenceDetector::detectSequences(const QStringList& file
             }
             continue;
         }
-        
+
         // Sort frames by frame number
         std::sort(frames.begin(), frames.end(), [](const FrameInfo& a, const FrameInfo& b) {
             return a.frameNumber < b.frameNumber;
         });
-        
+
         ImageSequence seq;
         seq.baseName = key.baseName;
         seq.extension = key.extension;
@@ -144,12 +145,12 @@ QVector<ImageSequence> SequenceDetector::detectSequences(const QStringList& file
         seq.version = extractVersion(key.baseName);
 
         sequences.append(seq);
-        
-        qDebug() << "[SequenceDetector] Detected sequence:" << seq.pattern 
-                 << "frames:" << seq.startFrame << "-" << seq.endFrame 
+
+        qDebug() << "[SequenceDetector] Detected sequence:" << seq.pattern
+                 << "frames:" << seq.startFrame << "-" << seq.endFrame
                  << "count:" << seq.frameCount;
     }
-    
+
     return sequences;
 }
 
@@ -158,7 +159,7 @@ bool SequenceDetector::isSequenceFile(const QString& fileName) {
     // name.####.ext
     // name_####.ext
     // name####.ext
-    
+
     QRegularExpression re("\\d{3,}"); // 3 or more consecutive digits
     return re.match(fileName).hasMatch();
 }
@@ -262,4 +263,6 @@ QString SequenceDetector::extractVersion(const QString& baseName) {
 
     return QString(); // No version found
 }
+
+
 
