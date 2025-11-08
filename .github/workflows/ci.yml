@@ -1,0 +1,106 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test-windows:
+    runs-on: windows-latest
+    env:
+      VCPKG_ROOT: C:\\vcpkg
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Ninja
+        uses: seanmiddleditch/gha-setup-ninja@v5
+      - name: Install Qt (minimal)
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: 6.6.3
+          arch: win64_msvc2019_64
+          modules: qtbase
+          cache: true
+      - name: Configure (tests only)
+        run: |
+          cmake -S native/qt6 -B build -G Ninja -DBUILD_APP=OFF -DBUILD_TESTS=ON -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build --config Release -j 2
+      - name: Install (tests to install_run/bin)
+        run: cmake --install build --config Release --prefix build/install_run
+      - name: Run tests
+        run: ctest --test-dir build --output-on-failure
+
+  build-test-ubuntu:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build clang-tidy
+      - name: Install Qt (minimal)
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: 6.6.3
+          arch: linux_gcc_64
+          modules: qtbase
+          cache: true
+      - name: Configure (ASan + clang-tidy)
+        env:
+          CC: gcc
+          CXX: g++
+        run: |
+          cmake -S native/qt6 -B build -G Ninja -DBUILD_APP=OFF -DBUILD_TESTS=ON -DENABLE_ASAN=ON -DENABLE_UBSAN=ON -DENABLE_CLANG_TIDY=ON -DCMAKE_BUILD_TYPE=Debug
+      - name: Build
+        run: cmake --build build -j 2
+      - name: Install (tests to install_run/bin)
+        run: cmake --install build --prefix build/install_run
+      - name: Run tests (ASan/UBSan)
+        env:
+          ASAN_OPTIONS: detect_leaks=1:check_initialization_order=1
+          UBSAN_OPTIONS: print_stacktrace=1
+        run: ctest --test-dir build --output-on-failure
+
+
+  coverage-ubuntu:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build gcovr
+      - name: Install Qt (minimal)
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: 6.6.3
+          arch: linux_gcc_64
+          modules: qtbase
+          cache: true
+      - name: Configure (Coverage)
+        env:
+          CC: gcc
+          CXX: g++
+        run: |
+          cmake -S native/qt6 -B build -G Ninja -DBUILD_APP=OFF -DBUILD_TESTS=ON -DENABLE_COVERAGE=ON -DCMAKE_BUILD_TYPE=Debug
+      - name: Build
+        run: cmake --build build -j 2
+      - name: Install (tests to install_run/bin)
+        run: cmake --install build --prefix build/install_run
+      - name: Run tests
+        run: ctest --test-dir build --output-on-failure
+      - name: Generate coverage report
+        run: |
+          gcovr -r native/qt6 --filter native/qt6/src --xml -o build/coverage.xml --txt --branches || true
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-xml
+          path: build/coverage.xml
+

@@ -566,7 +566,6 @@ void PreviewOverlay::showAsset(const QString &filePath, const QString &fileName,
     setFocus();
 
     // Process events to ensure window is properly sized
-    QApplication::processEvents();
 
     // Simple text formats shown with a plain text viewer
     if (currentFileType == "txt" || currentFileType == "log" || currentFileType == "csv") {
@@ -698,7 +697,6 @@ void PreviewOverlay::showImage(const QString &filePath)
         imageView->viewport()->update();
         imageView->update();
         imageScene->update();
-        QApplication::processEvents(); // Force immediate processing
 
         // Show/hide color space selector based on whether this is HDR
         if (isHDRImage) {
@@ -1325,7 +1323,6 @@ void PreviewOverlay::showSequence(const QStringList &framePaths, const QString &
     positionNavButtons(imageView->viewport());
 
     // Process events to ensure window is properly sized
-    QApplication::processEvents();
 
     // CRITICAL: Clear scene before loading sequence
     imageScene->clear();
@@ -1891,7 +1888,6 @@ void PreviewOverlay::showDocx(const QString &filePath)
     show();
     raise();
     setFocus();
-    QApplication::processEvents();
 
     if (!textView) return;
 
@@ -1924,7 +1920,6 @@ void PreviewOverlay::showDoc(const QString &filePath)
     show();
     raise();
     setFocus();
-    QApplication::processEvents();
 
     if (!textView) return;
 
@@ -1958,7 +1953,6 @@ void PreviewOverlay::showXlsx(const QString &filePath)
     show();
     raise();
     setFocus();
-    QApplication::processEvents();
 
     if (!tableView || !tableModel) return;
 

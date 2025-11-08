@@ -1,7 +1,7 @@
 #include "sequence_detector.h"
 #include <QFileInfo>
 #include <QDebug>
-#include <QMap>
+#include <QHash>
 
 // Centralized regex patterns for sequence detection
 const QRegularExpression& SequenceDetector::mainPattern()
@@ -27,7 +27,7 @@ const QRegularExpression& SequenceDetector::lastFramePattern()
 }
 
 QVector<ImageSequence> SequenceDetector::detectSequences(const QStringList& filePaths) {
-    QMap<SequenceKey, QVector<FrameInfo>> sequenceGroups;
+    QHash<SequenceKey, QVector<FrameInfo>> sequenceGroups;
     QStringList nonSequenceFiles;
 
     // Define image extensions (not video)
@@ -199,14 +199,8 @@ int SequenceDetector::extractFrameNumber(const QString& fileName, int& paddingLe
 }
 
 QString SequenceDetector::generatePattern(const QString& baseName, int paddingLength, const QString& extension) {
-    QString padding;
-    for (int i = 0; i < paddingLength; ++i) {
-        padding += "#";
-    }
-
-    // Determine separator (dot or underscore)
-    // Default to dot
-    return QString("%1.%2.%3").arg(baseName).arg(padding).arg(extension);
+    const QString padding(paddingLength, QLatin1Char('#'));
+    return QString("%1.%2.%3").arg(baseName, padding, extension);
 }
 
 void SequenceDetector::detectGaps(ImageSequence& sequence, const QVector<int>& frameNumbers) {

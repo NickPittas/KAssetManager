@@ -2,8 +2,9 @@
 #include <QString>
 #include <QStringList>
 #include <QRegularExpression>
-#include <QMap>
+#include <QHash>
 #include <QVector>
+#include <QHashFunctions>
 
 struct ImageSequence {
     QString pattern;           // e.g., "render.####.exr"
@@ -55,22 +56,28 @@ public:
     // Extract version string from base name (e.g., "v01", "v02")
     static QString extractVersion(const QString& baseName);
 
-private:
+public:
     struct SequenceKey {
         QString baseName;
         QString extension;
         int paddingLength;
-        
-        bool operator<(const SequenceKey& other) const {
-            if (baseName != other.baseName) return baseName < other.baseName;
-            if (extension != other.extension) return extension < other.extension;
-            return paddingLength < other.paddingLength;
+
+        bool operator==(const SequenceKey& other) const {
+            return baseName == other.baseName && extension == other.extension && paddingLength == other.paddingLength;
         }
     };
-    
+
     struct FrameInfo {
         int frameNumber;
         QString filePath;
     };
 };
+
+// qHash overloads for SequenceDetector::SequenceKey
+inline size_t qHash(const SequenceDetector::SequenceKey& key, size_t seed = 0) noexcept {
+    return qHashMulti(seed, key.baseName, key.extension, key.paddingLength);
+}
+inline uint qHash(const SequenceDetector::SequenceKey& key, uint seed) noexcept {
+    return qHashMulti(seed, key.baseName, key.extension, key.paddingLength);
+}
 

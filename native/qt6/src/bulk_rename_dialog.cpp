@@ -39,39 +39,39 @@ BulkRenameDialog::BulkRenameDialog(const QStringList& filePaths, QWidget* parent
 void BulkRenameDialog::setupUI() {
     m_mainLayout = new QVBoxLayout(this);
     m_mainLayout->setSpacing(12);
-    
+
     // Pattern input section
     m_patternGroup = new QGroupBox("Rename Pattern", this);
     QVBoxLayout* patternLayout = new QVBoxLayout(m_patternGroup);
-    
+
     QHBoxLayout* patternInputLayout = new QHBoxLayout();
     m_patternEdit = new QLineEdit(this);
     m_patternEdit->setPlaceholderText("Enter rename pattern (e.g., shot_{###} or {original}_v01)");
     connect(m_patternEdit, &QLineEdit::textChanged, this, &BulkRenameDialog::onPatternChanged);
     patternInputLayout->addWidget(m_patternEdit);
-    
+
     patternLayout->addLayout(patternInputLayout);
-    
+
     // Token buttons
     QHBoxLayout* tokenLayout = new QHBoxLayout();
     m_insertCounterButton = new QPushButton("{###}", this);
     m_insertCounterButton->setToolTip("Insert counter with padding");
     connect(m_insertCounterButton, &QPushButton::clicked, this, [this]() { onInsertToken("{###}"); });
     tokenLayout->addWidget(m_insertCounterButton);
-    
+
     m_insertOriginalButton = new QPushButton("{original}", this);
     m_insertOriginalButton->setToolTip("Insert original filename");
     connect(m_insertOriginalButton, &QPushButton::clicked, this, [this]() { onInsertToken("{original}"); });
     tokenLayout->addWidget(m_insertOriginalButton);
-    
+
     m_insertDateButton = new QPushButton("{date}", this);
     m_insertDateButton->setToolTip("Insert current date (YYYYMMDD)");
     connect(m_insertDateButton, &QPushButton::clicked, this, [this]() { onInsertToken("{date}"); });
     tokenLayout->addWidget(m_insertDateButton);
-    
+
     tokenLayout->addStretch();
     patternLayout->addLayout(tokenLayout);
-    
+
     m_patternHelpLabel = new QLabel(
         "Tokens: {###} = counter with padding, {original} = original name, {date} = YYYYMMDD, {ext} = extension",
         this
@@ -79,19 +79,19 @@ void BulkRenameDialog::setupUI() {
     m_patternHelpLabel->setStyleSheet("color: #666; font-size: 10pt;");
     m_patternHelpLabel->setWordWrap(true);
     patternLayout->addWidget(m_patternHelpLabel);
-    
+
     m_mainLayout->addWidget(m_patternGroup);
-    
+
     // Options section
     m_optionsGroup = new QGroupBox("Options", this);
     QHBoxLayout* optionsLayout = new QHBoxLayout(m_optionsGroup);
-    
+
     m_preserveExtensionCheck = new QCheckBox("Preserve Extension", this);
     m_preserveExtensionCheck->setChecked(true);
     m_preserveExtensionCheck->setToolTip("Keep original file extension");
     connect(m_preserveExtensionCheck, &QCheckBox::toggled, this, &BulkRenameDialog::onPatternChanged);
     optionsLayout->addWidget(m_preserveExtensionCheck);
-    
+
     m_updateDatabaseCheck = new QCheckBox("Update Database", this);
     m_updateDatabaseCheck->setChecked(true);
     m_updateDatabaseCheck->setToolTip("Update asset names in database");
@@ -102,9 +102,9 @@ void BulkRenameDialog::setupUI() {
     m_updateFilesystemCheck->setChecked(true);
     m_updateFilesystemCheck->setToolTip("Physically rename files on filesystem");
     optionsLayout->addWidget(m_updateFilesystemCheck);
-    
+
     optionsLayout->addSpacing(20);
-    
+
     QLabel* startLabel = new QLabel("Start Number:", this);
     optionsLayout->addWidget(startLabel);
     m_startNumberSpin = new QSpinBox(this);
@@ -112,7 +112,7 @@ void BulkRenameDialog::setupUI() {
     m_startNumberSpin->setValue(1);
     connect(m_startNumberSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, &BulkRenameDialog::onPatternChanged);
     optionsLayout->addWidget(m_startNumberSpin);
-    
+
     QLabel* paddingLabel = new QLabel("Padding:", this);
     optionsLayout->addWidget(paddingLabel);
     m_paddingSpin = new QSpinBox(this);
@@ -120,14 +120,14 @@ void BulkRenameDialog::setupUI() {
     m_paddingSpin->setValue(3);
     connect(m_paddingSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, &BulkRenameDialog::onPatternChanged);
     optionsLayout->addWidget(m_paddingSpin);
-    
+
     optionsLayout->addStretch();
     m_mainLayout->addWidget(m_optionsGroup);
-    
+
     // Preview section
     m_previewGroup = new QGroupBox("Preview", this);
     QVBoxLayout* previewLayout = new QVBoxLayout(m_previewGroup);
-    
+
     m_previewTable = new QTableWidget(this);
     m_previewTable->setColumnCount(3);
     m_previewTable->setHorizontalHeaderLabels({"Original Name", "New Name", "Status"});
@@ -138,28 +138,28 @@ void BulkRenameDialog::setupUI() {
     m_previewTable->setAlternatingRowColors(true);
     m_previewTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
     m_previewTable->setSelectionBehavior(QAbstractItemView::SelectRows);
-    
+
     previewLayout->addWidget(m_previewTable);
-    
+
     m_statusLabel = new QLabel(this);
     m_statusLabel->setStyleSheet("color: #666;");
     previewLayout->addWidget(m_statusLabel);
-    
+
     m_mainLayout->addWidget(m_previewGroup);
-    
+
     // Action buttons
     QHBoxLayout* buttonLayout = new QHBoxLayout();
     buttonLayout->addStretch();
-    
+
     m_cancelButton = new QPushButton("Cancel", this);
     connect(m_cancelButton, &QPushButton::clicked, this, &QDialog::reject);
     buttonLayout->addWidget(m_cancelButton);
-    
+
     m_applyButton = new QPushButton("Apply Rename", this);
     m_applyButton->setEnabled(false);
     connect(m_applyButton, &QPushButton::clicked, this, &BulkRenameDialog::onApplyRename);
     buttonLayout->addWidget(m_applyButton);
-    
+
     m_mainLayout->addLayout(buttonLayout);
 }
 
@@ -211,22 +211,22 @@ void BulkRenameDialog::onInsertToken(const QString& token) {
 
 void BulkRenameDialog::updatePreview() {
     QString pattern = m_patternEdit->text();
-    
+
     if (pattern.isEmpty()) {
         m_statusLabel->setText("Enter a rename pattern to preview changes");
         m_applyButton->setEnabled(false);
         m_previewTable->setRowCount(0);
         return;
     }
-    
+
     // Update preview items
     QSet<QString> newNames;
     m_hasConflicts = false;
-    
+
     for (int i = 0; i < m_previewItems.size(); ++i) {
         RenamePreviewItem& item = m_previewItems[i];
         item.newName = applyPattern(item.originalName, i);
-        
+
         // Check for conflicts
         if (newNames.contains(item.newName)) {
             item.hasConflict = true;
@@ -245,16 +245,16 @@ void BulkRenameDialog::updatePreview() {
             newNames.insert(item.newName);
         }
     }
-    
+
     // Update table
     m_previewTable->setRowCount(m_previewItems.size());
-    
+
     for (int i = 0; i < m_previewItems.size(); ++i) {
         const RenamePreviewItem& item = m_previewItems[i];
-        
+
         QTableWidgetItem* originalItem = new QTableWidgetItem(item.originalName);
         m_previewTable->setItem(i, 0, originalItem);
-        
+
         QTableWidgetItem* newItem = new QTableWidgetItem(item.newName);
         if (item.hasConflict) {
             newItem->setForeground(QBrush(QColor("#d32f2f")));
@@ -262,7 +262,7 @@ void BulkRenameDialog::updatePreview() {
             newItem->setForeground(QBrush(QColor("#388e3c")));
         }
         m_previewTable->setItem(i, 1, newItem);
-        
+
         QString status = item.hasConflict ? item.conflictReason : (item.newName == item.originalName ? "No change" : "OK");
         QTableWidgetItem* statusItem = new QTableWidgetItem(status);
         if (item.hasConflict) {
@@ -270,7 +270,7 @@ void BulkRenameDialog::updatePreview() {
         }
         m_previewTable->setItem(i, 2, statusItem);
     }
-    
+
     // Update status
     int changedCount = 0;
     for (const auto& item : m_previewItems) {
@@ -278,7 +278,7 @@ void BulkRenameDialog::updatePreview() {
             changedCount++;
         }
     }
-    
+
     if (m_hasConflicts) {
         m_statusLabel->setText(QString("<span style='color:#d32f2f;'>⚠ Conflicts detected - fix issues before applying</span>"));
         m_applyButton->setEnabled(false);
@@ -294,7 +294,7 @@ void BulkRenameDialog::updatePreview() {
 QString BulkRenameDialog::applyPattern(const QString& originalName, int index) const {
     QString pattern = m_patternEdit->text();
     QString result = replaceTokens(pattern, originalName, index);
-    
+
     // Handle extension
     if (m_preserveExtensionCheck->isChecked()) {
         QFileInfo info(originalName);
@@ -303,7 +303,7 @@ QString BulkRenameDialog::applyPattern(const QString& originalName, int index) c
             result += "." + ext;
         }
     }
-    
+
     return result;
 }
 
@@ -408,6 +408,15 @@ bool BulkRenameDialog::performRename() {
         if (item.newName == item.originalName) {
             continue; // Skip unchanged
         }
+        // Validate that newName does not traverse directories or include separators
+        if (item.newName == "." || item.newName == ".." || item.newName.contains('/') || item.newName.contains('\\')) {
+            QMessageBox::critical(this, "Invalid Name",
+                QString("The new name '%1' is invalid. It must not contain '/' or '\\' or be '.'/'..'.")
+                    .arg(item.newName));
+            rollbackRename(renamedAssets);
+            return false;
+        }
+
 
         QFileInfo originalInfo(item.fullPath);
         QString newPath = originalInfo.absolutePath() + "/" + item.newName;
@@ -448,6 +457,19 @@ bool BulkRenameDialog::performFileRename() {
         if (item.newName == item.originalName) {
             continue; // Skip unchanged
         }
+        // Validate that newName does not traverse directories or include separators
+        if (item.newName == "." || item.newName == ".." || item.newName.contains('/') || item.newName.contains('\\')) {
+            QMessageBox::critical(this, "Invalid Name",
+                QString("The new name '%1' is invalid. It must not contain '/' or '\\' or be '.'/'..'.")
+                    .arg(item.newName));
+            // Rollback previous renames
+            for (const auto& pair : renamedFiles) {
+                QFile rollbackFile(pair.second);
+                rollbackFile.rename(pair.first);
+            }
+            return false;
+        }
+
 
         QFileInfo originalInfo(item.fullPath);
         QString newPath = originalInfo.dir().filePath(item.newName);
@@ -461,6 +483,19 @@ bool BulkRenameDialog::performFileRename() {
                         .arg(item.fullPath)
                         .arg(newPath)
                         .arg(file.errorString()));
+        // Validate that newName does not traverse directories or include separators
+        if (item.newName == "." || item.newName == ".." || item.newName.contains('/') || item.newName.contains('\\')) {
+            QMessageBox::critical(this, "Invalid Name",
+                QString("The new name '%1' is invalid. It must not contain '/' or '\\' or be '.'/'..'.")
+                    .arg(item.newName));
+            // Rollback previous renames
+            for (const auto& pair : renamedFiles) {
+                QFile rollbackFile(pair.second);
+                rollbackFile.rename(pair.first);
+            }
+            return false;
+        }
+
 
                 // Rollback previous renames
                 for (const auto& pair : renamedFiles) {

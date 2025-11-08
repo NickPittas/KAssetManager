@@ -97,21 +97,15 @@ bool Importer::importFolder(const QString& dirPath, int parentFolderId){
         }
     }
 
-    // Count total files first for progress reporting
-    QDirIterator countIt(dirPath, QDir::Files, QDirIterator::Subdirectories);
+    // Single-pass directory iteration: collect files by directory and count total
     int totalFiles = 0;
-    while(countIt.hasNext()) {
-        countIt.next();
-        if (isMediaFile(countIt.filePath())) totalFiles++;
-    }
-
-    // Collect all files first, grouped by directory
-    QMap<QString, QStringList> filesByDir;
+    QHash<QString, QStringList> filesByDir;
     QDirIterator it(dirPath, QDir::Files, QDirIterator::Subdirectories);
-    while(it.hasNext()){
+    while (it.hasNext()) {
         QString fp = it.next();
         if (!isMediaFile(fp)) continue;
-        QString folderPath = QFileInfo(fp).absolutePath();
+        ++totalFiles;
+        const QString folderPath = QFileInfo(fp).absolutePath();
         filesByDir[folderPath].append(fp);
     }
 
@@ -153,7 +147,6 @@ bool Importer::importFolder(const QString& dirPath, int parentFolderId){
                 sequenceFiles.insert(framePath);
                 currentFile++;
                 emit progressChanged(currentFile, totalFiles);
-                if ((currentFile % 200) == 0) QApplication::processEvents();
             }
         }
 
@@ -165,7 +158,6 @@ bool Importer::importFolder(const QString& dirPath, int parentFolderId){
             QString fileName = QFileInfo(fp).fileName();
             emit currentFileChanged(fileName);
             emit progressChanged(currentFile, totalFiles);
-            if ((currentFile % 200) == 0) QApplication::processEvents();
 
             DB::instance().insertAssetMetadataFast(fp, fid);
         }
@@ -250,7 +242,6 @@ void Importer::importFiles(const QStringList& filePaths, int parentFolderId)
         emit progressChanged(i + 1, total);
 
         // Throttle event pumping to every 200 files
-        if (((i + 1) % 200) == 0) QApplication::processEvents();
 
         // Import the file (fast metadata-only)
         if (isMediaFile(filePath) && DB::instance().insertAssetMetadataFast(filePath, parentFolderId) > 0) {

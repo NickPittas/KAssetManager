@@ -11,6 +11,8 @@
 #include <QList>
 #include <QStringList>
 
+#include <QCache>
+
 /**
  * LivePreviewManager streams preview frames for stills, video clips, and image sequences
  * without persisting thumbnails to disk. It exposes a lightweight request API that returns
@@ -72,6 +74,11 @@ public:
     void setSequenceDetectionEnabled(bool enabled);
     bool sequenceDetectionEnabled() const;
 
+    // Cache metrics
+    quint64 cacheHits() const;
+    quint64 cacheMisses() const;
+    double cacheHitRate() const; // [0,1]
+
 signals:
     void frameReady(const QString& filePath, qreal position, QSize targetSize, const QPixmap& pixmap);
     void frameFailed(const QString& filePath, QString errorString);
@@ -98,7 +105,6 @@ private:
         QPixmap pixmap;
         qreal position = 0.0;
         QSize size;
-        QElapsedTimer lastAccess;
     };
 
     struct SequenceTask {
@@ -123,14 +129,18 @@ private:
     };
 
     mutable QMutex m_mutex;
-    QHash<QString, CachedEntry> m_cache;
+    QCache<QString, CachedEntry> m_cache;
     QSet<QString> m_inFlight;
     QList<SequenceTask> m_sequenceQueue;
-    QHash<QString, SequenceMeta> m_sequenceMetaCache;
+    QCache<QString, SequenceMeta> m_sequenceMetaCache;
     int m_maxCacheEntries = 256;
     int m_maxSequenceLoads = 1;
     int m_activeSequenceLoads = 0;
     int m_sequenceMetaLimit = 64;
     int m_sequenceQueueLimit = 24;
     bool m_sequenceDetectionEnabled = true; // Default to enabled for backward compatibility
+
+    // Metrics (protected by m_mutex)
+    quint64 m_cacheHits = 0;
+    quint64 m_cacheMisses = 0;
 };

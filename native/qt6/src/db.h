@@ -9,6 +9,8 @@
 #include <QPair>
 #include <QStringList>
 
+#include <QHash>
+
 // Version history row for an asset
 struct AssetVersionRow {
     int id = 0;
@@ -64,7 +66,7 @@ public:
     // Versioning ops
     int getAssetIdByPath(const QString& filePath) const;
     QVector<AssetVersionRow> listAssetVersions(int assetId) const;
-    int createAssetVersion(int assetId, const QString& srcFilePath, const QString& notes = QString());
+    int createAssetVersion(int assetId, const QString& srcFilePath, const QString& notes = QString(), const QString& precomputedChecksum = QString());
     bool revertAssetToVersion(int assetId, int versionId, bool createBackupVersion);
 
     // Tags ops
@@ -73,6 +75,8 @@ public:
     bool deleteTag(int id);
     bool mergeTags(int sourceTagId, int targetTagId);
     QVector<QPair<int, QString>> listTags() const;
+    QHash<int, QStringList> tagsForAssets(const QList<int>& assetIds) const;
+
     bool assignTagsToAssets(const QList<int>& assetIds, const QList<int>& tagIds);
     QStringList tagsForAsset(int assetId) const;
 
@@ -101,8 +105,40 @@ private:
     bool exec(const QString& sql);
     bool hasColumn(const QString& table, const QString& column) const;
 
+    // Prepared statement cache
+    QSqlQuery prepared(const QString& key, const QString& sql) const;
+
+    // Schema versioning helpers (SQLite PRAGMA user_version)
+    int schemaUserVersion() const;
+    bool setSchemaUserVersion(int v);
+
+    // Schedule background checksum computation and apply results on DB thread
+    void scheduleChecksumJob(int assetId,
+                             const QString& filePath,
+                             qint64 newSize,
+                             const QString& oldChecksum,
+                             bool isNewAsset,
+                             const QString& versionNotes);
+
+private slots:
+    void applyChecksumUpdate(int assetId,
+                             const QString& filePath,
+                             qint64 newSize,
+                             const QString& newChecksum,
+                             const QString& oldChecksum,
+                             bool isNewAsset,
+                             const QString& versionNotes);
+
+
+private:
+
+
     QSqlDatabase m_db;
     int m_rootId = 0;
     QString m_dataDir; // directory that holds the DB; used for version storage
+
+    // Simple prepared statement cache keyed by a stable key name
+    mutable QHash<QString, QSqlQuery> m_stmtCache;
+    mutable QHash<QString, QString> m_stmtSql; // to detect SQL changes per key
 };
 

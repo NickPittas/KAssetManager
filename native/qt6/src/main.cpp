@@ -29,46 +29,6 @@ extern "C" {
 #endif
 #endif
 
-static QFile* g_appLogFile = nullptr;
-static QFile* g_debugLogFile = nullptr;
-
-static void messageHandler(QtMsgType type, const QMessageLogContext &context, const QString &msg)
-{
-    QString timestamp = QDateTime::currentDateTime().toString("hh:mm:ss.zzz");
-    QString typeStr;
-
-    switch (type) {
-        case QtDebugMsg:    typeStr = "DEBUG"; break;
-        case QtInfoMsg:     typeStr = "INFO "; break;
-        case QtWarningMsg:  typeStr = "WARN "; break;
-        case QtCriticalMsg: typeStr = "CRIT "; break;
-        case QtFatalMsg:    typeStr = "FATAL"; break;
-    }
-
-    QString logLine = QString("[%1] [%2] %3\n").arg(timestamp).arg(typeStr).arg(msg);
-
-    // Write to files
-    if (g_appLogFile && g_appLogFile->isOpen()) {
-        QTextStream s1(g_appLogFile);
-        s1 << logLine;
-        s1.flush();
-    }
-    if (g_debugLogFile && g_debugLogFile->isOpen()) {
-        QTextStream s2(g_debugLogFile);
-        s2 << logLine;
-        s2.flush();
-    }
-
-    // Only write warnings and errors to console
-    if (type == QtWarningMsg || type == QtCriticalMsg || type == QtFatalMsg) {
-        fprintf(stderr, "%s", logLine.toLocal8Bit().constData());
-        fflush(stderr);
-    }
-
-    if (type == QtFatalMsg) {
-        abort();
-    }
-}
 
 int main(int argc, char *argv[])
 {
@@ -85,16 +45,9 @@ int main(int argc, char *argv[])
     QCoreApplication::setOrganizationDomain("kasset.local");
     QCoreApplication::setApplicationName("KAsset Manager Qt");
 
-    // Setup logging to files (both app.log and debug.log)
+    // Install centralized message handler that logs via LogManager to app.log
     QString appDir = QCoreApplication::applicationDirPath();
-    g_appLogFile = new QFile(appDir + "/app.log");
-    g_debugLogFile = new QFile(appDir + "/debug.log");
-    bool anyLogOpen = false;
-    if (g_appLogFile->open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) anyLogOpen = true;
-    if (g_debugLogFile->open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) anyLogOpen = true;
-    if (anyLogOpen) {
-        qInstallMessageHandler(messageHandler);
-    }
+    qInstallMessageHandler(customMessageHandler);
 
 #ifdef Q_OS_WIN
     // Install a top-level SEH filter to capture crashes and write a minidump
@@ -115,8 +68,15 @@ int main(int argc, char *argv[])
         QFile f(dataDir + "/crash.log");
         if (f.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text)) {
             QTextStream ts(&f);
-            ts << QDateTime::currentDateTime().toString(Qt::ISODate) << " Crash: code=0x" << QString::number(ep->ExceptionRecord->ExceptionCode, 16)
+            const QString tsNow = QDateTime::currentDateTime().toString(Qt::ISODate);
+#ifdef QT_NO_DEBUG
+            // In release builds, avoid logging raw addresses to limit information disclosure
+            ts << tsNow << " Crash: code=0x" << QString::number(ep->ExceptionRecord->ExceptionCode, 16) << "\n";
+#else
+            // In debug builds, include full details for diagnosis
+            ts << tsNow << " Crash: code=0x" << QString::number(ep->ExceptionRecord->ExceptionCode, 16)
                << " addr=0x" << QString::number(reinterpret_cast<qulonglong>(ep->ExceptionRecord->ExceptionAddress), 16) << "\n";
+#endif
         }
         return EXCEPTION_EXECUTE_HANDLER;
     });
@@ -207,9 +167,6 @@ skip_new_init:
     int rc = app.exec();
     LogManager::instance().addLog(QString("[MAIN] Event loop exited with code %1").arg(rc));
 
-    // Cleanup
-    if (g_appLogFile) { g_appLogFile->close(); delete g_appLogFile; }
-    if (g_debugLogFile) { g_debugLogFile->close(); delete g_debugLogFile; }
-
+    // Cleanup (LogManager flushes automatically on destruction)
     return rc;
 }

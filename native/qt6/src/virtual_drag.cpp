@@ -145,6 +145,8 @@ public:
                 fd.ftLastWriteTime = now;
                 const std::wstring wname = vf.name.toStdWString();
                 wcsncpy(fd.cFileName, wname.c_str(), MAX_PATH - 1);
+                fd.cFileName[MAX_PATH - 1] = L'\0';
+
             }
             GlobalUnlock(h);
             pmedium->tymed = TYMED_HGLOBAL; pmedium->hGlobal = h; pmedium->pUnkForRelease = nullptr;

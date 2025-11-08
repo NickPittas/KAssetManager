@@ -12,8 +12,6 @@ LogManager::LogManager(QObject* parent) : QObject(parent) {
         m_ts << "\n--- session start ---\n";
         m_ts.flush();
     }
-    // Install custom message handler to capture qDebug/qWarning/qCritical
-    qInstallMessageHandler(customMessageHandler);
 }
 
 void LogManager::addLog(const QString& message, const QString& level) {

@@ -127,11 +127,12 @@ void ProjectFolderWatcher::onDirectoryChanged(const QString& path)
     
     int projectFolderId = m_pathToProjectId[path];
     
-    // Check if new subdirectories were added
+    // Check if new subdirectories were added (only immediate children)
     if (QDir(path).exists()) {
-        QDirIterator it(path, QDir::Dirs | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
-        while (it.hasNext()) {
-            QString subDir = it.next();
+        QDir d(path);
+        const QFileInfoList subdirs = d.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
+        for (const QFileInfo& fi : subdirs) {
+            const QString subDir = fi.absoluteFilePath();
             if (!m_pathToProjectId.contains(subDir)) {
                 if (m_watcher->addPath(subDir)) {
                     m_pathToProjectId[subDir] = projectFolderId;
@@ -140,7 +141,7 @@ void ProjectFolderWatcher::onDirectoryChanged(const QString& path)
             }
         }
     }
-    
+
     // Add to pending refreshes and start/restart timer
     m_pendingRefreshes.insert(projectFolderId);
     m_refreshTimer->start();

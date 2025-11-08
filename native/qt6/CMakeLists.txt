@@ -1,18 +1,75 @@
 cmake_minimum_required(VERSION 3.21)
 
-# Set vcpkg toolchain file if not already set and vcpkg exists
-if(NOT DEFINED CMAKE_TOOLCHAIN_FILE AND EXISTS "C:/vcpkg/scripts/buildsystems/vcpkg.cmake")
-    set(CMAKE_TOOLCHAIN_FILE "C:/vcpkg/scripts/buildsystems/vcpkg.cmake" CACHE STRING "Vcpkg toolchain file")
-    # Use x64-windows triplet (MSVC) for OpenImageIO since MinGW has compatibility issues
-    set(VCPKG_TARGET_TRIPLET "x64-windows" CACHE STRING "Vcpkg target triplet")
-    message(STATUS "Using vcpkg toolchain: ${CMAKE_TOOLCHAIN_FILE}")
-    message(STATUS "Using vcpkg triplet: ${VCPKG_TARGET_TRIPLET}")
+# Set vcpkg toolchain file from environment if not already set
+if(NOT DEFINED CMAKE_TOOLCHAIN_FILE)
+    if(DEFINED ENV{VCPKG_ROOT} AND EXISTS "$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake")
+        set(CMAKE_TOOLCHAIN_FILE "$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake" CACHE STRING "Vcpkg toolchain file")
+        # Default triplet; can be overridden by user
+        if(NOT DEFINED VCPKG_TARGET_TRIPLET)
+            set(VCPKG_TARGET_TRIPLET "x64-windows" CACHE STRING "Vcpkg target triplet")
+        endif()
+        message(STATUS "Using vcpkg toolchain: ${CMAKE_TOOLCHAIN_FILE}")
+        message(STATUS "Using vcpkg triplet: ${VCPKG_TARGET_TRIPLET}")
+    endif()
 endif()
 
 project(KAssetManagerQt VERSION 1.0.8 LANGUAGES CXX)
+# Optional static analysis / sanitizers
+option(ENABLE_ASAN "Enable AddressSanitizer (Clang/GCC only)" OFF)
+if(ENABLE_ASAN)
+  if (CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+    add_compile_options(-fsanitize=address -fno-omit-frame-pointer)
+    add_link_options(-fsanitize=address)
+  else()
+    message(WARNING "ENABLE_ASAN is ON but current compiler may not support it")
+  endif()
+endif()
+
+# UndefinedBehaviorSanitizer (Clang/GCC only)
+option(ENABLE_UBSAN "Enable UndefinedBehaviorSanitizer (Clang/GCC only)" OFF)
+if(ENABLE_UBSAN)
+  if (CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+    add_compile_options(-fsanitize=undefined)
+    add_link_options(-fsanitize=undefined)
+  else()
+    message(WARNING "ENABLE_UBSAN is ON but current compiler may not support it")
+  endif()
+endif()
+
+
+option(ENABLE_CLANG_TIDY "Enable clang-tidy static analysis" OFF)
+if(ENABLE_CLANG_TIDY)
+  find_program(CLANG_TIDY_EXE NAMES clang-tidy)
+  if(CLANG_TIDY_EXE)
+    set(CMAKE_CXX_CLANG_TIDY "${CLANG_TIDY_EXE};-warnings-as-errors=*,-llvm-header-guard,-modernize-use-trailing-return-type")
+    message(STATUS "clang-tidy enabled: ${CLANG_TIDY_EXE}")
+  else()
+    message(WARNING "clang-tidy not found")
+  endif()
+endif()
+
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+
+# Option to build the main application (allows CI to build tests-only)
+option(BUILD_APP "Build main application" ON)
+
+
+# Allow building only tests in CI without full app dependencies
+# Code coverage (GCC/Clang only)
+option(ENABLE_COVERAGE "Enable code coverage flags (GCC/Clang only)" OFF)
+if(ENABLE_COVERAGE)
+  if (CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+    add_compile_options(--coverage -O0)
+    add_link_options(--coverage)
+  else()
+    message(WARNING "ENABLE_COVERAGE is ON but current compiler may not support it")
+  endif()
+endif()
+
+if(BUILD_APP)
 
 find_package(QT NAMES Qt6 REQUIRED COMPONENTS Widgets Multimedia MultimediaWidgets Sql Concurrent Svg SvgWidgets)
 find_package(Qt6 REQUIRED COMPONENTS Widgets Multimedia MultimediaWidgets Sql Concurrent Svg SvgWidgets)
@@ -90,7 +147,7 @@ if(NOT FFMPEG_FOUND)
 endif()
 if(NOT FFMPEG_FOUND)
     # Try vcpkg FFmpeg
-    find_path(FFMPEG_INCLUDE_DIR libavutil/log.h PATHS "C:/vcpkg/installed/x64-windows/include")
+    find_path(FFMPEG_INCLUDE_DIR libavutil/log.h HINTS "$ENV{VCPKG_ROOT}/installed/${VCPKG_TARGET_TRIPLET}/include")
     if(FFMPEG_INCLUDE_DIR)
         set(FFMPEG_FOUND TRUE)
         message(STATUS "FFmpeg headers found at ${FFMPEG_INCLUDE_DIR}")
@@ -166,6 +223,9 @@ qt_add_executable(kassetmanagerqt WIN32
     src/everything_search.h
     src/everything_search.cpp
     src/everything_search_dialog.h
+    src/utils.h
+    src/utils.cpp
+
     src/everything_search_dialog.cpp
     src/media_convert_dialog.h
     src/media_convert_dialog.cpp
@@ -189,7 +249,9 @@ endif()
 # Try to link FFmpeg core libs when headers are present
 if(FFMPEG_FOUND)
     if(NOT DEFINED FFMPEG_LIBRARY_DIRS)
-        set(FFMPEG_LIBRARY_DIRS "C:/vcpkg/installed/x64-windows/lib")
+        if(DEFINED ENV{VCPKG_ROOT})
+            set(FFMPEG_LIBRARY_DIRS "$ENV{VCPKG_ROOT}/installed/${VCPKG_TARGET_TRIPLET}/lib")
+        endif()
     endif()
     find_library(FFMPEG_AVFORMAT avformat HINTS ${FFMPEG_LIBRARY_DIRS})
     find_library(FFMPEG_AVCODEC  avcodec  HINTS ${FFMPEG_LIBRARY_DIRS})
@@ -292,8 +354,11 @@ if (WIN32)
   endif()
 
   # Install all vcpkg DLLs (OpenImageIO, zlib, bzip2, liblzma, libpng, libjpeg, etc.)
-  set(_VCPKG_BIN "C:/vcpkg/installed/x64-windows/bin")
-  if(EXISTS "${_VCPKG_BIN}")
+  set(_VCPKG_BIN "")
+  if(DEFINED ENV{VCPKG_ROOT})
+    set(_VCPKG_BIN "$ENV{VCPKG_ROOT}/installed/${VCPKG_TARGET_TRIPLET}/bin")
+  endif()
+  if(_VCPKG_BIN AND EXISTS "${_VCPKG_BIN}")
     file(GLOB _VCPKG_DLLS "${_VCPKG_BIN}/*.dll")
     foreach(_dll ${_VCPKG_DLLS})
       get_filename_component(_dll_name "${_dll}" NAME)
@@ -325,6 +390,10 @@ if (WIN32)
     message(WARNING "Run scripts/download-everything-sdk.ps1 to download the Everything SDK")
   endif()
 endif()
+
+# End BUILD_APP block
+endif()
+
 
 # Enable testing
 enable_testing()

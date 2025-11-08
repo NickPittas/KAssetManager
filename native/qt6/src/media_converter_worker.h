@@ -4,8 +4,6 @@
 #include <QProcess>
 #include <QVector>
 #include <QStringList>
-#include <QMutex>
-#include <QWaitCondition>
 #include <QElapsedTimer>
 
 class QFileInfo;
@@ -73,8 +71,6 @@ signals:
 
 public slots:
     void start(const QVector<Task>& tasks);
-    void pause();
-    void resume();
     void cancelAll();
     void retryCurrent();
     void continueAfterFailure();
@@ -103,7 +99,6 @@ private:
     QVector<Task> m_tasks;
     int m_index = -1;
     QProcess* m_proc = nullptr;
-    bool m_paused = false;
     bool m_cancelling = false;
     bool m_waitingOnError = false;
     qint64 m_curDurationMs = 0;

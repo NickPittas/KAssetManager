@@ -1,6 +1,8 @@
 #include "live_preview_manager.h"
 
 #include "oiio_image_loader.h"
+#include "utils.h"
+
 
 #include <QtConcurrent/QtConcurrentRun>
 #include <QFileInfo>
@@ -12,7 +14,9 @@
 #include <algorithm>
 #include <cmath>
 
-#ifdef HAVE_FFMPEG
+#include <memory>
+
+#if defined(HAVE_FFMPEG) && HAVE_FFMPEG
 extern "C" {
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
@@ -25,15 +29,29 @@ extern "C" {
 
 namespace {
 
+constexpr int kMinCacheEntries = 64;
+constexpr int kMaxCacheEntries = 2048;
+constexpr qint64 kSeqUpperSearchStart = 10000000; // 10M
+constexpr int kSeqUpperSearchMaxDoublings = 32;
+constexpr qint64 kSeqUpperSearchHardCap = 100000000; // 100M
+constexpr int kDecodeSafetyIterMax = 256;
+
 constexpr qreal kDefaultPosterPosition = 0.05; // pick early frame for motion clips
 constexpr int kSequenceMetaTtlMs = 30000;
 
+#if defined(HAVE_FFMPEG) && HAVE_FFMPEG
 QString ffmpegErrorString(int err)
 {
     char buf[AV_ERROR_MAX_STRING_SIZE] = {};
     av_strerror(err, buf, sizeof(buf));
     return QString::fromUtf8(buf);
 }
+#else
+static QString ffmpegErrorString(int err)
+{
+    return QString::number(err);
+}
+#endif
 
 bool isImageExtension(const QString& suffix)
 {
@@ -79,7 +97,7 @@ LivePreviewManager& LivePreviewManager::instance()
 LivePreviewManager::LivePreviewManager(QObject* parent)
     : QObject(parent)
 {
-#ifdef HAVE_FFMPEG
+#if defined(HAVE_FFMPEG) && HAVE_FFMPEG
     av_log_set_level(AV_LOG_ERROR);
     static bool s_loggedVersion = false;
     if (!s_loggedVersion) {
@@ -93,18 +111,20 @@ LivePreviewManager::LivePreviewManager(QObject* parent)
         s_loggedVersion = true;
     }
 #endif
+    // Initialize QCache capacity based on default setting
+    m_cache.setMaxCost(m_maxCacheEntries);
+    m_sequenceMetaCache.setMaxCost(m_sequenceMetaLimit);
 }
 
 LivePreviewManager::FrameHandle LivePreviewManager::cachedFrame(const QString& filePath, const QSize& targetSize, qreal position)
 {
     const QString key = makeCacheKey(filePath, targetSize, position);
     QMutexLocker locker(&m_mutex);
-    auto it = m_cache.find(key);
-    if (it == m_cache.end()) {
-        return {};
+    if (auto* entry = m_cache.object(key)) {
+        ++m_cacheHits;
+        return { entry->pixmap, entry->position, entry->size };
     }
-    it->lastAccess.restart();
-    return { it->pixmap, it->position, it->size };
+    return {};
 }
 
 void LivePreviewManager::requestFrame(const QString& filePath, const QSize& targetSize, qreal position)
@@ -122,8 +142,8 @@ void LivePreviewManager::requestFrame(const QString& filePath, const QSize& targ
     const QString key = makeCacheKey(filePath, targetSize, position);
     {
         QMutexLocker locker(&m_mutex);
-        auto cached = m_cache.constFind(key);
-        if (cached != m_cache.constEnd()) {
+        if (auto* cached = m_cache.object(key)) {
+            ++m_cacheHits;
             QPixmap pixmap = cached->pixmap;
             QSize cachedSize = cached->size;
             qreal cachedPos = cached->position;
@@ -135,6 +155,7 @@ void LivePreviewManager::requestFrame(const QString& filePath, const QSize& targ
             return;
         }
         m_inFlight.insert(key);
+        ++m_cacheMisses;
     }
 
     Request request { filePath, targetSize, position };
@@ -144,13 +165,14 @@ void LivePreviewManager::requestFrame(const QString& filePath, const QSize& targ
 void LivePreviewManager::invalidate(const QString& filePath)
 {
     QMutexLocker locker(&m_mutex);
-    for (auto it = m_cache.begin(); it != m_cache.end(); ) {
-        if (it.key().startsWith(filePath + "|")) {
-            it = m_cache.erase(it);
-        } else {
-            ++it;
+    // Remove cached entries for this file path by scanning keys
+    const auto keys = m_cache.keys();
+    for (const QString& k : keys) {
+        if (k.startsWith(filePath + "|")) {
+            m_cache.remove(k);
         }
     }
+    // Clear any in-flight requests for this file path
     for (auto it = m_inFlight.begin(); it != m_inFlight.end(); ) {
         if (it->startsWith(filePath + "|")) {
             it = m_inFlight.erase(it);
@@ -175,10 +197,11 @@ int LivePreviewManager::cacheEntryCount() const
 
 void LivePreviewManager::setMaxCacheEntries(int maxEntries)
 {
-    // Bounds: 64-2048 entries
-    const int bounded = qBound(64, maxEntries, 2048);
+    // Bounds: kMinCacheEntries-kMaxCacheEntries
+    const int bounded = qBound(kMinCacheEntries, maxEntries, kMaxCacheEntries);
     QMutexLocker locker(&m_mutex);
     m_maxCacheEntries = bounded;
+    m_cache.setMaxCost(bounded);
     qInfo() << "[LivePreview] Cache size set to" << bounded << "entries";
 }
 
@@ -187,6 +210,11 @@ int LivePreviewManager::maxCacheEntries() const
     QMutexLocker locker(&m_mutex);
     return m_maxCacheEntries;
 }
+
+
+quint64 LivePreviewManager::cacheHits() const { QMutexLocker locker(&m_mutex); return m_cacheHits; }
+quint64 LivePreviewManager::cacheMisses() const { QMutexLocker locker(&m_mutex); return m_cacheMisses; }
+double LivePreviewManager::cacheHitRate() const { QMutexLocker locker(&m_mutex); const quint64 total = m_cacheHits + m_cacheMisses; return total ? double(m_cacheHits) / double(total) : 0.0; }
 
 void LivePreviewManager::setSequenceDetectionEnabled(bool enabled)
 {
@@ -203,11 +231,17 @@ bool LivePreviewManager::sequenceDetectionEnabled() const
 
 QString LivePreviewManager::makeCacheKey(const QString& filePath, const QSize& targetSize, qreal position) const
 {
-    return QStringLiteral("%1|%2x%3|%4")
-        .arg(filePath)
-        .arg(targetSize.width())
-        .arg(targetSize.height())
-        .arg(position, 0, 'f', 3);
+    // Faster than chained .arg(); avoids temporary allocations
+    QString key;
+    key.reserve(filePath.size() + 32);
+    key += filePath;
+    key += '|';
+    key += QString::number(targetSize.width());
+    key += 'x';
+    key += QString::number(targetSize.height());
+    key += '|';
+    key += QString::number(position, 'f', 3);
+    return key;
 }
 
 void LivePreviewManager::enqueueDecode(const Request& request, const QString& cacheKey)
@@ -326,28 +360,12 @@ void LivePreviewManager::startDecodeTask(const Request& request, const QString& 
 void LivePreviewManager::storeFrame(const QString& key, const QPixmap& pixmap, qreal position, const QSize& size)
 {
     QMutexLocker locker(&m_mutex);
-    if (m_cache.size() >= m_maxCacheEntries) {
-        // Find least recently used entry
-        QString lruKey;
-        qint64 lruElapsed = -1;
-        for (auto it = m_cache.begin(); it != m_cache.end(); ++it) {
-            const qint64 elapsed = it->lastAccess.elapsed();
-            if (elapsed > lruElapsed) {
-                lruElapsed = elapsed;
-                lruKey = it.key();
-            }
-        }
-        if (!lruKey.isEmpty()) {
-            m_cache.remove(lruKey);
-        }
-    }
-
-    CachedEntry entry;
-    entry.pixmap = pixmap;
-    entry.position = position;
-    entry.size = size;
-    entry.lastAccess.start();
-    m_cache.insert(key, entry);
+    // Insert into QCache with cost=1 (entry count eviction)
+    auto* entry = new CachedEntry();
+    entry->pixmap = pixmap;
+    entry->position = position;
+    entry->size = size;
+    m_cache.insert(key, entry, 1);
 }
 
 bool LivePreviewManager::isImageSequence(const QString& filePath) const
@@ -388,7 +406,7 @@ QImage LivePreviewManager::loadImageFrame(const Request& request, QString& error
     QImage image;
 
     if (isHdrExtension(suffix) && OIIOImageLoader::isOIIOSupported(request.filePath)) {
-#ifdef HAVE_OPENIMAGEIO
+#if defined(HAVE_OPENIMAGEIO) && HAVE_OPENIMAGEIO
         image = OIIOImageLoader::loadImage(request.filePath, request.targetSize.width(), request.targetSize.height());
 #else
         image = QImage();
@@ -413,30 +431,14 @@ QImage LivePreviewManager::loadImageFrame(const Request& request, QString& error
 
 void LivePreviewManager::pruneSequenceMetaCache()
 {
-    QList<QString> staleKeys;
-    for (auto it = m_sequenceMetaCache.begin(); it != m_sequenceMetaCache.end(); ++it) {
-        if (it->lastScan.isValid() && it->lastScan.elapsed() > kSequenceMetaTtlMs) {
-            staleKeys.append(it.key());
-        }
-    }
-    for (const QString& key : staleKeys) {
-        m_sequenceMetaCache.remove(key);
-    }
-
-    while (m_sequenceMetaCache.size() > m_sequenceMetaLimit && !m_sequenceMetaCache.isEmpty()) {
-        QString lruKey;
-        qint64 lruElapsed = -1;
-        for (auto it = m_sequenceMetaCache.begin(); it != m_sequenceMetaCache.end(); ++it) {
-            const qint64 elapsed = it->lastScan.isValid() ? it->lastScan.elapsed() : 0;
-            if (elapsed > lruElapsed) {
-                lruElapsed = elapsed;
-                lruKey = it.key();
+    // TTL-based purge; size is enforced by QCache maxCost
+    const QList<QString> keys = m_sequenceMetaCache.keys();
+    for (const QString& key : keys) {
+        if (SequenceMeta* meta = m_sequenceMetaCache.object(key)) {
+            if (meta->lastScan.isValid() && meta->lastScan.elapsed() > kSequenceMetaTtlMs) {
+                m_sequenceMetaCache.remove(key);
             }
         }
-        if (lruKey.isEmpty()) {
-            break;
-        }
-        m_sequenceMetaCache.remove(lruKey);
     }
 }
 
@@ -445,15 +447,14 @@ LivePreviewManager::SequenceMeta LivePreviewManager::sequenceMetaFor(const QStri
     const QString head = sequenceHead(filePath);
     {
         QMutexLocker locker(&m_mutex);
-        auto it = m_sequenceMetaCache.find(head);
-        if (it != m_sequenceMetaCache.end()) {
-            if (!it->lastScan.isValid() || it->lastScan.elapsed() < kSequenceMetaTtlMs) {
-                if (!it->lastScan.isValid()) {
-                    it->lastScan.start();
+        if (SequenceMeta* cached = m_sequenceMetaCache.object(head)) {
+            if (!cached->lastScan.isValid() || cached->lastScan.elapsed() < kSequenceMetaTtlMs) {
+                if (!cached->lastScan.isValid()) {
+                    cached->lastScan.start();
                 } else {
-                    it->lastScan.restart();
+                    cached->lastScan.restart();
                 }
-                return *it;
+                return *cached; // return a copy
             }
         }
     }
@@ -493,16 +494,10 @@ LivePreviewManager::SequenceMeta LivePreviewManager::sequenceMetaFor(const QStri
     const qint64 curN = match.captured(1).toLongLong();
 
     // 1) Find first frame via binary search in [0, curN]
-    qint64 low = -1;           // known non-existing (virtual)
-    qint64 high = curN;        // known existing
-    while (high - low > 1) {
-        const qint64 mid = low + (high - low) / 2;
-        if (existsFrame(mid)) high = mid; else low = mid;
-    }
-    meta.firstFrame = high;
+    meta.firstFrame = Utils::binarySearchFirstTrue(-1, curN, existsFrame);
 
     // 2) Find last frame using halving from a large bound then binary search
-    const qint64 START_HUGE = 10000000; // 10M
+    const qint64 START_HUGE = kSeqUpperSearchStart;
     qint64 lastKnownExist = curN;
     qint64 lastKnownNonExist = -1;
 
@@ -514,9 +509,9 @@ LivePreviewManager::SequenceMeta LivePreviewManager::sequenceMetaFor(const QStri
     }
     if (lastKnownExist == curN) {
         qint64 up = std::max<qint64>(curN + 1, 2 * curN);
-        for (int i = 0; i < 32; ++i) {
+        for (int i = 0; i < kSeqUpperSearchMaxDoublings; ++i) {
             if (!existsFrame(up)) { lastKnownNonExist = up; break; }
-            if (up > 100000000) { lastKnownNonExist = up + 1; break; }
+            if (up > kSeqUpperSearchHardCap) { lastKnownNonExist = up + 1; break; }
             up *= 2;
         }
         if (lastKnownNonExist < 0) lastKnownNonExist = curN + 1;
@@ -524,14 +519,8 @@ LivePreviewManager::SequenceMeta LivePreviewManager::sequenceMetaFor(const QStri
         if (lastKnownNonExist < 0) lastKnownNonExist = lastKnownExist + 1;
     }
 
-    qint64 lo = lastKnownExist;
-    qint64 hi = lastKnownNonExist;
-    if (hi <= lo) hi = lo + 1;
-    while (hi - lo > 1) {
-        const qint64 mid = lo + (hi - lo) / 2;
-        if (existsFrame(mid)) lo = mid; else hi = mid;
-    }
-    meta.lastFrame = lo;
+    if (lastKnownNonExist <= lastKnownExist) lastKnownNonExist = lastKnownExist + 1;
+    meta.lastFrame = Utils::binarySearchLastTrue(lastKnownExist, lastKnownNonExist, existsFrame);
 
     if (meta.frames.isEmpty()) {
         if (!(meta.padding > 0 && meta.firstFrame >= 0 && meta.lastFrame >= meta.firstFrame)) {
@@ -544,7 +533,7 @@ LivePreviewManager::SequenceMeta LivePreviewManager::sequenceMetaFor(const QStri
     {
         QMutexLocker locker(&m_mutex);
         pruneSequenceMetaCache();
-        m_sequenceMetaCache.insert(head, meta);
+        m_sequenceMetaCache.insert(head, new SequenceMeta(meta), 1);
     }
 
     return meta;
@@ -605,7 +594,7 @@ QImage LivePreviewManager::loadSequenceFrame(const Request& request, QString& er
 
 QImage LivePreviewManager::loadVideoFrame(const Request& request, QString& error)
 {
-#ifndef HAVE_FFMPEG
+#if !defined(HAVE_FFMPEG) || !HAVE_FFMPEG
     Q_UNUSED(request);
     error = QStringLiteral("FFmpeg support not available");
     return {};
@@ -616,25 +605,31 @@ QImage LivePreviewManager::loadVideoFrame(const Request& request, QString& error
         ffmpegInit = true;
     }
 
-    AVFormatContext* fmt = nullptr;
+    // RAII deleters for FFmpeg resources
+    struct AvFormatCtxDeleter { void operator()(AVFormatContext* p) const { if (p) avformat_close_input(&p); } };
+    struct AvCodecCtxDeleter  { void operator()(AVCodecContext* p) const { if (p) avcodec_free_context(&p); } };
+    struct AvPacketDeleter    { void operator()(AVPacket* p) const { if (p) av_packet_free(&p); } };
+    struct AvFrameDeleter     { void operator()(AVFrame* p) const { if (p) av_frame_free(&p); } };
+    struct SwsCtxDeleter      { void operator()(SwsContext* p) const { if (p) sws_freeContext(p); } };
+
     QByteArray localPath = QFile::encodeName(request.filePath);
-    int openResult = avformat_open_input(&fmt, localPath.constData(), nullptr, nullptr);
+    AVFormatContext* fmtRaw = nullptr;
+    int openResult = avformat_open_input(&fmtRaw, localPath.constData(), nullptr, nullptr);
     if (openResult < 0) {
         error = QStringLiteral("avformat_open_input failed: %1").arg(ffmpegErrorString(openResult));
         return {};
     }
+    std::unique_ptr<AVFormatContext, AvFormatCtxDeleter> fmt(fmtRaw);
 
-    int infoResult = avformat_find_stream_info(fmt, nullptr);
+    int infoResult = avformat_find_stream_info(fmt.get(), nullptr);
     if (infoResult < 0) {
         error = QStringLiteral("avformat_find_stream_info failed: %1").arg(ffmpegErrorString(infoResult));
-        avformat_close_input(&fmt);
         return {};
     }
 
-    int vIdx = av_find_best_stream(fmt, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
+    int vIdx = av_find_best_stream(fmt.get(), AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
     if (vIdx < 0) {
         error = QStringLiteral("No video stream");
-        avformat_close_input(&fmt);
         return {};
     }
 
@@ -646,30 +641,24 @@ QImage LivePreviewManager::loadVideoFrame(const Request& request, QString& error
         QString codecName = desc ? QString::fromUtf8(desc->name) : QStringLiteral("?");
         error = QStringLiteral("Decoder not found (%1). Rebuild FFmpeg with this codec enabled.").arg(codecName);
         qWarning() << "[LivePreview] decoder missing for" << request.filePath << "codec" << codecName;
-        avformat_close_input(&fmt);
         return {};
     }
 
-    AVCodecContext* ctx = avcodec_alloc_context3(decoder);
+    std::unique_ptr<AVCodecContext, AvCodecCtxDeleter> ctx(avcodec_alloc_context3(decoder));
     if (!ctx) {
         error = QStringLiteral("avcodec_alloc_context3 failed");
-        avformat_close_input(&fmt);
         return {};
     }
 
-    int paramsResult = avcodec_parameters_to_context(ctx, params);
+    int paramsResult = avcodec_parameters_to_context(ctx.get(), params);
     if (paramsResult < 0) {
         error = QStringLiteral("avcodec_parameters_to_context failed: %1").arg(ffmpegErrorString(paramsResult));
-        avcodec_free_context(&ctx);
-        avformat_close_input(&fmt);
         return {};
     }
 
-    int openCodecResult = avcodec_open2(ctx, decoder, nullptr);
+    int openCodecResult = avcodec_open2(ctx.get(), decoder, nullptr);
     if (openCodecResult < 0) {
         error = QStringLiteral("avcodec_open2 failed: %1").arg(ffmpegErrorString(openCodecResult));
-        avcodec_free_context(&ctx);
-        avformat_close_input(&fmt);
         return {};
     }
 
@@ -682,34 +671,34 @@ QImage LivePreviewManager::loadVideoFrame(const Request& request, QString& error
         const double duration = stream->duration * av_q2d(stream->time_base);
         const double targetSec = duration * pos;
         int64_t ts = static_cast<int64_t>(targetSec / av_q2d(stream->time_base));
-        av_seek_frame(fmt, vIdx, ts, AVSEEK_FLAG_BACKWARD);
-        avcodec_flush_buffers(ctx);
+        av_seek_frame(fmt.get(), vIdx, ts, AVSEEK_FLAG_BACKWARD);
+        avcodec_flush_buffers(ctx.get());
     }
 
-    AVPacket* packet = av_packet_alloc();
-    AVFrame* frame = av_frame_alloc();
+    std::unique_ptr<AVPacket, AvPacketDeleter> packet(av_packet_alloc());
+    std::unique_ptr<AVFrame, AvFrameDeleter> frame(av_frame_alloc());
     QImage result;
 
-    SwsContext* sws = nullptr;
+    std::unique_ptr<SwsContext, SwsCtxDeleter> sws;
     bool done = false;
     int safety = 0;
 
-    while (!done && av_read_frame(fmt, packet) >= 0) {
+    while (!done && av_read_frame(fmt.get(), packet.get()) >= 0) {
         if (packet->stream_index != vIdx) {
-            av_packet_unref(packet);
+            av_packet_unref(packet.get());
             continue;
         }
 
-        int sendResult = avcodec_send_packet(ctx, packet);
+        int sendResult = avcodec_send_packet(ctx.get(), packet.get());
         if (sendResult < 0) {
             qWarning() << "[LivePreview] avcodec_send_packet failed for" << request.filePath << ":" << ffmpegErrorString(sendResult);
-            av_packet_unref(packet);
+            av_packet_unref(packet.get());
             continue;
         }
-        av_packet_unref(packet);
+        av_packet_unref(packet.get());
 
         while (!done) {
-            int ret = avcodec_receive_frame(ctx, frame);
+            int ret = avcodec_receive_frame(ctx.get(), frame.get());
             if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
                 break;
             }
@@ -722,9 +711,9 @@ QImage LivePreviewManager::loadVideoFrame(const Request& request, QString& error
             const int width = frame->width;
             const int height = frame->height;
             if (!sws) {
-                sws = sws_getContext(width, height, static_cast<AVPixelFormat>(frame->format),
-                                     width, height, AV_PIX_FMT_RGBA,
-                                     SWS_BICUBIC, nullptr, nullptr, nullptr);
+                sws.reset(sws_getContext(width, height, static_cast<AVPixelFormat>(frame->format),
+                                         width, height, AV_PIX_FMT_RGBA,
+                                         SWS_BICUBIC, nullptr, nullptr, nullptr));
             }
             if (!sws) {
                 error = QStringLiteral("Failed to create sws context");
@@ -735,7 +724,7 @@ QImage LivePreviewManager::loadVideoFrame(const Request& request, QString& error
             QImage image(width, height, QImage::Format_RGBA8888);
             uint8_t* dstData[4] = { image.bits(), nullptr, nullptr, nullptr };
             int dstLinesize[4] = { static_cast<int>(image.bytesPerLine()), 0, 0, 0 };
-            sws_scale(sws, frame->data, frame->linesize, 0, height, dstData, dstLinesize);
+            sws_scale(sws.get(), frame->data, frame->linesize, 0, height, dstData, dstLinesize);
 
             if (request.targetSize.isValid()) {
                 image = image.scaled(request.targetSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
@@ -745,16 +734,12 @@ QImage LivePreviewManager::loadVideoFrame(const Request& request, QString& error
             break;
         }
 
-        if (++safety > 256) {
+        if (++safety > kDecodeSafetyIterMax) {
             break;
         }
     }
 
-    if (sws) sws_freeContext(sws);
-    av_frame_free(&frame);
-    av_packet_free(&packet);
-    avcodec_free_context(&ctx);
-    avformat_close_input(&fmt);
+    // RAII handles cleanup of packet, frame, ctx, fmt, and sws
 
     if (result.isNull() && error.isEmpty()) {
         error = QStringLiteral("No frame decoded");

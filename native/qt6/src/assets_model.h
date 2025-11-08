@@ -8,6 +8,8 @@
 #include <QtQml/qqml.h>
 #include <QTimer>
 
+#include <QHash>
+
 struct AssetRow {
     int id = 0;
     QString fileName;
@@ -94,6 +96,9 @@ public:
     bool searchEntireDatabase() const { return m_searchEntireDatabase; }
     void setSearchEntireDatabase(bool enabled);
 
+    // Batch filter setter to coalesce a single reset
+    Q_INVOKABLE void setFilters(int typeFilter, int ratingFilter, const QStringList& tagNames, int tagMode);
+
     Q_INVOKABLE bool moveAssetToFolder(int assetId, int folderId);
     Q_INVOKABLE bool moveAssetsToFolder(const QVariantList& assetIds, int folderId);
     Q_INVOKABLE bool removeAssets(const QVariantList& assetIds);
@@ -125,6 +130,10 @@ private:
     bool matchesFilter(const AssetRow& row) const;
     void scheduleReload();
 
+    // Coalesced filter reset helpers
+    void scheduleFilterReset();
+    void performFilterReset();
+
     int m_folderId = 0;
     QVector<AssetRow> m_rows;
     QString m_searchQuery;
@@ -139,6 +148,10 @@ private:
     // Guard to avoid emitting dataChanged while the model is resetting
     bool m_isResetting = false;
 
+    QHash<int, QStringList> m_prefetchedTags; // cache for current filter pass
+
     QTimer m_reloadTimer;
     bool m_reloadScheduled = false;
+
+    bool m_filterResetPending = false;
 };

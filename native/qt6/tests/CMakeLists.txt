@@ -26,16 +26,119 @@ target_include_directories(test_db PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
 add_test(NAME test_db COMMAND test_db)
 
 # Test executable: test_models
-# Note: test_models is disabled due to DB singleton initialization issues
-# The DB tests in test_db.cpp provide sufficient coverage for model-related functionality
-# add_executable(test_models
-#     test_models.cpp
-# )
-#
-# target_link_libraries(test_models PRIVATE Qt6::Test)
-# target_include_directories(test_models PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
-#
-# add_test(NAME test_models COMMAND test_models)
+add_executable(test_models
+    test_models.cpp
+    ../src/assets_model.cpp
+    ../src/assets_model.h
+    ../src/db.cpp
+    ../src/db.h
+    ../src/log_manager.cpp
+    ../src/log_manager.h
+)
+
+target_link_libraries(test_models PRIVATE Qt6::Test Qt6::Sql Qt6::Core Qt6::Widgets)
+target_include_directories(test_models PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+
+add_test(NAME test_models COMMAND test_models)
+set_tests_properties(test_models PROPERTIES WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/install_run/bin")
+
+# Test executable: test_sequence_detector
+add_executable(test_sequence_detector
+    test_sequence_detector.cpp
+    ../src/sequence_detector.cpp
+    ../src/sequence_detector.h
+)
+
+target_link_libraries(test_sequence_detector PRIVATE Qt6::Test Qt6::Core)
+
+target_include_directories(test_sequence_detector PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+
+add_test(NAME test_sequence_detector COMMAND test_sequence_detector)
+set_tests_properties(test_sequence_detector PROPERTIES WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/install_run/bin")
 
 # Install test executables to bin directory
-install(TARGETS test_simple test_db DESTINATION bin)
+install(TARGETS test_simple test_db test_models test_sequence_detector DESTINATION bin)
+
+
+# Test executable: test_importer
+add_executable(test_importer
+    test_importer.cpp
+    ../src/importer.cpp
+    ../src/importer.h
+    ../src/db.cpp
+    ../src/db.h
+    ../src/log_manager.cpp
+    ../src/log_manager.h
+    ../src/sequence_detector.cpp
+    ../src/sequence_detector.h
+    ../src/file_utils.h
+)
+
+target_link_libraries(test_importer PRIVATE Qt6::Test Qt6::Sql Qt6::Core Qt6::Widgets)
+
+target_include_directories(test_importer PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+
+add_test(NAME test_importer COMMAND test_importer)
+set_tests_properties(test_importer PROPERTIES WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/install_run/bin")
+
+# Install test executables to bin directory (append)
+install(TARGETS test_importer DESTINATION bin)
+
+
+# Test executable: test_utils
+add_executable(test_utils
+    test_utils.cpp
+    ../src/utils.h
+)
+
+target_link_libraries(test_utils PRIVATE Qt6::Test Qt6::Core)
+
+target_include_directories(test_utils PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+
+add_test(NAME test_utils COMMAND test_utils)
+set_tests_properties(test_utils PROPERTIES WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/install_run/bin")
+
+install(TARGETS test_utils DESTINATION bin)
+
+# Test executable: test_live_preview_manager
+add_executable(test_live_preview_manager
+    test_live_preview_manager.cpp
+    ../src/live_preview_manager.cpp
+    ../src/live_preview_manager.h
+    ../src/oiio_image_loader.cpp
+    ../src/oiio_image_loader.h
+    ../src/utils.cpp
+    ../src/utils.h
+)
+
+# Needs Widgets for QPixmap, and Concurrent for QtConcurrent::run
+target_link_libraries(test_live_preview_manager PRIVATE Qt6::Test Qt6::Core Qt6::Widgets Qt6::Concurrent)
+
+target_include_directories(test_live_preview_manager PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+
+add_test(NAME test_live_preview_manager COMMAND test_live_preview_manager)
+set_tests_properties(test_live_preview_manager PROPERTIES WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/install_run/bin")
+
+
+# Ensure external heavy features are disabled for this unit test to avoid extra SDK deps
+# Use value-0 so we can leave directory-level defines intact and rely on #if defined(X) && X guards
+# This keeps other tests and the main app unaffected
+target_compile_definitions(test_live_preview_manager PRIVATE HAVE_OPENIMAGEIO=0 HAVE_FFMPEG=0)
+
+install(TARGETS test_live_preview_manager DESTINATION bin)
+
+# Test executable: test_media_converter_worker
+add_executable(test_media_converter_worker
+    test_media_converter_worker.cpp
+    ../src/media_converter_worker.cpp
+    ../src/media_converter_worker.h
+)
+
+target_link_libraries(test_media_converter_worker PRIVATE Qt6::Test Qt6::Core Qt6::Widgets)
+
+target_include_directories(test_media_converter_worker PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+
+add_test(NAME test_media_converter_worker COMMAND test_media_converter_worker)
+set_tests_properties(test_media_converter_worker PROPERTIES WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/install_run/bin")
+
+install(TARGETS test_media_converter_worker DESTINATION bin)

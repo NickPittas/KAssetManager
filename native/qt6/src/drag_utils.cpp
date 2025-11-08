@@ -11,6 +11,7 @@
 #ifdef _WIN32
 #include <windows.h>
 #include <shellapi.h>
+#include <ShlObj.h>
 #include "virtual_drag.h"
 #endif
 
@@ -80,11 +81,13 @@ bool DragUtils::startVirtualDragSampleFallbackCFHDrop() {
 
 bool DragUtils::showInExplorer(const QString &path) {
 #ifdef _WIN32
-    QString p = QDir::toNativeSeparators(path);
-    QString param = QStringLiteral("/select,\"%1\"").arg(p);
-    std::wstring wparam = param.toStdWString();
-    HINSTANCE res = ShellExecuteW(nullptr, L"open", L"explorer.exe", wparam.c_str(), nullptr, SW_SHOWNORMAL);
-    return (UINT_PTR)res > 32;
+    const QString native = QDir::toNativeSeparators(path);
+    const std::wstring w = native.toStdWString();
+    PIDLIST_ABSOLUTE pidl = ILCreateFromPathW(w.c_str());
+    if (!pidl) return false;
+    HRESULT hr = SHOpenFolderAndSelectItems(pidl, 0, nullptr, 0);
+    ILFree(pidl);
+    return SUCCEEDED(hr);
 #else
     QFileInfo fi(path);
     return QDesktopServices::openUrl(QUrl::fromLocalFile(fi.absolutePath()));

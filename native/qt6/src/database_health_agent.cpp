@@ -242,13 +242,21 @@ QVector<HealthCheckResult> DatabaseHealthAgent::checkIndexes() {
     };
     
     int missingIndexes = 0;
+    q.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name=?");
     for (const QString& indexName : expectedIndexes) {
-        q.exec(QString("SELECT name FROM sqlite_master WHERE type='index' AND name='%1'").arg(indexName));
+        q.bindValue(0, indexName);
+        if (!q.exec()) {
+            // Treat query failure as missing index to be conservative
+            missingIndexes++;
+            q.finish();
+            continue;
+        }
         if (!q.next()) {
             missingIndexes++;
         }
+        q.finish();
     }
-    
+
     if (missingIndexes > 0) {
         results.append(HealthCheckResult(
             "Indexes",

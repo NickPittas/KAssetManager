@@ -1,4 +1,6 @@
 #include "media_converter_worker.h"
+#include "utils.h"
+
 #include <QFileInfo>
 #include <QDir>
 #include <QStandardPaths>
@@ -7,6 +9,12 @@
 #include <QRegularExpression>
 #include <QSet>
 
+
+namespace {
+constexpr qint64 kSeqUpperSearchStart = 10000000; // 10M
+constexpr int kSeqUpperSearchMaxDoublings = 32;
+constexpr qint64 kSeqUpperSearchHardCap = 100000000; // 100M
+}
 
 #include <algorithm>
 
@@ -24,22 +32,10 @@ void MediaConverterWorker::start(const QVector<Task>& tasks)
     m_tasks = tasks;
     m_index = -1;
     m_cancelling = false;
-    m_paused = false;
     emit queueStarted(m_tasks.size());
     startNext();
 }
 
-void MediaConverterWorker::pause()
-{
-    // Disabled globally per user request to avoid OS-level thread suspension risks
-    emit logLine("[Pause disabled]");
-}
-
-void MediaConverterWorker::resume()
-{
-    // Disabled globally per user request to avoid OS-level thread suspension risks
-    emit logLine("[Resume disabled]");
-}
 
 void MediaConverterWorker::cancelAll()
 {
@@ -276,16 +272,10 @@ qint64 MediaConverterWorker::countSequenceFrames(const QFileInfo& inFi, const QR
     const qint64 curN = mm.captured(1).toLongLong();
 
     // 1) Find first frame: binary search in [0, curN]
-    qint64 low = -1;              // known non-existing (virtual)
-    qint64 high = curN;           // known existing
-    while (high - low > 1) {
-        qint64 mid = low + (high - low) / 2;
-        if (existsFrame(mid)) high = mid; else low = mid;
-    }
-    const qint64 first = high;
+    const qint64 first = Utils::binarySearchFirstTrue(-1, curN, existsFrame);
 
     // 2) Find last frame using high-start halving then binary search
-    const qint64 START_HUGE = 10000000; // 10M
+    const qint64 START_HUGE = kSeqUpperSearchStart;
     qint64 lastKnownExist = curN;
     qint64 lastKnownNonExist = -1;
 
@@ -301,9 +291,9 @@ qint64 MediaConverterWorker::countSequenceFrames(const QFileInfo& inFi, const QR
         // Find a non-existing number just above current by doubling until not found
         qint64 up = std::max<qint64>(curN + 1, 2 * curN);
         // Cap to avoid extremely large paths; we just need one non-existing
-        for (int i = 0; i < 32; ++i) {
+        for (int i = 0; i < kSeqUpperSearchMaxDoublings; ++i) {
             if (!existsFrame(up)) { lastKnownNonExist = up; break; }
-            if (up > 100000000) { lastKnownNonExist = up + 1; break; } // force a non-existing cap
+            if (up > kSeqUpperSearchHardCap) { lastKnownNonExist = up + 1; break; } // force a non-existing cap
             up *= 2;
         }
         if (lastKnownNonExist < 0) lastKnownNonExist = curN + 1; // fallback
@@ -313,15 +303,9 @@ qint64 MediaConverterWorker::countSequenceFrames(const QFileInfo& inFi, const QR
     }
 
     // Now binary search between [lastKnownExist, lastKnownNonExist] to find the maximum existing frame
-    qint64 lo = lastKnownExist;          // exists
-    qint64 hi = lastKnownNonExist;       // does not exist
     // Guard against degenerate cases
-    if (hi <= lo) hi = lo + 1;
-    while (hi - lo > 1) {
-        qint64 mid = lo + (hi - lo) / 2;
-        if (existsFrame(mid)) lo = mid; else hi = mid;
-    }
-    const qint64 last = lo;
+    if (lastKnownNonExist <= lastKnownExist) lastKnownNonExist = lastKnownExist + 1;
+    const qint64 last = Utils::binarySearchLastTrue(lastKnownExist, lastKnownNonExist, existsFrame);
 
     const qint64 total = (last >= first) ? (last - first + 1) : 1;
     return total;
@@ -348,6 +332,15 @@ bool MediaConverterWorker::buildCommand(const Task& t, QString& program, QString
     const QFileInfo inFi(t.sourcePath);
     if (!inFi.exists()) { err = QString("Source not found: %1").arg(t.sourcePath); return false; }
 
+    // Helper: prevent paths starting with '-' from being interpreted as flags by tools when used without a preceding option
+    auto safePath = [](const QString& p) -> QString {
+        QFileInfo fi(p);
+        if (!fi.isAbsolute() && p.startsWith('-')) {
+            return QStringLiteral("./") + p;
+        }
+        return p;
+    };
+
     // Derive base output name
     const QString baseName = inFi.completeBaseName();
     const QString outDir = t.outputDir.isEmpty() ? inFi.dir().absolutePath() : t.outputDir;
@@ -362,7 +355,7 @@ bool MediaConverterWorker::buildCommand(const Task& t, QString& program, QString
         program = m_magickPath;
 
         // Input first for ImageMagick
-        args << inFi.absoluteFilePath();
+        args << safePath(inFi.absoluteFilePath());
 
         // Scaling (preserve aspect by default): WxH, Wx, or xH
         const int W = t.scaleWidth, H = t.scaleHeight;
@@ -387,7 +380,7 @@ bool MediaConverterWorker::buildCommand(const Task& t, QString& program, QString
         }
 
         if (t.conflict == ConflictAction::AutoRename) outPath = uniqueOutPath(outPath);
-        args << outPath;
+        args << safePath(outPath);
         return true;
     }
 
@@ -522,7 +515,7 @@ bool MediaConverterWorker::buildCommand(const Task& t, QString& program, QString
     }
     // For Overwrite we rely on -y above; for Skip handled earlier
 
-    args << outPath;
+    args << safePath(outPath);
     return true;
 }
 

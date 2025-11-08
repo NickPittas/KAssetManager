@@ -4,7 +4,7 @@
 
 
 
-#ifdef HAVE_OPENIMAGEIO
+#if defined(HAVE_OPENIMAGEIO) && HAVE_OPENIMAGEIO
 #include <OpenImageIO/imageio.h>
 #include <OpenImageIO/imagebuf.h>
 #include <OpenImageIO/imagebufalgo.h>
@@ -12,7 +12,7 @@ using namespace OIIO;
 #endif
 
 bool OIIOImageLoader::isOIIOSupported(const QString& filePath) {
-#ifdef HAVE_OPENIMAGEIO
+#if defined(HAVE_OPENIMAGEIO) && HAVE_OPENIMAGEIO
     QFileInfo fi(filePath);
     QString ext = fi.suffix().toLower();
 
@@ -34,18 +34,17 @@ bool OIIOImageLoader::isOIIOSupported(const QString& filePath) {
 }
 
 QImage OIIOImageLoader::loadImage(const QString& filePath, int maxWidth, int maxHeight, ColorSpace colorSpace) {
-#ifdef HAVE_OPENIMAGEIO
+#if defined(HAVE_OPENIMAGEIO) && HAVE_OPENIMAGEIO
     qDebug() << "[OIIOImageLoader] Loading image:" << filePath;
 
-    // Open the image
-    auto inp = ImageInput::open(filePath.toStdString());
-    if (!inp) {
-        qWarning() << "[OIIOImageLoader] Failed to open:" << filePath;
-        qWarning() << "[OIIOImageLoader] Error:" << QString::fromStdString(OIIO::geterror());
+    // Use ImageBuf to manage the input resource (RAII) and avoid manual ImageInput handling
+    ImageBuf buf(filePath.toStdString());
+    if (!buf.read(0, 0, true, TypeDesc::FLOAT)) {
+        qWarning() << "[OIIOImageLoader] Failed to read image data";
         return QImage();
     }
 
-    const ImageSpec &spec = inp->spec();
+    const ImageSpec &spec = buf.spec();
     int width = spec.width;
     int height = spec.height;
     int channels = spec.nchannels;
@@ -67,16 +66,6 @@ QImage OIIOImageLoader::loadImage(const QString& filePath, int maxWidth, int max
             qDebug() << "[OIIOImageLoader] Will resize to:" << targetWidth << "x" << targetHeight;
         }
     }
-
-    // Read the image into an ImageBuf
-    ImageBuf buf(filePath.toStdString());
-    if (!buf.read(0, 0, true, TypeDesc::FLOAT)) {
-        qWarning() << "[OIIOImageLoader] Failed to read image data";
-        inp->close();
-        return QImage();
-    }
-
-    inp->close();
 
     // Resize if needed
     if (needsResize) {
@@ -149,7 +138,7 @@ QImage OIIOImageLoader::loadImage(const QString& filePath, int maxWidth, int max
 }
 
 QImage OIIOImageLoader::toneMapHDR(const float* data, int width, int height, int channels, ColorSpace colorSpace, float exposure) {
-#ifdef HAVE_OPENIMAGEIO
+#if defined(HAVE_OPENIMAGEIO) && HAVE_OPENIMAGEIO
     QString colorSpaceName;
     switch (colorSpace) {
         case ColorSpace::Linear: colorSpaceName = "Linear"; break;
@@ -219,7 +208,7 @@ QImage OIIOImageLoader::toneMapHDR(const float* data, int width, int height, int
 }
 
 float OIIOImageLoader::reinhardToneMap(float value) {
-#ifdef HAVE_OPENIMAGEIO
+#if defined(HAVE_OPENIMAGEIO) && HAVE_OPENIMAGEIO
     // Simple Reinhard tone mapping: x / (1 + x)
     return value / (1.0f + value);
 #else
@@ -229,7 +218,7 @@ float OIIOImageLoader::reinhardToneMap(float value) {
 }
 
 float OIIOImageLoader::linearToSRGB(float value) {
-#ifdef HAVE_OPENIMAGEIO
+#if defined(HAVE_OPENIMAGEIO) && HAVE_OPENIMAGEIO
     // sRGB gamma curve
     value = clamp(value, 0.0f, 1.0f);
     if (value <= 0.0031308f) {
@@ -244,7 +233,7 @@ float OIIOImageLoader::linearToSRGB(float value) {
 }
 
 float OIIOImageLoader::linearToRec709(float value) {
-#ifdef HAVE_OPENIMAGEIO
+#if defined(HAVE_OPENIMAGEIO) && HAVE_OPENIMAGEIO
     // Rec.709 gamma curve (similar to sRGB but slightly different)
     value = clamp(value, 0.0f, 1.0f);
     if (value < 0.018f) {

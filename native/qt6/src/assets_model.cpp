@@ -178,45 +178,41 @@ void AssetsModel::setSearchQuery(const QString& query) {
 void AssetsModel::setTypeFilter(int f) {
     if (m_typeFilter == f) return;
     m_typeFilter = f;
-    m_isResetting = true;
-    beginResetModel();
-    rebuildFilter();
-    endResetModel();
-    m_isResetting = false;
+    scheduleFilterReset();
     emit typeFilterChanged();
 }
 
 void AssetsModel::setRatingFilter(int f) {
     if (m_ratingFilter == f) return;
     m_ratingFilter = f;
-    m_isResetting = true;
-    beginResetModel();
-    rebuildFilter();
-    endResetModel();
-    m_isResetting = false;
+    scheduleFilterReset();
 }
 
 void AssetsModel::setSelectedTagNames(const QStringList& tags) {
     if (m_selectedTagNames == tags) return;
     m_selectedTagNames = tags;
     // Changing tag selection may require loading assets across folders
-    m_isResetting = true;
-    beginResetModel();
-    rebuildFilter();
-    endResetModel();
-    m_isResetting = false;
+    scheduleFilterReset();
     emit selectedTagNamesChanged();
 }
 
 void AssetsModel::setTagFilterMode(int mode) {
     if (m_tagFilterMode == mode) return;
     m_tagFilterMode = mode;
-    m_isResetting = true;
-    beginResetModel();
-    rebuildFilter();
-    endResetModel();
-    m_isResetting = false;
+    scheduleFilterReset();
     emit tagFilterModeChanged();
+}
+
+
+void AssetsModel::setFilters(int typeFilter, int ratingFilter, const QStringList& tagNames, int tagMode) {
+    bool anyChanged = false;
+    if (m_typeFilter != typeFilter) { m_typeFilter = typeFilter; anyChanged = true; emit typeFilterChanged(); }
+    if (m_ratingFilter != ratingFilter) { m_ratingFilter = ratingFilter; anyChanged = true; }
+    if (m_selectedTagNames != tagNames) { m_selectedTagNames = tagNames; anyChanged = true; emit selectedTagNamesChanged(); }
+    if (m_tagFilterMode != tagMode) { m_tagFilterMode = tagMode; anyChanged = true; emit tagFilterModeChanged(); }
+    if (!anyChanged) return;
+    // Apply a single reset for all filter changes
+    performFilterReset();
 }
 
 void AssetsModel::setRecursiveMode(bool recursive) {
@@ -273,10 +269,9 @@ void AssetsModel::query(){
             }
 
             // Build IN clause for asset IDs
-            QString placeholders = QString("?").repeated(assetIds.size());
-            for (int i = 1; i < assetIds.size(); ++i) {
-                placeholders.replace(i * 2 - 1, 1, ",?");
-            }
+            QStringList marks; marks.reserve(assetIds.size());
+            for (int i = 0; i < assetIds.size(); ++i) marks << "?";
+            const QString placeholders = marks.join(',');
 
             q.prepare(QString("SELECT id,file_name,file_path,file_size,COALESCE(rating,-1),virtual_folder_id,COALESCE(is_sequence,0),sequence_pattern,sequence_start_frame,sequence_end_frame,sequence_frame_count,COALESCE(sequence_has_gaps,0),COALESCE(sequence_gap_count,0),sequence_version FROM assets WHERE id IN (%1) ORDER BY file_name").arg(placeholders));
             LogManager::instance().addLog(QString("DB query (assets by folder %1, recursive) started - %2 assets").arg(m_folderId).arg(assetIds.size()), "DEBUG");
@@ -313,8 +308,9 @@ void AssetsModel::query(){
         r.sequenceVersion = q.value(13).toString();
 
         QFileInfo fi(r.filePath);
-        r.fileType = fi.exists() ? fi.suffix().toLower() : QString();
-        r.lastModified = fi.exists() ? fi.lastModified() : QDateTime();
+        const bool exists = fi.exists();
+        r.fileType = exists ? fi.suffix().toLower() : QString();
+        r.lastModified = exists ? fi.lastModified() : QDateTime();
         m_rows.push_back(r);
         ++rows;
     }
@@ -344,6 +340,16 @@ void AssetsModel::rebuildFilter() {
     m_filteredRowIndexes.clear();
     m_filteredRowIndexes.reserve(m_rows.size());
 
+    // Pre-fetch tags map to avoid N+1 queries when tag filtering is active
+    if (!m_selectedTagNames.isEmpty()) {
+        QList<int> ids; ids.reserve(m_rows.size());
+        for (const auto& r : m_rows) ids << r.id;
+        m_prefetchedTags = DB::instance().tagsForAssets(ids);
+    } else {
+        m_prefetchedTags.clear();
+    }
+
+
     for (int i = 0; i < m_rows.size(); ++i) {
         if (matchesFilter(m_rows[i])) {
             m_filteredRowIndexes.append(i);
@@ -369,11 +375,11 @@ bool AssetsModel::matchesFilter(const AssetRow& row) const {
     }
 
     if (!m_selectedTagNames.isEmpty()) {
-        QStringList assetTags = DB::instance().tagsForAsset(row.id);
+        const QStringList assetTags = m_prefetchedTags.value(row.id);
         bool hasAnyTag = false;
         bool hasAllTags = true;
         for (const QString& selectedTag : m_selectedTagNames) {
-            bool assetHasTag = assetTags.contains(selectedTag);
+            const bool assetHasTag = assetTags.contains(selectedTag);
             if (assetHasTag) {
                 hasAnyTag = true;
             } else {
@@ -443,4 +449,26 @@ void AssetsModel::scheduleReload() {
         m_reloadTimer.start();
     }
     m_reloadScheduled = true;
+}
+
+
+void AssetsModel::scheduleFilterReset() {
+    if (m_filterResetPending)
+        return;
+    m_filterResetPending = true;
+    // Coalesce multiple calls within the same event loop turn
+    QMetaObject::invokeMethod(this, [this]{
+        if (!m_filterResetPending)
+            return;
+        m_filterResetPending = false;
+        performFilterReset();
+    }, Qt::QueuedConnection);
+}
+
+void AssetsModel::performFilterReset() {
+    m_isResetting = true;
+    beginResetModel();
+    rebuildFilter();
+    endResetModel();
+    m_isResetting = false;
 }

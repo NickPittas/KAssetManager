@@ -1,0 +1,6 @@
+Checks: '-*,clang-analyzer-*,bugprone-*,performance-*,modernize-*,-modernize-use-trailing-return-type'
+WarningsAsErrors: ''
+HeaderFilterRegex: 'native/qt6/src/.*'
+AnalyzeTemporaryDtors: false
+FormatStyle: none
+
