@@ -1,4 +1,4 @@
-#include "mainwindow.h"
+﻿#include "mainwindow.h"
 #include "virtual_drag.h"
 #include "virtual_folders.h"
 #include "assets_model.h"
@@ -459,7 +459,7 @@ void MainWindow::setupUi()
     toolbarLayout->addStretch();
 
     // Lock checkbox for project folders
-    lockCheckBox = new QCheckBox("🔒 Lock Assets", toolbar);
+    lockCheckBox = new QCheckBox("ðŸ”’ Lock Assets", toolbar);
     lockCheckBox->setChecked(true); // Locked by default
     lockCheckBox->setStyleSheet(
         "QCheckBox { color: #ff4444; font-size: 12px; font-weight: bold; }"
@@ -1531,7 +1531,7 @@ void MainWindow::onFmShowContextMenu(const QPoint &pos)
     menu.addSeparator();
     QAction *addLibA = menu.addAction("Add to Asset Library", this, &MainWindow::onAddSelectionToAssetLibrary);
 
-    QAction *favA = menu.addAction("Add to Favorites", this, &MainWindow::onFmAddToFavorites);
+    QAction *favA = menu.addAction("Add to Favorites", fileManagerWidget, &FileManagerWidget::onFmAddToFavorites);
 
     menu.addSeparator();
     QAction *openInExplorerA = menu.addAction("Open in Explorer");
@@ -2164,18 +2164,18 @@ void MainWindow::onAssetContextMenu(const QPoint &pos)
         QMenu *setRatingMenu = menu.addMenu("Set Rating");
         setRatingMenu->setStyleSheet(menu.styleSheet());
 
-        QAction *rating0 = setRatingMenu->addAction("☆☆☆☆☆ (Clear rating)");
+        QAction *rating0 = setRatingMenu->addAction("â˜†â˜†â˜†â˜†â˜† (Clear rating)");
         rating0->setData(-1);
         setRatingMenu->addSeparator();
-        QAction *rating1 = setRatingMenu->addAction("★☆☆☆☆");
+        QAction *rating1 = setRatingMenu->addAction("â˜…â˜†â˜†â˜†â˜†");
         rating1->setData(1);
-        QAction *rating2 = setRatingMenu->addAction("★★☆☆☆");
+        QAction *rating2 = setRatingMenu->addAction("â˜…â˜…â˜†â˜†â˜†");
         rating2->setData(2);
-        QAction *rating3 = setRatingMenu->addAction("★★★☆☆");
+        QAction *rating3 = setRatingMenu->addAction("â˜…â˜…â˜…â˜†â˜†");
         rating3->setData(3);
-        QAction *rating4 = setRatingMenu->addAction("★★★★☆");
+        QAction *rating4 = setRatingMenu->addAction("â˜…â˜…â˜…â˜…â˜†");
         rating4->setData(4);
-        QAction *rating5 = setRatingMenu->addAction("★★★★★");
+        QAction *rating5 = setRatingMenu->addAction("â˜…â˜…â˜…â˜…â˜…");
         rating5->setData(5);
 
         menu.addSeparator();
@@ -2709,7 +2709,7 @@ void MainWindow::updateInfoPanel()
             if (hasGaps) {
                 int expectedFrames = endFrame - startFrame + 1;
                 int missingFrames = expectedFrames - frameCount;
-                dimensionsStr += QString("\n⚠ WARNING: %1 gap(s), %2 missing frame(s)")
+                dimensionsStr += QString("\nâš  WARNING: %1 gap(s), %2 missing frame(s)")
                     .arg(gapCount).arg(missingFrames);
             }
 
@@ -5248,7 +5248,7 @@ if (isExcelFile(ext)) {
 
 #ifdef HAVE_QT_PDF
     if (isAiFile(ext)) {
-        // Many .ai files embed PDF — try to render with PDF engine
+        // Many .ai files embed PDF â€” try to render with PDF engine
         auto err = fmPdfDoc ? fmPdfDoc->load(path) : QPdfDocument::Error::Unknown;
         if (fmPdfDoc && err == QPdfDocument::Error::None && fmPdfDoc->pageCount()>0) {
             hideNonImageWidgets();

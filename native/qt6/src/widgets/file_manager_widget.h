@@ -183,6 +183,11 @@ private slots:
     void onFmThumbnailSizeChanged(int size);
     void onFmGroupSequencesToggled(bool checked);
     void onFmHideFoldersToggled(bool checked);
+    void onFmRemoveFavorite();
+    void onFmFavoriteActivated(QListWidgetItem* item);
+
+public slots:
+    void onFmAddToFavorites();
 };
 
 

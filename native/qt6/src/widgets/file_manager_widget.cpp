@@ -31,6 +31,8 @@
 #include <QToolButton>
 #include <QTreeView>
 #include <QVBoxLayout>
+#include <QSortFilterProxyModel>
+#include <QFileInfo>
 
 FileManagerWidget::FileManagerWidget(MainWindow* host, QWidget* parent)
     : QWidget(parent)
@@ -72,17 +74,37 @@ void FileManagerWidget::setupUi()
     fmFavoritesList->setStyleSheet("QListWidget{background:#0a0a0a; border:none; color:#fff;} QListWidget::item:selected{background:#2f3a4a;}");
     fmFavoritesList->setContextMenuPolicy(Qt::CustomContextMenu);
     if (m_host) {
-        connect(fmFavoritesList, &QListWidget::itemDoubleClicked, m_host, &MainWindow::onFmFavoriteActivated);
+        connect(fmFavoritesList, &QListWidget::itemDoubleClicked, this, &FileManagerWidget::onFmFavoriteActivated);
     }
     connect(fmFavoritesList, &QListWidget::customContextMenuRequested, this, [this](const QPoint &pos){
         if (!fmFavoritesList || !m_host) return;
         QPoint gp = fmFavoritesList->viewport()->mapToGlobal(pos);
-        QMenu m; QAction *rem = m.addAction("Remove Favorite", m_host, &MainWindow::onFmRemoveFavorite);
+        QMenu m; QAction *rem = m.addAction("Remove Favorite", this, &FileManagerWidget::onFmRemoveFavorite);
         rem->setEnabled(fmFavoritesList->currentItem()!=nullptr);
         m.exec(gp);
     });
     favLayout->addWidget(fmFavoritesList);
-    // load favorites will be handled in MainWindow for now
+    // Load favorites from settings
+    {
+        QSettings s("AugmentCode", "KAssetManager");
+        int size = s.beginReadArray("FileManager/Favorites");
+        for (int i=0;i<size;++i) {
+            s.setArrayIndex(i);
+            const QString p = s.value("path").toString();
+            if (!p.isEmpty()) fmFavorites << p;
+        }
+        s.endArray();
+        fmFavorites.removeDuplicates();
+        if (fmFavoritesList) {
+            fmFavoritesList->clear();
+            for (const QString &p : fmFavorites) {
+                QListWidgetItem *it = new QListWidgetItem(QIcon::fromTheme("star"), QFileInfo(p).fileName());
+                it->setToolTip(p);
+                it->setData(Qt::UserRole, p);
+                fmFavoritesList->addItem(it);
+            }
+        }
+    }
 
     // Folder tree
     fmTreeModel->setRootPath(""); // show drives at root
@@ -392,3 +414,86 @@ void FileManagerWidget::onFmHideFoldersToggled(bool checked)
     if (fmProxyModel) fmProxyModel->setHideFolders(checked);
 }
 
+
+// Helpers local to this translation unit for selection mapping and favorites actions
+namespace {
+    static QStringList fm_selectedPaths(QFileSystemModel *model, QListView *grid, QTableView *list, QStackedWidget *stack)
+    {
+        QStringList out;
+        auto mapToSource = [](const QModelIndex &viewIdx) -> QModelIndex {
+            if (!viewIdx.isValid()) return viewIdx;
+            auto proxy = qobject_cast<const QSortFilterProxyModel*>(viewIdx.model());
+            if (proxy) return proxy->mapToSource(viewIdx);
+            return viewIdx;
+        };
+        if (!model || !grid || !list || !stack) return out;
+        if (stack->currentIndex() == 0) {
+            const auto idxs = grid->selectionModel() ? grid->selectionModel()->selectedIndexes() : QModelIndexList{};
+            for (const QModelIndex &idx : idxs) {
+                if (idx.column() != 0) continue;
+                QModelIndex src = mapToSource(idx);
+                if (src.isValid()) out << model->filePath(src);
+            }
+        } else {
+            const auto rows = list->selectionModel() ? list->selectionModel()->selectedRows() : QModelIndexList{};
+            for (const QModelIndex &idx : rows) {
+                QModelIndex src = mapToSource(idx);
+                if (src.isValid()) out << model->filePath(src);
+            }
+        }
+        out.removeDuplicates();
+        return out;
+    }
+}
+
+void FileManagerWidget::onFmAddToFavorites()
+{
+    const QStringList sel = fm_selectedPaths(fmDirModel, reinterpret_cast<QListView*>(fmGridView), reinterpret_cast<QTableView*>(fmListView), fmViewStack);
+    if (sel.isEmpty()) return;
+    bool changed = false;
+    for (const QString &p : sel) {
+        if (!fmFavorites.contains(p)) { fmFavorites << p; changed = true; }
+    }
+    if (!changed) return;
+    fmFavorites.removeDuplicates();
+
+    // Refresh list widget
+    if (fmFavoritesList) {
+        fmFavoritesList->clear();
+        for (const QString &p : fmFavorites) {
+            QListWidgetItem *it = new QListWidgetItem(QIcon::fromTheme("star"), QFileInfo(p).fileName());
+            it->setToolTip(p);
+            it->setData(Qt::UserRole, p);
+            fmFavoritesList->addItem(it);
+        }
+    }
+
+    // Persist
+    QSettings s("AugmentCode", "KAssetManager");
+    s.beginWriteArray("FileManager/Favorites");
+    for (int i=0;i<fmFavorites.size();++i) { s.setArrayIndex(i); s.setValue("path", fmFavorites.at(i)); }
+    s.endArray();
+}
+
+void FileManagerWidget::onFmRemoveFavorite()
+{
+    if (!fmFavoritesList) return;
+    QListWidgetItem *it = fmFavoritesList->currentItem();
+    if (!it) return;
+    const QString path = it->data(Qt::UserRole).toString();
+    fmFavorites.removeAll(path);
+    delete it;
+
+    QSettings s("AugmentCode", "KAssetManager");
+    s.beginWriteArray("FileManager/Favorites");
+    for (int i=0;i<fmFavorites.size();++i) { s.setArrayIndex(i); s.setValue("path", fmFavorites.at(i)); }
+    s.endArray();
+}
+
+void FileManagerWidget::onFmFavoriteActivated(QListWidgetItem* item)
+{
+    if (!item) return;
+    const QString path = item->data(Qt::UserRole).toString();
+    if (path.isEmpty()) return;
+    emit navigateToPathRequested(path, true);
+}
