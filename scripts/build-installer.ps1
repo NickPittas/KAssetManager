@@ -46,7 +46,7 @@ if (-not $SkipBuild) {
     }
     
     # Run build script with Package flag
-    & powershell -NoProfile -ExecutionPolicy Bypass -File $BuildScript -Generator "Visual Studio 17 2022" -Package
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $BuildScript -Generator "Ninja" -Package
     
     if ($LASTEXITCODE -ne 0) {
         Write-Host "ERROR: Build failed!" -ForegroundColor Red
@@ -129,7 +129,7 @@ try {
     Write-Host ""
     
     # Find the installer file
-    $InstallerFile = Get-ChildItem -Path $DistDir -Filter "KAssetManager-Setup-*.exe" | Select-Object -First 1
+    $InstallerFile = Get-ChildItem -Path $DistDir -Filter "KAssetManager-Setup-*.exe" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
     
     if ($InstallerFile) {
         Write-Host "Installer location:" -ForegroundColor Cyan
@@ -148,7 +148,7 @@ try {
         Write-Host ""
         
         # Save hash to file
-        $HashFile = Join-Path $DistDir "KAssetManager-Setup-0.2.0.exe.sha256"
+        $HashFile = Join-Path $DistDir ("$($InstallerFile.Name).sha256")
         $Hash.Hash | Out-File -FilePath $HashFile -Encoding ASCII
         Write-Host "Hash saved to: $HashFile" -ForegroundColor Green
         Write-Host ""

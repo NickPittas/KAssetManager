@@ -65,6 +65,7 @@ KAsset Manager is a native Windows desktop application built with Qt 6 that prov
 - **Videos**: MOV, MP4, AVI, MP5, MKV, WMV (via FFmpeg)
 - **Audio**: MP3, WAV, OGG, FLAC
 - **Sequences**: Automatic detection of numbered image sequences
+- **External DnD aware:** Explorer/Desktop receives individual frame files; Nuke/After Effects receive folder paths (single sequence import)
 
 ## Quick Start
 

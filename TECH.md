@@ -374,7 +374,16 @@ CREATE INDEX idx_asset_versions_asset_id ON asset_versions(asset_id);
 
 ## Version History
 
-### v1.0.5 (Current)
+### v1.1.0 (Current)
+
+- Adaptive external drag-and-drop for image sequences
+- Explorer/Desktop: copies individual frame files (CF_HDROP)
+- Nuke/After Effects: folder drop imports a single sequence item
+- Consistent DnD behavior across File Manager and Asset Manager
+- Minor fixes in drag handlers (brace/structure)
+
+
+### v1.0.5
 
 - Database persistence fix (survives app updates)
 - Database stored in `AppData/Roaming/KAsset/KAsset Manager Qt/`

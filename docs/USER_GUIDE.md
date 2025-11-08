@@ -48,6 +48,13 @@ This guide covers day-to-day usage of KAsset Manager. The UI is designed to feel
 - Numbered image sequences are detected automatically and can be grouped (toolbar: Group Sequences)
 - First/Last frame detection is available in File Manager
 
+
+## External drag-and-drop to other applications
+
+- Windows Explorer/Desktop: Dragging an image sequence copies the individual frame files (not the parent folder)
+- Nuke and After Effects: Dragging a sequence sends the sequence folder so both apps import a single sequence item
+- File Manager and Asset Manager behave identically for external drag-and-drop
+
 ## Conversion
 
 - Convert videos, image sequences, and single images via the Convert dialog

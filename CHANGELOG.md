@@ -16,6 +16,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Undo/redo system
 - Crash reporting
 
+## [1.1.0] - 2025-11-08
+
+### Added
+- Adaptive external drag-and-drop for image sequences that auto-detects the drop target:
+  - Windows Explorer/Desktop: sends individual frame files (CF_HDROP) so file operations copy frames, not the parent folder
+  - Nuke and After Effects: sends folder path(s) so they import a single sequence item
+
+### Changed
+- File Manager and Asset Manager now behave identically for external drag-and-drop
+
+### Fixed
+- Corrected brace/structure issues in preview overlay and File Manager preview drag handlers that could break builds
+- Resolved cases where Nuke imported sequences as single frames instead of one sequence
+
+### Technical
+- Implemented native OLE IDataObject that adapts payload using Explorer/DCC detection:
+  - Window class (CabinetWClass/WorkerW/Progman) and process name checks (explorer.exe/FileExplorer.exe)
+  - Internal (in-app) drops still use application/x-kasset-sequence-urls with the full frame list
+- Packaging/Installer:
+  - NSIS script updated to 1.1.0 (OutFile, VIProductVersion, DisplayVersion)
+  - build-installer.ps1 now uses Ninja generator, selects the newest installer artifact, and writes a matching .sha256 hash file
+
+
 ## [1.0.5] - 2025-11-05
 
 ### Fixed
