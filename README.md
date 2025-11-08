@@ -8,16 +8,16 @@ KAsset Manager is a native Windows desktop application built with Qt 6 that prov
 
 ### Key Features
 
-#### 🤖 **Intelligent Features (v0.3.0)**
+#### 🤖 **Intelligent tools**
+
 - **Everything Search Integration** - Ultra-fast disk-wide search with bulk import
 - **Database Health Agent** - Automated health checks and maintenance
 - **Bulk Rename Intelligence** - Pattern-based renaming with preview and rollback
 - **Sequence Intelligence** - Automatic gap detection and version tracking
 - **Context Preserver** - Per-folder UI state persistence
 
-See [INTELLIGENT_FEATURES.md](INTELLIGENT_FEATURES.md) for complete installation and usage instructions.
-
 #### 🗂️ **Organization**
+
 - **Virtual Folder System** - Organize assets without moving files on disk
 - **Hierarchical Structure** - Create nested folders for complex projects
 - **Drag-and-Drop Import** - Import files and folders with a simple drag
@@ -26,12 +26,14 @@ See [INTELLIGENT_FEATURES.md](INTELLIGENT_FEATURES.md) for complete installation
 - **Add to Library (Explorer-style)** - From File Manager, add files or entire folders; when folders are selected, their subfolder hierarchy is preserved and recreated in the Asset Manager
 
 #### 🏷️ **Tagging & Rating**
+
 - **Multi-Tag Support** - Assign multiple tags to each asset
 - **Tag Management** - Create, rename, delete, and merge tags
 - **5-Star Rating System** - Rate assets for quality or importance
 - **Smart Filtering** - Filter by tags (AND/OR mode), rating, and file type
 
 #### 🔍 **Search & Filter**
+
 - **Real-time Search** - Find assets by name instantly
 - **Advanced Filters** - Combine search, tags, rating, and file type
 - **Sortable Views** - Sort by name, type, size, date, or rating
@@ -40,6 +42,7 @@ See [INTELLIGENT_FEATURES.md](INTELLIGENT_FEATURES.md) for complete installation
 - **Folders-first Sorting** - In File Manager (grid and list), folders are always listed before files regardless of sort column or order
 
 #### 👁️ **Preview & Playback**
+
 - **Full-Screen Preview** - View images, videos, and sequences
 - **Image Zoom & Pan** - Inspect images in detail
 - **Video Playback** - Play videos with timeline and volume controls
@@ -50,12 +53,14 @@ See [INTELLIGENT_FEATURES.md](INTELLIGENT_FEATURES.md) for complete installation
 - **Focus Restoration** - When closing full-size preview, selection and keyboard focus return to the previously selected item so you can continue navigating with arrow keys instantly
 
 #### 🚀 **Performance**
+
 - **Live Preview Streaming** - FFmpeg/OpenImageIO decode with in-memory caching
 - **Smart Caching** - LRU pixmap cache (~512MB) keeps recent frames warm
 - **Database Indexes** - Optimized queries for large libraries
 - **Lazy Loading** - Decode only when cards enter the viewport
 
 #### 📊 **Professional Formats**
+
 - **Images**: PNG, JPG, JPEG, BMP, GIF, TIFF, TIF, EXR, HDR, PSD, IFF, RAW
 - **Videos**: MOV, MP4, AVI, MP5, MKV, WMV (via FFmpeg)
 - **Audio**: MP3, WAV, OGG, FLAC
@@ -85,28 +90,26 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-windows.ps1 
 6. **Filter** - Use the filters panel on the right to search and filter assets
 7. **Preview** - Double-click an asset to open preview mode
 
-## Screenshots
-
-*Coming soon - Screenshots will be added in a future update*
-
 ## Documentation
 
 ### For Users
-- **[INTELLIGENT_FEATURES.md](INTELLIGENT_FEATURES.md)** - ⭐ **NEW!** Installation and usage guide for intelligent features
-- **[USER_GUIDE.md](USER_GUIDE.md)** - Complete user guide with tutorials and workflows
-- **[INSTALL.md](INSTALL.md)** - Installation and build instructions
+
+- [docs/USER_GUIDE.md](docs/USER_GUIDE.md) — Complete user guide with workflows and tips
+
+### Installation
+
+- [docs/INSTALL.md](docs/INSTALL.md) — Build and installation instructions
 
 ### For Developers
-- **[DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md)** - Architecture, code structure, and contribution guidelines
-- **[NEW_FEATURES.md](NEW_FEATURES.md)** - Intelligent features roadmap and implementation status
-- **[API_REFERENCE.md](API_REFERENCE.md)** - Complete API documentation for all classes
-- **[TECH.md](TECH.md)** - Technology stack and design decisions
-- **[PERFORMANCE_OPTIMIZATIONS.md](PERFORMANCE_OPTIMIZATIONS.md)** - Performance optimization details
-- **[TASKS.md](TASKS.md)** - Development tasks and roadmap
+
+- [docs/DEVELOPER_GUIDE.md](docs/DEVELOPER_GUIDE.md) — Developer setup, testing, coding standards
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — Architecture and threading/I-O model
+- [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md) — Dependencies, versions, and security notes
+- [CODEBASE_REVIEW_REPORT.md](CODEBASE_REVIEW_REPORT.md) — Comprehensive audit and fixes summary
 
 ## Project Structure
 
-```
+```text
 KAssetManager/
 ├── native/qt6/          # Qt 6 C++ application
 │   ├── src/             # C++ source files
@@ -128,7 +131,7 @@ KAssetManager/
 
 ## Database Schema
 
-SQLite database stored in persistent user data location (see [INSTALL.md](INSTALL.md) for exact path):
+SQLite database stored in persistent user data location (see [docs/INSTALL.md](docs/INSTALL.md) for exact path):
 
 - **virtual_folders** - Folder hierarchy
 - **assets** - Asset metadata (file path, size, type, rating, etc.)
@@ -142,34 +145,39 @@ SQLite database stored in persistent user data location (see [INSTALL.md](INSTAL
 ### Common Issues
 
 **Live preview not showing:**
+
 - Give the decoder a moment to cache the first frame (large EXR/ProRes files can take a second).
 - Check `debug.log` for `[LivePreview]` warnings about codecs or permissions.
 - Make sure the bundled FFmpeg DLLs were refreshed with `scripts/fetch-ffmpeg.ps1`.
 
 **Import not working:**
+
 - Verify file permissions (files must be readable)
 - Ensure files are not locked by another application
 - Check available disk space for the database and cached previews
 
 **Preview not opening:**
+
 - Verify the file format is supported
 - Check that the file still exists at the original path
 - Try right-click → Preview instead of double-click
 
 **Performance issues:**
+
 - Reduce thumbnail size using the slider
 - Use filters to reduce the number of visible assets
 - Close preview when not in use to free memory
 - Restart the application if it becomes sluggish
 
 **Database errors:**
+
 - Export your database as a backup (Settings → Export Database)
 - Try importing a backup if corruption occurs
 - As a last resort, clear the database and re-import assets
 
 ### Getting Help
 
-- Check the **[USER_GUIDE.md](USER_GUIDE.md)** for detailed instructions
+- Check the **[docs/USER_GUIDE.md](docs/USER_GUIDE.md)** for detailed instructions
 - Review **[TECH.md](TECH.md)** for technical information
 - Report bugs on GitHub Issues (include steps to reproduce)
 
