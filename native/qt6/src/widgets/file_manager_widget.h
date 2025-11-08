@@ -188,6 +188,15 @@ private slots:
 
 public slots:
     void onFmAddToFavorites();
+    void onFmRefresh();
+    void onFmNewFolder();
+    void onFmRename();
+    void onFmCopy();
+    void onFmCut();
+    void onFmPaste();
+    void onFmDelete();
+    void onFmDeletePermanent();
+    void onFmCreateFolderWithSelected();
 };
 
 

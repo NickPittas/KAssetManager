@@ -1,4 +1,4 @@
-#include "widgets/file_manager_widget.h"
+﻿#include "widgets/file_manager_widget.h"
 
 #include "file_ops.h"
 #include "file_ops_dialog.h"
@@ -31,7 +31,9 @@
 #include <QToolButton>
 #include <QTreeView>
 #include <QVBoxLayout>
-#include <QSortFilterProxyModel>
+#include <QInputDialog>
+#include <QMessageBox>
+#include <QProcess>#include <QSortFilterProxyModel>
 #include <QFileInfo>
 
 FileManagerWidget::FileManagerWidget(MainWindow* host, QWidget* parent)
@@ -66,7 +68,7 @@ void FileManagerWidget::setupUi()
     QVBoxLayout *favLayout = new QVBoxLayout(favContainer);
     favLayout->setContentsMargins(0,0,0,0);
     favLayout->setSpacing(0);
-    QLabel *favHeader = new QLabel("★ Favorites", favContainer);
+    QLabel *favHeader = new QLabel("â˜… Favorites", favContainer);
     favHeader->setStyleSheet("color:#9aa0a6; font-weight:bold; padding:6px 4px;");
     favLayout->addWidget(favHeader);
 
@@ -172,18 +174,18 @@ void FileManagerWidget::setupUi()
     tb->addWidget(fmUpButton);
 
     QToolButton *refreshButton = mkTb(icoRefresh(), "Refresh");
-    if (m_host) connect(refreshButton, &QToolButton::clicked, m_host, &MainWindow::onFmRefresh);
+    if (m_host) connect(refreshButton, &QToolButton::clicked, this, &FileManagerWidget::onFmRefresh);
     tb->addWidget(refreshButton);
 
     QToolButton *newFolderBtn = mkTb(icoFolderNew(), "New Folder");
-    if (m_host) connect(newFolderBtn, &QToolButton::clicked, m_host, &MainWindow::onFmNewFolder);
+    if (m_host) connect(newFolderBtn, &QToolButton::clicked, this, &FileManagerWidget::onFmNewFolder);
     tb->addWidget(newFolderBtn);
 
-    QToolButton *copyBtn = mkTb(icoCopy(), "Copy"); if (m_host) connect(copyBtn, &QToolButton::clicked, m_host, &MainWindow::onFmCopy); tb->addWidget(copyBtn);
-    QToolButton *cutBtn = mkTb(icoCut(), "Cut"); if (m_host) connect(cutBtn, &QToolButton::clicked, m_host, &MainWindow::onFmCut); tb->addWidget(cutBtn);
-    QToolButton *pasteBtn = mkTb(icoPaste(), "Paste"); if (m_host) connect(pasteBtn, &QToolButton::clicked, m_host, &MainWindow::onFmPaste); tb->addWidget(pasteBtn);
-    QToolButton *deleteBtn = mkTb(icoDelete(), "Delete"); if (m_host) connect(deleteBtn, &QToolButton::clicked, m_host, &MainWindow::onFmDelete); tb->addWidget(deleteBtn);
-    QToolButton *renameBtn = mkTb(icoRename(), "Rename"); if (m_host) connect(renameBtn, &QToolButton::clicked, m_host, &MainWindow::onFmRename); tb->addWidget(renameBtn);
+    QToolButton *copyBtn = mkTb(icoCopy(), "Copy"); if (m_host) connect(copyBtn, &QToolButton::clicked, this, &FileManagerWidget::onFmCopy); tb->addWidget(copyBtn);
+    QToolButton *cutBtn = mkTb(icoCut(), "Cut"); if (m_host) connect(cutBtn, &QToolButton::clicked, this, &FileManagerWidget::onFmCut); tb->addWidget(cutBtn);
+    QToolButton *pasteBtn = mkTb(icoPaste(), "Paste"); if (m_host) connect(pasteBtn, &QToolButton::clicked, this, &FileManagerWidget::onFmPaste); tb->addWidget(pasteBtn);
+    QToolButton *deleteBtn = mkTb(icoDelete(), "Delete"); if (m_host) connect(deleteBtn, &QToolButton::clicked, this, &FileManagerWidget::onFmDelete); tb->addWidget(deleteBtn);
+    QToolButton *renameBtn = mkTb(icoRename(), "Rename"); if (m_host) connect(renameBtn, &QToolButton::clicked, this, &FileManagerWidget::onFmRename); tb->addWidget(renameBtn);
 
     tb->addSpacing(12);
 
@@ -496,4 +498,135 @@ void FileManagerWidget::onFmFavoriteActivated(QListWidgetItem* item)
     const QString path = item->data(Qt::UserRole).toString();
     if (path.isEmpty()) return;
     emit navigateToPathRequested(path, true);
+}
+
+
+static QString fm_uniqueNameInDir(const QString &dirPath, const QString &baseName)
+{
+    QFileInfo fi(dirPath + QDir::separator() + baseName);
+    if (!fi.exists()) return fi.absoluteFilePath();
+    QString name = fi.completeBaseName();
+    QString ext = fi.completeSuffix();
+    int n = 2;
+    while (true) {
+        QString candidate = name + QString(" (%1)").arg(n);
+        if (!ext.isEmpty()) candidate += "." + ext;
+        QFileInfo fi2(dirPath + QDir::separator() + candidate);
+        if (!fi2.exists()) return fi2.absoluteFilePath();
+        ++n;
+    }
+}
+
+void FileManagerWidget::onFmRefresh()
+{
+    if (!fmDirModel) return;
+    const QString currentPath = fmDirModel->rootPath();
+    if (currentPath.isEmpty()) return;
+    fmDirModel->setRootPath("");
+    fmDirModel->setRootPath(currentPath);
+    if (fmProxyModel) {
+        fmProxyModel->rebuildForRoot(currentPath);
+        QModelIndex srcRoot = fmDirModel->index(currentPath);
+        QModelIndex proxyRoot = fmProxyModel->mapFromSource(srcRoot);
+        if (fmGridView) fmGridView->setRootIndex(proxyRoot);
+        if (fmListView) fmListView->setRootIndex(proxyRoot);
+    } else {
+        QModelIndex srcRoot = fmDirModel->index(currentPath);
+        if (fmGridView) fmGridView->setRootIndex(srcRoot);
+        if (fmListView) fmListView->setRootIndex(srcRoot);
+    }
+}
+
+void FileManagerWidget::onFmNewFolder()
+{
+    if (!fmDirModel) return;
+    const QString destDir = fmDirModel->rootPath();
+    if (destDir.isEmpty()) return;
+    QString path = fm_uniqueNameInDir(destDir, "New Folder");
+    QDir().mkpath(path);
+}
+
+void FileManagerWidget::onFmRename()
+{
+    if (!fmDirModel || !fmViewStack) return;
+    const QStringList paths = fm_selectedPaths(fmDirModel, reinterpret_cast<QListView*>(fmGridView), reinterpret_cast<QTableView*>(fmListView), fmViewStack);
+    if (paths.size() != 1) return;
+    const QString p = paths.first();
+    if (m_host) m_host->releaseAnyPreviewLocksForPaths(QStringList{p});
+    QFileInfo fi(p);
+    bool ok=false;
+    QString newName = QInputDialog::getText(this, "Rename", "New name:", QLineEdit::Normal, fi.fileName(), &ok);
+    if (!ok || newName.trimmed().isEmpty()) return;
+    QString dest = fi.absolutePath() + QDir::separator() + newName.trimmed();
+    if (fi.isDir()) {
+        QDir parent(fi.absolutePath());
+        parent.rename(fi.fileName(), newName.trimmed());
+    } else {
+        QFile::rename(p, dest);
+    }
+}
+
+void FileManagerWidget::onFmCopy()
+{
+    fmClipboard = fm_selectedPaths(fmDirModel, reinterpret_cast<QListView*>(fmGridView), reinterpret_cast<QTableView*>(fmListView), fmViewStack);
+    fmClipboardCutMode = false;
+}
+
+void FileManagerWidget::onFmCut()
+{
+    fmClipboard = fm_selectedPaths(fmDirModel, reinterpret_cast<QListView*>(fmGridView), reinterpret_cast<QTableView*>(fmListView), fmViewStack);
+    fmClipboardCutMode = true;
+}
+
+void FileManagerWidget::onFmPaste()
+{
+    if (!fmDirModel || fmClipboard.isEmpty()) return;
+    const QString destDir = fmDirModel->rootPath();
+    if (destDir.isEmpty()) return;
+    if (m_host) m_host->releaseAnyPreviewLocksForPaths(fmClipboard);
+    auto &q = FileOpsQueue::instance();
+    if (fmClipboardCutMode) q.enqueueMove(fmClipboard, destDir);
+    else q.enqueueCopy(fmClipboard, destDir);
+    if (!fileOpsDialog) fileOpsDialog = new FileOpsProgressDialog(this);
+    fileOpsDialog->show(); fileOpsDialog->raise(); fileOpsDialog->activateWindow();
+}
+
+void FileManagerWidget::onFmDelete()
+{
+    if (!fmDirModel) return;
+    QStringList paths = fm_selectedPaths(fmDirModel, reinterpret_cast<QListView*>(fmGridView), reinterpret_cast<QTableView*>(fmListView), fmViewStack);
+    if (paths.isEmpty()) return;
+    if (m_host) m_host->releaseAnyPreviewLocksForPaths(paths);
+    FileOpsQueue::instance().enqueueDelete(paths);
+}
+
+void FileManagerWidget::onFmDeletePermanent()
+{
+    if (!fmDirModel) return;
+    QStringList paths = fm_selectedPaths(fmDirModel, reinterpret_cast<QListView*>(fmGridView), reinterpret_cast<QTableView*>(fmListView), fmViewStack);
+    if (paths.isEmpty()) return;
+    if (m_host) m_host->releaseAnyPreviewLocksForPaths(paths);
+    FileOpsQueue::instance().enqueueDeletePermanent(paths);
+}
+
+void FileManagerWidget::onFmCreateFolderWithSelected()
+{
+    if (!fmDirModel) return;
+    QStringList paths = fm_selectedPaths(fmDirModel, reinterpret_cast<QListView*>(fmGridView), reinterpret_cast<QTableView*>(fmListView), fmViewStack);
+    if (paths.isEmpty()) return;
+    const QString destDir = fmDirModel->rootPath();
+    bool ok=false;
+    QString folderName = QInputDialog::getText(this, "Create Folder", "Enter folder name:", QLineEdit::Normal, "New Folder", &ok);
+    if (!ok) return;
+    folderName = folderName.trimmed();
+    if (folderName.isEmpty()) return;
+    QDir dd(destDir);
+    QString folderPath = dd.filePath(folderName);
+    if (QFileInfo::exists(folderPath)) {
+        int i=2; QString base = folderName; while (QFileInfo::exists(folderPath)) { folderName = QString("%1 (%2)").arg(base).arg(i++); folderPath = dd.filePath(folderName);}    }
+    if (!dd.mkpath(folderPath)) { QMessageBox::warning(this, "Error", QString("Failed to create folder: %1").arg(folderPath)); return; }
+    if (m_host) m_host->releaseAnyPreviewLocksForPaths(paths);
+    FileOpsQueue::instance().enqueueMove(paths, folderPath);
+    if (!fileOpsDialog) fileOpsDialog = new FileOpsProgressDialog(this);
+    fileOpsDialog->show(); fileOpsDialog->raise(); fileOpsDialog->activateWindow();
 }
