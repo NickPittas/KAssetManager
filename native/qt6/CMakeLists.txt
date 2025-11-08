@@ -168,6 +168,28 @@ qt_add_executable(kassetmanagerqt WIN32
     src/main.cpp
     src/mainwindow.h
     src/mainwindow.cpp
+    src/ui/icon_helpers.h
+    src/ui/icon_helpers.cpp
+    src/ui/preview_helpers.h
+    src/ui/preview_helpers.cpp
+    src/ui/file_type_helpers.h
+    src/ui/file_type_helpers.cpp
+    src/widgets/sequence_grouping_proxy_model.h
+    src/widgets/sequence_grouping_proxy_model.cpp
+    src/widgets/asset_grid_view.h
+    src/widgets/asset_grid_view.cpp
+    src/widgets/fm_icon_provider.h
+    src/widgets/fm_icon_provider.cpp
+    src/widgets/fm_drag_views.h
+    src/widgets/fm_drag_views.cpp
+    src/widgets/asset_item_delegate.h
+    src/widgets/asset_item_delegate.cpp
+    src/widgets/fm_item_delegate.h
+    src/widgets/fm_item_delegate.cpp
+    src/widgets/grid_scrub_overlay.h
+    src/widgets/grid_scrub_overlay.cpp
+    src/widgets/grid_scrub_controller.h
+    src/widgets/grid_scrub_controller.cpp
     src/virtual_drag.cpp
     src/virtual_drag.h
     src/db.cpp
