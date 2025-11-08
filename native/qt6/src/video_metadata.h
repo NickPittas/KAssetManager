@@ -10,6 +10,8 @@ struct VideoMetadata {
     int height = 0;
     double fps = 0.0;
     qint64 bitrate = 0;
+    bool hasTimecode = false;
+    QString timecodeStart; // e.g., HH:MM:SS:FF or HH:MM:SS;FF
 };
 
 // Probes a media file for video/audio codec, resolution, fps and bitrate.

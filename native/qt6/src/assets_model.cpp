@@ -7,12 +7,49 @@
 #include <QSqlQuery>
 #include <QSqlError>
 #include <QFileInfo>
+#include <QDir>
+
 #include <QDebug>
 #include <QThread>
 #include <QElapsedTimer>
 #include <QMimeData>
 #include <QFile>
 #include <QTextStream>
+
+#include "file_utils.h"
+
+static QStringList buildSequencePaths(const QString& firstFramePath, int startFrame, int endFrame)
+{
+    QStringList framePaths;
+    if (firstFramePath.isEmpty() || startFrame > endFrame) return framePaths;
+
+    QFileInfo fi(firstFramePath);
+    const QString dirPath = fi.absolutePath();
+    const QString fileName = fi.fileName();
+
+    // Extract frame number in the first frame file name
+    int matchPos = -1, paddingLength = 0;
+    for (int i = fileName.size() - 1; i >= 0; --i) {
+        if (fileName[i].isDigit()) {
+            int j = i;
+            while (j >= 0 && fileName[j].isDigit()) --j;
+            matchPos = j + 1;
+            paddingLength = (i - j);
+            break;
+        }
+    }
+    if (matchPos < 0 || paddingLength <= 0) return framePaths;
+
+    const QString baseName = fileName.left(matchPos);
+    const QString suffix = fileName.mid(matchPos + paddingLength);
+
+    for (int frame = startFrame; frame <= endFrame; ++frame) {
+        const QString frameNum = QString("%1").arg(frame, paddingLength, 10, QLatin1Char('0'));
+        const QString framePath = QDir(dirPath).filePath(baseName + frameNum + suffix);
+        if (FileUtils::fileExists(framePath)) framePaths.append(framePath);
+    }
+    return framePaths;
+}
 
 namespace {
 
@@ -130,15 +167,22 @@ QMimeData *AssetsModel::mimeData(const QModelIndexList &indexes) const
     QList<QUrl> urls;
 
     for (const QModelIndex &index : indexes) {
-        if (index.isValid()) {
-            int assetId = data(index, IdRole).toInt();
-            assetIds.append(assetId);
+        if (!index.isValid()) continue;
 
-            // Get file path and add as URL for external drag-drop
-            QString filePath = data(index, FilePathRole).toString();
-            if (!filePath.isEmpty()) {
-                urls.append(QUrl::fromLocalFile(filePath));
-            }
+        int assetId = data(index, IdRole).toInt();
+        assetIds.append(assetId);
+
+        const bool isSeq = data(index, IsSequenceRole).toBool();
+        const QString filePath = data(index, FilePathRole).toString(); // first frame path for sequences
+        if (filePath.isEmpty()) continue;
+
+        if (isSeq) {
+            const int startFrame = data(index, SequenceStartFrameRole).toInt();
+            const int endFrame   = data(index, SequenceEndFrameRole).toInt();
+            const QStringList frames = buildSequencePaths(filePath, startFrame, endFrame);
+            for (const QString& fp : frames) urls.append(QUrl::fromLocalFile(fp));
+        } else {
+            urls.append(QUrl::fromLocalFile(filePath));
         }
     }
 

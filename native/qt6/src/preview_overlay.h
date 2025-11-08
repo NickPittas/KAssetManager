@@ -39,6 +39,7 @@
 // Forward declarations
 class SequenceFrameCache;
 
+class CacheBarWidget;
 /**
  * @brief Custom timeline slider with visual cache indicators for image sequences
  *
@@ -180,6 +181,65 @@ private:
     QSet<int> m_cachedFrames;
 };
 
+// CacheBarWidget: shows cached frames as a thin red line bar (no slider)
+class CacheBarWidget : public QWidget {
+    Q_OBJECT
+public:
+    explicit CacheBarWidget(QWidget* parent=nullptr) : QWidget(parent) {
+        setFixedHeight(3);
+        setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    }
+    void setTotalFrames(int total) {
+        m_totalFrames = qMax(0, total);
+        update();
+    }
+    void setCachedFrames(const QSet<int>& frames) {
+        m_cached = frames;
+        update();
+    }
+    void markFrameCached(int frameIndex) {
+        if (frameIndex >= 0) {
+            m_cached.insert(frameIndex);
+            update();
+        }
+    }
+    void clearCachedFrames() {
+        m_cached.clear();
+        update();
+    }
+protected:
+    void paintEvent(QPaintEvent* e) override {
+        Q_UNUSED(e);
+        QPainter p(this);
+        p.setRenderHint(QPainter::Antialiasing, false);
+        // background
+        p.fillRect(rect(), QColor(51,51,51));
+        if (m_totalFrames <= 0 || m_cached.isEmpty()) return;
+        // draw cached segments in red
+        const QRect r = rect();
+        const double pxPerFrame = static_cast<double>(r.width()) / m_totalFrames;
+        QVector<int> sorted = m_cached.values();
+        std::sort(sorted.begin(), sorted.end());
+        p.setPen(Qt::NoPen);
+        p.setBrush(QColor(231,76,60));
+        int rs = sorted[0];
+        int re = sorted[0];
+        for (int i=1;i<=sorted.size();++i){
+            if (i<sorted.size() && sorted[i] == re+1) {
+                re = sorted[i];
+            } else {
+                int x = r.left() + static_cast<int>(rs * pxPerFrame);
+                int w = std::max(1, static_cast<int>((re - rs + 1) * pxPerFrame));
+                p.drawRect(QRect(x, r.top(), w, r.height()));
+                if (i<sorted.size()) { rs = re = sorted[i]; }
+            }
+        }
+    }
+private:
+    int m_totalFrames = 0;
+    QSet<int> m_cached;
+};
+
 class PreviewOverlay : public QWidget
 {
     Q_OBJECT
@@ -241,6 +301,8 @@ private:
     void showText(const QString &filePath);
     void updatePlayPauseButton();
     QString formatTime(qint64 milliseconds);
+    void updateVideoTimeDisplays(qint64 positionMs, qint64 durationMs);
+    void updateSequenceTimeDisplays(int frameIndex, bool caching=false);
     void zoomImage(double factor);
     void fitImageToView();
     void resetImageZoom();
@@ -265,8 +327,10 @@ private:
     QPushButton *playPauseBtn;
     QPushButton *prevFrameBtn;
     QPushButton *nextFrameBtn;
+    CacheBarWidget *cacheBar;
     CachedFrameSlider *positionSlider;
-    QLabel *timeLabel;
+    QLabel *currentTimeLabel;
+    QLabel *durationTimeLabel;
     QSlider *volumeSlider;
     QPushButton *muteBtn;
 
@@ -313,6 +377,9 @@ private:
     bool userSeeking = false;
     bool wasPlayingBeforeSeek = false;
     double detectedFps = 0.0;
+    // Embedded timecode metadata (if probed via FFmpeg)
+    bool hasEmbeddedTimecode = false;
+    QString embeddedStartTimecode;
 
     // Image zoom/pan state
     double currentZoom;

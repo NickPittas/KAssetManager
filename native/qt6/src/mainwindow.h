@@ -317,8 +317,8 @@ private:
     class QSlider *fmThumbnailSizeSlider;
     QToolButton *fmPreviewToggleButton;
     class QStackedWidget *fmViewStack;
-    QListView *fmGridView;
-    class QTableView *fmListView;
+    class FmGridViewEx *fmGridView;
+    class FmListViewEx *fmListView;
     bool fmIsGridMode;
 
     // Auto-refresh watchers for File Manager
@@ -357,10 +357,18 @@ private:
     class QMediaPlayer *fmMediaPlayer;
     class QAudioOutput *fmAudioOutput;
     QPushButton *fmPlayPauseBtn;
+    QPushButton *fmPrevFrameBtn = nullptr;
+    QPushButton *fmNextFrameBtn = nullptr;
     // Shortcuts management for File Manager
     QHash<QString, class QShortcut*> fmShortcutObjs;
     void applyFmShortcuts();
     static QKeySequence fmShortcutFor(const QString& actionName, const QKeySequence& def);
+
+    // Sequence preview helpers (File Manager)
+    void loadFmSequenceFrame(int index);
+    void playFmSequence();
+    void pauseFmSequence();
+    void stepFmSequence(int delta);
 
     // Helpers for tree/context operations
     QStringList getSelectedFmTreePaths() const;
@@ -370,6 +378,17 @@ private:
     QSlider *fmPositionSlider;
     QLabel *fmTimeLabel;
     QSlider *fmVolumeSlider;
+
+    // Sequence playback state for File Manager preview
+    bool fmIsSequence = false;
+    QStringList fmSequenceFramePaths;
+    int fmSequenceStartFrame = 0;
+    int fmSequenceEndFrame = 0;
+    int fmSequenceCurrentIndex = 0;
+    class QTimer *fmSequenceTimer = nullptr;
+    bool fmSequencePlaying = false;
+    double fmSequenceFps = 24.0;
+
     QPushButton *fmMuteBtn;
 
 

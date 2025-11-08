@@ -30,6 +30,8 @@ bool probeVideoFile(const QString& filePath, VideoMetadata& out, QString* errorM
     out.height = 0;
     out.fps = 0.0;
     out.bitrate = 0;
+    out.hasTimecode = false;
+    out.timecodeStart.clear();
 
     AVFormatContext* fmtCtx = nullptr;
     QByteArray localPath = QFile::encodeName(filePath);
@@ -62,6 +64,13 @@ bool probeVideoFile(const QString& filePath, VideoMetadata& out, QString* errorM
             const AVCodec* vcodec = avcodec_find_decoder(vp->codec_id);
             const char* vname = vcodec && vcodec->name ? vcodec->name : avcodec_get_name(vp->codec_id);
             if (vname) out.videoCodec = QString::fromUtf8(vname);
+            // Try to extract starting timecode from stream/container metadata
+            AVDictionaryEntry* tc = av_dict_get(vs->metadata, "timecode", nullptr, 0);
+            if (!tc) tc = av_dict_get(fmtCtx->metadata, "timecode", nullptr, 0);
+            if (tc && tc->value) {
+                out.hasTimecode = true;
+                out.timecodeStart = QString::fromUtf8(tc->value);
+            }
 
             // Try to derive profile name for common professional codecs
             if (vp->profile != FF_PROFILE_UNKNOWN) {

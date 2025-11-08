@@ -7,6 +7,8 @@
 #include <QScrollArea>
 #include <QStyle>
 #include <QApplication>
+#include <QGridLayout>
+
 #include <QCoreApplication>
 
 #include <QWheelEvent>
@@ -42,6 +44,9 @@
 
 #include <QSettings>
 
+
+#include <QRegularExpression>
+#include "video_metadata.h"
 
 // Load media icons from disk without recoloring; search common install paths
 static QIcon loadMediaIcon(const QString& relative)
@@ -263,7 +268,8 @@ void PreviewOverlay::setupUi()
     setAttribute(Qt::WA_StyledBackground, true);
 
     QVBoxLayout *mainLayout = new QVBoxLayout(this);
-    mainLayout->setContentsMargins(0, 0, 0, 0);
+    // Lift the entire controls area up from the bottom to avoid OS/taskbar overlap
+    mainLayout->setContentsMargins(0, 0, 0, 80); // bottom offset ~80px
     mainLayout->setSpacing(0);
 
     // Top bar with filename and close button
@@ -381,7 +387,7 @@ void PreviewOverlay::setupUi()
     // Bottom controls (for video)
     controlsWidget = new QWidget(this);
     controlsWidget->setStyleSheet("QWidget { background-color: rgba(0, 0, 0, 180); }");
-    controlsWidget->setFixedHeight(80);
+    controlsWidget->setFixedHeight(120);
     controlsWidget->installEventFilter(this);
     controlsWidget->hide();
 
@@ -398,10 +404,7 @@ void PreviewOverlay::setupUi()
     connect(positionSlider, &QSlider::sliderMoved, this, &PreviewOverlay::onSliderMoved);
     connect(positionSlider, &QSlider::sliderPressed, this, &PreviewOverlay::onSliderPressed);
     connect(positionSlider, &QSlider::sliderReleased, this, &PreviewOverlay::onSliderReleased);
-    controlsLayout->addWidget(positionSlider);
 
-    // Control buttons row
-    QHBoxLayout *buttonsLayout = new QHBoxLayout();
     // Load media control icons (from icons/media)
     playIcon = loadMediaIcon("media/Play.png");
     pauseIcon = loadMediaIcon("media/Pause.png");
@@ -411,6 +414,76 @@ void PreviewOverlay::setupUi()
     muteIcon = loadMediaIcon("media/Mute.png");
     noAudioIcon = loadMediaIcon("media/No Audio.png");
 
+    // ========== ROW 1: Cache bar (red line) ==========
+    cacheBar = new CacheBarWidget(this);
+    cacheBar->hide(); // Shown only for sequences
+    {
+        QHBoxLayout *cacheRow = new QHBoxLayout();
+        cacheRow->setContentsMargins(0, 0, 0, 0);
+        cacheRow->addWidget(cacheBar);
+        controlsLayout->addLayout(cacheRow);
+    }
+
+    // ========== ROW 2: Timeline (Current | Slider | Duration) ==========
+    currentTimeLabel = new QLabel("00:00:00:00", this);
+    currentTimeLabel->setStyleSheet("QLabel { color: white; font-size: 14px; padding: 0 8px; }");
+
+    durationTimeLabel = new QLabel("00:00:00:00", this);
+    durationTimeLabel->setStyleSheet("QLabel { color: white; font-size: 14px; padding: 0 8px; }");
+
+    positionSlider->setFixedHeight(20);
+
+    {
+        QHBoxLayout *timelineRow = new QHBoxLayout();
+        timelineRow->setContentsMargins(0, 4, 0, 4);
+        timelineRow->setSpacing(8);
+        timelineRow->addWidget(currentTimeLabel);
+        timelineRow->addWidget(positionSlider, /*stretch*/ 1);
+        timelineRow->addWidget(durationTimeLabel);
+        controlsLayout->addLayout(timelineRow);
+    }
+
+    // Optional color space selector (kept hidden by default)
+    colorSpaceLabel = new QLabel("Color Space:", this);
+    colorSpaceLabel->setStyleSheet("QLabel { color: white; font-size: 14px; padding: 0 5px; }");
+    colorSpaceLabel->hide();
+
+    colorSpaceCombo = new QComboBox(this);
+    colorSpaceCombo->addItem("Linear");
+    colorSpaceCombo->addItem("sRGB");
+    colorSpaceCombo->addItem("Rec.709");
+    colorSpaceCombo->setCurrentIndex(1);
+    colorSpaceCombo->setFocusPolicy(Qt::NoFocus);
+    colorSpaceCombo->setStyleSheet(
+        "QComboBox { background-color: #333; color: white; border: 1px solid #555; "
+        "padding: 5px; border-radius: 3px; min-width: 100px; }"
+        "QComboBox::drop-down { border: none; }"
+        "QComboBox::down-arrow { image: none; border: none; }"
+        "QComboBox QAbstractItemView { background-color: #333; color: white; selection-background-color: #58a6ff; }"
+    );
+    colorSpaceCombo->hide();
+    connect(colorSpaceCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &PreviewOverlay::onColorSpaceChanged);
+
+    // ========== ROW 3: Playback (center) + Audio (right) ==========
+    // Transport (Prev - Play/Pause - Next)
+    QWidget *transport = new QWidget(this);
+    QHBoxLayout *transportLayout = new QHBoxLayout(transport);
+    transportLayout->setContentsMargins(0, 0, 0, 0);
+    transportLayout->setSpacing(8);
+    transportLayout->setAlignment(Qt::AlignVCenter);
+
+    prevFrameBtn = new QPushButton(this);
+    prevFrameBtn->setIcon(prevFrameIcon);
+    prevFrameBtn->setIconSize(QSize(20, 20));
+    prevFrameBtn->setFixedSize(36, 36);
+    prevFrameBtn->setFocusPolicy(Qt::NoFocus);
+    prevFrameBtn->setToolTip("Previous frame (,)");
+    prevFrameBtn->setStyleSheet(
+        "QPushButton { background-color: #444; color: white; font-size: 16px; border-radius: 18px; border: none; }"
+        "QPushButton:hover { background-color: #555; }"
+    );
+    connect(prevFrameBtn, &QPushButton::clicked, this, &PreviewOverlay::onStepPrevFrame);
+    transportLayout->addWidget(prevFrameBtn);
 
     playPauseBtn = new QPushButton(this);
     playPauseBtn->setIcon(playIcon);
@@ -423,20 +496,7 @@ void PreviewOverlay::setupUi()
         "QPushButton:hover { background-color: #4a90e2; }"
     );
     connect(playPauseBtn, &QPushButton::clicked, this, &PreviewOverlay::onPlayPauseClicked);
-    buttonsLayout->addWidget(playPauseBtn);
-    // Frame step buttons
-    prevFrameBtn = new QPushButton(this);
-    prevFrameBtn->setIcon(prevFrameIcon);
-    prevFrameBtn->setIconSize(QSize(20, 20));
-    prevFrameBtn->setFixedSize(36, 36);
-    prevFrameBtn->setFocusPolicy(Qt::NoFocus);
-    prevFrameBtn->setToolTip("Previous frame (,)");
-    prevFrameBtn->setStyleSheet(
-        "QPushButton { background-color: #444; color: white; font-size: 16px; border-radius: 18px; border: none; }"
-        "QPushButton:hover { background-color: #555; }"
-    );
-    connect(prevFrameBtn, &QPushButton::clicked, this, &PreviewOverlay::onStepPrevFrame);
-    buttonsLayout->addWidget(prevFrameBtn);
+    transportLayout->addWidget(playPauseBtn);
 
     nextFrameBtn = new QPushButton(this);
     nextFrameBtn->setIcon(nextFrameIcon);
@@ -449,43 +509,14 @@ void PreviewOverlay::setupUi()
         "QPushButton:hover { background-color: #555; }"
     );
     connect(nextFrameBtn, &QPushButton::clicked, this, &PreviewOverlay::onStepNextFrame);
-    buttonsLayout->addWidget(nextFrameBtn);
+    transportLayout->addWidget(nextFrameBtn);
 
+    // Audio controls group (right)
+    QWidget *audioGroup = new QWidget(this);
+    QHBoxLayout *audioLayout = new QHBoxLayout(audioGroup);
+    audioLayout->setContentsMargins(0, 0, 0, 0);
+    audioLayout->setSpacing(8);
 
-    timeLabel = new QLabel("0:00 / 0:00", this);
-    timeLabel->setStyleSheet("QLabel { color: white; font-size: 14px; padding: 0 10px; }");
-    buttonsLayout->addWidget(timeLabel);
-
-    buttonsLayout->addStretch();
-
-    // Color space selector (for HDR/EXR images)
-    colorSpaceLabel = new QLabel("Color Space:", this);
-    colorSpaceLabel->setStyleSheet("QLabel { color: white; font-size: 14px; padding: 0 5px; }");
-    colorSpaceLabel->hide();
-    buttonsLayout->addWidget(colorSpaceLabel);
-
-    colorSpaceCombo = new QComboBox(this);
-    colorSpaceCombo->addItem("Linear");
-    colorSpaceCombo->addItem("sRGB");
-    colorSpaceCombo->addItem("Rec.709");
-    colorSpaceCombo->setCurrentIndex(1); // Default to sRGB
-    colorSpaceCombo->setFocusPolicy(Qt::NoFocus);
-    colorSpaceCombo->setStyleSheet(
-        "QComboBox { background-color: #333; color: white; border: 1px solid #555; "
-        "padding: 5px; border-radius: 3px; min-width: 100px; }"
-        "QComboBox::drop-down { border: none; }"
-        "QComboBox::down-arrow { image: none; border: none; }"
-        "QComboBox QAbstractItemView { background-color: #333; color: white; "
-        "selection-background-color: #58a6ff; }"
-    );
-    colorSpaceCombo->hide();
-    connect(colorSpaceCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
-            this, &PreviewOverlay::onColorSpaceChanged);
-    buttonsLayout->addWidget(colorSpaceCombo);
-
-    buttonsLayout->addSpacing(20);
-
-    // Volume control
     muteBtn = new QPushButton(this);
     muteBtn->setIcon(audioIcon);
     muteBtn->setIconSize(QSize(18, 18));
@@ -494,7 +525,7 @@ void PreviewOverlay::setupUi()
     muteBtn->setFocusPolicy(Qt::NoFocus);
     muteBtn->setToolTip("Mute/Unmute");
     connect(muteBtn, &QPushButton::clicked, this, &PreviewOverlay::onToggleMute);
-    buttonsLayout->addWidget(muteBtn);
+    audioLayout->addWidget(muteBtn);
 
     volumeSlider = new QSlider(Qt::Horizontal, this);
     volumeSlider->setFixedWidth(100);
@@ -503,9 +534,33 @@ void PreviewOverlay::setupUi()
     volumeSlider->setFocusPolicy(Qt::NoFocus);
     volumeSlider->setStyleSheet(positionSlider->styleSheet());
     connect(volumeSlider, &QSlider::valueChanged, this, &PreviewOverlay::onVolumeChanged);
-    buttonsLayout->addWidget(volumeSlider);
+    audioLayout->addWidget(volumeSlider);
 
-    controlsLayout->addLayout(buttonsLayout);
+    // Bottom row grid to center transport and right-align audio
+    QGridLayout *bottomGrid = new QGridLayout();
+    bottomGrid->setContentsMargins(0, 0, 0, 0);
+    bottomGrid->setHorizontalSpacing(10);
+
+    bottomGrid->setColumnStretch(0, 1); // left stretch
+    bottomGrid->setColumnStretch(1, 0); // center content
+    bottomGrid->setColumnStretch(2, 1); // right stretch (before audio)
+    bottomGrid->setColumnStretch(3, 0); // audio group
+
+    bottomGrid->addWidget(transport, 0, 1, Qt::AlignHCenter | Qt::AlignVCenter);
+
+    // Keep color space controls in layout (hidden) between center and right
+    QWidget *csGroup = new QWidget(this);
+    QHBoxLayout *csLayout = new QHBoxLayout(csGroup);
+    csLayout->setContentsMargins(0, 0, 0, 0);
+    csLayout->setSpacing(6);
+    csLayout->addWidget(colorSpaceLabel);
+    csLayout->addWidget(colorSpaceCombo);
+    csGroup->setVisible(false);
+    bottomGrid->addWidget(csGroup, 0, 2, Qt::AlignVCenter);
+
+    bottomGrid->addWidget(audioGroup, 0, 3, Qt::AlignRight | Qt::AlignVCenter);
+
+    controlsLayout->addLayout(bottomGrid);
 
     mainLayout->addWidget(controlsWidget);
     // Overlay side navigation arrows
@@ -753,6 +808,8 @@ void PreviewOverlay::showImage(const QString &filePath)
     } else {
         qWarning() << "[PreviewOverlay::showImage] Failed to load image:" << filePath;
     }
+    // Cache bar is only for sequences
+    if (cacheBar) cacheBar->hide();
 }
 
 void PreviewOverlay::showVideo(const QString &filePath)
@@ -783,6 +840,8 @@ void PreviewOverlay::showVideo(const QString &filePath)
     // Anchor nav arrows to the video widget when showing video (handles native window stacking)
     positionNavButtons(videoWidget);
     controlsWidget->show();
+    // Cache bar is only for sequences
+    if (cacheBar) cacheBar->hide();
     // Enable audio controls for video
     if (muteBtn) {
         muteBtn->setEnabled(true);
@@ -798,6 +857,17 @@ void PreviewOverlay::showVideo(const QString &filePath)
     // CRITICAL: Clear the scene to free memory
     imageScene->clear();
     imageItem = nullptr;
+    // Probe metadata for FPS/timecode via FFmpeg (if available)
+    {
+        MediaInfo::VideoMetadata vm;
+        QString err;
+        if (MediaInfo::probeVideoFile(filePath, vm, &err)) {
+            if (vm.fps > 0.0) detectedFps = vm.fps;
+            hasEmbeddedTimecode = vm.hasTimecode;
+            embeddedStartTimecode = vm.timecodeStart;
+        }
+    }
+
     originalPixmap = QPixmap(); // Clear the pixmap
 
     mediaPlayer->setSource(QUrl::fromLocalFile(filePath));
@@ -852,7 +922,7 @@ void PreviewOverlay::onPositionChanged(qint64 position)
     }
 
     qint64 duration = mediaPlayer->duration();
-    timeLabel->setText(QString("%1 / %2").arg(formatTime(position)).arg(formatTime(duration)));
+    updateVideoTimeDisplays(position, duration);
 }
 
 void PreviewOverlay::onDurationChanged(qint64 duration)
@@ -872,9 +942,9 @@ void PreviewOverlay::onSliderMoved(int position)
     if (usingFallbackVideo) {
         // Update time label and seek continuously while dragging (live scrubbing)
         if (fallbackDurationMs > 0) {
-            timeLabel->setText(QString("%1 / %2").arg(formatTime(position)).arg(formatTime(fallbackDurationMs)));
+            updateVideoTimeDisplays(position, fallbackDurationMs);
         } else {
-            timeLabel->setText(QString("%1 / --:--").arg(formatTime(position)));
+            updateVideoTimeDisplays(position, -1);
         }
         if (fallbackReader) {
             QMetaObject::invokeMethod(fallbackReader, "seekToMs", Qt::QueuedConnection, Q_ARG(qint64, static_cast<qint64>(position)));
@@ -887,7 +957,7 @@ void PreviewOverlay::onSliderMoved(int position)
     // QMediaPlayer path - always do live scrubbing
     mediaPlayer->setPosition(position);
     qint64 duration = mediaPlayer->duration();
-    timeLabel->setText(QString("%1 / %2").arg(formatTime(position)).arg(formatTime(duration)));
+    updateVideoTimeDisplays(position, duration);
     controlsTimer->start();
 }
 
@@ -1160,6 +1230,79 @@ QString PreviewOverlay::formatTime(qint64 milliseconds)
     return QString("%1:%2").arg(minutes).arg(seconds, 2, 10, QChar('0'));
 }
 
+
+// Helper to format HH:MM:SS:FF given milliseconds and fps
+static QString formatHMSF(qint64 ms, int fps)
+{
+    if (fps <= 0) fps = 24;
+    qint64 totalSeconds = ms / 1000;
+    int hours = static_cast<int>(totalSeconds / 3600);
+    int minutes = static_cast<int>((totalSeconds % 3600) / 60);
+    int seconds = static_cast<int>(totalSeconds % 60);
+    int frames = static_cast<int>(qRound64((ms % 1000) * (fps / 1000.0)));
+    return QString("%1:%2:%3:%4")
+        .arg(hours, 2, 10, QChar('0'))
+        .arg(minutes, 2, 10, QChar('0'))
+        .arg(seconds, 2, 10, QChar('0'))
+        .arg(frames, 2, 10, QChar('0'));
+}
+
+// Very simple non-dropframe timecode adder: start + frames @ fps
+static QString addFramesToTimecode(const QString& startTc, qint64 framesToAdd, int fps)
+{
+    QRegularExpression re("^(\\d{2}):(\\d{2}):(\\d{2})[:;](\\d{2})$");
+    QRegularExpressionMatch m = re.match(startTc);
+    if (!m.hasMatch()) {
+        // Fallback: format from frames only
+        qint64 ms = (framesToAdd * 1000) / qMax(1, fps);
+        return formatHMSF(ms, fps);
+    }
+    int h = m.captured(1).toInt();
+    int min = m.captured(2).toInt();
+    int s = m.captured(3).toInt();
+    int f = m.captured(4).toInt();
+    qint64 totalFrames = ((h * 3600LL) + (min * 60LL) + s) * fps + f + framesToAdd;
+    if (totalFrames < 0) totalFrames = 0;
+    int oh = static_cast<int>(totalFrames / (fps * 3600LL));
+    totalFrames %= (fps * 3600LL);
+    int omin = static_cast<int>(totalFrames / (fps * 60LL));
+    totalFrames %= (fps * 60LL);
+    int os = static_cast<int>(totalFrames / fps);
+    int of = static_cast<int>(totalFrames % fps);
+    return QString("%1:%2:%3:%4")
+        .arg(oh, 2, 10, QChar('0'))
+        .arg(omin, 2, 10, QChar('0'))
+        .arg(os, 2, 10, QChar('0'))
+        .arg(of, 2, 10, QChar('0'));
+}
+
+void PreviewOverlay::updateVideoTimeDisplays(qint64 positionMs, qint64 durationMs)
+{
+    int fpsInt = qMax(1, static_cast<int>(qRound(detectedFps > 0.0 ? detectedFps : 24.0)));
+    if (hasEmbeddedTimecode && !embeddedStartTimecode.isEmpty()) {
+        qint64 posFrames = qRound64(positionMs * (fpsInt / 1000.0));
+        qint64 durFrames = durationMs > 0 ? qRound64(durationMs * (fpsInt / 1000.0)) : -1;
+        if (currentTimeLabel)
+            currentTimeLabel->setText(addFramesToTimecode(embeddedStartTimecode, posFrames, fpsInt));
+        if (durationTimeLabel)
+            durationTimeLabel->setText(durFrames >= 0 ? addFramesToTimecode(embeddedStartTimecode, durFrames, fpsInt) : QString("--:--:--:--"));
+    } else {
+        if (currentTimeLabel) currentTimeLabel->setText(formatHMSF(positionMs, fpsInt));
+        if (durationTimeLabel) durationTimeLabel->setText(durationMs > 0 ? formatHMSF(durationMs, fpsInt) : QString("--:--:--:--"));
+    }
+}
+
+void PreviewOverlay::updateSequenceTimeDisplays(int frameIndex, bool caching)
+{
+    int actualFrame = sequenceStartFrame + frameIndex;
+    if (currentTimeLabel) {
+        currentTimeLabel->setText(QString("Frame %1").arg(actualFrame) + (caching ? " [CACHING...]" : ""));
+    }
+    if (durationTimeLabel) {
+        durationTimeLabel->setText(QString("%1").arg(sequenceEndFrame));
+    }
+}
+
 void PreviewOverlay::navigateNext()
 {
     emit navigateRequested(1);
@@ -1424,13 +1567,17 @@ void PreviewOverlay::showSequence(const QStringList &framePaths, const QString &
         frameCache->setSequence(framePaths, currentColorSpace);
         qDebug() << "[PreviewOverlay] Frame cache initialized for sequence with" << framePaths.size() << "frames";
 
-        // Connect cache signal to update slider visualization
-        // Note: Cannot use Qt::UniqueConnection with lambdas, so we disconnect first to avoid duplicates
+        // Prepare to receive cache progress updates (disconnect to avoid duplicates)
         disconnect(frameCache, &SequenceFrameCache::frameCached, nullptr, nullptr);
-        connect(frameCache, &SequenceFrameCache::frameCached, this, [this](int frameIndex) {
-            positionSlider->markFrameCached(frameIndex);
-        });
+        // We no longer paint cache on the slider; only the cache bar reflects caching
 
+        // Update the separate cache bar as frames are cached
+        connect(frameCache, &SequenceFrameCache::frameCached, this, [this](int frameIndex){
+            if (cacheBar) {
+                cacheBar->markFrameCached(frameIndex);
+                cacheBar->show();
+            }
+        });
         // Start pre-fetching immediately (this will load frames in background)
         frameCache->startPrefetch(0);
         qDebug() << "[PreviewOverlay] Started pre-fetching frames from index 0";
@@ -1455,6 +1602,12 @@ void PreviewOverlay::showSequence(const QStringList &framePaths, const QString &
         if (!originalPixmap.isNull()) {
             imageScene->clear();
             imageItem = imageScene->addPixmap(originalPixmap);
+    // Initialize cache bar for sequence
+    if (cacheBar) {
+        cacheBar->setTotalFrames(sequenceFramePaths.size());
+        cacheBar->clearCachedFrames();
+        cacheBar->show();
+    }
             imageScene->setSceneRect(originalPixmap.rect());
             fitImageToView();
         }
@@ -1464,8 +1617,8 @@ void PreviewOverlay::showSequence(const QStringList &framePaths, const QString &
     positionSlider->setRange(0, sequenceFramePaths.size() - 1);
     positionSlider->setValue(0);
 
-    // Update time label
-    timeLabel->setText(QString("Frame %1 / %2").arg(startFrame).arg(endFrame));
+    // Update time labels
+    updateSequenceTimeDisplays(0);
 
     // Update play/pause button
     updatePlayPauseButton();
@@ -1504,8 +1657,7 @@ void PreviewOverlay::loadSequenceFrame(int frameIndex)
             positionSlider->blockSignals(true);
             positionSlider->setValue(frameIndex);
             positionSlider->blockSignals(false);
-            int actualFrame = sequenceStartFrame + frameIndex;
-            timeLabel->setText(QString("Frame %1 / %2 [CACHING...]").arg(actualFrame).arg(sequenceEndFrame));
+            updateSequenceTimeDisplays(frameIndex, true);
 
             // Schedule a retry after a short delay to check if frame is ready
             QTimer::singleShot(50, this, [this, frameIndex]() {
@@ -1567,8 +1719,7 @@ void PreviewOverlay::loadSequenceFrame(int frameIndex)
     positionSlider->setValue(frameIndex);
     positionSlider->blockSignals(false);
 
-    int actualFrame = sequenceStartFrame + frameIndex;
-    timeLabel->setText(QString("Frame %1 / %2").arg(actualFrame).arg(sequenceEndFrame));
+    updateSequenceTimeDisplays(frameIndex);
 }
 
 void PreviewOverlay::playSequence()
@@ -1753,11 +1904,11 @@ void PreviewOverlay::startFallbackVideo(const QString &filePath)
 
     if (fallbackDurationMs > 0) {
         positionSlider->setRange(0, fallbackDurationMs);
-        timeLabel->setText(QString("%1 / %2").arg(formatTime(0)).arg(formatTime(fallbackDurationMs)));
+        updateVideoTimeDisplays(0, fallbackDurationMs);
     } else {
         // Unknown duration
         positionSlider->setRange(0, 0);
-        timeLabel->setText(QString("%1 / --:--").arg(formatTime(0)));
+        updateVideoTimeDisplays(0, -1);
     }
 
     // Spin up worker thread
@@ -1853,9 +2004,9 @@ void PreviewOverlay::onFallbackFrameReady(const QImage &image, qint64 ptsMs)
     // Update UI time/slider
     if (fallbackDurationMs > 0) {
         positionSlider->setValue(static_cast<int>(ptsMs));
-        timeLabel->setText(QString("%1 / %2").arg(formatTime(ptsMs)).arg(formatTime(fallbackDurationMs)));
+        updateVideoTimeDisplays(ptsMs, fallbackDurationMs);
     } else {
-        timeLabel->setText(QString("%1 / --:--").arg(formatTime(ptsMs)));
+        updateVideoTimeDisplays(ptsMs, -1);
     }
 }
 
