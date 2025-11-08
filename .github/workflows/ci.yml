@@ -16,7 +16,7 @@ jobs:
     env:
       VCPKG_ROOT: C:\\vcpkg
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Set up Ninja
         uses: seanmiddleditch/gha-setup-ninja@v5
       - name: Install Qt (minimal)
@@ -39,7 +39,7 @@ jobs:
   build-test-ubuntu:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install deps
         run: |
           sudo apt-get update
@@ -71,7 +71,7 @@ jobs:
   coverage-ubuntu:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install deps
         run: |
           sudo apt-get update
