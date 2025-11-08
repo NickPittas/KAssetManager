@@ -187,6 +187,7 @@ private slots:
     void onFmFavoriteActivated(QListWidgetItem* item);
     void onFmTreeContextMenu(const QPoint &pos);
     void onFmShowContextMenu(const QPoint &pos);
+    void onFmItemDoubleClicked(const QModelIndex &index);
 
 public slots:
     void onFmAddToFavorites();
@@ -199,6 +200,7 @@ public slots:
     void onFmDelete();
     void onFmDeletePermanent();
     void onFmCreateFolderWithSelected();
+    void onFmBulkRename();
     void onFmNavigateBack();
     void onFmNavigateUp();
 };

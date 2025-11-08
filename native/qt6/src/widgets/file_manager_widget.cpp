@@ -36,6 +36,7 @@
 #include <QProcess>
 #include <QSortFilterProxyModel>
 #include "media_convert_dialog.h"
+#include "bulk_rename_dialog.h"
 #ifdef Q_OS_WIN
 #include <Windows.h>
 #include <shellapi.h>
@@ -275,7 +276,7 @@ void FileManagerWidget::setupUi()
     fmGridView->setDropIndicatorShown(true);
     fmGridView->setDragDropMode(QAbstractItemView::DragDrop);
     if (fmGridView->viewport()) fmGridView->viewport()->installEventFilter(this);
-    if (m_host) connect(fmGridView, &QListView::doubleClicked, m_host, &MainWindow::onFmItemDoubleClicked);
+    connect(fmGridView, &QListView::doubleClicked, this, &FileManagerWidget::onFmItemDoubleClicked);
     connect(fmGridView, &QListView::customContextMenuRequested, this, &FileManagerWidget::onFmShowContextMenu);
     fmViewStack->addWidget(fmGridView);
 
@@ -285,7 +286,7 @@ void FileManagerWidget::setupUi()
     fmListView->setSelectionBehavior(QAbstractItemView::SelectRows);
     fmListView->setSelectionMode(QAbstractItemView::ExtendedSelection);
     fmListView->setContextMenuPolicy(Qt::CustomContextMenu);
-    if (m_host) connect(fmListView, &QTableView::doubleClicked, m_host, &MainWindow::onFmItemDoubleClicked);
+    connect(fmListView, &QTableView::doubleClicked, this, &FileManagerWidget::onFmItemDoubleClicked);
     connect(fmListView, &QTableView::customContextMenuRequested, this, &FileManagerWidget::onFmShowContextMenu);
     fmViewStack->addWidget(fmListView);
 
@@ -620,7 +621,7 @@ void FileManagerWidget::onFmShowContextMenu(const QPoint &pos)
     QAction *pasteA = menu.addAction("Paste", this, &FileManagerWidget::onFmPaste, QKeySequence::Paste);
     menu.addSeparator();
     QAction *renameA = menu.addAction("Rename", this, &FileManagerWidget::onFmRename, QKeySequence(Qt::Key_F2));
-    QAction *bulkRenameA = menu.addAction("Bulk Rename...");
+    QAction *bulkRenameA = menu.addAction("Bulk Rename...", this, &FileManagerWidget::onFmBulkRename);
     QAction *delA = menu.addAction("Delete", this, &FileManagerWidget::onFmDelete, QKeySequence::Delete);
     QAction *createFolderWithSel = menu.addAction("Create Folder with Selected Files", this, &FileManagerWidget::onFmCreateFolderWithSelected);
     menu.addSeparator();
@@ -850,4 +851,21 @@ void FileManagerWidget::onFmNavigateBack()
 void FileManagerWidget::onFmNavigateUp()
 {
     if (m_host) m_host->onFmNavigateUp();
+}
+
+
+void FileManagerWidget::onFmItemDoubleClicked(const QModelIndex &index)
+{
+    if (m_host) { m_host->onFmItemDoubleClicked(index); return; }
+}
+
+void FileManagerWidget::onFmBulkRename()
+{
+    const QStringList paths = fm_selectedPaths(fmDirModel, reinterpret_cast<QListView*>(fmGridView), reinterpret_cast<QTableView*>(fmListView), fmViewStack);
+    if (paths.size() < 2) return;
+    if (m_host) m_host->releaseAnyPreviewLocksForPaths(paths);
+    BulkRenameDialog dialog(paths, this);
+    if (dialog.exec() == QDialog::Accepted) {
+        onFmRefresh();
+    }
 }
