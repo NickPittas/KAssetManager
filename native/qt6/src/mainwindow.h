@@ -311,8 +311,8 @@ private:
     // Right pane
     QFileSystemModel *fmDirModel;
     QWidget *fmToolbar;
-    QToolButton *fmBackButton;
-    QToolButton *fmUpButton;
+    QToolButton *fmBackButton = nullptr;
+    QToolButton *fmUpButton = nullptr;
     QToolButton *fmViewModeButton;
     class QSlider *fmThumbnailSizeSlider;
     QToolButton *fmPreviewToggleButton;

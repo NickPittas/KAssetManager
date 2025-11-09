@@ -1110,13 +1110,36 @@ void MainWindow::performStartupHealthCheck()
 
 void MainWindow::setupFileManagerUi()
 {
+    LogManager::instance().addLog("[TRACE] FM: setupFileManagerUi enter", "DEBUG");
     auto layout = new QVBoxLayout(fileManagerPage);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
     fileManagerWidget = new FileManagerWidget(this, fileManagerPage);
     layout->addWidget(fileManagerWidget);
+    // Build the right-side Preview+Info splitter and fix any duplicate stacks created during extraction
+    LogManager::instance().addLog("[TRACE] FM: calling ensurePreviewInfoLayout", "DEBUG");
+    fileManagerWidget->ensurePreviewInfoLayout();
+    LogManager::instance().addLog("[TRACE] FM: ensurePreviewInfoLayout returned", "DEBUG");
+
     connect(fileManagerWidget, &FileManagerWidget::navigateToPathRequested, this, [this](const QString& p, bool add){ fmNavigateToPath(p, add); });
+
+    // Ensure legacy double-click connections to MainWindow are removed
+    if (fileManagerWidget->fmGridView)
+        disconnect(fileManagerWidget->fmGridView, &QAbstractItemView::doubleClicked, this, &MainWindow::onFmItemDoubleClicked);
+    if (fileManagerWidget->fmListView)
+        disconnect(fileManagerWidget->fmListView, &QAbstractItemView::doubleClicked, this, &MainWindow::onFmItemDoubleClicked);
+
+    // Route double-clicks to the widget slot (behavior identical to original MainWindow)
+    if (fileManagerWidget->fmGridView)
+        connect(fileManagerWidget->fmGridView, &QAbstractItemView::doubleClicked,
+                fileManagerWidget, &FileManagerWidget::onFmItemDoubleClicked);
+    if (fileManagerWidget->fmListView)
+        connect(fileManagerWidget->fmListView, &QAbstractItemView::doubleClicked,
+                fileManagerWidget, &FileManagerWidget::onFmItemDoubleClicked);
+
+    LogManager::instance().addLog("[TRACE] FM: setupFileManagerUi leave", "DEBUG");
 }
+
 
 void MainWindow::onFmTreeActivated(const QModelIndex &index)
 {
@@ -1604,6 +1627,8 @@ void MainWindow::onFmCreateFolderWithSelected()
         QMessageBox::warning(this, "Error", QString("Failed to create folder: %1").arg(folderPath));
         return;
     }
+    // Release any preview locks before file ops
+    releaseAnyPreviewLocksForPaths(paths);
     // Enqueue async move of selected into the new folder
     auto &q = FileOpsQueue::instance();
     q.enqueueMove(paths, folderPath);
@@ -3353,6 +3378,21 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
         }
     }
 
+    // Handle Space key on File Manager views to toggle preview overlay
+    if (((fmGridView && (watched == fmGridView || watched == fmGridView->viewport())) ||
+         (fmListView && (watched == fmListView || watched == fmListView->viewport()))) &&
+        event->type() == QEvent::KeyPress) {
+        QKeyEvent *keyEvent = static_cast<QKeyEvent*>(event);
+        if (keyEvent->key() == Qt::Key_Space && !keyEvent->isAutoRepeat()) {
+            if (previewOverlay && previewOverlay->isVisible()) {
+                closePreview();
+                return true;
+            }
+            onFmOpenOverlay();
+            return true;
+        }
+    }
+
     // Mouse wheel zoom for File Manager image preview
     if ((watched == fmImageView || (fmImageView && watched == fmImageView->viewport())) && event->type() == QEvent::Wheel) {
         QWheelEvent *wheel = static_cast<QWheelEvent*>(event);
@@ -3501,6 +3541,15 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
                 QModelIndex srcIdx = idx;
                 if (idx.isValid() && fmProxyModel && idx.model() == fmProxyModel) srcIdx = fmProxyModel->mapToSource(idx);
 
+                // Visual highlight of valid folder drop targets in the view (mirrors tree behavior)
+                if (view && view->selectionModel()) {
+                    if (idx.isValid() && fmDirModel && fmDirModel->isDir(srcIdx)) {
+                        view->selectionModel()->select(idx, QItemSelectionModel::ClearAndSelect);
+                    } else {
+                        view->selectionModel()->clearSelection();
+                    }
+                }
+
                 QString destDir;
                 if (idx.isValid() && fmDirModel && fmDirModel->isDir(srcIdx)) destDir = fmDirModel->filePath(srcIdx);
                 else destDir = fmDirModel ? fmDirModel->rootPath() : QString();
@@ -3618,7 +3667,12 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
                 QPoint pos = dragEvent->position().toPoint();
                 QModelIndex idx = fmTree->indexAt(pos);
                 if (idx.isValid()) {
-                    fmTree->selectionModel()->select(idx, QItemSelectionModel::ClearAndSelect);
+                    fmTree->setCurrentIndex(idx);
+                    if (fmTree->selectionModel())
+                        fmTree->selectionModel()->select(idx, QItemSelectionModel::ClearAndSelect);
+                } else {
+                    if (fmTree->selectionModel())
+                        fmTree->selectionModel()->clearSelection();
                 }
                 // Prevent dropping into the same folder as the sources
                 QString destDir = (idx.isValid() && fmTreeModel) ? fmTreeModel->filePath(idx) : QString();

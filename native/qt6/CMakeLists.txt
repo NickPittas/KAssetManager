@@ -191,7 +191,7 @@ qt_add_executable(kassetmanagerqt WIN32
     src/widgets/grid_scrub_controller.h
     src/widgets/grid_scrub_controller.cpp
     src/widgets/file_manager_widget.h
-    src/widgets/file_manager_widget.cpp
+    src/widgets/file_manager_widget_rebuilt.cpp
     src/virtual_drag.cpp
     src/virtual_drag.h
     src/db.cpp

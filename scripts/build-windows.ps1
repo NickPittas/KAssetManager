@@ -151,6 +151,7 @@ if (-not $env:IMAGEMAGICK_ROOT) {
 
 if (-not $QtPrefix) { $QtPrefix = Find-QtPrefix -Hint $QtPrefix }
 Write-Host "Using Qt prefix: $QtPrefix"
+$preferVcpkgRoot = $env:VCPKG_ROOT
 Initialize-MSVC -Generator $Generator
 Initialize-QtToolchain -QtPrefix $QtPrefix
 
@@ -162,6 +163,21 @@ $configureArgs = @(
     "-G", $Generator,
     "-DCMAKE_PREFIX_PATH=$QtPrefix"
 )
+
+# If VCPKG_ROOT is set (before MSVC init), force the vcpkg toolchain explicitly to avoid VS-integrated instance
+$targetVcpkgRoot = if ($preferVcpkgRoot) { $preferVcpkgRoot } else { $env:VCPKG_ROOT }
+if ($targetVcpkgRoot) {
+    $toolchain = Join-Path $targetVcpkgRoot 'scripts/buildsystems/vcpkg.cmake'
+    if (Test-Path $toolchain) {
+        $configureArgs += @("-DCMAKE_TOOLCHAIN_FILE=$toolchain")
+        Write-Host "Using vcpkg toolchain explicitly: $toolchain" -ForegroundColor Green
+        if (-not $env:VCPKG_TARGET_TRIPLET) {
+            $configureArgs += @("-DVCPKG_TARGET_TRIPLET=x64-windows")
+        }
+    } else {
+        Write-Warning "VCPKG_ROOT is set but toolchain file not found at $toolchain"
+    }
+}
 
 # For Ninja, set build type during configuration
 if ($Generator -eq "Ninja") {
