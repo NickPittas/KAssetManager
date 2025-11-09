@@ -129,6 +129,8 @@ static size_t currentWorkingSetMB() {
 #include <QGraphicsSvgItem>
 
 #include <QImageReader>
+#include <QThread>
+
 #include <QThreadPool>
 #include <QRunnable>
 
@@ -234,7 +236,7 @@ MainWindow::MainWindow(QWidget *parent)
     // File Manager auto-refresh: watch current directory and debounce refreshes
     fmDirectoryWatcher = new QFileSystemWatcher(this);
     fmDirChangeTimer.setSingleShot(true);
-    connect(&fmDirChangeTimer, &QTimer::timeout, this, &MainWindow::onFmRefresh);
+    connect(&fmDirChangeTimer, &QTimer::timeout, fileManagerWidget, &FileManagerWidget::onFmRefresh);
     connect(fmDirectoryWatcher, &QFileSystemWatcher::directoryChanged,
             this, [this](const QString&){ fmDirChangeTimer.start(200); });
 
@@ -1123,11 +1125,6 @@ void MainWindow::setupFileManagerUi()
 
     connect(fileManagerWidget, &FileManagerWidget::navigateToPathRequested, this, [this](const QString& p, bool add){ fmNavigateToPath(p, add); });
 
-    // Ensure legacy double-click connections to MainWindow are removed
-    if (fileManagerWidget->fmGridView)
-        disconnect(fileManagerWidget->fmGridView, &QAbstractItemView::doubleClicked, this, &MainWindow::onFmItemDoubleClicked);
-    if (fileManagerWidget->fmListView)
-        disconnect(fileManagerWidget->fmListView, &QAbstractItemView::doubleClicked, this, &MainWindow::onFmItemDoubleClicked);
 
     // Route double-clicks to the widget slot (behavior identical to original MainWindow)
     if (fileManagerWidget->fmGridView)
@@ -1141,82 +1138,10 @@ void MainWindow::setupFileManagerUi()
 }
 
 
-void MainWindow::onFmTreeActivated(const QModelIndex &index)
-{
-    QString path = fmTreeModel->filePath(index);
-    if (path.isEmpty()) return;
-
-    fmNavigateToPath(path, true);
-}
 
 // Helper function to get file type icon based on extension
 
 
-void MainWindow::onFmItemDoubleClicked(const QModelIndex &index)
-{
-    QModelIndex idx = index.sibling(index.row(), 0);
-    // If view uses proxy, map to source when needed
-    QModelIndex srcIdx = idx;
-    if (fmProxyModel && idx.model() == fmProxyModel)
-        srcIdx = fmProxyModel->mapToSource(idx);
-
-    QString path = fmDirModel->filePath(srcIdx);
-    if (path.isEmpty()) return;
-
-    // If grouping is enabled and this is a representative, open sequence in overlay
-    if (fmProxyModel && fmGroupSequences && idx.model() == fmProxyModel && fmProxyModel->isRepresentativeProxyIndex(idx)) {
-        auto info = fmProxyModel->infoForProxyIndex(idx);
-        QStringList frames = reconstructSequenceFramePaths(info.reprPath, info.start, info.end);
-        if (!frames.isEmpty()) {
-            if (!previewOverlay) {
-                previewOverlay = new PreviewOverlay(this);
-                previewOverlay->setGeometry(rect());
-                connect(previewOverlay, &PreviewOverlay::closed, this, &MainWindow::closePreview);
-                connect(previewOverlay, &PreviewOverlay::navigateRequested, this, &MainWindow::changePreview);
-            } else {
-                previewOverlay->stopPlayback();
-            }
-            // Remember source view/index for focus restoration on close
-            QAbstractItemView* srcView = (fmGridView && fmGridView->isVisible() && fmGridView->hasFocus()) ? static_cast<QAbstractItemView*>(fmGridView) : static_cast<QAbstractItemView*>(fmListView);
-            fmOverlayCurrentIndex = QPersistentModelIndex(idx);
-            fmOverlaySourceView = srcView;
-            // Build display name
-            int pad = 0;
-            auto m = SequenceDetector::mainPattern().match(QFileInfo(info.reprPath).fileName());
-            if (m.hasMatch()) pad = m.captured(3).length(); else pad = QString::number(info.start).length();
-            QString s0 = QString("%1").arg(info.start, pad, 10, QLatin1Char('0'));
-            QString s1 = QString("%1").arg(info.end, pad, 10, QLatin1Char('0'));
-            QString seqName = QString("%1.[%2-%3].%4").arg(info.base, s0, s1, info.ext);
-            previewOverlay->showSequence(frames, seqName, info.start, info.end);
-            return;
-        }
-    }
-
-    QFileInfo fi(path);
-    if (fi.isDir()) {
-        fmNavigateToPath(path, true);
-        return;
-    }
-
-    const QString ext = fi.suffix();
-    if (isImageFile(ext) || isVideoFile(ext)) {
-        if (!previewOverlay) {
-            previewOverlay = new PreviewOverlay(this);
-            previewOverlay->setGeometry(rect());
-            connect(previewOverlay, &PreviewOverlay::closed, this, &MainWindow::closePreview);
-            connect(previewOverlay, &PreviewOverlay::navigateRequested, this, &MainWindow::changePreview);
-        } else {
-            previewOverlay->stopPlayback();
-        }
-        // Remember source view/index for focus restoration on close
-        QAbstractItemView* srcView = (fmGridView && fmGridView->isVisible() && fmGridView->hasFocus()) ? static_cast<QAbstractItemView*>(fmGridView) : static_cast<QAbstractItemView*>(fmListView);
-        fmOverlayCurrentIndex = QPersistentModelIndex(idx);
-        fmOverlaySourceView = srcView;
-        previewOverlay->showAsset(path, fi.fileName(), fi.suffix());
-    } else {
-        QDesktopServices::openUrl(QUrl::fromLocalFile(path));
-    }
-}
 
 static QString uniqueNameInDir(const QString &dirPath, const QString &baseName)
 {
@@ -1263,197 +1188,16 @@ QStringList getSelectedFileManagerPaths(QFileSystemModel *model, QListView *grid
     return out;
 }
 
-void MainWindow::onFmCopy()
-{
-    if (qobject_cast<QShortcut*>(sender())) {
-        QWidget* fw = QApplication::focusWidget();
-        if (fw && (qobject_cast<QLineEdit*>(fw) || fw->inherits("QTextEdit") || fw->inherits("QPlainTextEdit"))) return;
-    }
-    fmClipboard = getSelectedFileManagerPaths(fmDirModel, fmGridView, fmListView, fmViewStack);
-    fmClipboardCutMode = false;
-}
-
-void MainWindow::onFmCut()
-{
-    if (qobject_cast<QShortcut*>(sender())) {
-        QWidget* fw = QApplication::focusWidget();
-        if (fw && (qobject_cast<QLineEdit*>(fw) || fw->inherits("QTextEdit") || fw->inherits("QPlainTextEdit"))) return;
-    }
-    fmClipboard = getSelectedFileManagerPaths(fmDirModel, fmGridView, fmListView, fmViewStack);
-    fmClipboardCutMode = true;
-}
-
-void MainWindow::onFmPaste()
-{
-    if (qobject_cast<QShortcut*>(sender())) {
-        QWidget* fw = QApplication::focusWidget();
-        if (fw && (qobject_cast<QLineEdit*>(fw) || fw->inherits("QTextEdit") || fw->inherits("QPlainTextEdit"))) return;
-    }
-    if (fmClipboard.isEmpty()) return;
-    const QString destDir = fmDirModel->rootPath();
-
-    // Ensure any preview locks are released before file ops
-    if (fmMediaPlayer) { fmMediaPlayer->stop(); fmMediaPlayer->setSource(QUrl()); }
-    // Release any locks held by previews
-    releaseAnyPreviewLocksForPaths(fmClipboard);
-    // Enqueue async operation
-    auto &q = FileOpsQueue::instance();
-    if (fmClipboardCutMode) q.enqueueMove(fmClipboard, destDir);
-    else q.enqueueCopy(fmClipboard, destDir);
-
-    if (!fileOpsDialog) fileOpsDialog = new FileOpsProgressDialog(this);
-    fileOpsDialog->show(); fileOpsDialog->raise(); fileOpsDialog->activateWindow();
-
-    fmClipboard.clear();
-    fmClipboardCutMode = false;
-}
-
-void MainWindow::onFmDelete()
-{
-    if (qobject_cast<QShortcut*>(sender())) {
-        QWidget* fw = QApplication::focusWidget();
-        if (fw && (qobject_cast<QLineEdit*>(fw) || fw->inherits("QTextEdit") || fw->inherits("QPlainTextEdit"))) return;
-    }
-    QStringList paths = getSelectedFileManagerPaths(fmDirModel, fmGridView, fmListView, fmViewStack);
-    if (paths.isEmpty()) return;
 
 
-    // Ensure any preview locks are released before file ops
-    releaseAnyPreviewLocksForPaths(paths);
-    // Enqueue async delete
-    auto &q = FileOpsQueue::instance();
-    q.enqueueDelete(paths);
-
-}
 
 
-void MainWindow::onFmDeletePermanent()
-{
-    if (qobject_cast<QShortcut*>(sender())) {
-        QWidget* fw = QApplication::focusWidget();
-        if (fw && (qobject_cast<QLineEdit*>(fw) || fw->inherits("QTextEdit") || fw->inherits("QPlainTextEdit"))) return;
-    }
-    QStringList paths = getSelectedFileManagerPaths(fmDirModel, fmGridView, fmListView, fmViewStack);
-    if (paths.isEmpty()) return;
 
 
-    // Ensure any preview locks are released before file ops
-    releaseAnyPreviewLocksForPaths(paths);
-    auto &q = FileOpsQueue::instance();
-    q.enqueueDeletePermanent(paths);
-
-}
-
-void MainWindow::onFmBackToParent()
-{
-    if (qobject_cast<QShortcut*>(sender())) {
-        QWidget* fw = QApplication::focusWidget();
-        if (fw && (qobject_cast<QLineEdit*>(fw) || fw->inherits("QTextEdit") || fw->inherits("QPlainTextEdit"))) return;
-    }
-    onFmNavigateUp();
-}
-
-void MainWindow::onFmRefresh()
-{
-    if (!fmDirModel) return;
-
-    // Get the current directory path
-    QString currentPath = fmDirModel->rootPath();
-
-    if (currentPath.isEmpty()) {
-        // If no specific path is set, refresh the entire model
-        fmDirModel->setRootPath("");
-        if (fmTreeModel) {
-            fmTreeModel->setRootPath("");
-        }
-        statusBar()->showMessage("File Manager refreshed", 2000);
-        return;
-    }
-
-    // Clear any cached thumbnails for this directory
-    LivePreviewManager::instance().clear();
-
-    // Force QFileSystemModel to re-read the directory
-    // We do this by temporarily setting a different root and then setting it back
-    QString tempPath = QDir::tempPath();
-    fmDirModel->setRootPath(tempPath);
-    fmDirModel->setRootPath(currentPath);
-
-    // Also refresh the tree model
-    if (fmTreeModel) {
-        fmTreeModel->setRootPath("");
-    }
-
-    // Rebuild proxy model if it exists
-    if (fmProxyModel) {
-        fmProxyModel->rebuildForRoot(currentPath);
-    }
-
-    // Force viewport updates
-    if (fmGridView) {
-        fmGridView->viewport()->update();
-    }
-    if (fmListView) {
-        fmListView->viewport()->update();
-    }
-
-    statusBar()->showMessage("Folder refreshed", 2000);
-}
-
-void MainWindow::onFmRename()
-{
-    if (qobject_cast<QShortcut*>(sender())) {
-        QWidget* fw = QApplication::focusWidget();
-        if (fw && (qobject_cast<QLineEdit*>(fw) || fw->inherits("QTextEdit") || fw->inherits("QPlainTextEdit"))) return;
-    }
-    QStringList paths = getSelectedFileManagerPaths(fmDirModel, fmGridView, fmListView, fmViewStack);
-
-    if (paths.size() != 1) return;
-    QString p = paths.first();
-    releaseAnyPreviewLocksForPaths(QStringList{p});
-    QFileInfo fi(p);
-    bool ok = false;
-    QString newName = QInputDialog::getText(this, "Rename", "New name:", QLineEdit::Normal, fi.fileName(), &ok);
-    if (!ok || newName.trimmed().isEmpty()) return;
-    QString dest = fi.absolutePath() + QDir::separator() + newName.trimmed();
-    if (fi.isDir()) {
-        QDir parent(fi.absolutePath());
-        parent.rename(fi.fileName(), newName.trimmed());
-    } else {
-        QFile::rename(p, dest);
-    }
-}
-
-void MainWindow::onFmBulkRename()
-{
-    QStringList paths = getSelectedFileManagerPaths(fmDirModel, fmGridView, fmListView, fmViewStack);
-    if (paths.size() < 2) return;
 
 
-    releaseAnyPreviewLocksForPaths(paths);
 
-    BulkRenameDialog dialog(paths, this);
-    if (dialog.exec() == QDialog::Accepted) {
-        // Refresh the file manager view
-        if (fmDirModel) {
-            QString currentPath = fmDirModel->rootPath();
-            fmDirModel->setRootPath("");
-            fmDirModel->setRootPath(currentPath);
-        }
-        statusBar()->showMessage("Bulk rename completed", 3000);
-    }
-}
 
-void MainWindow::onFmNewFolder()
-{
-    if (qobject_cast<QShortcut*>(sender())) {
-        QWidget* fw = QApplication::focusWidget();
-        if (fw && (qobject_cast<QLineEdit*>(fw) || fw->inherits("QTextEdit") || fw->inherits("QPlainTextEdit"))) return;
-    }
-    const QString destDir = fmDirModel->rootPath();
-    QString path = uniqueNameInDir(destDir, "New Folder");
-    QDir().mkpath(path);
-}
 
 void MainWindow::onFmAddToFavorites()
 {
@@ -1602,87 +1346,7 @@ void MainWindow::releaseAnyPreviewLocksForPaths(const QStringList& paths)
 }
 
 
-void MainWindow::onFmCreateFolderWithSelected()
-{
-    if (qobject_cast<QShortcut*>(sender())) {
-        QWidget* fw = QApplication::focusWidget();
-        if (fw && (qobject_cast<QLineEdit*>(fw) || fw->inherits("QTextEdit") || fw->inherits("QPlainTextEdit"))) return;
-    }
-    QStringList paths = getSelectedFileManagerPaths(fmDirModel, fmGridView, fmListView, fmViewStack);
-    if (paths.isEmpty()) return;
-    // Destination directory is current root of fmDirModel
-    const QString destDir = fmDirModel->rootPath();
-    bool ok=false;
-    QString folderName = QInputDialog::getText(this, "Create Folder", "Enter folder name:", QLineEdit::Normal, "New Folder", &ok);
-    if (!ok) return;
-    folderName = folderName.trimmed();
-    if (folderName.isEmpty()) return;
-    QDir dd(destDir);
-    QString folderPath = dd.filePath(folderName);
-    if (FileUtils::pathExists(folderPath)) {
-        // attempt unique suffix
-        int i=2; QString base = folderName; while (FileUtils::pathExists(folderPath)) { folderName = QString("%1 (%2)").arg(base).arg(i++); folderPath = dd.filePath(folderName);}
-    }
-    if (!dd.mkpath(folderPath)) {
-        QMessageBox::warning(this, "Error", QString("Failed to create folder: %1").arg(folderPath));
-        return;
-    }
-    // Release any preview locks before file ops
-    releaseAnyPreviewLocksForPaths(paths);
-    // Enqueue async move of selected into the new folder
-    auto &q = FileOpsQueue::instance();
-    q.enqueueMove(paths, folderPath);
-    if (!fileOpsDialog) fileOpsDialog = new FileOpsProgressDialog(this);
-    fileOpsDialog->show(); fileOpsDialog->raise(); fileOpsDialog->activateWindow();
-}
 
-void MainWindow::onFmViewModeToggled()
-{
-    fmIsGridMode = !fmIsGridMode;
-    fmViewStack->setCurrentIndex(fmIsGridMode ? 0 : 1);
-    fmViewModeButton->setIcon(fmIsGridMode ? icoGrid() : icoList());
-
-    // Keep the current folder when switching views
-    if (fmDirModel) {
-        const QString path = fmDirModel->rootPath();
-        if (!path.isEmpty()) {
-            QModelIndex srcRoot = fmDirModel->index(path);
-            if (fmProxyModel) {
-                fmProxyModel->rebuildForRoot(path);
-                QModelIndex proxyRoot = fmProxyModel->mapFromSource(srcRoot);
-                if (fmGridView) fmGridView->setRootIndex(proxyRoot);
-                if (fmListView) fmListView->setRootIndex(proxyRoot);
-            } else {
-                if (fmGridView) fmGridView->setRootIndex(srcRoot);
-                if (fmListView) fmListView->setRootIndex(srcRoot);
-            }
-        }
-    }
-
-    // Grid view always maintains ascending alphabetical sort with folders first
-    // regardless of List view's current sort order
-    if (fmIsGridMode && fmProxyModel) {
-        fmProxyModel->sort(0, Qt::AscendingOrder);
-    }
-
-    // Persist immediately
-    QSettings s("AugmentCode", "KAssetManager");
-    s.setValue("FileManager/ViewMode", fmIsGridMode);
-    s.sync();
-}
-
-void MainWindow::onFmThumbnailSizeChanged(int size)
-{
-    if (fmGridView) {
-        fmGridView->setIconSize(QSize(size, size));
-        fmGridView->setGridSize(QSize(size + 24, size + 40));
-        if (auto *d = dynamic_cast<FmItemDelegate*>(fmGridView->itemDelegate())) d->setThumbnailSize(size);
-        // Trigger viewport update without resetting view state (which would clear root index)
-        fmGridView->viewport()->update();
-    }
-    QSettings s("AugmentCode", "KAssetManager");
-    s.setValue("FileManager/GridThumbSize", size);
-}
 
 
 void MainWindow::onAddSelectionToAssetLibrary()
@@ -1917,7 +1581,7 @@ void MainWindow::setupConnections()
     // Auto-refresh File Manager after file operations complete
     connect(&FileOpsQueue::instance(), &FileOpsQueue::itemFinished,
             this, [this](int, bool success, const QString&){
-                if (success) QTimer::singleShot(100, this, &MainWindow::onFmRefresh);
+                if (success) QTimer::singleShot(100, this, [this]{ if (fileManagerWidget) fileManagerWidget->onFmRefresh(); });
             });
 
 }
@@ -2065,8 +1729,8 @@ void MainWindow::onAssetContextMenu(const QPoint &pos)
             releaseAnyPreviewLocksForPaths(selectedAssetFilePaths);
             auto *dlg = new MediaConvertDialog(selectedAssetFilePaths, this);
             dlg->setAttribute(Qt::WA_DeleteOnClose);
-            connect(dlg, &QDialog::accepted, this, &MainWindow::onFmRefresh);
-            connect(dlg, &QObject::destroyed, this, [this](){ QTimer::singleShot(100, this, &MainWindow::onFmRefresh); });
+            connect(dlg, &QDialog::accepted, this, [this]{ if (fileManagerWidget) fileManagerWidget->onFmRefresh(); });
+            connect(dlg, &QObject::destroyed, this, [this](){ QTimer::singleShot(100, this, [this]{ if (fileManagerWidget) fileManagerWidget->onFmRefresh(); }); });
             dlg->show(); dlg->raise(); dlg->activateWindow();
 
         } else if (selected && assignTagMenu->actions().contains(selected)) {
@@ -2310,8 +1974,7 @@ void MainWindow::showPreview(int index)
     bool isSequence = modelIndex.data(AssetsModel::IsSequenceRole).toBool();
 
     if (!previewOverlay) {
-        previewOverlay = new PreviewOverlay(this);
-        previewOverlay->setGeometry(rect());
+        previewOverlay = new PreviewOverlay(nullptr);
 
         connect(previewOverlay, &PreviewOverlay::closed, this, &MainWindow::closePreview);
         connect(previewOverlay, &PreviewOverlay::navigateRequested, this, &MainWindow::changePreview);
@@ -3393,84 +3056,49 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
         }
     }
 
-    // Mouse wheel zoom for File Manager image preview
+    // Mouse wheel zoom for File Manager image/video preview
     if ((watched == fmImageView || (fmImageView && watched == fmImageView->viewport())) && event->type() == QEvent::Wheel) {
         QWheelEvent *wheel = static_cast<QWheelEvent*>(event);
         const int delta = wheel->angleDelta().y();
         double factor = (delta > 0) ? 1.15 : 0.85;
 
-        if (fmImageView && fmImageItem && !fmImageItem->pixmap().isNull()) {
-            // Get current transform scale
-            QTransform currentTransform = fmImageView->transform();
-            double currentScale = currentTransform.m11(); // horizontal scale factor
+        if (fmImageView) {
+            auto applyZoomFitLogic = [&](QGraphicsItem *item){
+                // Get current transform scale
+                QTransform currentTransform = fmImageView->transform();
+                double currentScale = currentTransform.m11();
 
-            // Apply zoom
-            fmImageView->scale(factor, factor);
+                // Apply zoom
+                fmImageView->scale(factor, factor);
 
-            // If zooming out (factor < 1.0), check if we should reset to fit-to-view
-            if (delta < 0) {
-                double newScale = currentScale * factor;
-
-                // Calculate what the fit-to-view scale would be
-                QRectF itemRect = fmImageItem->boundingRect();
-                QRectF viewRect = fmImageView->viewport()->rect();
-                double fitScale = qMin(viewRect.width() / itemRect.width(),
-                                      viewRect.height() / itemRect.height());
-
-                // If zoomed out beyond fit-to-view, reset to fit-to-view and center
-                if (newScale <= fitScale * 0.95) { // 0.95 threshold to avoid flickering
-                    fmImageScene->setSceneRect(fmImageItem->boundingRect());
-                    fmImageView->resetTransform();
-                    fmImageView->centerOn(fmImageItem);
-                    fmImageView->fitInView(fmImageItem, Qt::KeepAspectRatio);
-                    fmImageFitToView = true;
-                    return true;
+                if (delta < 0 && item) {
+                    double newScale = currentScale * factor;
+                    QRectF itemRect = item->boundingRect();
+                    QRectF viewRect = fmImageView->viewport()->rect();
+                    double fitScale = qMin(viewRect.width() / itemRect.width(),
+                                            viewRect.height() / itemRect.height());
+                    if (newScale <= fitScale * 0.95) {
+                        if (fmImageScene) fmImageScene->setSceneRect(itemRect);
+                        fmImageView->resetTransform();
+                        fmImageView->centerOn(item);
+                        fmImageView->fitInView(item, Qt::KeepAspectRatio);
+                        fmImageFitToView = true;
+                        return true;
+                    }
                 }
-            }
+                fmImageFitToView = false;
+                return true;
+            };
 
-            // User performed manual zoom; stop auto-fit
-            fmImageFitToView = false;
+            if (fmImageItem && !fmImageItem->pixmap().isNull()) {
+                if (applyZoomFitLogic(fmImageItem)) return true;
+            } else if (fmVideoItem && fmVideoItem->isVisible()) {
+                if (applyZoomFitLogic(fmVideoItem)) return true;
+            }
         }
         return true;
     }
 
-    // Start drag from File Manager preview pane (image/video): include full sequence if present
-    if (((fmImageView && (watched == fmImageView || watched == fmImageView->viewport())) || (fmVideoWidget && watched == fmVideoWidget))) {
-        if (event->type() == QEvent::MouseButtonPress) {
-            QMouseEvent *me = static_cast<QMouseEvent*>(event);
-            if (me->button() == Qt::LeftButton) {
-                fmPreviewDragStartPos = me->pos();
-                fmPreviewDragPending = true;
-            }
-        } else if (event->type() == QEvent::MouseMove) {
-            QMouseEvent *me = static_cast<QMouseEvent*>(event);
-            if (fmPreviewDragPending && (me->buttons() & Qt::LeftButton)) {
-                if ((me->pos() - fmPreviewDragStartPos).manhattanLength() >= QApplication::startDragDistance()) {
-                    // Build adaptive native drag: frames for Explorer/self, folder for sequences in DCCs
-                    QVector<QString> frameVec;
-                    QVector<QString> folderVec;
-                    if (fmIsSequence && !fmSequenceFramePaths.isEmpty()) {
-                        for (const QString &p : fmSequenceFramePaths) frameVec.push_back(p);
-                        const QString dirPath = QFileInfo(fmSequenceFramePaths.first()).absolutePath();
-                        folderVec.push_back(dirPath);
-                    } else if (!fmCurrentPreviewPath.isEmpty()) {
-                        frameVec.push_back(fmCurrentPreviewPath);
-                        folderVec.push_back(fmCurrentPreviewPath); // allow direct file drop to DCCs
-                    }
-                    if (!frameVec.isEmpty() || !folderVec.isEmpty()) {
-                        VirtualDrag::startAdaptivePathsDrag(frameVec, folderVec);
-                    }
-                    fmPreviewDragPending = false;
-                    return true;
-                }
-            }
-        } else if (event->type() == QEvent::MouseButtonRelease) {
-            QMouseEvent *me = static_cast<QMouseEvent*>(event);
-            if (me->button() == Qt::LeftButton) {
-                fmPreviewDragPending = false;
-            }
-        }
-    }
 
     // Keep image fitted on view resize if auto-fit is active
     if ((watched == fmImageView || (fmImageView && watched == fmImageView->viewport())) && event->type() == QEvent::Resize) {
@@ -4121,7 +3749,7 @@ void MainWindow::onOpenSettings()
 {
     SettingsDialog dialog(this);
     if (dialog.exec() == QDialog::Accepted) {
-        applyFmShortcuts();
+        if (fileManagerWidget) fileManagerWidget->reapplyShortcutsFromSettings();
     }
 }
 
@@ -4676,6 +4304,7 @@ void MainWindow::clearFmPreview()
 {
     if (fmMediaPlayer) { fmMediaPlayer->stop(); fmMediaPlayer->setSource(QUrl()); }
     if (fmVideoWidget) fmVideoWidget->hide();
+    if (fmVideoItem) fmVideoItem->setVisible(false);
     if (fmPrevFrameBtn) fmPrevFrameBtn->hide();
     if (fmPlayPauseBtn) fmPlayPauseBtn->hide();
     if (fmNextFrameBtn) fmNextFrameBtn->hide();
@@ -4683,6 +4312,9 @@ void MainWindow::clearFmPreview()
     if (fmTimeLabel) fmTimeLabel->hide();
     if (fmVolumeSlider) fmVolumeSlider->hide();
     if (fmMuteBtn) fmMuteBtn->hide();
+
+    if (fmColorSpaceLabel) fmColorSpaceLabel->hide();
+    if (fmColorSpaceCombo) fmColorSpaceCombo->hide();
 
     // Reset sequence state
     if (fmSequenceTimer) fmSequenceTimer->stop();
@@ -4760,6 +4392,13 @@ void MainWindow::updateFmPreviewForIndex(const QModelIndex &idx)
         if (fmNextFrameBtn) fmNextFrameBtn->show();
         if (fmPositionSlider) { fmPositionSlider->show(); fmPositionSlider->setRange(0, frames.size()-1); fmPositionSlider->setValue(0); }
         if (fmTimeLabel) { fmTimeLabel->show(); fmTimeLabel->setText(QString("Frame %1 / %2").arg(info.start).arg(info.end)); }
+        // Color space selector visibility for HDR sequences (EXR/HDR/TIF/PSD)
+        if (fmColorSpaceCombo && fmColorSpaceLabel) {
+            const QString ext = QFileInfo(reprPath).suffix().toLower();
+            const bool hdr = (ext == "exr" || ext == "hdr" || ext == "tif" || ext == "tiff" || ext == "psd");
+            fmColorSpaceLabel->setVisible(hdr);
+            fmColorSpaceCombo->setVisible(hdr);
+        }
 
         // Audio: sequences have no audio - disable and show No Audio icon
         if (fmMuteBtn) { fmMuteBtn->show(); fmMuteBtn->setEnabled(false); fmMuteBtn->setIcon(icoMediaNoAudio()); }
@@ -5075,14 +4714,24 @@ if (isExcelFile(ext)) {
 
     if (isAudioFile(ext) || isVideoFile(ext)) {
         // Media branch: audio/video
+        fmCurrentPreviewPath = path;
         if (isVideoFile(ext)) {
-            fmCurrentPreviewPath = path;
-            if (fmVideoWidget) fmVideoWidget->show();
-            if (fmImageView) fmImageView->hide();
+            if (fmVideoWidget) fmVideoWidget->hide();
+            if (fmImageView) fmImageView->show();
+            if (fmImageItem) fmImageItem->setPixmap(QPixmap());
+            if (fmVideoItem) {
+                fmVideoItem->setVisible(true);
+                if (fmImageView) {
+                    fmImageView->resetTransform();
+                    fmImageView->fitInView(fmVideoItem, Qt::KeepAspectRatio);
+                    fmImageFitToView = true;
+                }
+            }
         } else {
-            fmCurrentPreviewPath = path;
+            // Pure audio: hide visuals
             if (fmVideoWidget) fmVideoWidget->hide();
             if (fmImageView) fmImageView->hide();
+            if (fmVideoItem) fmVideoItem->setVisible(false);
         }
         if (fmPlayPauseBtn) fmPlayPauseBtn->show();
         if (fmPositionSlider) fmPositionSlider->show();
@@ -5172,34 +4821,57 @@ void MainWindow::loadFmSequenceFrame(int index)
     if (index >= fmSequenceFramePaths.size()) index = fmSequenceFramePaths.size()-1;
     fmSequenceCurrentIndex = index;
     const QString path = fmSequenceFramePaths.at(index);
-    QPixmap px;
-    if (OIIOImageLoader::isOIIOSupported(path)) {
-        QImage img = OIIOImageLoader::loadImage(path, 0, 0, OIIOImageLoader::ColorSpace::sRGB);
-        if (!img.isNull()) px = QPixmap::fromImage(img);
-    }
-    if (px.isNull()) {
-        QImageReader reader(path);
-        reader.setAutoTransform(true);
-        QImage img = reader.read();
-        if (!img.isNull()) px = QPixmap::fromImage(img);
-    }
-    if (!px.isNull()) {
-        if (fmImageItem) {
-            fmImageItem->setPixmap(px);
-            fmImageItem->setTransformationMode(Qt::SmoothTransformation);
-        }
-        if (fmImageScene && fmImageItem) fmImageScene->setSceneRect(fmImageItem->boundingRect());
-        if (fmImageView && fmImageItem) {
-            fmImageView->resetTransform();
-            fmImageView->centerOn(fmImageItem);
-            fmImageView->fitInView(fmImageItem, Qt::KeepAspectRatio);
-            fmImageFitToView = true;
-            fmImageView->setBackgroundBrush(QColor("#0a0a0a"));
-            fmImageView->show();
-        }
-    }
+
+    // Increment epoch to invalidate any in-flight workers
+    const int epoch = ++fmSeqLoadEpoch;
+
+    // UI updates happen immediately: slider/time
     if (fmPositionSlider) { fmPositionSlider->blockSignals(true); fmPositionSlider->setRange(0, fmSequenceFramePaths.size()-1); fmPositionSlider->setValue(index); fmPositionSlider->blockSignals(false); }
     if (fmTimeLabel) { fmTimeLabel->setText(QString("Frame %1 / %2").arg(fmSequenceStartFrame + index).arg(fmSequenceEndFrame)); }
+
+    // Determine color space from dropdown (default sRGB)
+    OIIOImageLoader::ColorSpace cs = OIIOImageLoader::ColorSpace::sRGB;
+    if (fmColorSpaceCombo) {
+        const int cidx = fmColorSpaceCombo->currentIndex();
+        if (cidx == 0) cs = OIIOImageLoader::ColorSpace::Linear;
+        else if (cidx == 1) cs = OIIOImageLoader::ColorSpace::sRGB;
+        else cs = OIIOImageLoader::ColorSpace::Rec709;
+    }
+
+    // Start a worker thread to load the frame off the UI thread
+    if (fmSeqWorkerThread) { QObject::disconnect(fmSeqWorkerThread, nullptr, nullptr, nullptr); fmSeqWorkerThread->requestInterruption(); fmSeqWorkerThread->deleteLater(); fmSeqWorkerThread = nullptr; }
+    fmSeqWorkerThread = QThread::create([this, path, cs, epoch]() {
+        QImage img;
+        if (OIIOImageLoader::isOIIOSupported(path)) {
+            img = OIIOImageLoader::loadImage(path, 0, 0, cs);
+        }
+        if (img.isNull()) {
+            QImageReader reader(path);
+            reader.setAutoTransform(true);
+            img = reader.read();
+        }
+        // Post result back to UI thread
+        QMetaObject::invokeMethod(this, [this, img, epoch]() {
+            if (epoch != fmSeqLoadEpoch) return; // stale
+            if (!img.isNull()) {
+                if (fmImageItem) {
+                    fmImageItem->setPixmap(QPixmap::fromImage(img));
+                    fmImageItem->setTransformationMode(Qt::SmoothTransformation);
+                }
+                if (fmImageScene && fmImageItem) fmImageScene->setSceneRect(fmImageItem->boundingRect());
+                if (fmImageView && fmImageItem) {
+                    if (fmImageFitToView) {
+                        fmImageView->resetTransform();
+                        fmImageView->centerOn(fmImageItem);
+                        fmImageView->fitInView(fmImageItem, Qt::KeepAspectRatio);
+                    }
+                    fmImageView->setBackgroundBrush(QColor("#0a0a0a"));
+                    fmImageView->show();
+                }
+            }
+        }, Qt::QueuedConnection);
+    });
+    fmSeqWorkerThread->start();
 }
 
 void MainWindow::playFmSequence()
@@ -5513,8 +5185,7 @@ void MainWindow::onFmOpenOverlay()
         QStringList frames = reconstructSequenceFramePaths(info.reprPath, info.start, info.end);
         if (!frames.isEmpty()) {
             if (!previewOverlay) {
-                previewOverlay = new PreviewOverlay(this);
-                previewOverlay->setGeometry(rect());
+                previewOverlay = new PreviewOverlay(nullptr);
                 connect(previewOverlay, &PreviewOverlay::closed, this, &MainWindow::closePreview);
                 connect(previewOverlay, &PreviewOverlay::navigateRequested, this, &MainWindow::changeFmPreview);
             } else {
@@ -5540,8 +5211,7 @@ void MainWindow::onFmOpenOverlay()
     QFileInfo info(path);
     if (!info.exists()) return;
     if (!previewOverlay) {
-        previewOverlay = new PreviewOverlay(this);
-        previewOverlay->setGeometry(rect());
+        previewOverlay = new PreviewOverlay(nullptr);
         connect(previewOverlay, &PreviewOverlay::closed, this, &MainWindow::closePreview);
         connect(previewOverlay, &PreviewOverlay::navigateRequested, this, &MainWindow::changeFmPreview);
     } else {
@@ -5651,88 +5321,8 @@ void MainWindow::closeEvent(QCloseEvent* event)
 }
 
 
-void MainWindow::applyFmShortcuts()
-{
-    QSettings s("AugmentCode", "KAssetManager");
-    s.beginGroup("FileManager/Shortcuts");
-    for (auto it = fmShortcutObjs.begin(); it != fmShortcutObjs.end(); ++it) {
-        const QString action = it.key();
-        QShortcut* sc = it.value();
-        if (!sc) continue;
-        const QString stored = s.value(action).toString();
-        if (!stored.isEmpty()) sc->setKey(QKeySequence(stored));
-    }
-    s.endGroup();
-}
 
-void MainWindow::onFmGroupSequencesToggled(bool checked)
-{
-    fmGroupSequences = checked;
-    if (fmProxyModel) fmProxyModel->setGroupingEnabled(checked);
-    // Update LivePreviewManager to enable/disable sequence detection
-    LivePreviewManager::instance().setSequenceDetectionEnabled(checked);
-    // Update scrub controller to know about grouping state (for selective scrubbing)
-    if (fmScrubController) fmScrubController->setSequenceGroupingEnabled(checked);
-    // Clear the cache to force regeneration of thumbnails with new settings
-    LivePreviewManager::instance().clear();
-    // Rebuild for current root
-    if (fmDirModel && fmProxyModel) {
-        QString rootPath = fmDirModel->rootPath();
-        if (!rootPath.isEmpty()) fmProxyModel->rebuildForRoot(rootPath);
-    }
-    // Force complete repaint of grid view to regenerate thumbnails
-    if (fmGridView) {
-        fmGridView->viewport()->update();
-        // Also schedule a delayed update to catch async thumbnail loads
-        QTimer::singleShot(100, fmGridView->viewport(), [this]() {
-            if (fmGridView) fmGridView->viewport()->update();
-        });
-        QTimer::singleShot(500, fmGridView->viewport(), [this]() {
-            if (fmGridView) fmGridView->viewport()->update();
-        });
-    }
-    QSettings s("AugmentCode", "KAssetManager");
-    s.setValue("FileManager/GroupSequences", checked);
-}
 
-void MainWindow::onFmHideFoldersToggled(bool checked)
-{
-    fmHideFolders = checked;
-    if (fmDirModel) {
-        // Preserve current path
-        QString currentPath = fmDirModel->rootPath();
-
-        // Update source model filter to hide/show folders in the listing
-        QDir::Filters filters = QDir::NoDotAndDotDot | (checked ? QDir::Files : QDir::AllEntries);
-        fmDirModel->setFilter(filters);
-
-        // Rebuild proxy and restore root
-        if (!currentPath.isEmpty()) {
-            QModelIndex srcRoot = fmDirModel->index(currentPath);
-            if (fmProxyModel) {
-                fmProxyModel->rebuildForRoot(currentPath);
-                QModelIndex proxyRoot = fmProxyModel->mapFromSource(srcRoot);
-                if (fmGridView) fmGridView->setRootIndex(proxyRoot);
-                if (fmListView) fmListView->setRootIndex(proxyRoot);
-            } else {
-                if (fmGridView) fmGridView->setRootIndex(srcRoot);
-                if (fmListView) fmListView->setRootIndex(srcRoot);
-            }
-        }
-    }
-    QSettings s("AugmentCode", "KAssetManager");
-    s.setValue("FileManager/HideFolders", checked);
-}
-
-QKeySequence MainWindow::fmShortcutFor(const QString& actionName, const QKeySequence& def)
-{
-    QSettings s("AugmentCode", "KAssetManager");
-    s.beginGroup("FileManager/Shortcuts");
-    const QString stored = s.value(actionName).toString();
-    s.endGroup();
-    if (stored.isEmpty()) return def;
-    return QKeySequence(stored);
-}
 
 void MainWindow::showDatabaseHealthDialog()
 {

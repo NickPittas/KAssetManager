@@ -6,7 +6,7 @@
 #include <QPushButton>
 #include <QSlider>
 #include <QMediaPlayer>
-#include <QVideoWidget>
+#include <QGraphicsVideoItem>
 #include <QAudioOutput>
 #include <QKeyEvent>
 #include <QTimer>
@@ -325,7 +325,7 @@ private:
     QGraphicsScene *imageScene;
     QGraphicsPixmapItem *imageItem;
     QGraphicsSvgItem *svgItem;
-    QVideoWidget *videoWidget;
+    QGraphicsVideoItem *videoItem;
     QWidget *controlsWidget;
     QPushButton *playPauseBtn;
     QPushButton *prevFrameBtn;
@@ -389,10 +389,12 @@ private:
     QPixmap originalPixmap;
     QPoint lastPanPoint;
     bool isPanning;
+    bool fitToView;        // true = auto-fit, false = preserve user zoom/pan
+    bool initialSized;     // window initial size set to content once per load
 
 
 	    // Drag from overlay preview (image/video)
-	    QPoint overlayDragStartPos; bool overlayDragPending = false;
+
 
     // Image sequence playback state
     bool isSequence;

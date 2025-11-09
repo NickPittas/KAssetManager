@@ -27,6 +27,8 @@
 
 #include <QFileSystemWatcher>
 #include <QToolButton>
+#include <QFutureWatcher>
+#include <QImage>
 
 class FileManagerWidget;
 class VirtualFolderTreeModel;
@@ -111,10 +113,6 @@ private slots:
     void performStartupHealthCheck();
 
     // File Manager slots
-    void onFmTreeActivated(const QModelIndex &index);
-    void onFmItemDoubleClicked(const QModelIndex &index);
-    void onFmViewModeToggled();
-    void onFmThumbnailSizeChanged(int size);
     void onAddSelectionToAssetLibrary();
     void onFmAddToFavorites();
     void onFmRemoveFavorite();
@@ -122,20 +120,6 @@ private slots:
     void onFmNavigateBack();
     void onFmNavigateUp();
 
-    // File operations
-    void onFmCopy();
-    void onFmCut();
-    void onFmPaste();
-    void onFmDelete();
-    void onFmDeletePermanent();
-    void onFmRename();
-    void onFmBulkRename();
-    void onFmNewFolder();
-    void onFmCreateFolderWithSelected();
-    void onFmBackToParent();
-    void onFmRefresh();
-    void onFmGroupSequencesToggled(bool checked);
-    void onFmHideFoldersToggled(bool checked);
 
     // Everything Search
     void onEverythingSearchAssetManager();
@@ -339,7 +323,8 @@ private:
     class QGraphicsView *fmImageView = nullptr;
     class QGraphicsScene *fmImageScene = nullptr;
     class QGraphicsPixmapItem *fmImageItem = nullptr;
-    class QVideoWidget *fmVideoWidget = nullptr;
+    class QGraphicsVideoItem *fmVideoItem = nullptr; // video in graphics view for zoom/pan
+    class QVideoWidget *fmVideoWidget = nullptr; // legacy fallback (hidden)
     // Additional preview widgets
     class QPlainTextEdit *fmTextView = nullptr;           // TXT/LOG
     class QTableView *fmCsvView = nullptr;                // CSV table
@@ -353,18 +338,13 @@ private:
     // State for image/alpha
     bool fmImageFitToView = true; // auto fit image to view and refit on resize until user zooms manually
     QImage fmOriginalImage; QString fmCurrentPreviewPath; bool fmPreviewHasAlpha = false; bool fmAlphaOnlyMode = false;
-    QPoint fmPreviewDragStartPos; bool fmPreviewDragPending = false;
+
     // Media
     class QMediaPlayer *fmMediaPlayer;
     class QAudioOutput *fmAudioOutput;
     QPushButton *fmPlayPauseBtn;
     QPushButton *fmPrevFrameBtn = nullptr;
     QPushButton *fmNextFrameBtn = nullptr;
-    // Shortcuts management for File Manager
-    QHash<QString, class QShortcut*> fmShortcutObjs;
-    void applyFmShortcuts();
-    static QKeySequence fmShortcutFor(const QString& actionName, const QKeySequence& def);
-
     // Sequence preview helpers (File Manager)
     void loadFmSequenceFrame(int index);
     void playFmSequence();
@@ -379,6 +359,14 @@ private:
     QSlider *fmPositionSlider;
     QLabel *fmTimeLabel;
     QSlider *fmVolumeSlider;
+    // Color space controls (HDR sequences)
+    class QComboBox *fmColorSpaceCombo = nullptr;
+    QLabel *fmColorSpaceLabel = nullptr;
+    // Async sequence frame loading to avoid UI stalls
+    int fmSeqLoadEpoch = 0;
+    QFutureWatcher<QImage> *fmSeqLoadWatcher = nullptr; // not used currently
+    class QThread *fmSeqWorkerThread = nullptr;
+
 
     // Sequence playback state for File Manager preview
     bool fmIsSequence = false;

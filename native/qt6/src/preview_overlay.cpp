@@ -54,6 +54,9 @@
 #include <QDrag>
 #include <QMimeData>
 #include <QUrl>
+#include <QGuiApplication>
+#include <QScreen>
+#include "star_rating_widget.h"
 
 // Load media icons from disk without recoloring; search common install paths
 static QIcon loadMediaIcon(const QString& relative)
@@ -209,7 +212,7 @@ PreviewOverlay::PreviewOverlay(QWidget *parent)
     , imageView(nullptr)
     , imageScene(nullptr)
     , imageItem(nullptr)
-    , videoWidget(nullptr)
+    , videoItem(nullptr)
     , mediaPlayer(nullptr)
     , audioOutput(nullptr)
 #ifdef HAVE_QT_PDF
@@ -220,6 +223,8 @@ PreviewOverlay::PreviewOverlay(QWidget *parent)
     , isVideo(false)
     , currentZoom(1.0)
     , isPanning(false)
+    , fitToView(true)
+    , initialSized(false)
     , isSequence(false)
     , currentSequenceFrame(0)
     , sequenceStartFrame(0)
@@ -231,6 +236,15 @@ PreviewOverlay::PreviewOverlay(QWidget *parent)
 {
     setupUi();
     setFocusPolicy(Qt::StrongFocus);
+
+    // Show as a normal resizable window (not fullscreen/child of main window)
+    setWindowFlags(Qt::Window | Qt::WindowTitleHint | Qt::WindowCloseButtonHint | Qt::WindowMinMaxButtonsHint);
+    setAttribute(Qt::WA_DeleteOnClose, false);
+
+    // Remove any stray StarRatingWidget if accidentally added to the overlay
+    if (auto star = findChild<StarRatingWidget*>(QString(), Qt::FindChildrenRecursively)) {
+        star->deleteLater();
+    }
 
     // Auto-hide controls timer
     controlsTimer = new QTimer(this);
@@ -349,6 +363,10 @@ void PreviewOverlay::setupUi()
     // Consume wheel on the view/viewport to avoid parent scrolling
     imageView->installEventFilter(this);
     imageView->viewport()->installEventFilter(this);
+    // Disable DnD in overlay preview to avoid conflicts with pan gesture
+    imageView->setAcceptDrops(false);
+    if (imageView->viewport()) imageView->viewport()->setAcceptDrops(false);
+
     imageView->hide();
     contentLayout->addWidget(imageView);
 #ifdef HAVE_QT_PDF
@@ -383,11 +401,28 @@ void PreviewOverlay::setupUi()
     tableView->hide();
     contentLayout->addWidget(tableView);
 
-    // Video widget (for videos)
-    videoWidget = new QVideoWidget(this);
-    videoWidget->installEventFilter(this);
-    videoWidget->hide();
-    contentLayout->addWidget(videoWidget);
+    // Video item (for videos) inside the same GraphicsView to support zoom/pan
+    videoItem = new QGraphicsVideoItem();
+    videoItem->setVisible(false);
+    imageScene->addItem(videoItem);
+
+    // Fit video when native size becomes available
+    connect(videoItem, &QGraphicsVideoItem::nativeSizeChanged, this, [this](const QSizeF& sz){
+        if (imageView && videoItem && videoItem->isVisible()) {
+            if (fitToView) {
+                imageView->fitInView(videoItem, Qt::KeepAspectRatio);
+            }
+            if (!initialSized) {
+                const QRect avail = QGuiApplication::primaryScreen()->availableGeometry();
+                const int contentW = static_cast<int>(sz.width());
+                const int contentH = static_cast<int>(sz.height());
+                int w = qMin(contentW + 40, avail.width() - 80);
+                int h = qMin(50 + contentH + 120 + 40, avail.height() - 80);
+                resize(w, h);
+                initialSized = true;
+            }
+        }
+    });
 
     mainLayout->addWidget(contentWidget, 1);
 
@@ -569,7 +604,9 @@ void PreviewOverlay::setupUi()
 
     controlsLayout->addLayout(bottomGrid);
 
-    mainLayout->addWidget(controlsWidget);
+    // Overlay controls float over content; not added to mainLayout to maximize content area
+    // Geometry is set in resizeEvent and when showing content
+
     // Overlay side navigation arrows
     navPrevBtn = new QPushButton("\u25C0", this); // ◀
     navPrevBtn->setFixedSize(64, 64);
@@ -602,7 +639,7 @@ void PreviewOverlay::setupUi()
     mediaPlayer = new QMediaPlayer(this);
     audioOutput = new QAudioOutput(this);
     mediaPlayer->setAudioOutput(audioOutput);
-    mediaPlayer->setVideoOutput(videoWidget);
+    mediaPlayer->setVideoOutput(videoItem);
 
     connect(mediaPlayer, &QMediaPlayer::positionChanged, this, &PreviewOverlay::onPositionChanged);
     // Initial positioning
@@ -686,8 +723,9 @@ void PreviewOverlay::showAsset(const QString &filePath, const QString &fileName,
 #else
     if (currentFileType == "pdf" || currentFileType == "ai") {
         // No Qt PDF available: show placeholder message
-        videoWidget->hide();
+        if (videoItem) videoItem->setVisible(false);
         imageView->show();
+        if (videoItem && videoItem->scene() == imageScene) imageScene->removeItem(videoItem);
         imageScene->clear();
         imageScene->addText("Preview not available", QFont("Segoe UI", 14));
         controlsWidget->hide();
@@ -700,11 +738,12 @@ void PreviewOverlay::showAsset(const QString &filePath, const QString &fileName,
 #endif
     // SVG vector graphics
     if (currentFileType == "svg" || currentFileType == "svgz") {
-        videoWidget->hide();
+        if (videoItem) videoItem->setVisible(false);
 #ifdef HAVE_QT_PDF
         if (pdfView) pdfView->hide();
 #endif
         imageView->show();
+        if (videoItem && videoItem->scene() == imageScene) imageScene->removeItem(videoItem);
         imageScene->clear();
         svgItem = new QGraphicsSvgItem(filePath);
         imageScene->addItem(svgItem);
@@ -728,12 +767,15 @@ void PreviewOverlay::showAsset(const QString &filePath, const QString &fileName,
 void PreviewOverlay::showImage(const QString &filePath)
 {
     // CRITICAL: Hide other widgets and show image view
-    if (videoWidget) videoWidget->hide();
+    if (videoItem) videoItem->setVisible(false);
     if (textView) textView->hide();
     if (tableView) tableView->hide();
 #ifdef HAVE_QT_PDF
     if (pdfView) pdfView->hide();
 #endif
+    // Reset sizing/fit for new content
+    initialSized = false;
+    fitToView = true;
     imageView->setBackgroundBrush(QColor("#0a0a0a"));
     imageView->show();
 
@@ -753,7 +795,7 @@ void PreviewOverlay::showImage(const QString &filePath)
     // Check if this is an HDR/EXR image
     QFileInfo fileInfo(filePath);
     QString ext = fileInfo.suffix().toLower();
-    isHDRImage = (ext == "exr" || ext == "hdr" || ext == "pic");
+    isHDRImage = (ext == "exr" || ext == "hdr" || ext == "tif" || ext == "tiff" || ext == "psd");
 
     // Try loading with OpenImageIO first for advanced formats
     QImage image;
@@ -780,6 +822,7 @@ void PreviewOverlay::showImage(const QString &filePath)
         if (imageItem) {
             imageItem->setPixmap(newPixmap);
         } else {
+            if (videoItem && videoItem->scene() == imageScene) imageScene->removeItem(videoItem);
             imageScene->clear();
             imageItem = imageScene->addPixmap(newPixmap);
         }
@@ -796,6 +839,16 @@ void PreviewOverlay::showImage(const QString &filePath)
 
         // Fit to view
         fitImageToView();
+        // Initial window sizing to content
+        if (!initialSized) {
+            const QRect avail = QGuiApplication::primaryScreen()->availableGeometry();
+            const int contentW = newPixmap.width();
+            const int contentH = newPixmap.height();
+            int w = qMin(contentW + 40, avail.width() - 80);
+            int h = qMin(50 + contentH + 120 + 40, avail.height() - 80);
+            resize(w, h);
+            initialSized = true;
+        }
 
         // CRITICAL: Force complete view refresh
         imageView->viewport()->update();
@@ -821,6 +874,9 @@ void PreviewOverlay::showImage(const QString &filePath)
 
 void PreviewOverlay::showVideo(const QString &filePath)
 {
+    // Reset sizing/fit for new content
+    initialSized = false;
+    fitToView = true;
 
     // Ensure any fallback is stopped before starting normal video
 #ifdef HAVE_FFMPEG
@@ -836,17 +892,19 @@ void PreviewOverlay::showVideo(const QString &filePath)
     mediaPlayer->setSource(QUrl()); // clear previous source to avoid stray signals
     mediaPlayer->setPosition(0);
 
-    // CRITICAL: Hide other content and show video widget
-    if (imageView) imageView->hide();
+    // CRITICAL: Hide other content and show video inside graphics view
     if (textView) textView->hide();
     if (tableView) tableView->hide();
 #ifdef HAVE_QT_PDF
     if (pdfView) pdfView->hide();
 #endif
-    videoWidget->show();
-    // Anchor nav arrows to the video widget when showing video (handles native window stacking)
-    positionNavButtons(videoWidget);
+    if (imageView) imageView->show();
+    if (videoItem) videoItem->setVisible(true);
+    // Anchor nav arrows to the image viewport (graphics view)
+    positionNavButtons(imageView ? imageView->viewport() : this);
     controlsWidget->show();
+    controlsWidget->setGeometry(0, height() - controlsWidget->height(), width(), controlsWidget->height());
+    controlsWidget->raise();
     // Cache bar is only for sequences
     if (cacheBar) cacheBar->hide();
     // Enable audio controls for video
@@ -857,13 +915,20 @@ void PreviewOverlay::showVideo(const QString &filePath)
     }
     if (volumeSlider) volumeSlider->setEnabled(true);
 
-
     // Hide alpha toggle for videos
     if (alphaCheck) alphaCheck->hide();
 
-    // CRITICAL: Clear the scene to free memory
+    // CRITICAL: Clear the scene pixmap to free memory but keep scene for videoItem
+    if (videoItem && videoItem->scene() == imageScene) imageScene->removeItem(videoItem);
     imageScene->clear();
     imageItem = nullptr;
+    if (imageScene && videoItem && imageView) {
+        if (!imageScene->items().contains(videoItem)) imageScene->addItem(videoItem);
+        if (fitToView) {
+            imageView->resetTransform();
+            imageView->fitInView(videoItem, Qt::KeepAspectRatio);
+        }
+    }
     // Probe metadata for FPS/timecode via FFmpeg (if available)
     {
         MediaInfo::VideoMetadata vm;
@@ -879,8 +944,10 @@ void PreviewOverlay::showVideo(const QString &filePath)
 
     mediaPlayer->setSource(QUrl::fromLocalFile(filePath));
 
-    // Set video to fill the widget while maintaining aspect ratio
-    videoWidget->setAspectRatioMode(Qt::KeepAspectRatio);
+    // Fit video item to view while maintaining aspect ratio
+    if (imageView && videoItem && fitToView) {
+        imageView->fitInView(videoItem, Qt::KeepAspectRatio);
+    }
 
     mediaPlayer->play();
 
@@ -1184,7 +1251,7 @@ void PreviewOverlay::positionNavButtons(QWidget* container)
     // Compute vertical center based on the overlay (this window), not the content widget
     const int overlayCenterY = height() / 2 - navPrevBtn->height() / 2;
 
-    const bool videoCase = (container == videoWidget);
+    const bool videoCase = false;
 
     auto setupTopLevel = [this](QPushButton* b){
         // Convert to a small top-level tool window that can float above native video
@@ -1382,9 +1449,19 @@ void PreviewOverlay::resizeEvent(QResizeEvent *event)
 {
     QWidget::resizeEvent(event);
 
-    // Refit image if showing an image
-    if (!isVideo && !originalPixmap.isNull()) {
-        fitImageToView();
+    // Refit content only when auto-fit is enabled
+    if (fitToView) {
+        if (!isVideo && !originalPixmap.isNull()) {
+            fitImageToView();
+        } else if (isVideo && videoItem && videoItem->isVisible()) {
+            imageView->fitInView(videoItem, Qt::KeepAspectRatio);
+        }
+    }
+
+    // Float controls at the very bottom without reducing content area
+    if (controlsWidget && controlsWidget->isVisible()) {
+        controlsWidget->setGeometry(0, height() - controlsWidget->height(), width(), controlsWidget->height());
+        controlsWidget->raise();
     }
 
     // Reposition nav arrows within their container on overlay resize
@@ -1398,6 +1475,8 @@ void PreviewOverlay::mousePressEvent(QMouseEvent *event)
     if (isVideo) {
         // Show controls on click
         controlsWidget->show();
+        controlsWidget->setGeometry(0, height() - controlsWidget->height(), width(), controlsWidget->height());
+        controlsWidget->raise();
 
         controlsTimer->start();
     } else if (event->button() == Qt::MiddleButton) {
@@ -1411,11 +1490,9 @@ void PreviewOverlay::mousePressEvent(QMouseEvent *event)
 
 void PreviewOverlay::wheelEvent(QWheelEvent *event)
 {
-    if (!isVideo && !originalPixmap.isNull()) {
+    if ((isVideo && videoItem && videoItem->isVisible()) || (!isVideo && !originalPixmap.isNull())) {
         // Zoom with mouse wheel (fallback if event reached overlay)
         double factor = event->angleDelta().y() > 0 ? 1.15 : 0.85;
-
-
         zoomImage(factor);
         event->accept();
         return;
@@ -1425,55 +1502,24 @@ void PreviewOverlay::wheelEvent(QWheelEvent *event)
 
 bool PreviewOverlay::eventFilter(QObject* watched, QEvent* event)
 {
-    // Handle wheel events for image zoom
-    if ((watched == imageView || (imageView && watched == imageView->viewport())) && event->type() == QEvent::Wheel) {
-        if (!isVideo && !originalPixmap.isNull()) {
-            QWheelEvent* wheel = static_cast<QWheelEvent*>(event);
-            double factor = wheel->angleDelta().y() > 0 ? 1.15 : 0.85;
-            zoomImage(factor);
-            wheel->accept();
-            return true; // consume to prevent any scrolling
+    // Handle wheel events for zoom (images and videos)
+    if ((watched == imageView || (imageView && watched == imageView->viewport()))) {
+        if (event->type() == QEvent::Wheel) {
+            if ((isVideo && videoItem && videoItem->isVisible()) || (!isVideo && !originalPixmap.isNull())) {
+                QWheelEvent* wheel = static_cast<QWheelEvent*>(event);
+                double factor = wheel->angleDelta().y() > 0 ? 1.15 : 0.85;
+                zoomImage(factor);
+                wheel->accept();
+                return true; // consume to prevent any scrolling
+            }
+        } else if (event->type() == QEvent::MouseButtonPress) {
+            // Any user interaction starts manual zoom/pan mode
+            fitToView = false;
         }
     }
 
-    // Start drag from overlay preview (image/video)
-    if (((imageView && (watched == imageView || watched == imageView->viewport())) || (videoWidget && watched == videoWidget))) {
-        if (event->type() == QEvent::MouseButtonPress) {
-            QMouseEvent *me = static_cast<QMouseEvent*>(event);
-            if (me->button() == Qt::LeftButton) {
-                overlayDragStartPos = me->pos();
-                overlayDragPending = true;
-            }
-        } else if (event->type() == QEvent::MouseMove) {
-            QMouseEvent *me = static_cast<QMouseEvent*>(event);
-            if (overlayDragPending && (me->buttons() & Qt::LeftButton)) {
-                if ((me->pos() - overlayDragStartPos).manhattanLength() >= QApplication::startDragDistance()) {
-                    // Begin adaptive native drag: frames for Explorer/self; folder for sequences to DCCs
-                    QVector<QString> frameVec; QVector<QString> folderVec;
-                    if (isSequence && !sequenceFramePaths.isEmpty()) {
-                        for (const QString &p : sequenceFramePaths) frameVec.push_back(p);
-                        const QString dirPath = QFileInfo(sequenceFramePaths.first()).absolutePath();
-                        folderVec.push_back(dirPath);
-                    } else if (!currentFilePath.isEmpty()) {
-                        frameVec.push_back(currentFilePath);
-                        folderVec.push_back(currentFilePath); // allow direct file to DCCs
-                    }
-                    if (!frameVec.isEmpty() || !folderVec.isEmpty()) {
-                        VirtualDrag::startAdaptivePathsDrag(frameVec, folderVec);
-                    }
-                    overlayDragPending = false;
-                    return true;
-                }
-            }
-        } else if (event->type() == QEvent::MouseButtonRelease) {
-            QMouseEvent *me = static_cast<QMouseEvent*>(event);
-            if (me->button() == Qt::LeftButton) {
-                overlayDragPending = false;
-            }
-        }
-    }
 
-    // Handle keyboard events from child widgets (videoWidget, imageView, etc.)
+    // Handle keyboard events from child widgets (imageView viewport, etc.)
     if (event->type() == QEvent::KeyPress) {
         QKeyEvent* keyEvent = static_cast<QKeyEvent*>(event);
 
@@ -1509,6 +1555,8 @@ bool PreviewOverlay::eventFilter(QObject* watched, QEvent* event)
 
 void PreviewOverlay::zoomImage(double factor)
 {
+    // User initiated zoom disables auto-fit
+    fitToView = false;
     currentZoom *= factor;
 
     // Limit zoom range
@@ -1521,6 +1569,7 @@ void PreviewOverlay::zoomImage(double factor)
 
 void PreviewOverlay::fitImageToView()
 {
+    if (!fitToView) return;
     if (originalPixmap.isNull()) return;
 
     // Calculate zoom to fit image in view
@@ -1540,14 +1589,17 @@ void PreviewOverlay::fitImageToView()
 void PreviewOverlay::resetImageZoom()
 {
     currentZoom = 1.0;
-    imageView->resetTransform();
-    imageView->centerOn(imageItem);
+    fitToView = true;
+    fitImageToView();
 }
 
 void PreviewOverlay::showSequence(const QStringList &framePaths, const QString &sequenceName, int startFrame, int endFrame)
 {
     isSequence = true;
     isVideo = false;
+    // Reset sizing/fit for new content
+    initialSized = false;
+    fitToView = true;
     sequenceFramePaths = framePaths;
     sequenceStartFrame = startFrame;
     sequenceEndFrame = endFrame;
@@ -1558,7 +1610,7 @@ void PreviewOverlay::showSequence(const QStringList &framePaths, const QString &
     if (!framePaths.isEmpty()) {
         QFileInfo fileInfo(framePaths.first());
         QString ext = fileInfo.suffix().toLower();
-        isHDRImage = (ext == "exr" || ext == "hdr" || ext == "pic");
+        isHDRImage = (ext == "exr" || ext == "hdr" || ext == "tif" || ext == "tiff" || ext == "psd");
     } else {
         isHDRImage = false;
     }
@@ -1574,13 +1626,16 @@ void PreviewOverlay::showSequence(const QStringList &framePaths, const QString &
     // Process events to ensure window is properly sized
 
     // CRITICAL: Clear scene before loading sequence
+    if (videoItem && videoItem->scene() == imageScene) imageScene->removeItem(videoItem);
     imageScene->clear();
     imageItem = nullptr;
 
     // Show image view and controls
-    videoWidget->hide();
+    if (videoItem) videoItem->setVisible(false);
     imageView->show();
     controlsWidget->show();
+    controlsWidget->setGeometry(0, height() - controlsWidget->height(), width(), controlsWidget->height());
+    controlsWidget->raise();
     // Disable audio controls for image sequences (no audio)
     if (muteBtn) { muteBtn->setEnabled(false); muteBtn->setIcon(noAudioIcon); }
     if (volumeSlider) volumeSlider->setEnabled(false);
@@ -1627,35 +1682,14 @@ void PreviewOverlay::showSequence(const QStringList &framePaths, const QString &
         qDebug() << "[PreviewOverlay] Started pre-fetching frames from index 0";
     }
 
-    // Load first frame (synchronously for immediate display)
-    if (!sequenceFramePaths.isEmpty()) {
-        // For the first frame, load it directly (not from cache) to ensure immediate display
-        QString framePath = sequenceFramePaths[0];
-        QImage image;
-        if (OIIOImageLoader::isOIIOSupported(framePath)) {
-            image = OIIOImageLoader::loadImage(framePath, 0, 0, currentColorSpace);
-            if (!image.isNull()) {
-                originalPixmap = QPixmap::fromImage(image);
-            }
-        }
-        if (originalPixmap.isNull()) {
-            originalPixmap = QPixmap(framePath);
-        }
-
-        // Display the first frame
-        if (!originalPixmap.isNull()) {
-            imageScene->clear();
-            imageItem = imageScene->addPixmap(originalPixmap);
-    // Initialize cache bar for sequence
+    // Initialize cache bar and kick off first frame load asynchronously
     if (cacheBar) {
         cacheBar->setTotalFrames(sequenceFramePaths.size());
         cacheBar->clearCachedFrames();
         cacheBar->show();
     }
-            imageScene->setSceneRect(originalPixmap.rect());
-            fitImageToView();
-        }
-    }
+    // Request first frame via cache/async path (non-blocking)
+    loadSequenceFrame(0);
 
     // Update slider for sequence
     positionSlider->setRange(0, sequenceFramePaths.size() - 1);
@@ -1669,6 +1703,8 @@ void PreviewOverlay::showSequence(const QStringList &framePaths, const QString &
 
     // Show controls
     controlsWidget->show();
+    controlsWidget->setGeometry(0, height() - controlsWidget->height(), width(), controlsWidget->height());
+    controlsWidget->raise();
     controlsTimer->start();
 }
 
@@ -1745,6 +1781,7 @@ void PreviewOverlay::loadSequenceFrame(int frameIndex)
     }
 
     if (!originalPixmap.isNull()) {
+        if (videoItem && videoItem->scene() == imageScene) imageScene->removeItem(videoItem);
         imageScene->clear();
         imageItem = imageScene->addPixmap(originalPixmap);
         imageScene->setSceneRect(originalPixmap.rect());
@@ -1754,6 +1791,16 @@ void PreviewOverlay::loadSequenceFrame(int frameIndex)
         if (alphaCheck) { alphaCheck->setVisible(previewHasAlpha); alphaCheck->blockSignals(true); alphaCheck->setChecked(false); alphaOnlyMode = false; alphaCheck->blockSignals(false); }
 
         fitImageToView();
+        // Initial window sizing to content (first frame)
+        if (!initialSized) {
+            const QRect avail = QGuiApplication::primaryScreen()->availableGeometry();
+            const int contentW = originalPixmap.width();
+            const int contentH = originalPixmap.height();
+            int w = qMin(contentW + 40, avail.width() - 80);
+            int h = qMin(50 + contentH + 120 + 40, avail.height() - 80);
+            resize(w, h);
+            initialSized = true;
+        }
     } else {
         qWarning() << "[PreviewOverlay::loadSequenceFrame] Failed to load frame - pixmap is null!";
     }
@@ -1917,12 +1964,15 @@ void PreviewOverlay::startFallbackVideo(const QString &filePath)
 
     // Stop and hide the video widget path
     mediaPlayer->stop();
-    videoWidget->hide();
+    if (videoItem) videoItem->setVisible(false);
     imageView->show();
     controlsWidget->show();
+    controlsWidget->setGeometry(0, height() - controlsWidget->height(), width(), controlsWidget->height());
+    controlsWidget->raise();
     positionNavButtons(imageView->viewport());
 
     // Clear scene and reset pixmap
+    if (videoItem && videoItem->scene() == imageScene) imageScene->removeItem(videoItem);
     imageScene->clear();
     imageItem = nullptr;
     originalPixmap = QPixmap();
@@ -2069,7 +2119,7 @@ void PreviewOverlay::onFallbackFinished()
 void PreviewOverlay::showText(const QString &filePath)
 {
     // Hide other content
-    videoWidget->hide();
+    if (videoItem) videoItem->setVisible(false);
 #ifdef HAVE_QT_PDF
     if (pdfView) pdfView->hide();
 #endif
@@ -2137,7 +2187,7 @@ void PreviewOverlay::showText(const QString &filePath)
 void PreviewOverlay::showDocx(const QString &filePath)
 {
     // Hide other content
-    if (videoWidget) videoWidget->hide();
+    if (videoItem) videoItem->setVisible(false);
 #ifdef HAVE_QT_PDF
     if (pdfView) pdfView->hide();
 #endif
@@ -2169,7 +2219,7 @@ void PreviewOverlay::showDocx(const QString &filePath)
 void PreviewOverlay::showDoc(const QString &filePath)
 {
     // Hide other content
-    if (videoWidget) videoWidget->hide();
+    if (videoItem) videoItem->setVisible(false);
 #ifdef HAVE_QT_PDF
     if (pdfView) pdfView->hide();
 #endif
@@ -2202,7 +2252,7 @@ void PreviewOverlay::showDoc(const QString &filePath)
 void PreviewOverlay::showXlsx(const QString &filePath)
 {
     // Hide other content
-    if (videoWidget) videoWidget->hide();
+    if (videoItem) videoItem->setVisible(false);
 #ifdef HAVE_QT_PDF
     if (pdfView) pdfView->hide();
 #endif
@@ -2236,7 +2286,7 @@ void PreviewOverlay::showXlsx(const QString &filePath)
 void PreviewOverlay::showPdf(const QString &filePath)
 {
     // Hide other content
-    if (videoWidget) videoWidget->hide();
+    if (videoItem) videoItem->setVisible(false);
     if (textView) textView->hide();
     if (tableView) tableView->hide();
     controlsWidget->hide();
@@ -2292,6 +2342,7 @@ void PreviewOverlay::renderPdfPageToImage()
 
     originalPixmap = QPixmap::fromImage(img);
     if (!imageItem) {
+        if (videoItem && videoItem->scene() == imageScene) imageScene->removeItem(videoItem);
         imageScene->clear();
         imageItem = imageScene->addPixmap(originalPixmap);
     } else {
