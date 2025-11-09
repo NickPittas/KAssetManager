@@ -39,15 +39,17 @@ QImage OIIOImageLoader::loadImage(const QString& filePath, int maxWidth, int max
 
     // Use ImageBuf to manage the input resource (RAII) and avoid manual ImageInput handling
     ImageBuf buf(filePath.toStdString());
-    if (!buf.read(0, 0, true, TypeDesc::FLOAT)) {
-        qWarning() << "[OIIOImageLoader] Failed to read image data";
-        return QImage();
-    }
 
+    // Lazy read: avoid forcing the entire image into memory; rely on ImageBuf/ImageCache
+    // and downscale first when possible to keep memory usage low for huge HDR images (e.g., EXR)
     const ImageSpec &spec = buf.spec();
     int width = spec.width;
     int height = spec.height;
     int channels = spec.nchannels;
+    if (width <= 0 || height <= 0) {
+        qWarning() << "[OIIOImageLoader] Invalid image spec";
+        return QImage();
+    }
 
     qDebug() << "[OIIOImageLoader] Image info:" << width << "x" << height << "channels:" << channels;
     qDebug() << "[OIIOImageLoader] Format:" << QString::fromStdString(spec.format.c_str());
@@ -123,6 +125,36 @@ QImage OIIOImageLoader::loadImage(const QString& filePath, int maxWidth, int max
         for (int y = 0; y < height; ++y) {
             uint8_t* scanline = image.scanLine(y);
             memcpy(scanline, &pixels[y * width * targetChannels], width * targetChannels);
+        }
+
+        // Apply color space transform for LDR assuming source is sRGB
+        if (colorSpace != ColorSpace::sRGB) {
+            auto srgbToLinear = [](float v){
+                v = clamp(v, 0.0f, 1.0f);
+                return (v <= 0.04045f) ? (v / 12.92f) : std::pow((v + 0.055f) / 1.055f, 2.4f);
+            };
+            image = image.convertToFormat(QImage::Format_RGBA8888);
+            for (int y = 0; y < height; ++y) {
+                uchar* p = image.scanLine(y);
+                for (int x = 0; x < width; ++x) {
+                    float r = p[4*x+0] / 255.0f;
+                    float g = p[4*x+1] / 255.0f;
+                    float b = p[4*x+2] / 255.0f;
+                    // sRGB -> Linear
+                    r = srgbToLinear(r); g = srgbToLinear(g); b = srgbToLinear(b);
+                    // Linear -> target
+                    if (colorSpace == ColorSpace::Rec709) {
+                        r = linearToRec709(r); g = linearToRec709(g); b = linearToRec709(b);
+                    } else { // Linear
+                        r = clamp(r, 0.0f, 1.0f);
+                        g = clamp(g, 0.0f, 1.0f);
+                        b = clamp(b, 0.0f, 1.0f);
+                    }
+                    p[4*x+0] = uchar(r * 255.0f + 0.5f);
+                    p[4*x+1] = uchar(g * 255.0f + 0.5f);
+                    p[4*x+2] = uchar(b * 255.0f + 0.5f);
+                }
+            }
         }
 
         qDebug() << "[OIIOImageLoader] Successfully loaded image";

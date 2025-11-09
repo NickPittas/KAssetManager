@@ -126,16 +126,11 @@ private slots:
     void onEverythingSearchFileManager();
     void onEverythingImportRequested(const QStringList& paths);
 
-    // File Manager preview
-    void onFmSelectionChanged();
-    void onFmTogglePreview(); // toolbar toggle
-    void onFmOpenOverlay();   // Space: toggle full-screen overlay
-    void changeFmPreview(int delta); // Navigate in File Manager overlay
+    // File Manager preview (migrated to FileManagerWidget)
 
 private:
     QString fmPathForIndex(const QModelIndex& idx) const;
     void releaseAnyPreviewLocksForPaths(const QStringList& paths);
-    void updateFmInfoPanel();
     void fmNavigateToPath(const QString& path, bool addToHistory = true);
     void fmUpdateNavigationButtons();
     void fmScrollTreeToPath(const QString& path);
@@ -345,11 +340,7 @@ private:
     QPushButton *fmPlayPauseBtn;
     QPushButton *fmPrevFrameBtn = nullptr;
     QPushButton *fmNextFrameBtn = nullptr;
-    // Sequence preview helpers (File Manager)
-    void loadFmSequenceFrame(int index);
-    void playFmSequence();
-    void pauseFmSequence();
-    void stepFmSequence(int delta);
+    // Sequence preview helpers (migrated to FileManagerWidget)
 
     // Helpers for tree/context operations
     QStringList getSelectedFmTreePaths() const;
@@ -400,9 +391,7 @@ private:
     // Overlay navigation context for File Manager
     QPersistentModelIndex fmOverlayCurrentIndex; QAbstractItemView* fmOverlaySourceView = nullptr; // grid or list
 
-    // Helpers
-    void updateFmPreviewForIndex(const QModelIndex &idx);
-    void clearFmPreview();
+    // Helpers (migrated to FileManagerWidget)
 };
 
 #endif // MAINWINDOW_H

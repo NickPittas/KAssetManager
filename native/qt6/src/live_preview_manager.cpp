@@ -37,7 +37,7 @@ constexpr qint64 kSeqUpperSearchHardCap = 100000000; // 100M
 constexpr int kDecodeSafetyIterMax = 256;
 
 constexpr qreal kDefaultPosterPosition = 0.05; // pick early frame for motion clips
-constexpr int kSequenceMetaTtlMs = 30000;
+constexpr int kSequenceMetaTtlMs = 86400000;
 
 #if defined(HAVE_FFMPEG) && HAVE_FFMPEG
 QString ffmpegErrorString(int err)
@@ -114,6 +114,7 @@ LivePreviewManager::LivePreviewManager(QObject* parent)
     // Initialize QCache capacity based on default setting
     m_cache.setMaxCost(m_maxCacheEntries);
     m_sequenceMetaCache.setMaxCost(m_sequenceMetaLimit);
+
 }
 
 LivePreviewManager::FrameHandle LivePreviewManager::cachedFrame(const QString& filePath, const QSize& targetSize, qreal position)
@@ -483,44 +484,54 @@ LivePreviewManager::SequenceMeta LivePreviewManager::sequenceMetaFor(const QStri
 
     QDir dir(meta.directory);
 
-    auto existsFrame = [&](qint64 n) -> bool {
-        if (n < 0) return false;
+    // Fast existence-based bounds discovery from a single file number
+    bool okNum = false;
+    const qint64 n0 = match.captured(1).toLongLong(&okNum);
+    if (!okNum) {
+        error = QStringLiteral("Invalid frame number");
+        return meta;
+    }
+
+    auto existsAt = [&](qint64 n) -> bool {
+        if (n < 0 || n > kSeqUpperSearchHardCap) return false;
         const QString digits = QString::number(n).rightJustified(meta.padding, QLatin1Char('0'));
-        const QString fileName = meta.prefix + digits + meta.suffix;
-        return QFileInfo(dir.filePath(fileName)).exists();
+        const QString candidate = dir.filePath(meta.prefix + digits + meta.suffix);
+        return QFileInfo::exists(candidate);
     };
 
-    // Use the current file's number as an anchor
-    const qint64 curN = match.captured(1).toLongLong();
+    meta.firstFrame = n0;
+    meta.lastFrame  = n0;
 
-    // 1) Find first frame via binary search in [0, curN]
-    meta.firstFrame = Utils::binarySearchFirstTrue(-1, curN, existsFrame);
-
-    // 2) Find last frame using halving from a large bound then binary search
-    const qint64 START_HUGE = kSeqUpperSearchStart;
-    qint64 lastKnownExist = curN;
-    qint64 lastKnownNonExist = -1;
-
-    qint64 probe = START_HUGE;
-    while (probe > lastKnownExist) {
-        if (existsFrame(probe)) { lastKnownExist = probe; break; }
-        lastKnownNonExist = probe;
-        probe /= 2;
+    // Find first frame (downward exponential then binary search)
+    qint64 step = 1;
+    while (existsAt(n0 - step)) {
+        if (step > n0) break;
+        step *= 2;
     }
-    if (lastKnownExist == curN) {
-        qint64 up = std::max<qint64>(curN + 1, 2 * curN);
-        for (int i = 0; i < kSeqUpperSearchMaxDoublings; ++i) {
-            if (!existsFrame(up)) { lastKnownNonExist = up; break; }
-            if (up > kSeqUpperSearchHardCap) { lastKnownNonExist = up + 1; break; }
-            up *= 2;
-        }
-        if (lastKnownNonExist < 0) lastKnownNonExist = curN + 1;
-    } else {
-        if (lastKnownNonExist < 0) lastKnownNonExist = lastKnownExist + 1;
+    qint64 left = n0 - step + 1; if (left < 0) left = 0;
+    qint64 right = n0;
+    while (left < right) {
+        const qint64 mid = (left + right) / 2;
+        if (existsAt(mid)) right = mid; else left = mid + 1;
     }
+    meta.firstFrame = right;
 
-    if (lastKnownNonExist <= lastKnownExist) lastKnownNonExist = lastKnownExist + 1;
-    meta.lastFrame = Utils::binarySearchLastTrue(lastKnownExist, lastKnownNonExist, existsFrame);
+    // Find last frame (upward exponential then binary search)
+    step = 1;
+    while (existsAt(n0 + step)) {
+        if ((n0 + step) >= kSeqUpperSearchHardCap) break;
+        step *= 2;
+    }
+    left = n0;
+    right = n0 + step - 1;
+    if (right > kSeqUpperSearchHardCap) right = kSeqUpperSearchHardCap;
+    while (left < right) {
+        const qint64 mid = (left + right + 1) / 2;
+        if (existsAt(mid)) left = mid; else right = mid - 1;
+    }
+    meta.lastFrame = left;
+
+    // Do not populate meta.frames here; cheap bounds only
 
     if (meta.frames.isEmpty()) {
         if (!(meta.padding > 0 && meta.firstFrame >= 0 && meta.lastFrame >= meta.firstFrame)) {
@@ -747,3 +758,6 @@ QImage LivePreviewManager::loadVideoFrame(const Request& request, QString& error
     return result;
 #endif
 }
+
+
+

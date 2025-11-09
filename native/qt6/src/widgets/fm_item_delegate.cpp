@@ -97,8 +97,6 @@ void FmItemDelegate::paint(QPainter* painter, const QStyleOptionViewItem& option
                 painter->drawPixmap(x, y, scaled);
                 painter->restore();
                 drewPreview = true;
-            } else {
-                previewMgr.requestFrame(filePath, targetSize);
             }
         }
     }

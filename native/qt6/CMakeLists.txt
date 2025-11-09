@@ -191,7 +191,7 @@ qt_add_executable(kassetmanagerqt WIN32
     src/widgets/grid_scrub_controller.h
     src/widgets/grid_scrub_controller.cpp
     src/widgets/file_manager_widget.h
-    src/widgets/file_manager_widget_rebuilt.cpp
+    src/widgets/file_manager_widget.cpp
     src/virtual_drag.cpp
     src/virtual_drag.h
     src/db.cpp
@@ -230,6 +230,9 @@ qt_add_executable(kassetmanagerqt WIN32
     src/log_viewer_widget.cpp
     src/video_metadata.h
     src/video_metadata.cpp
+    src/ffmpeg_video_reader.h
+    src/ffmpeg_video_reader.cpp
+
     src/file_ops.h
     src/file_ops.cpp
     src/file_ops_dialog.h

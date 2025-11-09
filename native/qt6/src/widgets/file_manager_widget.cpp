@@ -12,6 +12,35 @@
 #include "media_convert_dialog.h"
 #include "bulk_rename_dialog.h"
 
+#include "oiio_image_loader.h"
+#include "sequence_detector.h"
+#include "video_metadata.h"
+#include "office_preview.h"
+#include "ffmpeg_video_reader.h"
+#ifdef HAVE_FFMPEG
+extern "C" {
+#include <libavformat/avformat.h>
+#include <libavcodec/avcodec.h>
+#include <libavutil/avutil.h>
+}
+#endif
+
+
+
+#include <algorithm>
+#include <QVideoFrame>
+
+
+#include <QImageReader>
+#include <QGraphicsSvgItem>
+#include <QPainter>
+#include <QTextStream>
+#include <QTextOption>
+#include <QStandardItem>
+
+
+#include <QThread>
+
 
 #include <QApplication>
 #include <QFileSystemModel>
@@ -32,11 +61,25 @@
 #include <QMimeData>
 #include <QClipboard>
 
+#include <QScrollBar>
+
 #include <functional>
 
 #include <QInputDialog>
 #include <QMessageBox>
 #include <QLineEdit>
+
+
+static QString humanReadableSize(qint64 bytes)
+{
+    if (bytes < 1024)
+        return QString::number(bytes) + " B";
+    if (bytes < 1024 * 1024)
+        return QString::number(bytes / 1024.0, 'f', 1) + " KB";
+    if (bytes < 1024ll * 1024ll * 1024ll)
+        return QString::number(bytes / (1024.0 * 1024.0), 'f', 1) + " MB";
+    return QString::number(bytes / (1024.0 * 1024.0 * 1024.0), 'f', 2) + " GB";
+}
 
 static QString fmSettingsKey(const QString& name) { return QStringLiteral("FileManager/%1").arg(name); }
 
@@ -352,7 +395,7 @@ void FileManagerWidget::setupUi()
         connect(fmThumbnailSizeSlider, &QSlider::valueChanged, this, &FileManagerWidget::onFmThumbnailSizeChanged);
         connect(fmGroupSequencesCheckBox, &QToolButton::toggled, this, &FileManagerWidget::onFmGroupSequencesToggled);
         connect(fmHideFoldersCheckBox, &QToolButton::toggled, this, &FileManagerWidget::onFmHideFoldersToggled);
-        connect(fmPreviewToggleButton, &QToolButton::toggled, m_host, &MainWindow::onFmTogglePreview);
+        connect(fmPreviewToggleButton, &QToolButton::toggled, this, &FileManagerWidget::onFmTogglePreview);
     } else {
         connect(newFolderBtn, &QToolButton::clicked, this, &FileManagerWidget::onFmNewFolder);
         connect(copyBtn, &QToolButton::clicked, this, &FileManagerWidget::onFmCopy);
@@ -378,8 +421,8 @@ void FileManagerWidget::setupUi()
         if (fmGridView->viewport()) fmGridView->viewport()->installEventFilter(m_host);
         if (fmListView->viewport()) fmListView->viewport()->installEventFilter(m_host);
         if (fmTree->viewport()) fmTree->viewport()->installEventFilter(m_host);
-        if (fmGridView->selectionModel()) connect(fmGridView->selectionModel(), &QItemSelectionModel::selectionChanged, m_host, &MainWindow::onFmSelectionChanged);
-        if (fmListView->selectionModel()) connect(fmListView->selectionModel(), &QItemSelectionModel::selectionChanged, m_host, &MainWindow::onFmSelectionChanged);
+        if (fmGridView->selectionModel()) connect(fmGridView->selectionModel(), &QItemSelectionModel::selectionChanged, this, &FileManagerWidget::onFmSelectionChanged);
+        if (fmListView->selectionModel()) connect(fmListView->selectionModel(), &QItemSelectionModel::selectionChanged, this, &FileManagerWidget::onFmSelectionChanged);
         // Route context menus to the widget's own handlers
         connect(fmGridView, &QWidget::customContextMenuRequested, this, &FileManagerWidget::onFmShowContextMenu);
         connect(fmListView, &QWidget::customContextMenuRequested, this, &FileManagerWidget::onFmShowContextMenu);
@@ -470,8 +513,9 @@ void FileManagerWidget::setupShortcuts()
         sc->setKey(QKeySequence(Qt::Key_Space));
         connect(sc, &QShortcut::activated, this, [this]() {
             if (shouldIgnoreShortcutFromFocus()) return;
-            if (m_host) { m_host->onFmOpenOverlay(); }
-            else {
+            this->onFmOpenOverlay();
+            /* fallback path if no host overlay exists */
+            if (!m_host || !m_host->previewOverlay) {
                 QAbstractItemView* view = fmIsGridMode ? static_cast<QAbstractItemView*>(fmGridView)
                                                        : static_cast<QAbstractItemView*>(fmListView);
                 if (!view) return;
@@ -623,8 +667,21 @@ void FileManagerWidget::navigateToPath(const QString& path, bool addToHistory)
     }
     QModelIndex rootIndex = fmProxyModel ? fmProxyModel->mapFromSource(srcRoot) : srcRoot;
     LogManager::instance().addLog("[TRACE] FM: setRootIndex on views", "DEBUG");
+    // Apply new root to both views
     fmGridView->setRootIndex(rootIndex);
     fmListView->setRootIndex(rootIndex);
+
+    // Reset list/grid scroll position to top when changing folders
+    auto resetViewScrollTop = [](QAbstractItemView* v){
+        if (!v) return;
+        if (auto *sb = v->verticalScrollBar()) sb->setValue(sb->minimum());
+        if (v->model() && v->model()->rowCount() > 0) {
+            const QModelIndex first = v->model()->index(0, 0);
+            if (first.isValid()) v->scrollTo(first, QAbstractItemView::PositionAtTop);
+        }
+    };
+    resetViewScrollTop(fmGridView);
+    resetViewScrollTop(fmListView);
 
     if (!m_host && addToHistory) {
         if (fmNavigationIndex + 1 < fmNavigationHistory.size())
@@ -1250,9 +1307,9 @@ void FileManagerWidget::onFmItemDoubleClicked(const QModelIndex &index)
             if (!m_host->previewOverlay) {
                 m_host->previewOverlay = new PreviewOverlay(nullptr);
                 QObject::connect(m_host->previewOverlay, &PreviewOverlay::closed, m_host, &MainWindow::closePreview);
-                QObject::connect(m_host->previewOverlay, &PreviewOverlay::navigateRequested, m_host, &MainWindow::changeFmPreview);
+                QObject::connect(m_host->previewOverlay, &PreviewOverlay::navigateRequested, this, [this](int d){ this->changeFmPreview(d); });
             } else {
-                m_host->previewOverlay->stopPlayback();
+
             }
             QAbstractItemView* srcView = (fmGridView && fmGridView->isVisible() && fmGridView->hasFocus())
                 ? static_cast<QAbstractItemView*>(fmGridView)
@@ -1289,9 +1346,9 @@ void FileManagerWidget::onFmItemDoubleClicked(const QModelIndex &index)
         if (!m_host->previewOverlay) {
             m_host->previewOverlay = new PreviewOverlay(nullptr);
             QObject::connect(m_host->previewOverlay, &PreviewOverlay::closed, m_host, &MainWindow::closePreview);
-            QObject::connect(m_host->previewOverlay, &PreviewOverlay::navigateRequested, m_host, &MainWindow::changeFmPreview);
+            QObject::connect(m_host->previewOverlay, &PreviewOverlay::navigateRequested, this, [this](int d){ this->changeFmPreview(d); });
         } else {
-            m_host->previewOverlay->stopPlayback();
+
         }
         QAbstractItemView* srcView = (fmGridView && fmGridView->isVisible() && fmGridView->hasFocus())
             ? static_cast<QAbstractItemView*>(fmGridView)
@@ -1392,12 +1449,96 @@ void FileManagerWidget::ensurePreviewInfoLayout()
     // Media backend
     fmMediaPlayer = new QMediaPlayer(fmPreviewPanel);
     fmAudioOutput = new QAudioOutput(fmPreviewPanel);
+    // Create a QVideoSink for optional software processing (inactive by default)
+    fmVideoSink = new QVideoSink(fmPreviewPanel);
+    // Default to hardware video path for stability
     fmMediaPlayer->setVideoOutput(fmVideoItem);
     fmMediaPlayer->setAudioOutput(fmAudioOutput);
-    // Fit video when native size becomes available
-    QObject::connect(fmVideoItem, &QGraphicsVideoItem::nativeSizeChanged, this, [this](const QSizeF &){
-        if (m_host && m_host->fmImageView && m_host->fmVideoItem && m_host->fmImageFitToView) {
-            m_host->fmImageView->fitInView(m_host->fmVideoItem, Qt::KeepAspectRatio);
+
+    // Handle incoming video frames and apply color transform
+    QObject::connect(fmVideoSink, &QVideoSink::videoFrameChanged, this, [this](const QVideoFrame &frame){
+        if (!frame.isValid()) return;
+        QImage img = frame.toImage();
+        if (img.isNull()) return;
+        fmLastVideoFrameRaw = img; // cache raw frame (unscaled)
+
+        // Scale to viewport first to keep per-frame cost manageable
+        int targetW = 0, targetH = 0;
+        if (fmImageView && fmImageView->viewport()) {
+            targetW = fmImageView->viewport()->width();
+            targetH = fmImageView->viewport()->height();
+        }
+        if (targetW <= 0 || targetH <= 0) { targetW = 1600; targetH = 1200; }
+
+        QImage out = fmLastVideoFrameRaw.scaled(targetW, targetH, Qt::KeepAspectRatio, Qt::FastTransformation);
+
+        auto toLinear709 = [](float v){ return (v < 0.081f) ? (v / 4.5f) : std::pow((v + 0.099f) / 1.099f, 1.0f/0.45f); };
+        auto linearToSRGB = [](float v){ v = std::clamp(v, 0.0f, 1.0f); return (v <= 0.0031308f) ? 12.92f*v : 1.055f*std::pow(v, 1.0f/2.4f) - 0.055f; };
+
+        OIIOImageLoader::ColorSpace cs = OIIOImageLoader::ColorSpace::Rec709;
+        if (fmColorSpaceCombo) {
+            switch (fmColorSpaceCombo->currentIndex()) {
+                case 0: cs = OIIOImageLoader::ColorSpace::Linear; break;
+                case 1: cs = OIIOImageLoader::ColorSpace::sRGB;  break;
+                case 2: cs = OIIOImageLoader::ColorSpace::Rec709; break;
+            }
+        }
+
+        if (cs != OIIOImageLoader::ColorSpace::Rec709) {
+            out = out.convertToFormat(QImage::Format_RGBA8888);
+            const int w = out.width(), h = out.height();
+            for (int y = 0; y < h; ++y) {
+                uchar* p = out.scanLine(y);
+                for (int x = 0; x < w; ++x) {
+                    float r = p[4*x+0] / 255.0f;
+                    float g = p[4*x+1] / 255.0f;
+                    float b = p[4*x+2] / 255.0f;
+                    // Rec709 -> Linear
+                    r = toLinear709(r); g = toLinear709(g); b = toLinear709(b);
+                    // Linear -> target space
+                    if (cs == OIIOImageLoader::ColorSpace::sRGB) {
+                        r = linearToSRGB(r); g = linearToSRGB(g); b = linearToSRGB(b);
+                    } else { // Linear target: clamp
+                        r = std::clamp(r, 0.0f, 1.0f);
+                        g = std::clamp(g, 0.0f, 1.0f);
+                        b = std::clamp(b, 0.0f, 1.0f);
+                    }
+                    p[4*x+0] = uchar(r * 255.0f + 0.5f);
+                    p[4*x+1] = uchar(g * 255.0f + 0.5f);
+                    p[4*x+2] = uchar(b * 255.0f + 0.5f);
+                }
+            }
+        }
+
+        if (fmVideoItem) fmVideoItem->setVisible(false); // ensure legacy path hidden
+        if (fmImageItem) {
+            fmImageItem->setPixmap(QPixmap::fromImage(out));
+            fmImageItem->setTransformationMode(Qt::SmoothTransformation);
+            if (fmImageScene) fmImageScene->setSceneRect(fmImageItem->boundingRect());
+            if (fmImageView && fmImageFitToView) {
+                const QSize sz = out.size();
+                if (sz != fmLastVideoPixmapSize) {
+                    fmLastVideoPixmapSize = sz;
+                    fmImageView->resetTransform();
+                    fmImageView->fitInView(fmImageItem, Qt::KeepAspectRatio);
+                }
+            }
+        }
+    });
+
+    // Normalize video item geometry when native size becomes available and fit in view
+    QObject::connect(fmVideoItem, &QGraphicsVideoItem::nativeSizeChanged, this, [this](const QSizeF &sz){
+        if (!m_host) return;
+        if (m_host->fmImageView && m_host->fmVideoItem && m_host->fmVideoItem->isVisible()) {
+            m_host->fmVideoItem->setPos(0, 0);
+            if (sz.isValid()) {
+                m_host->fmVideoItem->setSize(sz);
+                if (m_host->fmImageScene) m_host->fmImageScene->setSceneRect(QRectF(QPointF(0, 0), sz));
+            }
+            if (m_host->fmImageFitToView) {
+                m_host->fmImageView->resetTransform();
+                m_host->fmImageView->fitInView(m_host->fmVideoItem, Qt::KeepAspectRatio);
+            }
         }
     });
     // Log media errors so we can diagnose unsupported MP4s in the pane
@@ -1485,11 +1626,19 @@ void FileManagerWidget::ensurePreviewInfoLayout()
     };
 
     QObject::connect(fmPlayPauseBtn, &QPushButton::clicked, this, [this]() {
-        if (m_host && m_host->fmIsSequence) {
-            if (m_host->fmSequencePlaying) m_host->pauseFmSequence();
-            else m_host->playFmSequence();
+        if (fmIsSequence) {
+            if (fmSequencePlaying) pauseFmSequence();
+            else playFmSequence();
             return;
         }
+#ifdef HAVE_FFMPEG
+        if (fmUsingFallbackVideo) {
+            fmFallbackPaused = !fmFallbackPaused;
+            if (fmFallbackReader) fmFallbackReader->setPaused(fmFallbackPaused);
+            fmPlayPauseBtn->setIcon(fmFallbackPaused ? icoMediaPlay() : icoMediaPause());
+            return;
+        }
+#endif
         if (!fmMediaPlayer) return;
         const auto st = fmMediaPlayer->playbackState();
         if (st == QMediaPlayer::PlayingState) {
@@ -1502,7 +1651,21 @@ void FileManagerWidget::ensurePreviewInfoLayout()
     });
 
     QObject::connect(fmPrevFrameBtn, &QPushButton::clicked, this, [this]() {
-        if (m_host && m_host->fmIsSequence) { m_host->stepFmSequence(-1); return; }
+        if (fmIsSequence) { stepFmSequence(-1); return; }
+#ifdef HAVE_FFMPEG
+        if (fmUsingFallbackVideo) {
+            fmFallbackPaused = true;
+            if (fmFallbackReader) {
+                fmFallbackReader->setPaused(true);
+                const qint64 step = (fmFallbackFps > 0.0) ? qint64(1000.0 / fmFallbackFps) : 41;
+                qint64 target = fmPositionSlider ? qMax(0, fmPositionSlider->value() - int(step)) : 0;
+                fmFallbackReader->seekToMs(target);
+                fmFallbackReader->stepOnce();
+            }
+            if (fmPlayPauseBtn) fmPlayPauseBtn->setIcon(icoMediaPlay());
+            return;
+        }
+#endif
         if (!fmMediaPlayer) return;
         qint64 pos = fmMediaPlayer->position();
         qint64 step = 41; // ~24 fps fallback
@@ -1510,7 +1673,21 @@ void FileManagerWidget::ensurePreviewInfoLayout()
     });
 
     QObject::connect(fmNextFrameBtn, &QPushButton::clicked, this, [this]() {
-        if (m_host && m_host->fmIsSequence) { m_host->stepFmSequence(1); return; }
+        if (fmIsSequence) { stepFmSequence(1); return; }
+#ifdef HAVE_FFMPEG
+        if (fmUsingFallbackVideo) {
+            fmFallbackPaused = true;
+            if (fmFallbackReader) {
+                fmFallbackReader->setPaused(true);
+                const qint64 step = (fmFallbackFps > 0.0) ? qint64(1000.0 / fmFallbackFps) : 41;
+                qint64 target = fmPositionSlider ? fmPositionSlider->value() + int(step) : step;
+                fmFallbackReader->seekToMs(target);
+                fmFallbackReader->stepOnce();
+            }
+            if (fmPlayPauseBtn) fmPlayPauseBtn->setIcon(icoMediaPlay());
+            return;
+        }
+#endif
         if (!fmMediaPlayer) return;
         qint64 pos = fmMediaPlayer->position();
         qint64 step = 41; // ~24 fps fallback
@@ -1519,28 +1696,53 @@ void FileManagerWidget::ensurePreviewInfoLayout()
 
     QObject::connect(fmPositionSlider, &QSlider::sliderPressed, this, [this]() {
         fmWasPlayingBeforeSeek = false;
-        if (m_host && m_host->fmIsSequence) {
-            fmWasPlayingBeforeSeek = m_host->fmSequencePlaying;
-            if (m_host->fmSequencePlaying) m_host->pauseFmSequence();
-        } else if (fmMediaPlayer) {
+        if (fmIsSequence) {
+            fmWasPlayingBeforeSeek = fmSequencePlaying;
+            if (fmSequencePlaying) pauseFmSequence();
+        }
+#ifdef HAVE_FFMPEG
+        else if (fmUsingFallbackVideo) {
+            fmWasPlayingBeforeSeek = !fmFallbackPaused;
+            fmFallbackPaused = true;
+            if (fmFallbackReader) fmFallbackReader->setPaused(true);
+        }
+#endif
+        else if (fmMediaPlayer) {
             fmWasPlayingBeforeSeek = (fmMediaPlayer->playbackState() == QMediaPlayer::PlayingState);
             if (fmWasPlayingBeforeSeek) fmMediaPlayer->pause();
         }
     });
 
     QObject::connect(fmPositionSlider, &QSlider::sliderMoved, this, [this](int v) {
-        if (m_host && m_host->fmIsSequence) {
-            m_host->loadFmSequenceFrame(v);
-
-        } else if (fmMediaPlayer) {
+        if (fmIsSequence) {
+            loadFmSequenceFrame(v);
+        }
+#ifdef HAVE_FFMPEG
+        else if (fmUsingFallbackVideo) {
+            if (fmFallbackReader) {
+                fmFallbackReader->seekToMs(v);
+                fmFallbackReader->stepOnce();
+            }
+        }
+#endif
+        else if (fmMediaPlayer) {
             fmMediaPlayer->setPosition(v);
         }
     });
 
     QObject::connect(fmPositionSlider, &QSlider::sliderReleased, this, [this]() {
-        if (m_host && m_host->fmIsSequence) {
-            if (fmWasPlayingBeforeSeek) m_host->playFmSequence();
-        } else if (fmMediaPlayer) {
+        if (fmIsSequence) {
+            if (fmWasPlayingBeforeSeek) playFmSequence();
+        }
+#ifdef HAVE_FFMPEG
+        else if (fmUsingFallbackVideo) {
+            if (fmWasPlayingBeforeSeek) {
+                fmFallbackPaused = false;
+                if (fmFallbackReader) fmFallbackReader->setPaused(false);
+            }
+        }
+#endif
+        else if (fmMediaPlayer) {
             if (fmWasPlayingBeforeSeek) fmMediaPlayer->play();
         }
     });
@@ -1548,15 +1750,6 @@ void FileManagerWidget::ensurePreviewInfoLayout()
     QObject::connect(fmMediaPlayer, &QMediaPlayer::durationChanged, this, [this, fmtTime](qint64 d) {
         if (fmPositionSlider) fmPositionSlider->setRange(0, int(d));
         if (fmTimeLabel) fmTimeLabel->setText(QString("%1 / %2").arg(fmtTime(0), fmtTime(d)));
-    // React to color space changes (only affects image sequences in embedded preview)
-    QObject::connect(fmColorSpaceCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int){
-        if (!m_host) return;
-        if (m_host->fmIsSequence) {
-            // Reload current frame with the new color space
-            m_host->loadFmSequenceFrame(m_host->fmSequenceCurrentIndex);
-        }
-    });
-
     });
 
     QObject::connect(fmMediaPlayer, &QMediaPlayer::positionChanged, this, [this, fmtTime](qint64 p) {
@@ -1572,11 +1765,90 @@ void FileManagerWidget::ensurePreviewInfoLayout()
         if (!fmPlayPauseBtn) return;
         fmPlayPauseBtn->setIcon(s == QMediaPlayer::PlayingState ? icoMediaPause() : icoMediaPlay());
     });
-    // React to color space changes (only affects image sequences in embedded preview)
+    // React to color space changes (affects sequences and HDR still images in embedded preview)
     QObject::connect(fmColorSpaceCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int){
-        if (!m_host) return;
-        if (m_host->fmIsSequence) {
-            m_host->loadFmSequenceFrame(m_host->fmSequenceCurrentIndex);
+        if (fmIsSequence) {
+            loadFmSequenceFrame(fmSequenceCurrentIndex);
+            return;
+        }
+        if (!fmCurrentPreviewPath.isEmpty()) {
+            const QString ext = QFileInfo(fmCurrentPreviewPath).suffix().toLower();
+            // For videos, force stable hardware pipeline (Rec.709). Color transforms disabled for now.
+
+            // Video: re-render last captured frame with new color space
+            if (isVideoFile(ext) && !fmLastVideoFrameRaw.isNull() && fmImageItem) {
+                // Scale to viewport first
+                int targetW = fmImageView && fmImageView->viewport() ? fmImageView->viewport()->width() : 1600;
+                int targetH = fmImageView && fmImageView->viewport() ? fmImageView->viewport()->height() : 1200;
+                QImage out = fmLastVideoFrameRaw.scaled(targetW, targetH, Qt::KeepAspectRatio, Qt::FastTransformation);
+                auto toLinear709 = [](float v){ return (v < 0.081f) ? (v / 4.5f) : std::pow((v + 0.099f) / 1.099f, 1.0f/0.45f); };
+                auto linearToSRGB = [](float v){ v = std::clamp(v, 0.0f, 1.0f); return (v <= 0.0031308f) ? 12.92f*v : 1.055f*std::pow(v, 1.0f/2.4f) - 0.055f; };
+                OIIOImageLoader::ColorSpace cs = OIIOImageLoader::ColorSpace::Rec709;
+                if (fmColorSpaceCombo) {
+                    switch (fmColorSpaceCombo->currentIndex()) {
+                        case 0: cs = OIIOImageLoader::ColorSpace::Linear; break;
+                        case 1: cs = OIIOImageLoader::ColorSpace::sRGB;  break;
+                        case 2: cs = OIIOImageLoader::ColorSpace::Rec709; break;
+                    }
+                }
+                if (cs != OIIOImageLoader::ColorSpace::Rec709) {
+                    out = out.convertToFormat(QImage::Format_RGBA8888);
+                    const int w = out.width(), h = out.height();
+                    for (int y = 0; y < h; ++y) {
+                        uchar* p = out.scanLine(y);
+                        for (int x = 0; x < w; ++x) {
+                            float r = p[4*x+0] / 255.0f;
+                            float g = p[4*x+1] / 255.0f;
+                            float b = p[4*x+2] / 255.0f;
+                            r = toLinear709(r); g = toLinear709(g); b = toLinear709(b);
+                            if (cs == OIIOImageLoader::ColorSpace::sRGB) {
+                                r = linearToSRGB(r); g = linearToSRGB(g); b = linearToSRGB(b);
+                            } else {
+                                r = std::clamp(r, 0.0f, 1.0f);
+                                g = std::clamp(g, 0.0f, 1.0f);
+                                b = std::clamp(b, 0.0f, 1.0f);
+                            }
+                            p[4*x+0] = uchar(r * 255.0f + 0.5f);
+                            p[4*x+1] = uchar(g * 255.0f + 0.5f);
+                            p[4*x+2] = uchar(b * 255.0f + 0.5f);
+                        }
+                    }
+                }
+                fmImageItem->setPixmap(QPixmap::fromImage(out));
+                fmImageItem->setTransformationMode(Qt::SmoothTransformation);
+                if (fmImageScene) fmImageScene->setSceneRect(fmImageItem->boundingRect());
+                if (fmImageView && fmImageFitToView) { fmImageView->resetTransform(); fmImageView->fitInView(fmImageItem, Qt::KeepAspectRatio); }
+                fmImageView->show();
+                return;
+            }
+            // HDR-capable still image via OIIO
+            const bool hdrByExt = (ext == "exr" || ext == "hdr" || ext == "tif" || ext == "tiff" || ext == "psd");
+            if (hdrByExt && fmImageView && fmImageItem) {
+                int targetW = fmImageView->viewport() ? fmImageView->viewport()->width() : 1600;
+                int targetH = fmImageView->viewport() ? fmImageView->viewport()->height() : 1200;
+                if (targetW <= 0 || targetH <= 0) { targetW = 1600; targetH = 1200; }
+                if (OIIOImageLoader::isOIIOSupported(fmCurrentPreviewPath)) {
+                    OIIOImageLoader::ColorSpace cs = OIIOImageLoader::ColorSpace::sRGB;
+                    if (fmColorSpaceCombo) {
+                        switch (fmColorSpaceCombo->currentIndex()) {
+                            case 0: cs = OIIOImageLoader::ColorSpace::Linear; break;
+                            case 1: cs = OIIOImageLoader::ColorSpace::sRGB;  break;
+                            case 2: cs = OIIOImageLoader::ColorSpace::Rec709; break;
+                        }
+                    }
+                    QImage img = OIIOImageLoader::loadImage(fmCurrentPreviewPath, targetW, targetH, cs);
+                    if (!img.isNull()) {
+                        fmOriginalImage = img;
+                        fmImageItem->setPixmap(QPixmap::fromImage(img));
+                        fmImageItem->setTransformationMode(Qt::SmoothTransformation);
+                        if (fmImageScene) fmImageScene->setSceneRect(fmImageItem->boundingRect());
+                        fmImageView->resetTransform();
+                        fmImageView->fitInView(fmImageItem, Qt::KeepAspectRatio);
+                        fmImageFitToView = true;
+                        fmImageView->show();
+                    }
+                }
+            }
         }
     });
 
@@ -1598,12 +1870,12 @@ void FileManagerWidget::ensurePreviewInfoLayout()
         fmSequenceTimer = new QTimer(fmPreviewPanel);
         fmSequenceTimer->setTimerType(Qt::PreciseTimer);
         QObject::connect(fmSequenceTimer, &QTimer::timeout, this, [this]() {
-            if (!(m_host && m_host->fmIsSequence)) return;
+            if (!fmIsSequence) return;
             // Avoid starting a new decode while a frame is still loading to ensure UI updates during playback
-            if (m_host->fmSeqWorkerThread && m_host->fmSeqWorkerThread->isRunning()) return;
-            int idx = m_host->fmSequenceCurrentIndex + 1;
-            if (idx >= m_host->fmSequenceFramePaths.size()) idx = 0;
-            m_host->loadFmSequenceFrame(idx);
+            if (fmSeqWorkerThread && fmSeqWorkerThread->isRunning()) return;
+            int idx = fmSequenceCurrentIndex + 1;
+            if (idx >= fmSequenceFramePaths.size()) idx = 0;
+            loadFmSequenceFrame(idx);
         });
     }
 
@@ -1667,3 +1939,899 @@ void FileManagerWidget::ensurePreviewInfoLayout()
     bindHostPointers();
     LogManager::instance().addLog("[TRACE] FM: ensurePreviewInfoLayout leave", "DEBUG");
 }
+
+
+void FileManagerWidget::onFmSelectionChanged()
+{
+    // Update preview and info when selection changes
+    QAbstractItemView* view = fmIsGridMode ? static_cast<QAbstractItemView*>(fmGridView)
+                                           : static_cast<QAbstractItemView*>(fmListView);
+    if (!view || !view->selectionModel()) { clearFmPreview(); updateFmInfoPanel(); return; }
+    QModelIndex idx;
+    const auto sel = view->selectionModel()->selectedIndexes();
+    if (!sel.isEmpty()) idx = sel.first();
+
+    fmOverlayCurrentIndex = QPersistentModelIndex(idx);
+    fmOverlaySourceView = view;
+
+    if (fmPreviewInfoSplitter && fmPreviewInfoSplitter->isVisible()) {
+        updateFmPreviewForIndex(idx);
+    }
+    updateFmInfoPanel();
+}
+
+void FileManagerWidget::onFmTogglePreview(bool checked)
+{
+    if (!fmPreviewInfoSplitter) return;
+    const bool show = checked;
+    fmPreviewInfoSplitter->setVisible(show);
+    if (!show) {
+        if (fmMediaPlayer) { fmMediaPlayer->stop(); fmMediaPlayer->setSource(QUrl()); }
+#ifdef HAVE_FFMPEG
+        stopFmFallbackVideo();
+#endif
+    } else {
+        onFmSelectionChanged();
+    }
+    QSettings s("AugmentCode", "KAssetManager");
+    s.setValue("FileManager/PreviewVisible", show);
+}
+
+void FileManagerWidget::onFmOpenOverlay()
+{
+    if (!m_host) return;
+    // Toggle: if overlay is visible, close it
+    if (m_host->previewOverlay && m_host->previewOverlay->isVisible()) { m_host->closePreview(); return; }
+
+    // Determine current selection in FM and open full-screen overlay
+    QModelIndex idx;
+    QAbstractItemView* focusedView = nullptr;
+    if (fmGridView && fmGridView->hasFocus()) { idx = fmGridView->currentIndex(); focusedView = fmGridView; }
+    else if (fmListView && fmListView->hasFocus()) { idx = fmListView->currentIndex(); focusedView = fmListView; }
+    if (!idx.isValid()) return;
+    idx = idx.sibling(idx.row(), 0);
+
+    // Record overlay navigation context
+    fmOverlayCurrentIndex = QPersistentModelIndex(idx);
+    fmOverlaySourceView = focusedView;
+
+    // If sequence grouping is enabled and the selection is a representative, open as sequence
+    if (fmProxyModel && fmGroupSequences && idx.model() == fmProxyModel && fmProxyModel->isRepresentativeProxyIndex(idx)) {
+        auto info = fmProxyModel->infoForProxyIndex(idx);
+        // Build all frame paths
+        QStringList frames;
+        // Reuse MainWindow helper if available, else reconstruct naively
+        if (m_host) {
+            frames = m_host->reconstructSequenceFramePaths(info.reprPath, info.start, info.end);
+        }
+        if (!frames.isEmpty()) {
+            if (!m_host->previewOverlay) {
+                m_host->previewOverlay = new PreviewOverlay(nullptr);
+                connect(m_host->previewOverlay, &PreviewOverlay::closed, m_host, &MainWindow::closePreview);
+                connect(m_host->previewOverlay, &PreviewOverlay::navigateRequested, this, [this](int d){ this->changeFmPreview(d); });
+            } else {
+
+            }
+            int pad = 0;
+            auto m = SequenceDetector::mainPattern().match(QFileInfo(info.reprPath).fileName());
+            if (m.hasMatch()) pad = m.captured(3).length(); else pad = QString::number(info.start).length();
+            QString s0 = QString("%1").arg(info.start, pad, 10, QLatin1Char('0'));
+            QString s1 = QString("%1").arg(info.end, pad, 10, QLatin1Char('0'));
+            QString seqName = QString("%1.[%2-%3].%4").arg(info.base, s0, s1, info.ext);
+            m_host->previewOverlay->showSequence(frames, seqName, info.start, info.end);
+            return;
+        }
+    }
+
+    // Otherwise open single asset
+    QModelIndex srcIdx = idx;
+    if (fmProxyModel && idx.model() == fmProxyModel)
+        srcIdx = fmProxyModel->mapToSource(idx);
+    const QString path = fmDirModel ? fmDirModel->filePath(srcIdx) : QString();
+    if (path.isEmpty()) return;
+    QFileInfo finfo(path);
+    if (!finfo.exists()) return;
+    if (!m_host->previewOverlay) {
+        m_host->previewOverlay = new PreviewOverlay(nullptr);
+        connect(m_host->previewOverlay, &PreviewOverlay::closed, m_host, &MainWindow::closePreview);
+        connect(m_host->previewOverlay, &PreviewOverlay::navigateRequested, this, [this](int d){ this->changeFmPreview(d); });
+    } else {
+
+    }
+    m_host->previewOverlay->showAsset(path, finfo.fileName(), finfo.suffix());
+}
+
+void FileManagerWidget::clearFmPreview()
+{
+    if (fmMediaPlayer) { fmMediaPlayer->stop(); fmMediaPlayer->setSource(QUrl()); }
+#ifdef HAVE_FFMPEG
+    stopFmFallbackVideo();
+#endif
+    if (fmVideoWidget) fmVideoWidget->hide();
+    if (fmVideoItem) fmVideoItem->setVisible(false);
+    if (fmPrevFrameBtn) fmPrevFrameBtn->hide();
+    if (fmPlayPauseBtn) fmPlayPauseBtn->hide();
+    if (fmNextFrameBtn) fmNextFrameBtn->hide();
+    if (fmPositionSlider) fmPositionSlider->hide();
+    if (fmTimeLabel) fmTimeLabel->hide();
+    if (fmVolumeSlider) fmVolumeSlider->hide();
+    if (fmMuteBtn) fmMuteBtn->hide();
+
+    if (fmColorSpaceLabel) fmColorSpaceLabel->hide();
+    if (fmColorSpaceCombo) fmColorSpaceCombo->hide();
+
+    // Reset sequence state
+    if (fmSequenceTimer) fmSequenceTimer->stop();
+    fmIsSequence = false;
+    fmSequenceFramePaths.clear();
+    fmSequenceCurrentIndex = 0;
+
+    if (fmTextView) { fmTextView->clear(); fmTextView->hide(); }
+    if (fmCsvView) fmCsvView->hide();
+    if (fmCsvModel) fmCsvModel->clear();
+#ifdef HAVE_QT_PDF_WIDGETS
+    if (fmPdfView) fmPdfView->hide();
+#endif
+#ifdef HAVE_QT_PDF
+    if (fmPdfDoc) fmPdfDoc->close();
+#endif
+    if (fmPdfPrevBtn) fmPdfPrevBtn->hide();
+    if (fmPdfNextBtn) fmPdfNextBtn->hide();
+    if (fmPdfPageLabel) fmPdfPageLabel->hide();
+    if (fmSvgItem) { fmSvgScene->removeItem(fmSvgItem); delete fmSvgItem; fmSvgItem = nullptr; }
+    if (fmSvgView) fmSvgView->hide();
+
+    if (fmImageItem) {
+        fmImageItem->setPixmap(QPixmap());
+    }
+    if (fmAlphaCheck) fmAlphaCheck->hide();
+#ifdef HAVE_FFMPEG
+    // Stop any existing FFmpeg reader when changing selection
+    stopFmFallbackVideo();
+#endif
+
+}
+
+void FileManagerWidget::updateFmPreviewForIndex(const QModelIndex &idx)
+{
+    if (!fmPreviewPanel || !fmPreviewPanel->isVisible()) return;
+    if (!idx.isValid()) { clearFmPreview(); return; }
+
+#ifdef HAVE_FFMPEG
+    // Stop any running FFmpeg reader before switching content
+    stopFmFallbackVideo();
+#endif
+
+    QModelIndex viewIdx = idx.sibling(idx.row(), 0);
+
+    // Representative sequence item -> full sequence preview
+    if (fmProxyModel && fmGroupSequences && viewIdx.model() == fmProxyModel && fmProxyModel->isRepresentativeProxyIndex(viewIdx)) {
+        auto info = fmProxyModel->infoForProxyIndex(viewIdx);
+        const QString reprPath = info.reprPath;
+        if (reprPath.isEmpty() || !QFileInfo::exists(reprPath)) { clearFmPreview(); return; }
+        QStringList frames = m_host ? m_host->reconstructSequenceFramePaths(reprPath, info.start, info.end) : QStringList();
+        if (frames.isEmpty()) { clearFmPreview(); return; }
+        if (fmMediaPlayer) { fmMediaPlayer->stop(); fmMediaPlayer->setSource(QUrl()); }
+        if (fmVideoWidget) fmVideoWidget->hide();
+        if (fmImageView) fmImageView->show();
+        fmIsSequence = true;
+        fmSequenceFramePaths = frames;
+        fmSequenceStartFrame = info.start;
+        fmSequenceEndFrame = info.end;
+        fmSequenceCurrentIndex = 0;
+        fmSequenceFps = 24.0;
+        if (fmSequenceTimer) fmSequenceTimer->stop();
+        fmSequencePlaying = false;
+        if (fmPrevFrameBtn) fmPrevFrameBtn->show();
+        if (fmPlayPauseBtn) { fmPlayPauseBtn->show(); fmPlayPauseBtn->setIcon(icoMediaPlay()); }
+        if (fmNextFrameBtn) fmNextFrameBtn->show();
+        if (fmPositionSlider) { fmPositionSlider->show(); fmPositionSlider->setRange(0, frames.size()-1); fmPositionSlider->setValue(0); }
+        if (fmTimeLabel) { fmTimeLabel->show(); fmTimeLabel->setText(QString("Frame %1 / %2").arg(info.start).arg(info.end)); }
+        if (fmColorSpaceCombo && fmColorSpaceLabel) {
+            // Always show for image sequences as requested
+            fmColorSpaceLabel->setVisible(true);
+            fmColorSpaceCombo->setVisible(true);
+            fmColorSpaceCombo->setEnabled(true);
+        }
+        if (fmMuteBtn) { fmMuteBtn->show(); fmMuteBtn->setEnabled(false); fmMuteBtn->setIcon(icoMediaNoAudio()); }
+        if (fmVolumeSlider) { fmVolumeSlider->show(); fmVolumeSlider->setEnabled(false); }
+        loadFmSequenceFrame(0);
+        return;
+    }
+
+    // Map through proxy if needed
+    QModelIndex srcIdx = viewIdx;
+    if (fmProxyModel && viewIdx.model() == fmProxyModel)
+        srcIdx = fmProxyModel->mapToSource(viewIdx);
+    const QString path = fmDirModel ? fmDirModel->filePath(srcIdx) : QString();
+    if (path.isEmpty()) { clearFmPreview(); return; }
+    QFileInfo info(path);
+    if (!info.exists() || info.isDir()) { clearFmPreview(); return; }
+
+    const QString ext = info.suffix();
+
+    auto hideNonImageWidgets = [this]{
+        if (fmTextView) fmTextView->hide();
+        if (fmCsvView) fmCsvView->hide();
+#ifdef HAVE_QT_PDF_WIDGETS
+        if (fmPdfView) fmPdfView->hide();
+#endif
+        if (fmPdfPrevBtn) fmPdfPrevBtn->hide();
+        if (fmPdfNextBtn) fmPdfNextBtn->hide();
+        if (fmPdfPageLabel) fmPdfPageLabel->hide();
+        if (fmSvgView) fmSvgView->hide();
+        if (fmVideoWidget) fmVideoWidget->hide();
+        if (fmPrevFrameBtn) fmPrevFrameBtn->hide();
+        if (fmPlayPauseBtn) fmPlayPauseBtn->hide();
+        if (fmNextFrameBtn) fmNextFrameBtn->hide();
+        if (fmPositionSlider) fmPositionSlider->hide();
+        if (fmTimeLabel) fmTimeLabel->hide();
+        if (fmVolumeSlider) fmVolumeSlider->hide();
+        if (fmMuteBtn) fmMuteBtn->hide();
+        if (fmImageView) fmImageView->hide();
+        if (fmAlphaCheck) fmAlphaCheck->hide();
+    };
+
+    if (isImageFile(ext)) {
+        if (fmMediaPlayer) { fmMediaPlayer->stop(); fmMediaPlayer->setSource(QUrl()); }
+        hideNonImageWidgets();
+        QImage img;
+        int targetW = 0, targetH = 0;
+        if (fmImageView && fmImageView->viewport()) {
+            targetW = fmImageView->viewport()->width();
+            targetH = fmImageView->viewport()->height();
+        }
+        if (targetW <= 0 || targetH <= 0) { targetW = 1600; targetH = 1200; }
+        if (OIIOImageLoader::isOIIOSupported(path)) {
+            OIIOImageLoader::ColorSpace cs = OIIOImageLoader::ColorSpace::sRGB;
+            if (fmColorSpaceCombo) {
+                switch (fmColorSpaceCombo->currentIndex()) {
+                    case 0: cs = OIIOImageLoader::ColorSpace::Linear; break;
+                    case 1: cs = OIIOImageLoader::ColorSpace::sRGB;  break;
+                    case 2: cs = OIIOImageLoader::ColorSpace::Rec709; break;
+                }
+            }
+            img = OIIOImageLoader::loadImage(path, targetW, targetH, cs);
+        }
+        if (img.isNull()) {
+            QImageReader reader(path);
+            reader.setAutoTransform(true);
+            img = reader.read();
+        }
+        if (img.isNull()) { clearFmPreview(); return; }
+        fmCurrentPreviewPath = path;
+        fmOriginalImage = img;
+        fmPreviewHasAlpha = img.hasAlphaChannel();
+        if (fmAlphaCheck) { fmAlphaCheck->setVisible(fmPreviewHasAlpha); fmAlphaCheck->setChecked(false); }
+        QImage disp = fmOriginalImage;
+        if (fmAlphaOnlyMode && disp.hasAlphaChannel()) {
+            QImage a(disp.size(), QImage::Format_Grayscale8);
+            for (int y=0;y<disp.height();++y){
+                for (int x=0;x<disp.width();++x){
+                    uchar alpha = qAlpha(reinterpret_cast<const QRgb*>(disp.constScanLine(y))[x]);
+                    a.scanLine(y)[x] = alpha;
+                }
+            }
+            disp = a;
+        }
+        if (fmImageItem) {
+            fmImageItem->setPixmap(QPixmap::fromImage(disp));
+            fmImageItem->setTransformationMode(Qt::SmoothTransformation);
+        }
+        if (fmImageScene && fmImageItem) fmImageScene->setSceneRect(fmImageItem->boundingRect());
+        if (fmImageView) {
+            fmImageView->resetTransform();
+            fmImageView->centerOn(fmImageItem);
+            fmImageView->fitInView(fmImageItem, Qt::KeepAspectRatio);
+            fmImageFitToView = true;
+            fmImageView->setBackgroundBrush(QColor("#0a0a0a"));
+            fmImageView->show();
+        // Show/hide color space controls for HDR still images (EXR/HDR/TIF/PSD)
+        if (fmColorSpaceLabel && fmColorSpaceCombo) {
+            const QString extLower = ext.toLower();
+            const bool hdr = (extLower == "exr" || extLower == "hdr" || extLower == "tif" || extLower == "tiff" || extLower == "psd");
+            fmColorSpaceLabel->setVisible(hdr);
+            fmColorSpaceCombo->setVisible(hdr);
+        }
+
+        }
+        return;
+    }
+
+#ifdef HAVE_QT_PDF
+    if (isPdfFile(ext)) {
+        hideNonImageWidgets();
+        if (fmPdfDoc) {
+            fmCurrentPreviewPath = path;
+            auto err = fmPdfDoc->load(path);
+            if (err == QPdfDocument::Error::None && fmPdfDoc->pageCount() > 0) {
+                fmPdfCurrentPage = 0;
+                const QSizeF pts = fmPdfDoc->pagePointSize(fmPdfCurrentPage);
+                int vw = fmImageView ? fmImageView->viewport()->width() : 800; if (vw < 1) vw = 800;
+                int w = vw; int h = pts.width() > 0 ? int(pts.height() * (w / pts.width())) : w;
+                QImage img = fmPdfDoc->render(fmPdfCurrentPage, QSize(w, h));
+                if (!img.isNull() && fmImageItem) {
+                    if (img.hasAlphaChannel()) { QImage bg(img.size(), QImage::Format_ARGB32_Premultiplied); bg.fill(Qt::white); QPainter p(&bg); p.drawImage(0, 0, img); p.end(); img = bg; }
+                    fmImageItem->setPixmap(QPixmap::fromImage(img));
+                    if (fmImageScene) fmImageScene->setSceneRect(fmImageItem->boundingRect());
+                    if (fmImageView) { fmImageView->resetTransform(); fmImageView->fitInView(fmImageItem, Qt::KeepAspectRatio); fmImageFitToView = true; fmImageView->setBackgroundBrush(Qt::white); fmImageView->show(); }
+                }
+                if (fmPdfPrevBtn) fmPdfPrevBtn->show(); if (fmPdfNextBtn) fmPdfNextBtn->show(); if (fmPdfPageLabel) { fmPdfPageLabel->show(); fmPdfPageLabel->setText(QString("%1/%2").arg(1).arg(fmPdfDoc->pageCount())); }
+#ifdef HAVE_QT_PDF_WIDGETS
+                if (fmPdfView) fmPdfView->hide();
+#endif
+            } else {
+                if (fmTextView) { fmTextView->setPlainText("Preview not available"); fmTextView->show(); }
+            }
+        }
+        return;
+    }
+#else
+    if (isPdfFile(ext)) { hideNonImageWidgets(); if (fmTextView) { fmTextView->setPlainText("Preview not available"); fmTextView->show(); } return; }
+#endif
+
+    if (isSvgFile(ext)) {
+        hideNonImageWidgets();
+        if (fmSvgScene && fmSvgView) {
+            if (fmSvgItem) { fmSvgScene->removeItem(fmSvgItem); delete fmSvgItem; fmSvgItem = nullptr; }
+            fmCurrentPreviewPath = path;
+            auto *item = new QGraphicsSvgItem(path);
+            item->setFlags(QGraphicsItem::ItemIsMovable | QGraphicsItem::ItemIsSelectable);
+            fmSvgItem = item;
+            fmSvgScene->addItem(fmSvgItem);
+            fmSvgView->fitInView(fmSvgItem, Qt::KeepAspectRatio);
+            fmSvgView->show();
+        }
+        return;
+    }
+
+    if (isTextFile(ext)) {
+        hideNonImageWidgets();
+        if (fmTextView) {
+            QFile f(path);
+            if (f.open(QIODevice::ReadOnly | QIODevice::Text)) {
+                fmCurrentPreviewPath = path;
+                QByteArray data = f.read(2*1024*1024);
+                auto decodeText = [](const QByteArray &data) -> QString {
+                    if (data.isEmpty()) return QString();
+                    const uchar *b = reinterpret_cast<const uchar*>(data.constData());
+                    const int n = data.size();
+                    if (n >= 3 && b[0] == 0xEF && b[1] == 0xBB && b[2] == 0xBF) { return QString::fromUtf8(reinterpret_cast<const char*>(b + 3), n - 3); }
+                    if (n >= 2 && b[0] == 0xFF && b[1] == 0xFE) { return QString::fromUtf16(reinterpret_cast<const ushort*>(b + 2), (n - 2) / 2); }
+                    if (n >= 2 && b[0] == 0xFE && b[1] == 0xFF) {
+                        const int ulen = (n - 2) / 2; QVector<ushort> buf; buf.resize(ulen);
+                        for (int i = 0; i < ulen; ++i) buf[i] = (ushort(b[2 + 2*i]) << 8) | ushort(b[2 + 2*i + 1]);
+                        return QString::fromUtf16(buf.constData(), ulen);
+                    }
+                    const int sample = qMin(n, 4096); int zeroEven = 0, zeroOdd = 0; for (int i = 0; i < sample; ++i) { if (b[i] == 0) { if ((i & 1) == 0) ++zeroEven; else ++zeroOdd; } }
+                    if ((zeroOdd + zeroEven) > sample / 16) {
+                        const bool le = (zeroOdd > zeroEven); const int ulen = n / 2; if (le) return QString::fromUtf16(reinterpret_cast<const ushort*>(b), ulen);
+                        QVector<ushort> buf; buf.resize(ulen); for (int i = 0; i < ulen; ++i) buf[i] = (ushort(b[2*i]) << 8) | ushort(b[2*i + 1]); return QString::fromUtf16(buf.constData(), ulen);
+                    }
+                    QString s = QString::fromUtf8(reinterpret_cast<const char*>(b), n);
+                    int bad = 0; const int check = qMin(s.size(), 4096);
+                    for (int i = 0; i < check; ++i) if (s.at(i).unicode() == 0xFFFD) ++bad;
+                    if (bad > check / 16) s = QString::fromLocal8Bit(reinterpret_cast<const char*>(b), n);
+                    return s;
+                };
+                fmTextView->setPlainText(decodeText(data));
+                fmTextView->show();
+            } else {
+                fmTextView->setPlainText("Preview not available"); fmTextView->show();
+            }
+        }
+        return;
+    }
+
+    // Office: DOCX/DOC (text), XLSX (table)
+    if (isDocxFile(ext)) {
+        hideNonImageWidgets(); fmCurrentPreviewPath = path;
+        if (fmTextView) { const QString text = extractDocxText(path); fmTextView->setFont(QFont("Segoe UI")); fmTextView->setWordWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere); fmTextView->setPlainText(text.isEmpty() ? QStringLiteral("Preview not available") : text); fmTextView->show(); }
+        return;
+    }
+    if (isDocFile(ext)) {
+        hideNonImageWidgets(); fmCurrentPreviewPath = path;
+        if (fmTextView) { const QString text = extractDocBinaryText(path, 2*1024*1024); fmTextView->setFont(QFont("Segoe UI")); fmTextView->setWordWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere); fmTextView->setPlainText(text.isEmpty() ? QStringLiteral("Preview not available") : text); fmTextView->show(); }
+        return;
+    }
+    if (isExcelFile(ext)) {
+        hideNonImageWidgets(); fmCurrentPreviewPath = path;
+        if (fmCsvModel && fmCsvView) { fmCsvModel->clear(); if (loadXlsxSheet(path, fmCsvModel, 2000)) { fmCsvView->resizeColumnsToContents(); fmCsvView->show(); } else if (fmTextView) { fmTextView->setPlainText("Preview not available"); fmTextView->show(); } }
+        return;
+    }
+
+    if (isCsvFile(ext)) {
+        hideNonImageWidgets();
+        if (fmCsvModel && fmCsvView) {
+            fmCsvModel->clear(); fmCurrentPreviewPath = path; QFile f(path);
+            if (f.open(QIODevice::ReadOnly | QIODevice::Text)) {
+                QTextStream ts(&f); int row=0; QChar delim = ',';
+                while (!ts.atEnd() && row<2000) {
+                    const QString line = ts.readLine(); if (row == 0) { int cComma = line.count(','); int cSemi = line.count(';'); int cTab = line.count('\t'); if (cSemi > cComma && cSemi >= cTab) delim = ';'; else if (cTab > cComma && cTab >= cSemi) delim = '\t'; }
+                    const QStringList cols = line.split(delim); if (row==0) fmCsvModel->setColumnCount(cols.size());
+                    QList<QStandardItem*> items; items.reserve(cols.size()); for (const QString &c : cols) items << new QStandardItem(c.trimmed()); fmCsvModel->appendRow(items); ++row;
+                }
+                fmCsvView->resizeColumnsToContents(); fmCsvView->show();
+            } else { if (fmTextView) { fmTextView->setPlainText("Preview not available"); fmTextView->show(); } }
+        }
+        return;
+    }
+
+    if (isAudioFile(ext) || isVideoFile(ext)) {
+        fmCurrentPreviewPath = path;
+#ifdef HAVE_FFMPEG
+        // Stop any previous FFmpeg reader when switching assets
+        stopFmFallbackVideo();
+#endif
+        if (isVideoFile(ext)) {
+            if (fmVideoWidget) fmVideoWidget->hide();
+            if (fmImageView) fmImageView->show();
+            if (fmImageItem) { fmImageItem->setVisible(true); fmImageItem->setPixmap(QPixmap()); }
+            if (fmVideoItem) fmVideoItem->setVisible(false);
+            if (fmImageView) {
+                fmImageView->resetTransform();
+                if (fmImageItem)
+                    fmImageView->fitInView(fmImageItem, Qt::KeepAspectRatio);
+                fmImageFitToView = true;
+            }
+            if (fmPrevFrameBtn) fmPrevFrameBtn->show();
+            if (fmNextFrameBtn) fmNextFrameBtn->show();
+            // Reset timeline until duration is known to avoid stale range from sequences
+            if (fmPositionSlider) { fmPositionSlider->setRange(0, 0); fmPositionSlider->setValue(0); }
+            if (fmTimeLabel) { fmTimeLabel->setText("00:00 / 00:00"); }
+            // Show color space controls for videos (disabled for now; Rec.709)
+            if (fmColorSpaceLabel) fmColorSpaceLabel->show();
+            if (fmColorSpaceCombo) { fmColorSpaceCombo->show(); fmColorSpaceCombo->setEnabled(false); }
+
+#ifdef HAVE_FFMPEG
+            // Probe and route deterministically
+            MediaInfo::VideoMetadata vm; QString perr;
+            bool probed = MediaInfo::probeVideoFile(path, vm, &perr);
+            bool useFFmpeg = false;
+            if (probed) {
+                const QString codec = vm.videoCodec.toLower();
+                const QString container = QFileInfo(path).suffix().toLower();
+                if (codec == "prores" || codec.startsWith("dnx") || codec == "qtrle" || codec == "png" || container == "mxf") {
+                    useFFmpeg = true;
+                }
+            }
+            if (useFFmpeg) {
+                startFmFallbackVideo(path);
+                if (fmPlayPauseBtn) fmPlayPauseBtn->setIcon(icoMediaPlay());
+                return;
+            }
+#endif
+            // Hardware path (WMF/D3D11 via QMediaPlayer)
+            if (fmVideoItem) {
+                fmVideoItem->setPos(0, 0);
+                const QSizeF ns = fmVideoItem->nativeSize();
+                if (ns.isValid()) {
+                    fmVideoItem->setSize(ns);
+                    if (fmImageScene) fmImageScene->setSceneRect(QRectF(QPointF(0, 0), ns));
+                }
+            }
+            fmMediaPlayer->setVideoOutput(fmVideoItem);
+            if (fmVideoItem) fmVideoItem->setVisible(true);
+            if (fmImageItem) fmImageItem->setVisible(false);
+            if (fmVideoItem && fmImageView && fmVideoItem->nativeSize().isValid() && fmImageFitToView) {
+                fmImageView->resetTransform();
+                fmImageView->fitInView(fmVideoItem, Qt::KeepAspectRatio);
+            }
+        } else {
+            // audio-only: hide frame step buttons
+            if (fmVideoWidget) fmVideoWidget->hide();
+            if (fmImageView) fmImageView->hide();
+            if (fmVideoItem) fmVideoItem->setVisible(false);
+            if (fmPrevFrameBtn) fmPrevFrameBtn->hide();
+            if (fmNextFrameBtn) fmNextFrameBtn->hide();
+        }
+        if (fmPlayPauseBtn) fmPlayPauseBtn->show(); if (fmPositionSlider) fmPositionSlider->show(); if (fmTimeLabel) fmTimeLabel->show(); if (fmVolumeSlider) fmVolumeSlider->show(); if (fmMuteBtn) fmMuteBtn->show();
+        if (fmMediaPlayer) { fmMediaPlayer->setSource(QUrl::fromLocalFile(path)); fmMediaPlayer->pause(); if (fmPlayPauseBtn) fmPlayPauseBtn->setIcon(icoMediaPlay()); }
+        return;
+    }
+
+#ifdef HAVE_QT_PDF
+    if (isAiFile(ext)) {
+        auto err = fmPdfDoc ? fmPdfDoc->load(path) : QPdfDocument::Error::Unknown;
+        if (fmPdfDoc && err == QPdfDocument::Error::None && fmPdfDoc->pageCount()>0) {
+            hideNonImageWidgets(); fmPdfCurrentPage = 0; const QSizeF pts = fmPdfDoc->pagePointSize(fmPdfCurrentPage);
+            int vw = fmImageView ? fmImageView->viewport()->width() : 800; if (vw < 1) vw = 800; int w = vw; int h = pts.width() > 0 ? int(pts.height() * (w / pts.width())) : w;
+            QImage img = fmPdfDoc->render(fmPdfCurrentPage, QSize(w, h)); if (!img.isNull() && fmImageItem) {
+                if (img.hasAlphaChannel()) { QImage bg(img.size(), QImage::Format_ARGB32_Premultiplied); bg.fill(Qt::white); QPainter p(&bg); p.drawImage(0, 0, img); p.end(); img = bg; }
+                fmImageItem->setPixmap(QPixmap::fromImage(img)); if (fmImageScene) fmImageScene->setSceneRect(fmImageItem->boundingRect()); if (fmImageView) { fmImageView->resetTransform(); fmImageView->fitInView(fmImageItem, Qt::KeepAspectRatio); fmImageFitToView = true; fmImageView->setBackgroundBrush(Qt::white); fmImageView->show(); }
+            }
+            if (fmPdfPrevBtn) fmPdfPrevBtn->show(); if (fmPdfNextBtn) fmPdfNextBtn->show(); if (fmPdfPageLabel) { fmPdfPageLabel->show(); fmPdfPageLabel->setText(QString("%1/%2").arg(1).arg(fmPdfDoc->pageCount())); }
+#ifdef HAVE_QT_PDF_WIDGETS
+            if (fmPdfView) fmPdfView->hide();
+#endif
+            return;
+        }
+        hideNonImageWidgets(); if (fmTextView) { fmTextView->setPlainText("Preview not available"); fmTextView->show(); } return;
+    }
+#else
+    if (isAiFile(ext)) { hideNonImageWidgets(); if (fmTextView) { fmTextView->setPlainText("Preview not available"); fmTextView->show(); } return; }
+#endif
+
+    clearFmPreview();
+}
+
+void FileManagerWidget::changeFmPreview(int delta)
+{
+    if (!m_host || !m_host->previewOverlay) return;
+    QModelIndex cur = fmOverlayCurrentIndex;
+    if (!cur.isValid()) {
+        QAbstractItemView* view = fmIsGridMode ? static_cast<QAbstractItemView*>(fmGridView)
+                                               : static_cast<QAbstractItemView*>(fmListView);
+        if (view) cur = view->currentIndex();
+        if (!cur.isValid()) return;
+        cur = cur.sibling(cur.row(), 0);
+        fmOverlayCurrentIndex = QPersistentModelIndex(cur);
+        fmOverlaySourceView = view;
+    }
+    QAbstractItemModel* model = const_cast<QAbstractItemModel*>(cur.model());
+    if (!model) return;
+    int newRow = cur.row() + delta;
+    if (newRow < 0 || newRow >= model->rowCount(cur.parent())) return;
+    QModelIndex next = model->index(newRow, 0, cur.parent());
+    if (!next.isValid()) return;
+
+    // Update context
+    fmOverlayCurrentIndex = QPersistentModelIndex(next);
+    if (fmOverlaySourceView) {
+        fmOverlaySourceView->setCurrentIndex(next);
+        fmOverlaySourceView->scrollTo(next, QAbstractItemView::PositionAtCenter);
+    }
+
+    // Grouped sequence representative
+    if (fmProxyModel && fmGroupSequences && next.model() == fmProxyModel && fmProxyModel->isRepresentativeProxyIndex(next)) {
+        auto info = fmProxyModel->infoForProxyIndex(next);
+        QStringList frames = m_host ? m_host->reconstructSequenceFramePaths(info.reprPath, info.start, info.end) : QStringList();
+        if (!frames.isEmpty()) {
+
+            int pad = 0;
+            auto m = SequenceDetector::mainPattern().match(QFileInfo(info.reprPath).fileName());
+            if (m.hasMatch()) pad = m.captured(3).length(); else pad = QString::number(info.start).length();
+            QString s0 = QString("%1").arg(info.start, pad, 10, QLatin1Char('0'));
+            QString s1 = QString("%1").arg(info.end, pad, 10, QLatin1Char('0'));
+            QString seqName = QString("%1.[%2-%3].%4").arg(info.base, s0, s1, info.ext);
+            m_host->previewOverlay->showSequence(frames, seqName, info.start, info.end);
+            return;
+        }
+    }
+
+    // Map to source and show asset
+    QModelIndex srcIdx = next;
+    if (fmProxyModel && next.model() == fmProxyModel)
+        srcIdx = fmProxyModel->mapToSource(next);
+    const QString path = fmDirModel ? fmDirModel->filePath(srcIdx) : QString();
+    if (path.isEmpty()) return;
+    QFileInfo fi(path);
+    if (!fi.exists()) return;
+
+    m_host->previewOverlay->showAsset(path, fi.fileName(), fi.suffix());
+}
+
+
+
+void FileManagerWidget::loadFmSequenceFrame(int index)
+{
+    if (fmSequenceFramePaths.isEmpty()) return;
+    if (index < 0) index = 0;
+    if (index >= fmSequenceFramePaths.size()) index = fmSequenceFramePaths.size() - 1;
+    fmSequenceCurrentIndex = index;
+    const QString path = fmSequenceFramePaths.at(index);
+
+    if (fmPositionSlider) fmPositionSlider->setValue(index);
+    if (fmTimeLabel) {
+        const int frameNum = fmSequenceStartFrame + index;
+        fmTimeLabel->setText(QString("Frame %1 / %2").arg(frameNum).arg(fmSequenceEndFrame));
+    }
+
+    // Coalesce requests: if a worker is still running, queue the latest index and return
+    const int epoch = ++fmSeqLoadEpoch;
+    if (fmSeqWorkerThread && fmSeqWorkerThread->isRunning()) {
+        fmSeqHasPending = true;
+        fmSeqPendingIndex = index;
+        return;
+    }
+    if (fmSeqWorkerThread) { // finished previously
+        fmSeqWorkerThread->deleteLater();
+        fmSeqWorkerThread = nullptr;
+    }
+
+    // Prepare UI
+    if (fmMediaPlayer) { fmMediaPlayer->stop(); fmMediaPlayer->setSource(QUrl()); }
+    if (fmVideoWidget) fmVideoWidget->hide();
+    if (fmImageView) fmImageView->show();
+
+    // Worker thread to load the image frame (scaled to viewport)
+    int targetW = 0, targetH = 0;
+    if (fmImageView && fmImageView->viewport()) {
+        targetW = fmImageView->viewport()->width();
+        targetH = fmImageView->viewport()->height();
+    }
+    if (targetW <= 0 || targetH <= 0) { targetW = 1600; targetH = 1200; }
+
+    // Determine color space ON UI THREAD to avoid racing UI from worker
+    OIIOImageLoader::ColorSpace csToUse = OIIOImageLoader::ColorSpace::sRGB;
+    if (fmColorSpaceCombo) {
+        switch (fmColorSpaceCombo->currentIndex()) {
+            case 0: csToUse = OIIOImageLoader::ColorSpace::Linear; break;
+            case 1: csToUse = OIIOImageLoader::ColorSpace::sRGB;  break;
+            case 2: csToUse = OIIOImageLoader::ColorSpace::Rec709; break;
+        }
+    }
+
+    QThread* t = new QThread();
+    fmSeqWorkerThread = t;
+    QObject* ctx = new QObject();
+    ctx->moveToThread(t);
+
+    connect(t, &QThread::started, ctx, [this, ctx, path, epoch, targetW, targetH, csToUse]() {
+        QImage img;
+        if (OIIOImageLoader::isOIIOSupported(path)) {
+            img = OIIOImageLoader::loadImage(path, targetW, targetH, csToUse);
+        }
+        if (img.isNull()) {
+            QImageReader reader(path);
+            reader.setAutoTransform(true);
+            reader.setScaledSize(QSize(targetW, targetH));
+            img = reader.read();
+        }
+        QMetaObject::invokeMethod(this, [this, img, epoch]() {
+            if (epoch != fmSeqLoadEpoch) return; // stale
+            if (img.isNull()) return;
+            fmOriginalImage = img;
+            if (fmImageItem) {
+                fmImageItem->setPixmap(QPixmap::fromImage(img));
+                fmImageItem->setTransformationMode(Qt::SmoothTransformation);
+                if (fmImageScene) fmImageScene->setSceneRect(fmImageItem->boundingRect());
+                if (fmImageView) { fmImageView->resetTransform(); fmImageView->fitInView(fmImageItem, Qt::KeepAspectRatio); fmImageFitToView = true; fmImageView->show(); }
+            }
+        }, Qt::QueuedConnection);
+        QMetaObject::invokeMethod(ctx, [ctx]() { ctx->deleteLater(); }, Qt::QueuedConnection);
+        QThread::currentThread()->quit();
+    });
+
+    connect(t, &QThread::finished, this, [this, t]() {
+        if (fmSeqWorkerThread == t) fmSeqWorkerThread = nullptr;
+        t->deleteLater();
+        if (fmSeqHasPending) {
+            int idx = fmSeqPendingIndex;
+            fmSeqHasPending = false;
+            // Kick off the most recent pending frame
+            QMetaObject::invokeMethod(this, [this, idx]() { loadFmSequenceFrame(idx); }, Qt::QueuedConnection);
+        }
+    });
+
+    t->start();
+}
+
+void FileManagerWidget::playFmSequence()
+{
+    if (!fmSequenceTimer || fmSequenceFramePaths.isEmpty()) return;
+    fmSequencePlaying = true;
+    if (fmPlayPauseBtn) fmPlayPauseBtn->setIcon(icoMediaPause());
+    const int intervalMs = int(1000.0 / qMax(1.0, fmSequenceFps));
+    fmSequenceTimer->start(intervalMs);
+}
+
+void FileManagerWidget::pauseFmSequence()
+{
+    if (!fmSequenceTimer) return;
+    fmSequencePlaying = false;
+    fmSequenceTimer->stop();
+    if (fmPlayPauseBtn) fmPlayPauseBtn->setIcon(icoMediaPlay());
+}
+
+void FileManagerWidget::stepFmSequence(int delta)
+{
+    if (fmSequenceFramePaths.isEmpty()) return;
+    int next = fmSequenceCurrentIndex + delta;
+    if (next < 0) next = 0;
+    if (next >= fmSequenceFramePaths.size()) next = fmSequenceFramePaths.size() - 1;
+    loadFmSequenceFrame(next);
+}
+
+
+void FileManagerWidget::updateFmInfoPanel()
+{
+    if (!fmInfoPanel) return;
+
+    QAbstractItemView* view = fmIsGridMode ? static_cast<QAbstractItemView*>(fmGridView)
+                                           : static_cast<QAbstractItemView*>(fmListView);
+    if (!view || !view->selectionModel()) {
+        if (fmInfoFileName) fmInfoFileName->setText("No selection");
+        if (fmInfoFilePath) fmInfoFilePath->clear();
+        if (fmInfoFileSize) fmInfoFileSize->clear();
+        if (fmInfoFileType) fmInfoFileType->clear();
+        if (fmInfoDimensions) fmInfoDimensions->clear();
+        if (fmInfoCreated) fmInfoCreated->clear();
+        if (fmInfoModified) fmInfoModified->clear();
+        if (fmInfoPermissions) fmInfoPermissions->clear();
+        return;
+    }
+
+    QModelIndexList sel = view->selectionModel()->selectedIndexes();
+    if (sel.isEmpty()) {
+        if (fmInfoFileName) fmInfoFileName->setText("No selection");
+        if (fmInfoFilePath) fmInfoFilePath->clear();
+        if (fmInfoFileSize) fmInfoFileSize->clear();
+        if (fmInfoFileType) fmInfoFileType->clear();
+        if (fmInfoDimensions) fmInfoDimensions->clear();
+        if (fmInfoCreated) fmInfoCreated->clear();
+        if (fmInfoModified) fmInfoModified->clear();
+        if (fmInfoPermissions) fmInfoPermissions->clear();
+        return;
+    }
+
+    QModelIndex viewIdx = sel.first().sibling(sel.first().row(), 0);
+    QModelIndex srcIdx = viewIdx;
+    if (fmProxyModel && viewIdx.model() == fmProxyModel)
+        srcIdx = fmProxyModel->mapToSource(viewIdx);
+
+    const QString path = fmDirModel ? fmDirModel->filePath(srcIdx) : QString();
+    if (path.isEmpty()) return;
+    QFileInfo fi(path);
+    if (!fi.exists()) return;
+
+    if (fmInfoFileName) fmInfoFileName->setText(fi.fileName());
+    if (fmInfoFilePath) fmInfoFilePath->setText(QDir::toNativeSeparators(fi.absoluteFilePath()));
+    if (fmInfoFileSize) fmInfoFileSize->setText(fi.isDir() ? QString("<dir>") : humanReadableSize(fi.size()));
+    if (fmInfoFileType) fmInfoFileType->setText(fi.suffix().toUpper());
+
+    QString dimText;
+    const QString ext = fi.suffix();
+    if (isImageFile(ext)) {
+        QImageReader r(path);
+        QSize s = r.size();
+        if (s.isValid()) dimText = QString("%1 x %2").arg(s.width()).arg(s.height());
+    } else if (isVideoFile(ext)) {
+        // Optional: lightweight metadata probe
+#ifdef HAVE_FFMPEG_METADATA
+        auto m = VideoMetadata::probe(path);
+        if (m.width > 0 && m.height > 0) dimText = QString("%1 x %2").arg(m.width).arg(m.height);
+#endif
+    }
+    if (fmInfoDimensions) fmInfoDimensions->setText(dimText);
+
+    auto fmt = [](const QDateTime& dt) { return dt.toString("yyyy-MM-dd hh:mm:ss"); };
+    if (fmInfoCreated) fmInfoCreated->setText(fmt(fi.birthTime()));
+    if (fmInfoModified) fmInfoModified->setText(fmt(fi.lastModified()));
+
+    if (fmInfoPermissions) {
+        QFile::Permissions p = fi.permissions();
+        auto f = [&](QFile::Permissions m, QChar c){ return (p & m) ? c : QChar('-'); };
+        QString perm = QString("%1%2%3 %4%5%6 %7%8%9")
+            .arg(f(QFile::ReadOwner, 'r')).arg(f(QFile::WriteOwner, 'w')).arg(f(QFile::ExeOwner, 'x'))
+            .arg(f(QFile::ReadUser, 'r')).arg(f(QFile::WriteUser, 'w')).arg(f(QFile::ExeUser, 'x'))
+            .arg(f(QFile::ReadGroup, 'r')).arg(f(QFile::WriteGroup, 'w')).arg(f(QFile::ExeGroup, 'x'));
+        fmInfoPermissions->setText(perm);
+    }
+}
+
+#ifdef HAVE_FFMPEG
+void FileManagerWidget::startFmFallbackVideo(const QString &path)
+{
+    // Stop media player path
+    if (fmMediaPlayer) { fmMediaPlayer->stop(); fmMediaPlayer->setSource(QUrl()); }
+
+    // Basic UI prep
+    if (fmVideoItem) fmVideoItem->setVisible(false);
+    if (fmImageView) fmImageView->show();
+    if (fmImageItem) { fmImageItem->setVisible(true); fmImageItem->setPixmap(QPixmap()); }
+    if (fmPrevFrameBtn) fmPrevFrameBtn->show();
+    if (fmNextFrameBtn) fmNextFrameBtn->show();
+    if (fmPlayPauseBtn) { fmPlayPauseBtn->show(); fmPlayPauseBtn->setIcon(icoMediaPlay()); }
+    if (fmPositionSlider) { fmPositionSlider->show(); fmPositionSlider->setRange(0, 0); fmPositionSlider->setValue(0); }
+    if (fmTimeLabel) { fmTimeLabel->show(); fmTimeLabel->setText("00:00 / 00:00"); }
+    if (fmColorSpaceLabel) fmColorSpaceLabel->show();
+    if (fmColorSpaceCombo) { fmColorSpaceCombo->show(); fmColorSpaceCombo->setEnabled(false); }
+
+    // Probe duration and fps quickly
+    fmFallbackDurationMs = 0;
+    fmFallbackFps = 0.0;
+    {
+        AVFormatContext *fmt = nullptr;
+        QByteArray nb = QFile::encodeName(path);
+        if (avformat_open_input(&fmt, nb.constData(), nullptr, nullptr) == 0) {
+            if (avformat_find_stream_info(fmt, nullptr) >= 0) {
+                int vindex = av_find_best_stream(fmt, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
+                if (vindex >= 0) {
+                    AVStream *st = fmt->streams[vindex];
+                    AVRational fr = st->avg_frame_rate.num ? st->avg_frame_rate : st->r_frame_rate;
+                    if (fr.num && fr.den) fmFallbackFps = av_q2d(fr);
+                    if (fmt->duration > 0) {
+                        fmFallbackDurationMs = qint64(fmt->duration / (AV_TIME_BASE / 1000));
+                    } else if (st->duration > 0) {
+                        fmFallbackDurationMs = qint64(av_rescale_q(st->duration, st->time_base, AVRational{1,1000}));
+                    }
+                }
+            }
+            avformat_close_input(&fmt);
+        }
+    }
+    if (fmPositionSlider && fmFallbackDurationMs > 0) fmPositionSlider->setRange(0, int(fmFallbackDurationMs));
+
+    // Launch reader thread
+    QThread *t = new QThread();
+    fmFallbackThread = t;
+    {
+        QSettings s("AugmentCode", "KAssetManager");
+        const bool drop = s.value("Playback/DropLateFrames", true).toBool();
+        fmFallbackReader = new FfmpegVideoReader(path, drop);
+    }
+    fmFallbackReader->moveToThread(t);
+
+    connect(t, &QThread::started, fmFallbackReader, &FfmpegVideoReader::start);
+    connect(fmFallbackReader, &FfmpegVideoReader::frameReady, this, &FileManagerWidget::onFmFallbackFrameReady, Qt::QueuedConnection);
+    connect(fmFallbackReader, &FfmpegVideoReader::finished, this, &FileManagerWidget::onFmFallbackFinished, Qt::QueuedConnection);
+    connect(fmFallbackReader, &FfmpegVideoReader::finished, t, &QThread::quit);
+    connect(t, &QThread::finished, fmFallbackReader, &QObject::deleteLater);
+    connect(t, &QThread::finished, t, &QObject::deleteLater);
+
+    // Ensure cleanup on widget destruction
+    connect(this, &QObject::destroyed, fmFallbackReader, &FfmpegVideoReader::stop, Qt::DirectConnection);
+    connect(this, &QObject::destroyed, t, &QThread::quit);
+
+    fmUsingFallbackVideo = true;
+    fmFallbackPaused = true;
+    t->start();
+}
+
+void FileManagerWidget::stopFmFallbackVideo()
+{
+    if (!fmUsingFallbackVideo) return;
+    fmUsingFallbackVideo = false;
+    if (fmFallbackReader) {
+        fmFallbackReader->stop();
+    }
+    if (fmFallbackThread) {
+        fmFallbackThread->quit();
+    }
+    fmFallbackReader = nullptr;
+    fmFallbackThread = nullptr;
+}
+
+static inline QString fmFmtTime(qint64 ms) {
+    if (ms < 0) ms = 0;
+    int h = int(ms / 3600000); ms %= 3600000;
+    int m = int(ms / 60000);   ms %= 60000;
+    int s = int(ms / 1000);
+    return h > 0 ? QString::asprintf("%d:%02d:%02d", h, m, s)
+                 : QString::asprintf("%02d:%02d", m, s);
+}
+
+void FileManagerWidget::onFmFallbackFrameReady(const QImage &image, qint64 ptsMs)
+{
+    if (!fmImageItem || !fmImageView) return;
+
+    // Update pixmap; refit on size change
+    const QSize sz = image.size();
+    const bool sizeChanged = (sz != fmLastVideoPixmapSize);
+    fmLastVideoPixmapSize = sz;
+    fmLastVideoFrameRaw = image;
+    fmImageItem->setPixmap(QPixmap::fromImage(image));
+    fmImageItem->setTransformationMode(Qt::SmoothTransformation);
+
+    if (fmImageScene) fmImageScene->setSceneRect(fmImageItem->boundingRect());
+    if (sizeChanged && fmImageFitToView) {
+        fmImageView->resetTransform();
+        fmImageView->fitInView(fmImageItem, Qt::KeepAspectRatio);
+    }
+
+    // Timeline updates
+    if (fmPositionSlider && !fmPositionSlider->isSliderDown()) fmPositionSlider->setValue(int(qMax<qint64>(0, ptsMs)));
+    if (fmTimeLabel) {
+        const qint64 d = fmFallbackDurationMs;
+        fmTimeLabel->setText(QString("%1 / %2").arg(fmFmtTime(ptsMs), fmFmtTime(d)));
+    }
+}
+
+void FileManagerWidget::onFmFallbackFinished()
+{
+    // Keep UI consistent
+    if (fmPlayPauseBtn) fmPlayPauseBtn->setIcon(icoMediaPlay());
+}
+#endif // HAVE_FFMPEG
+

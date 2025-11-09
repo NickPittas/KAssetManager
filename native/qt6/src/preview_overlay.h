@@ -7,6 +7,7 @@
 #include <QSlider>
 #include <QMediaPlayer>
 #include <QGraphicsVideoItem>
+#include <QVideoSink>
 #include <QAudioOutput>
 #include <QKeyEvent>
 #include <QTimer>
@@ -41,6 +42,8 @@
 
 // Forward declarations
 class SequenceFrameCache;
+
+class FfmpegVideoReader; // from src/ffmpeg_video_reader.h
 
 class CacheBarWidget;
 /**
@@ -326,6 +329,9 @@ private:
     QGraphicsPixmapItem *imageItem;
     QGraphicsSvgItem *svgItem;
     QGraphicsVideoItem *videoItem;
+    QVideoSink *videoSink;
+    QImage lastVideoFrameRaw;
+    QSize lastVideoPixmapSize; // track last displayed pixmap size to avoid refitting each frame
     QWidget *controlsWidget;
     QPushButton *playPauseBtn;
     QPushButton *prevFrameBtn;
@@ -407,14 +413,14 @@ private:
     SequenceFrameCache *frameCache;
     bool useCacheForSequences; // Flag to enable/disable cache (disabled by default)
 
-    // Fallback (software) video playback state for unsupported codecs (e.g., PNG-in-MOV)
+    // Fallback (software) video playback state for unsupported codecs (FFmpeg generic decode)
     bool usingFallbackVideo = false;
-    class FallbackPngMovReader; // defined in .cpp
-    FallbackPngMovReader* fallbackReader = nullptr;
+    FfmpegVideoReader* fallbackReader = nullptr;
     QThread* fallbackThread = nullptr;
     qint64 fallbackDurationMs = 0;
     double fallbackFps = 0.0;
     bool fallbackPaused = false;
+    QImage lastFallbackFrameRaw;
 
     // Color space for HDR/EXR images
     OIIOImageLoader::ColorSpace currentColorSpace;

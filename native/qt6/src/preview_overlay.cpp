@@ -20,6 +20,7 @@
 #include <QStandardPaths>
 #include <QUuid>
 #include <QImage>
+#include <QImageReader>
 #ifdef HAVE_QT_PDF
 #include <QPdfDocument>
 #include <QPdfView>
@@ -29,6 +30,8 @@
 
 #include <QVector>
 #include <QSettings>
+
+#include <QVideoFrame>
 
 #include "office_preview.h"
 
@@ -55,6 +58,7 @@
 #include <QMimeData>
 #include <QUrl>
 #include <QGuiApplication>
+#include <QElapsedTimer>
 #include <QScreen>
 #include "star_rating_widget.h"
 
@@ -81,130 +85,15 @@ static QIcon loadMediaIcon(const QString& relative)
 extern "C" {
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
+#include <libswscale/swscale.h>
+#include <libavutil/imgutils.h>
 }
 #include <QImage>
 #include <QRegularExpression>
 
-// Worker that reads PNG-coded frames from a MOV and emits QImage frames
-class PreviewOverlay::FallbackPngMovReader : public QObject {
-    Q_OBJECT
-public:
-    explicit FallbackPngMovReader(const QString& path)
-        : m_path(path) {}
+#include "ffmpeg_video_reader.h"
 
-public slots:
-    void start() {
-        if (!open()) { emit finished(); return; }
-        const double intervalMs = m_fps > 0.0 ? (1000.0 / m_fps) : (1000.0 / 24.0);
-        AVPacket pkt; av_init_packet(&pkt);
-        const uint8_t sig[8] = {0x89, 'P','N','G', 0x0D, 0x0A, 0x1A, 0x0A};
-        qint64 lastPtsMs = 0;
-        while (!m_stop) {
-            if (m_seekRequested.load()) {
-                qint64 targetMs = m_seekTargetMs.load();
-                AVRational ms = {1, 1000};
-                int64_t ts = av_rescale_q(targetMs, ms, m_stream->time_base);
-                av_seek_frame(m_fmt, m_vIdx, ts, AVSEEK_FLAG_BACKWARD);
-                m_seekRequested = false;
-                lastPtsMs = targetMs;
-            }
-            // Single-step: allow exactly one frame to pass while paused
-            bool doSingleStep = m_singleStep.exchange(false);
-            if (m_paused && !doSingleStep) { QThread::msleep(10); continue; }
-            if (av_read_frame(m_fmt, &pkt) < 0) {
-                break; // EOF
-            }
-            if (pkt.stream_index == m_vIdx && pkt.size >= 8 && pkt.data) {
-                int limit = pkt.size - 8;
-                int pos = -1;
-                for (int i = 0; i <= limit; ++i) {
-                    if (pkt.data[i] == sig[0]) {
-                        bool match = true;
-                        for (int j = 1; j < 8; ++j) {
-                            if (pkt.data[i + j] != sig[j]) { match = false; break; }
-                        }
-                        if (match) { pos = i; break; }
-                    }
-                }
-                if (pos >= 0) {
-                    QByteArray bytes(reinterpret_cast<const char*>(pkt.data + pos), pkt.size - pos);
-                    QImage img = QImage::fromData(bytes, "PNG");
-                    if (!img.isNull()) {
-                        qint64 ptsMs = 0;
-                        if (pkt.pts != AV_NOPTS_VALUE) {
-                            AVRational ms = {1, 1000};
-                            ptsMs = av_rescale_q(pkt.pts, m_stream->time_base, ms);
-                        } else {
-                            ptsMs = lastPtsMs + static_cast<qint64>(intervalMs);
-                        }
-                        lastPtsMs = ptsMs;
-                        emit frameReady(img, ptsMs);
-                        // Pace roughly to FPS; keep it simple
-                        QThread::msleep(static_cast<unsigned long>(intervalMs));
-                    }
-                }
-            }
-            av_packet_unref(&pkt);
-        }
-        avformat_close_input(&m_fmt);
-        emit finished();
-    }
-    void stop() { m_stop = true; }
-    void setPaused(bool p) { m_paused = p; }
 
-    void stepOnce() { m_singleStep = true; }
-    void seekToMs(qint64 ms) { m_seekTargetMs = ms; m_seekRequested = true; }
-
-signals:
-    void frameReady(const QImage& image, qint64 ptsMs);
-
-    void finished();
-
-public:
-    double fps() const { return m_fps; }
-    qint64 durationMs() const { return m_durationMs; }
-
-private:
-    bool open() {
-        if (avformat_open_input(&m_fmt, m_path.toUtf8().constData(), nullptr, nullptr) < 0) {
-            return false;
-        }
-        if (avformat_find_stream_info(m_fmt, nullptr) < 0) {
-            avformat_close_input(&m_fmt);
-            return false;
-        }
-        int vIdx = av_find_best_stream(m_fmt, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
-        if (vIdx < 0) {
-            avformat_close_input(&m_fmt);
-            return false;
-        }
-        m_vIdx = vIdx;
-        m_stream = m_fmt->streams[m_vIdx];
-        AVRational r = m_stream->avg_frame_rate.num > 0 ? m_stream->avg_frame_rate : m_stream->r_frame_rate;
-        m_fps = (r.num > 0 && r.den > 0) ? (static_cast<double>(r.num) / r.den) : 24.0;
-        if (m_fmt->duration > 0) {
-            m_durationMs = static_cast<qint64>( (m_fmt->duration * 1000) / AV_TIME_BASE );
-        } else {
-            m_durationMs = 0;
-        }
-        // Rewind to start for clean playback
-        av_seek_frame(m_fmt, m_vIdx, 0, AVSEEK_FLAG_BACKWARD);
-        return true;
-    }
-
-    QString m_path;
-    AVFormatContext* m_fmt = nullptr;
-    AVStream* m_stream = nullptr;
-    int m_vIdx = -1;
-    double m_fps = 24.0;
-    qint64 m_durationMs = 0;
-    std::atomic<bool> m_stop{false};
-    std::atomic<bool> m_paused{false};
-    std::atomic<bool> m_singleStep{false};
-    std::atomic<bool> m_seekRequested{false};
-    std::atomic<qint64> m_seekTargetMs{0};
-
-};
 #endif // HAVE_FFMPEG
 
 PreviewOverlay::PreviewOverlay(QWidget *parent)
@@ -230,7 +119,7 @@ PreviewOverlay::PreviewOverlay(QWidget *parent)
     , sequenceStartFrame(0)
     , sequenceEndFrame(0)
     , sequencePlaying(false)
-    , currentColorSpace(OIIOImageLoader::ColorSpace::sRGB)
+    , currentColorSpace(OIIOImageLoader::ColorSpace::Rec709)
     , isHDRImage(false)
     , useCacheForSequences(true) // ENABLED - using QRecursiveMutex to fix deadlock
 {
@@ -409,7 +298,14 @@ void PreviewOverlay::setupUi()
     // Fit video when native size becomes available
     connect(videoItem, &QGraphicsVideoItem::nativeSizeChanged, this, [this](const QSizeF& sz){
         if (imageView && videoItem && videoItem->isVisible()) {
+            // Normalize item geometry and scene rect to the new native size
+            videoItem->setPos(0, 0);
+            if (sz.isValid()) {
+                videoItem->setSize(sz);
+                if (imageScene) imageScene->setSceneRect(QRectF(QPointF(0, 0), sz));
+            }
             if (fitToView) {
+                imageView->resetTransform();
                 imageView->fitInView(videoItem, Qt::KeepAspectRatio);
             }
             if (!initialSized) {
@@ -419,6 +315,8 @@ void PreviewOverlay::setupUi()
                 int w = qMin(contentW + 40, avail.width() - 80);
                 int h = qMin(50 + contentH + 120 + 40, avail.height() - 80);
                 resize(w, h);
+                const QPoint center = avail.center();
+                move(center.x() - width()/2, center.y() - height()/2);
                 initialSized = true;
             }
         }
@@ -494,7 +392,7 @@ void PreviewOverlay::setupUi()
     colorSpaceCombo->addItem("Linear");
     colorSpaceCombo->addItem("sRGB");
     colorSpaceCombo->addItem("Rec.709");
-    colorSpaceCombo->setCurrentIndex(1);
+    colorSpaceCombo->setCurrentIndex(2);
     colorSpaceCombo->setFocusPolicy(Qt::NoFocus);
     colorSpaceCombo->setStyleSheet(
         "QComboBox { background-color: #333; color: white; border: 1px solid #555; "
@@ -597,7 +495,7 @@ void PreviewOverlay::setupUi()
     csLayout->setSpacing(6);
     csLayout->addWidget(colorSpaceLabel);
     csLayout->addWidget(colorSpaceCombo);
-    csGroup->setVisible(false);
+    csGroup->setVisible(true);
     bottomGrid->addWidget(csGroup, 0, 2, Qt::AlignVCenter);
 
     bottomGrid->addWidget(audioGroup, 0, 3, Qt::AlignRight | Qt::AlignVCenter);
@@ -639,7 +537,73 @@ void PreviewOverlay::setupUi()
     mediaPlayer = new QMediaPlayer(this);
     audioOutput = new QAudioOutput(this);
     mediaPlayer->setAudioOutput(audioOutput);
+    // Create a QVideoSink for optional software processing (inactive by default)
+    videoSink = new QVideoSink(this);
+    // Default to hardware video path for stability
     mediaPlayer->setVideoOutput(videoItem);
+    connect(videoSink, &QVideoSink::videoFrameChanged, this, [this](const QVideoFrame &frame){
+        if (!frame.isValid()) return;
+        QImage img = frame.toImage();
+        if (img.isNull()) return;
+        lastVideoFrameRaw = img; // cache raw frame (unscaled)
+
+        // Scale to viewport first to keep per-frame cost manageable
+        int targetW = 0, targetH = 0;
+        if (imageView && imageView->viewport()) {
+            targetW = imageView->viewport()->width();
+            targetH = imageView->viewport()->height();
+        }
+        if (targetW <= 0 || targetH <= 0) { targetW = 1600; targetH = 1200; }
+
+        QImage out = lastVideoFrameRaw.scaled(targetW, targetH, Qt::KeepAspectRatio, Qt::FastTransformation);
+
+        auto toLinear709 = [](float v){ return (v < 0.081f) ? (v / 4.5f) : std::pow((v + 0.099f) / 1.099f, 1.0f/0.45f); };
+        auto linearToSRGB = [](float v){ v = std::clamp(v, 0.0f, 1.0f); return (v <= 0.0031308f) ? 12.92f*v : 1.055f*std::pow(v, 1.0f/2.4f) - 0.055f; };
+
+        if (currentColorSpace != OIIOImageLoader::ColorSpace::Rec709) {
+            out = out.convertToFormat(QImage::Format_RGBA8888);
+            const int w = out.width(), h = out.height();
+            for (int y = 0; y < h; ++y) {
+                uchar* p = out.scanLine(y);
+                for (int x = 0; x < w; ++x) {
+                    float r = p[4*x+0] / 255.0f;
+                    float g = p[4*x+1] / 255.0f;
+                    float b = p[4*x+2] / 255.0f;
+                    r = toLinear709(r); g = toLinear709(g); b = toLinear709(b);
+                    if (currentColorSpace == OIIOImageLoader::ColorSpace::sRGB) {
+                        r = linearToSRGB(r); g = linearToSRGB(g); b = linearToSRGB(b);
+                    } else { // Linear target
+                        r = std::clamp(r, 0.0f, 1.0f);
+                        g = std::clamp(g, 0.0f, 1.0f);
+                        b = std::clamp(b, 0.0f, 1.0f);
+                    }
+                    p[4*x+0] = uchar(r * 255.0f + 0.5f);
+                    p[4*x+1] = uchar(g * 255.0f + 0.5f);
+                    p[4*x+2] = uchar(b * 255.0f + 0.5f);
+                }
+            }
+        }
+
+        // Show processed frame in the graphics view
+        if (videoItem) videoItem->setVisible(false);
+        if (imageScene) {
+            if (!imageItem) {
+                imageItem = new QGraphicsPixmapItem();
+                imageScene->addItem(imageItem);
+            }
+            imageItem->setPixmap(QPixmap::fromImage(out));
+            imageItem->setTransformationMode(Qt::SmoothTransformation);
+            imageScene->setSceneRect(imageItem->boundingRect());
+            if (imageView && fitToView) {
+                const QSize sz = out.size();
+                if (sz != lastVideoPixmapSize) {
+                    lastVideoPixmapSize = sz;
+                    imageView->resetTransform();
+                    imageView->fitInView(imageItem, Qt::KeepAspectRatio);
+                }
+            }
+        }
+    });
 
     connect(mediaPlayer, &QMediaPlayer::positionChanged, this, &PreviewOverlay::onPositionChanged);
     // Initial positioning
@@ -812,7 +776,14 @@ void PreviewOverlay::showImage(const QString &filePath)
 
     // Fall back to Qt's native loader if OIIO didn't work or isn't supported
     if (newPixmap.isNull()) {
-        newPixmap = QPixmap(filePath);
+        QImageReader reader(filePath);
+        reader.setAutoTransform(true);
+        // Scale to viewport to avoid huge allocations
+        int targetW = imageView && imageView->viewport() ? imageView->viewport()->width() : 1600;
+        int targetH = imageView && imageView->viewport() ? imageView->viewport()->height() : 1200;
+        reader.setScaledSize(QSize(targetW, targetH));
+        QImage img = reader.read();
+        if (!img.isNull()) newPixmap = QPixmap::fromImage(img);
         isHDRImage = false; // Qt loader doesn't support HDR
     }
 
@@ -847,6 +818,9 @@ void PreviewOverlay::showImage(const QString &filePath)
             int w = qMin(contentW + 40, avail.width() - 80);
             int h = qMin(50 + contentH + 120 + 40, avail.height() - 80);
             resize(w, h);
+            // Center relative to screen
+            const QPoint center = avail.center();
+            move(center.x() - width()/2, center.y() - height()/2);
             initialSized = true;
         }
 
@@ -899,7 +873,7 @@ void PreviewOverlay::showVideo(const QString &filePath)
     if (pdfView) pdfView->hide();
 #endif
     if (imageView) imageView->show();
-    if (videoItem) videoItem->setVisible(true);
+    if (videoItem) videoItem->setVisible(true); // ensure hardware video item is visible
     // Anchor nav arrows to the image viewport (graphics view)
     positionNavButtons(imageView ? imageView->viewport() : this);
     controlsWidget->show();
@@ -917,37 +891,68 @@ void PreviewOverlay::showVideo(const QString &filePath)
 
     // Hide alpha toggle for videos
     if (alphaCheck) alphaCheck->hide();
+    // Show color space controls for videos but disable transforms (Rec.709 hardware path)
+    if (colorSpaceLabel) colorSpaceLabel->show();
+    if (colorSpaceCombo) { colorSpaceCombo->show(); colorSpaceCombo->setEnabled(false); }
 
-    // CRITICAL: Clear the scene pixmap to free memory but keep scene for videoItem
-    if (videoItem && videoItem->scene() == imageScene) imageScene->removeItem(videoItem);
-    imageScene->clear();
-    imageItem = nullptr;
-    if (imageScene && videoItem && imageView) {
-        if (!imageScene->items().contains(videoItem)) imageScene->addItem(videoItem);
-        if (fitToView) {
-            imageView->resetTransform();
-            imageView->fitInView(videoItem, Qt::KeepAspectRatio);
-        }
+    // Prepare imageItem for video frames (delete stale item safely)
+    if (imageItem) {
+        if (imageItem->scene() == imageScene) imageScene->removeItem(imageItem);
+        delete imageItem;
+        imageItem = nullptr;
     }
-    // Probe metadata for FPS/timecode via FFmpeg (if available)
+
+    // Probe metadata for FPS/timecode via FFmpeg (if available) and choose pipeline deterministically
     {
         MediaInfo::VideoMetadata vm;
         QString err;
-        if (MediaInfo::probeVideoFile(filePath, vm, &err)) {
+        bool probed = MediaInfo::probeVideoFile(filePath, vm, &err);
+        if (probed) {
             if (vm.fps > 0.0) detectedFps = vm.fps;
             hasEmbeddedTimecode = vm.hasTimecode;
             embeddedStartTimecode = vm.timecodeStart;
         }
+        bool useFFmpeg = false;
+        if (probed) {
+            const QString codec = vm.videoCodec.toLower();
+            const QString container = QFileInfo(filePath).suffix().toLower();
+            if (codec == "prores" || codec.startsWith("dnx") || codec == "qtrle" || codec == "png" || container == "mxf") {
+                useFFmpeg = true;
+            }
+        }
+#ifdef HAVE_FFMPEG
+        if (useFFmpeg) {
+            qDebug() << "[PreviewOverlay] Routing" << filePath << "to FFmpeg reader based on probe";
+            startFallbackVideo(filePath);
+            return;
+        }
+#else
+        Q_UNUSED(useFFmpeg);
+#endif
     }
 
     originalPixmap = QPixmap(); // Clear the pixmap
 
-    mediaPlayer->setSource(QUrl::fromLocalFile(filePath));
+    // Select rendering pipeline based on current color space: Rec709 -> hardware, others -> sink
 
-    // Fit video item to view while maintaining aspect ratio
-    if (imageView && videoItem && fitToView) {
-        imageView->fitInView(videoItem, Qt::KeepAspectRatio);
+    mediaPlayer->setVideoOutput(videoItem);
+    if (videoItem) videoItem->setVisible(true);
+    if (imageItem) imageItem->setVisible(false);
+    // Normalize geometry and ensure initial fit in case nativeSizeChanged is not emitted
+    if (videoItem && imageView) {
+        videoItem->setPos(0, 0);
+        const QSizeF ns = videoItem->nativeSize();
+        if (ns.isValid()) {
+            videoItem->setSize(ns);
+            if (imageScene) imageScene->setSceneRect(QRectF(QPointF(0, 0), ns));
+            if (fitToView) {
+                imageView->resetTransform();
+                imageView->fitInView(videoItem, Qt::KeepAspectRatio);
+            }
+        }
     }
+
+    mediaPlayer->setSource(QUrl::fromLocalFile(filePath));
 
     mediaPlayer->play();
 
@@ -972,7 +977,7 @@ void PreviewOverlay::onPlayPauseClicked()
         if (usingFallbackVideo) {
             fallbackPaused = !fallbackPaused;
             if (fallbackReader) {
-                QMetaObject::invokeMethod(fallbackReader, "setPaused", Qt::QueuedConnection, Q_ARG(bool, fallbackPaused));
+                fallbackReader->setPaused(fallbackPaused);
             }
             updatePlayPauseButton();
         } else
@@ -1021,8 +1026,8 @@ void PreviewOverlay::onSliderMoved(int position)
             updateVideoTimeDisplays(position, -1);
         }
         if (fallbackReader) {
-            QMetaObject::invokeMethod(fallbackReader, "seekToMs", Qt::QueuedConnection, Q_ARG(qint64, static_cast<qint64>(position)));
-            QMetaObject::invokeMethod(fallbackReader, "stepOnce", Qt::QueuedConnection);
+            fallbackReader->seekToMs(static_cast<qint64>(position));
+            fallbackReader->stepOnce();
         }
         controlsTimer->start();
         return;
@@ -1065,7 +1070,8 @@ void PreviewOverlay::onSliderPressed()
         wasPlayingBeforeSeek = !fallbackPaused;
         fallbackPaused = true;
         if (fallbackReader) {
-            QMetaObject::invokeMethod(fallbackReader, "setPaused", Qt::QueuedConnection, Q_ARG(bool, true));
+            // Ensure the decode thread is paused before we continue (prevents racing during scrubbing)
+            fallbackReader->setPaused(true);
         }
         return;
     }
@@ -1088,13 +1094,14 @@ void PreviewOverlay::onSliderReleased()
 #ifdef HAVE_FFMPEG
     if (usingFallbackVideo) {
         if (fallbackReader) {
-            QMetaObject::invokeMethod(fallbackReader, "seekToMs", Qt::QueuedConnection, Q_ARG(qint64, static_cast<qint64>(pos)));
-            QMetaObject::invokeMethod(fallbackReader, "stepOnce", Qt::QueuedConnection);
+            // Apply seek synchronously, then single-step to render frame at target
+            fallbackReader->seekToMs(static_cast<qint64>(pos));
+            fallbackReader->stepOnce();
         }
         if (wasPlayingBeforeSeek) {
             fallbackPaused = false;
             if (fallbackReader) {
-                QMetaObject::invokeMethod(fallbackReader, "setPaused", Qt::QueuedConnection, Q_ARG(bool, false));
+                fallbackReader->setPaused(false);
             }
         }
         userSeeking = false;
@@ -1125,12 +1132,12 @@ void PreviewOverlay::onStepNextFrame()
         // Pause and single-step forward
         fallbackPaused = true;
         if (fallbackReader) {
-            QMetaObject::invokeMethod(fallbackReader, "setPaused", Qt::QueuedConnection, Q_ARG(bool, true));
+            fallbackReader->setPaused(true);
             qint64 pos = positionSlider->value();
             qint64 dt = static_cast<qint64>(qRound64(frameDurationMs()));
             qint64 target = qMin(pos + dt, static_cast<qint64>(positionSlider->maximum()));
-            QMetaObject::invokeMethod(fallbackReader, "seekToMs", Qt::QueuedConnection, Q_ARG(qint64, target));
-            QMetaObject::invokeMethod(fallbackReader, "stepOnce", Qt::QueuedConnection);
+            fallbackReader->seekToMs(target);
+            fallbackReader->stepOnce();
         }
         updatePlayPauseButton();
         return;
@@ -1164,12 +1171,12 @@ void PreviewOverlay::onStepPrevFrame()
     if (usingFallbackVideo) {
         fallbackPaused = true;
         if (fallbackReader) {
-            QMetaObject::invokeMethod(fallbackReader, "setPaused", Qt::QueuedConnection, Q_ARG(bool, true));
+            fallbackReader->setPaused(true);
             qint64 pos = positionSlider->value();
             qint64 dt = static_cast<qint64>(qRound64(frameDurationMs()));
             qint64 target = pos - dt; if (target < 0) target = 0;
-            QMetaObject::invokeMethod(fallbackReader, "seekToMs", Qt::QueuedConnection, Q_ARG(qint64, target));
-            QMetaObject::invokeMethod(fallbackReader, "stepOnce", Qt::QueuedConnection);
+            fallbackReader->seekToMs(target);
+            fallbackReader->stepOnce();
         }
         updatePlayPauseButton();
         return;
@@ -1401,8 +1408,7 @@ void PreviewOverlay::keyPressEvent(QKeyEvent *event)
                 if (isVideo || isSequence) { onStepPrevFrame(); return; }
                 break;
             }
-            // Always stop any playback before navigating to avoid mixing
-            stopPlayback();
+            // Navigate; showAsset will stop any prior playback safely
             navigatePrevious();
             break;
         case Qt::Key_Right:
@@ -1411,8 +1417,7 @@ void PreviewOverlay::keyPressEvent(QKeyEvent *event)
                 if (isVideo || isSequence) { onStepNextFrame(); return; }
                 break;
             }
-            // Always stop any playback before navigating to avoid mixing
-            stopPlayback();
+            // Navigate; showAsset will stop any prior playback safely
             navigateNext();
             break;
         case Qt::Key_Period: // '.' next frame
@@ -1451,9 +1456,11 @@ void PreviewOverlay::resizeEvent(QResizeEvent *event)
 
     // Refit content only when auto-fit is enabled
     if (fitToView) {
-        if (!isVideo && !originalPixmap.isNull()) {
+        if (!originalPixmap.isNull()) {
+            // Images and fallback-video frames use the pixmap path
             fitImageToView();
         } else if (isVideo && videoItem && videoItem->isVisible()) {
+            // Hardware video path
             imageView->fitInView(videoItem, Qt::KeepAspectRatio);
         }
     }
@@ -1557,14 +1564,22 @@ void PreviewOverlay::zoomImage(double factor)
 {
     // User initiated zoom disables auto-fit
     fitToView = false;
-    currentZoom *= factor;
 
-    // Limit zoom range
-    if (currentZoom < 0.1) currentZoom = 0.1;
-    if (currentZoom > 10.0) currentZoom = 10.0;
+    // Clamp factor so resulting zoom stays within bounds
+    double newZoom = currentZoom * factor;
+    if (newZoom < 0.1) {
+        factor = 0.1 / qMax(0.0001, currentZoom);
+        newZoom = 0.1;
+    } else if (newZoom > 10.0) {
+        factor = 10.0 / qMax(0.0001, currentZoom);
+        newZoom = 10.0;
+    }
+    currentZoom = newZoom;
 
-    imageView->resetTransform();
-    imageView->scale(currentZoom, currentZoom);
+    if (!imageView) return;
+
+    // Incremental scaling; with AnchorUnderMouse this zooms around the mouse position
+    imageView->scale(factor, factor);
 }
 
 void PreviewOverlay::fitImageToView()
@@ -1649,14 +1664,9 @@ void PreviewOverlay::showSequence(const QStringList &framePaths, const QString &
     // Update file name label
     fileNameLabel->setText(sequenceName);
 
-    // Show/hide color space selector based on whether this is HDR
-    if (isHDRImage) {
-        colorSpaceLabel->show();
-        colorSpaceCombo->show();
-    } else {
-        colorSpaceLabel->hide();
-        colorSpaceCombo->hide();
-    }
+    // Show color space selector for sequences as requested (always visible)
+    if (colorSpaceLabel) colorSpaceLabel->show();
+    if (colorSpaceCombo) { colorSpaceCombo->show(); colorSpaceCombo->setEnabled(true); }
 
     // Clear cached frame visualization
     positionSlider->clearCachedFrames();
@@ -1799,6 +1809,9 @@ void PreviewOverlay::loadSequenceFrame(int frameIndex)
             int w = qMin(contentW + 40, avail.width() - 80);
             int h = qMin(50 + contentH + 120 + 40, avail.height() - 80);
             resize(w, h);
+            // Center relative to screen
+            const QPoint center = avail.center();
+            move(center.x() - width()/2, center.y() - height()/2);
             initialSized = true;
         }
     } else {
@@ -1888,38 +1901,28 @@ void PreviewOverlay::onColorSpaceChanged(int index)
 
     // Update current color space
     switch (index) {
-        case 0:
-            currentColorSpace = OIIOImageLoader::ColorSpace::Linear;
-            qDebug() << "[PreviewOverlay] Switched to Linear color space";
-            break;
-        case 1:
-            currentColorSpace = OIIOImageLoader::ColorSpace::sRGB;
-            qDebug() << "[PreviewOverlay] Switched to sRGB color space";
-            break;
-        case 2:
-            currentColorSpace = OIIOImageLoader::ColorSpace::Rec709;
-            qDebug() << "[PreviewOverlay] Switched to Rec.709 color space";
-            break;
-        default:
-            currentColorSpace = OIIOImageLoader::ColorSpace::sRGB;
-            break;
+        case 0: currentColorSpace = OIIOImageLoader::ColorSpace::Linear; break;
+        case 1: currentColorSpace = OIIOImageLoader::ColorSpace::sRGB;  break;
+        case 2: currentColorSpace = OIIOImageLoader::ColorSpace::Rec709; break;
+        default: currentColorSpace = OIIOImageLoader::ColorSpace::sRGB; break;
     }
 
     // Reload current frame/image with new color space
     if (isSequence) {
-        qDebug() << "[PreviewOverlay] Reloading sequence frame with new color space";
-
-        // Clear cache and reinitialize with new color space (only if cache is enabled)
         if (frameCache && useCacheForSequences) {
             frameCache->setSequence(sequenceFramePaths, currentColorSpace);
         }
-
         loadSequenceFrame(currentSequenceFrame);
     } else if (!currentFilePath.isEmpty() && isHDRImage) {
-        qDebug() << "[PreviewOverlay] Reloading image with new color space";
         showImage(currentFilePath);
+    } else if (isVideo) {
+        // Videos use hardware path (Rec.709). Ignore color space changes.
+        return;
     }
 }
+
+
+
 
 void PreviewOverlay::stopPlayback()
 {
@@ -1960,7 +1963,7 @@ void PreviewOverlay::startFallbackVideo(const QString &filePath)
         stopFallbackVideo();
     }
 
-    qDebug() << "[PreviewOverlay] Starting fallback PNG-in-MOV playback for" << filePath;
+    qDebug() << "[PreviewOverlay] Starting FFmpeg software playback for" << filePath;
 
     // Stop and hide the video widget path
     mediaPlayer->stop();
@@ -1970,11 +1973,23 @@ void PreviewOverlay::startFallbackVideo(const QString &filePath)
     controlsWidget->setGeometry(0, height() - controlsWidget->height(), width(), controlsWidget->height());
     controlsWidget->raise();
     positionNavButtons(imageView->viewport());
+    // Videos: keep color controls visible but disable transforms (force Rec.709)
+    currentColorSpace = OIIOImageLoader::ColorSpace::Rec709;
+    if (colorSpaceLabel) colorSpaceLabel->show();
+    if (colorSpaceCombo) { colorSpaceCombo->show(); colorSpaceCombo->setCurrentIndex(2); colorSpaceCombo->setEnabled(false); }
+    if (alphaCheck) alphaCheck->hide();
 
-    // Clear scene and reset pixmap
-    if (videoItem && videoItem->scene() == imageScene) imageScene->removeItem(videoItem);
-    imageScene->clear();
-    imageItem = nullptr;
+    // Reset zoom/pan for new clip
+    lastVideoPixmapSize = QSize();
+    if (imageView) imageView->resetTransform();
+
+
+    // Prepare scene for software frames: keep videoItem in scene (hidden) to avoid black screen when switching back
+    if (imageItem) {
+        if (imageItem->scene() == imageScene) imageScene->removeItem(imageItem);
+        delete imageItem;
+        imageItem = nullptr;
+    }
     originalPixmap = QPixmap();
 
     // Probe duration and fps for UI
@@ -2007,19 +2022,23 @@ void PreviewOverlay::startFallbackVideo(const QString &filePath)
 
     // Spin up worker thread
     fallbackThread = new QThread();
-    fallbackReader = new FallbackPngMovReader(filePath);
+    {
+        QSettings s("AugmentCode", "KAssetManager");
+        const bool drop = s.value("Playback/DropLateFrames", true).toBool();
+        fallbackReader = new FfmpegVideoReader(filePath, drop);
+    }
     fallbackReader->moveToThread(fallbackThread);
 
-    connect(fallbackThread, &QThread::started, fallbackReader, &FallbackPngMovReader::start);
-    connect(fallbackReader, &FallbackPngMovReader::frameReady, this, &PreviewOverlay::onFallbackFrameReady, Qt::QueuedConnection);
-    connect(fallbackReader, &FallbackPngMovReader::finished, this, &PreviewOverlay::onFallbackFinished, Qt::QueuedConnection);
-    connect(fallbackReader, &FallbackPngMovReader::finished, fallbackThread, &QThread::quit);
+    connect(fallbackThread, &QThread::started, fallbackReader, &FfmpegVideoReader::start);
+    connect(fallbackReader, &FfmpegVideoReader::frameReady, this, &PreviewOverlay::onFallbackFrameReady, Qt::QueuedConnection);
+    connect(fallbackReader, &FfmpegVideoReader::finished, this, &PreviewOverlay::onFallbackFinished, Qt::QueuedConnection);
+    connect(fallbackReader, &FfmpegVideoReader::finished, fallbackThread, &QThread::quit);
     connect(fallbackThread, &QThread::finished, fallbackReader, &QObject::deleteLater);
     connect(fallbackThread, &QThread::finished, fallbackThread, &QObject::deleteLater);
 
     usingFallbackVideo = true;
     // Ensure reader and thread will stop on overlay destruction as a last resort
-    connect(this, &QObject::destroyed, fallbackReader, &FallbackPngMovReader::stop, Qt::DirectConnection);
+    connect(this, &QObject::destroyed, fallbackReader, &FfmpegVideoReader::stop, Qt::DirectConnection);
     connect(this, &QObject::destroyed, fallbackThread, &QThread::quit);
     fallbackThread->start();
 }
@@ -2048,23 +2067,9 @@ void PreviewOverlay::stopFallbackVideo()
 void PreviewOverlay::onPlayerError(QMediaPlayer::Error error, const QString &errorString)
 {
     qWarning() << "[PreviewOverlay] Media player error:" << error << errorString;
-#ifdef HAVE_FFMPEG
-    // Only trigger fallback if the error belongs to the currently requested source
-    if (!isVideo) return;
-    const QUrl src = mediaPlayer->source();
-    if (src.isLocalFile()) {
-        const QString srcPath = QDir::fromNativeSeparators(src.toLocalFile());
-        const QString curPath = QDir::fromNativeSeparators(currentFilePath);
-        if (srcPath != curPath) {
-            qDebug() << "[PreviewOverlay] Ignoring error for stale source" << srcPath;
-            return;
-        }
-    }
-    // Fallback if codec is unsupported (e.g., PNG in MOV)
-    if (!usingFallbackVideo) {
-        startFallbackVideo(currentFilePath);
-    }
-#endif
+    // Deterministic routing is done before playback; do not auto-fallback here to avoid double tries.
+    Q_UNUSED(error);
+    Q_UNUSED(errorString);
 }
 
 void PreviewOverlay::onMediaStatusChanged(QMediaPlayer::MediaStatus status)
@@ -2082,8 +2087,41 @@ void PreviewOverlay::onFallbackFrameReady(const QImage &image, qint64 ptsMs)
         return;
     }
 #endif
+    // Store raw frame (assumed Rec.709 source)
+    lastFallbackFrameRaw = image;
+
+    // Apply current color transform to fallback video frames
+    QImage out = image;
+    auto toLinear709 = [](float v){ return (v < 0.081f) ? (v / 4.5f) : std::pow((v + 0.099f) / 1.099f, 1.0f/0.45f); };
+    auto linearToSRGB = [](float v){ v = std::clamp(v, 0.0f, 1.0f); return (v <= 0.0031308f) ? 12.92f*v : 1.055f*std::pow(v, 1.0f/2.4f) - 0.055f; };
+    if (currentColorSpace != OIIOImageLoader::ColorSpace::Rec709) {
+        out = out.convertToFormat(QImage::Format_RGBA8888);
+        const int w = out.width(), h = out.height();
+        for (int y = 0; y < h; ++y) {
+            uchar* p = out.scanLine(y);
+            for (int x = 0; x < w; ++x) {
+                float r = p[4*x+0] / 255.0f;
+                float g = p[4*x+1] / 255.0f;
+                float b = p[4*x+2] / 255.0f;
+                // Rec709 -> Linear
+                r = toLinear709(r); g = toLinear709(g); b = toLinear709(b);
+                // Linear -> target space
+                if (currentColorSpace == OIIOImageLoader::ColorSpace::sRGB) {
+                    r = linearToSRGB(r); g = linearToSRGB(g); b = linearToSRGB(b);
+                } else { // Linear target
+                    r = std::clamp(r, 0.0f, 1.0f);
+                    g = std::clamp(g, 0.0f, 1.0f);
+                    b = std::clamp(b, 0.0f, 1.0f);
+                }
+                p[4*x+0] = uchar(r * 255.0f + 0.5f);
+                p[4*x+1] = uchar(g * 255.0f + 0.5f);
+                p[4*x+2] = uchar(b * 255.0f + 0.5f);
+            }
+        }
+    }
+
     // Update pixmap in the image scene
-    originalPixmap = QPixmap::fromImage(image);
+    originalPixmap = QPixmap::fromImage(out);
 
     // Determine alpha for fallback video frame display is irrelevant; hide toggle for videos
     if (alphaCheck) alphaCheck->hide();
@@ -2093,11 +2131,44 @@ void PreviewOverlay::onFallbackFrameReady(const QImage &image, qint64 ptsMs)
     } else {
         imageItem->setPixmap(originalPixmap);
     }
-    fitImageToView();
+    // Ensure scene rect matches content so fit calculations are correct
+    imageScene->setSceneRect(originalPixmap.rect());
 
-    // Update UI time/slider
+    // On the first frame after switching content, always refit so the new clip isn't zoomed
+    if (!initialSized) {
+        imageView->resetTransform();
+        if (fitToView) imageView->fitInView(imageItem, Qt::KeepAspectRatio);
+    }
+
+    // Fit only when size changes to maintain realtime playback
+    if (imageView && fitToView) {
+        const QSize sz = out.size();
+        if (sz != lastVideoPixmapSize) {
+            lastVideoPixmapSize = sz;
+            imageView->resetTransform();
+            imageView->fitInView(imageItem, Qt::KeepAspectRatio);
+        }
+    }
+
+    // Size window on first frame
+    if (!initialSized) {
+        const QRect avail = QGuiApplication::primaryScreen()->availableGeometry();
+        const int contentW = originalPixmap.width();
+        const int contentH = originalPixmap.height();
+        int w = qMin(contentW + 40, avail.width() - 80);
+        int h = qMin(50 + contentH + 120 + 40, avail.height() - 80);
+        resize(w, h);
+        const QPoint center = avail.center();
+        move(center.x() - width()/2, center.y() - height()/2);
+        initialSized = true;
+    }
+
+    // Update UI: always refresh time labels; only set the slider thumb if the user isn't dragging
+    const bool seekingNow = (positionSlider && (positionSlider->isSliderDown() || userSeeking));
+    if (!seekingNow) {
+        if (positionSlider) positionSlider->setValue(static_cast<int>(ptsMs));
+    }
     if (fallbackDurationMs > 0) {
-        positionSlider->setValue(static_cast<int>(ptsMs));
         updateVideoTimeDisplays(ptsMs, fallbackDurationMs);
     } else {
         updateVideoTimeDisplays(ptsMs, -1);

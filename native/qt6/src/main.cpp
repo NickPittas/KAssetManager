@@ -7,6 +7,7 @@
 #include <QStandardPaths>
 #include <QFileInfo>
 #include <iostream>
+#include <QImageReader>
 #include "mainwindow.h"
 #include "db.h"
 #include "log_manager.h"
@@ -39,6 +40,9 @@ int main(int argc, char *argv[])
 #endif
 
     QApplication app(argc, argv);
+
+    // Raise Qt image allocation limit for 12K+ assets on high-memory hosts (disable virtual ceilings)
+    QImageReader::setAllocationLimit(12288); // MB; 12 GB. Set to 0 to disable limit entirely if ever needed
 
     // Identify app for QSettings
     QCoreApplication::setOrganizationName("KAsset");

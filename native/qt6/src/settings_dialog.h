@@ -57,6 +57,8 @@ private:
     QSpinBox* thumbnailSizeSpin;
     QCheckBox* showFileExtensionsCheck;
     QCheckBox* showSequenceOverlayCheck;
+    // Playback options
+    QCheckBox* dropLateFramesCheck = nullptr;
 
     // Shortcuts tab (editable)
     QTableWidget* fmShortcutsTable;

@@ -29,6 +29,7 @@
 #include <QSettings>
 #include <QComboBox>
 #include <QGraphicsVideoItem>
+#include <QVideoSink>
 
 
 #include <QHBoxLayout>
@@ -87,10 +88,15 @@ class FmListViewEx;
 class PreviewOverlay;
 class ImportProgressDialog;
 class MainWindow;
+class QThread;
+class FfmpegVideoReader;
+
 
 class FileManagerWidget : public QWidget
 {
     Q_OBJECT
+    friend class MainWindow;
+
 
 public:
     explicit FileManagerWidget(MainWindow* host, QWidget* parent = nullptr);
@@ -115,6 +121,22 @@ private:
 	    void applyFmShortcuts();
 	    bool shouldIgnoreShortcutFromFocus() const;
 	    void releaseAnyPreviewLocksForPaths(const QStringList& paths);
+    // FM preview/info helpers moved from MainWindow
+    void clearFmPreview();
+    void updateFmPreviewForIndex(const QModelIndex& index);
+    void loadFmSequenceFrame(int index);
+    void playFmSequence();
+    void pauseFmSequence();
+    void stepFmSequence(int delta);
+    void updateFmInfoPanel();
+    void changeFmPreview(int delta);
+#ifdef HAVE_FFMPEG
+    void startFmFallbackVideo(const QString& path);
+    void stopFmFallbackVideo();
+    void onFmFallbackFrameReady(const QImage &image, qint64 ptsMs);
+    void onFmFallbackFinished();
+#endif
+
 
     MainWindow* m_host = nullptr;
 
@@ -155,8 +177,20 @@ public:
     QGraphicsView *fmImageView = nullptr;
     QGraphicsScene *fmImageScene = nullptr;
     QGraphicsPixmapItem *fmImageItem = nullptr;
-    QGraphicsVideoItem *fmVideoItem = nullptr; // video inside graphics view for zoom/pan
+    QGraphicsVideoItem *fmVideoItem = nullptr; // video inside graphics view for zoom/pan (legacy)
     QVideoWidget *fmVideoWidget = nullptr; // legacy fallback (hidden)
+    QVideoSink *fmVideoSink = nullptr; // modern video frame sink for color processing
+    QImage fmLastVideoFrameRaw; // last raw video frame for re-render on color change
+    QSize fmLastVideoPixmapSize; // track last displayed pixmap size to avoid refitting each frame
+#ifdef HAVE_FFMPEG
+    // FFmpeg fallback state
+    bool fmUsingFallbackVideo = false;
+    FfmpegVideoReader* fmFallbackReader = nullptr;
+    QThread* fmFallbackThread = nullptr;
+    qint64 fmFallbackDurationMs = 0;
+    double fmFallbackFps = 0.0;
+    bool fmFallbackPaused = false;
+#endif
     QPlainTextEdit *fmTextView = nullptr;
     QTableView *fmCsvView = nullptr;
     QStandardItemModel *fmCsvModel = nullptr;
@@ -200,6 +234,10 @@ public:
     bool fmSequencePlaying = false;
     double fmSequenceFps = 24.0;
     bool fmWasPlayingBeforeSeek = false;
+    int fmSeqLoadEpoch = 0;
+    QThread* fmSeqWorkerThread = nullptr;
+    bool fmSeqHasPending = false;
+    int fmSeqPendingIndex = -1;
 
     QPushButton *fmMuteBtn = nullptr;
 
@@ -215,7 +253,7 @@ public:
 
     QStringList fmClipboard;
     bool fmClipboardCutMode = false;
-    FileOpsProgressDialog *fileOpsDialog = nullptr;
+FileOpsProgressDialog *fileOpsDialog = nullptr;
 
     QPersistentModelIndex fmOverlayCurrentIndex;
     QPointer<QAbstractItemView> fmOverlaySourceView;
@@ -234,6 +272,10 @@ private slots:
 
 public slots:
     void onFmAddToFavorites();
+    void onFmSelectionChanged();
+    void onFmTogglePreview(bool checked);
+    void onFmOpenOverlay();
+
     void onFmItemDoubleClicked(const QModelIndex &index);
 
     void onFmRefresh();

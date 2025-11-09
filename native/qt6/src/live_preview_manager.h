@@ -13,6 +13,8 @@
 
 #include <QCache>
 
+
+
 /**
  * LivePreviewManager streams preview frames for stills, video clips, and image sequences
  * without persisting thumbnails to disk. It exposes a lightweight request API that returns
@@ -83,6 +85,8 @@ signals:
     void frameReady(const QString& filePath, qreal position, QSize targetSize, const QPixmap& pixmap);
     void frameFailed(const QString& filePath, QString errorString);
 
+
+
 private:
     explicit LivePreviewManager(QObject* parent = nullptr);
 
@@ -98,6 +102,8 @@ private:
     struct SequenceMeta;
     SequenceMeta sequenceMetaFor(const QString& filePath, QString& error);
     void pruneSequenceMetaCache();
+
+
 
     void storeFrame(const QString& key, const QPixmap& pixmap, qreal position, const QSize& size);
 
@@ -139,6 +145,7 @@ private:
     int m_sequenceMetaLimit = 64;
     int m_sequenceQueueLimit = 24;
     bool m_sequenceDetectionEnabled = true; // Default to enabled for backward compatibility
+
 
     // Metrics (protected by m_mutex)
     quint64 m_cacheHits = 0;

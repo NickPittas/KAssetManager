@@ -291,6 +291,21 @@ void SettingsDialog::setupViewTab()
     viewLayout->addWidget(showSequenceOverlayCheck);
 
     layout->addWidget(viewGroup);
+
+    // Playback options
+    QGroupBox* playbackGroup = new QGroupBox("Video Playback", viewTab);
+    playbackGroup->setStyleSheet("QGroupBox { color: #ffffff; border: 1px solid #333; padding: 10px; margin-top: 10px; } QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; }");
+    QVBoxLayout* playbackLayout = new QVBoxLayout(playbackGroup);
+
+    QSettings s("AugmentCode", "KAssetManager");
+    dropLateFramesCheck = new QCheckBox("Drop late frames to maintain exact fps (recommended)", playbackGroup);
+    dropLateFramesCheck->setChecked(s.value("Playback/DropLateFrames", true).toBool());
+    dropLateFramesCheck->setStyleSheet("QCheckBox { color: #ffffff; }");
+    dropLateFramesCheck->setToolTip("When enabled, frames that decode too slowly are dropped to preserve realtime playback at the file's fps. When disabled, playback may run slower than realtime.");
+    playbackLayout->addWidget(dropLateFramesCheck);
+
+    layout->addWidget(playbackGroup);
+
     layout->addStretch();
 
     tabWidget->addTab(viewTab, "View");
@@ -534,6 +549,11 @@ void SettingsDialog::saveSettings()
     }
     if (sequenceCacheSizeSpin) {
         s.setValue("SequenceCache/ManualSize", sequenceCacheSizeSpin->value());
+    }
+
+    // Save playback setting
+    if (dropLateFramesCheck) {
+        s.setValue("Playback/DropLateFrames", dropLateFramesCheck->isChecked());
     }
 
     // Persist File Manager shortcuts
