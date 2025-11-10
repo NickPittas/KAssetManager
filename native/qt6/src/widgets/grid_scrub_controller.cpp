@@ -51,7 +51,7 @@ GridScrubController::GridScrubController(QAbstractItemView* view,
 
     LivePreviewManager& previewMgr = LivePreviewManager::instance();
     connect(&previewMgr, &LivePreviewManager::frameReady, this,
-            [this](const QString& path, qreal position, QSize, const QPixmap& pixmap) {
+            [this](const QString& path, qreal position, QSize target, const QPixmap& pixmap) {
         if (path != m_currentPath || !m_overlay) {
             return;
         }

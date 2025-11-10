@@ -697,6 +697,13 @@ void FileManagerWidget::navigateToPath(const QString& path, bool addToHistory)
     LogManager::instance().addLog("[TRACE] FM: settings save current path", "DEBUG");
     QSettings("AugmentCode", "KAssetManager").setValue("FileManager/CurrentPath", path);
     LogManager::instance().addLog("[TRACE] FM: navigateToPath leave", "DEBUG");
+    // Trigger visible-only thumbnail requests after navigation completes
+    if (m_host) {
+        QTimer::singleShot(50, m_host, [this]() {
+            if (m_host) m_host->scheduleVisibleThumbProgressUpdate();
+        });
+    }
+
 }
 
 void FileManagerWidget::scrollTreeToPath(const QString& path)
@@ -758,7 +765,9 @@ void FileManagerWidget::onFmViewModeToggled()
     QSettings s("AugmentCode", "KAssetManager");
     s.setValue("FileManager/ViewMode", fmIsGridMode);
     s.sync();
+    if (m_host) m_host->scheduleVisibleThumbProgressUpdate();
 }
+
 
 void FileManagerWidget::onFmThumbnailSizeChanged(int size)
 {
@@ -1452,7 +1461,7 @@ void FileManagerWidget::ensurePreviewInfoLayout()
     // Create a QVideoSink for optional software processing (inactive by default)
     fmVideoSink = new QVideoSink(fmPreviewPanel);
     // Default to hardware video path for stability
-    fmMediaPlayer->setVideoOutput(fmVideoItem);
+    fmMediaPlayer->setVideoOutput(fmVideoSink);
     fmMediaPlayer->setAudioOutput(fmAudioOutput);
 
     // Handle incoming video frames and apply color transform
@@ -1836,7 +1845,7 @@ void FileManagerWidget::ensurePreviewInfoLayout()
                             case 2: cs = OIIOImageLoader::ColorSpace::Rec709; break;
                         }
                     }
-                    QImage img = OIIOImageLoader::loadImage(fmCurrentPreviewPath, targetW, targetH, cs);
+                    QImage img = OIIOImageLoader::loadImage(fmCurrentPreviewPath, 0, 0, cs);
                     if (!img.isNull()) {
                         fmOriginalImage = img;
                         fmImageItem->setPixmap(QPixmap::fromImage(img));
@@ -2191,7 +2200,7 @@ void FileManagerWidget::updateFmPreviewForIndex(const QModelIndex &idx)
                     case 2: cs = OIIOImageLoader::ColorSpace::Rec709; break;
                 }
             }
-            img = OIIOImageLoader::loadImage(path, targetW, targetH, cs);
+            img = OIIOImageLoader::loadImage(path, 0, 0, cs);
         }
         if (img.isNull()) {
             QImageReader reader(path);
@@ -2381,7 +2390,7 @@ void FileManagerWidget::updateFmPreviewForIndex(const QModelIndex &idx)
             if (fmTimeLabel) { fmTimeLabel->setText("00:00 / 00:00"); }
             // Show color space controls for videos (disabled for now; Rec.709)
             if (fmColorSpaceLabel) fmColorSpaceLabel->show();
-            if (fmColorSpaceCombo) { fmColorSpaceCombo->show(); fmColorSpaceCombo->setEnabled(false); }
+            if (fmColorSpaceCombo) { fmColorSpaceCombo->show(); fmColorSpaceCombo->setEnabled(true); }
 
 #ifdef HAVE_FFMPEG
             // Probe and route deterministically
@@ -2410,9 +2419,9 @@ void FileManagerWidget::updateFmPreviewForIndex(const QModelIndex &idx)
                     if (fmImageScene) fmImageScene->setSceneRect(QRectF(QPointF(0, 0), ns));
                 }
             }
-            fmMediaPlayer->setVideoOutput(fmVideoItem);
-            if (fmVideoItem) fmVideoItem->setVisible(true);
-            if (fmImageItem) fmImageItem->setVisible(false);
+            fmMediaPlayer->setVideoOutput(fmVideoSink);
+            if (fmImageItem) fmImageItem->setVisible(true);
+            if (fmVideoItem) fmVideoItem->setVisible(false);
             if (fmVideoItem && fmImageView && fmVideoItem->nativeSize().isValid() && fmImageFitToView) {
                 fmImageView->resetTransform();
                 fmImageView->fitInView(fmVideoItem, Qt::KeepAspectRatio);
@@ -2726,7 +2735,7 @@ void FileManagerWidget::startFmFallbackVideo(const QString &path)
     if (fmPositionSlider) { fmPositionSlider->show(); fmPositionSlider->setRange(0, 0); fmPositionSlider->setValue(0); }
     if (fmTimeLabel) { fmTimeLabel->show(); fmTimeLabel->setText("00:00 / 00:00"); }
     if (fmColorSpaceLabel) fmColorSpaceLabel->show();
-    if (fmColorSpaceCombo) { fmColorSpaceCombo->show(); fmColorSpaceCombo->setEnabled(false); }
+    if (fmColorSpaceCombo) { fmColorSpaceCombo->show(); fmColorSpaceCombo->setEnabled(true); }
 
     // Probe duration and fps quickly
     fmFallbackDurationMs = 0;

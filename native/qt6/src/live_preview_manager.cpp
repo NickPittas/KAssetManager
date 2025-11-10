@@ -415,8 +415,20 @@ QImage LivePreviewManager::loadImageFrame(const Request& request, QString& error
     } else {
         QImageReader reader(request.filePath);
         reader.setAutoTransform(true);
+        // Preserve aspect ratio when downscaling via QImageReader to avoid distortion
         if (request.targetSize.isValid()) {
-            reader.setScaledSize(request.targetSize);
+            const QSize orig = reader.size();
+            if (orig.isValid() && orig.width() > 0 && orig.height() > 0) {
+                const double sx = static_cast<double>(request.targetSize.width()) / static_cast<double>(orig.width());
+                const double sy = static_cast<double>(request.targetSize.height()) / static_cast<double>(orig.height());
+                const double s = qMin(sx, sy);
+                // Only pre-scale when downscaling to reduce memory; upscaling is done after read()
+                if (s > 0.0 && s < 1.0) {
+                    const int w = qMax(1, static_cast<int>(orig.width()  * s));
+                    const int h = qMax(1, static_cast<int>(orig.height() * s));
+                    reader.setScaledSize(QSize(w, h));
+                }
+            }
         }
         image = reader.read();
         if (image.isNull()) {
@@ -424,6 +436,7 @@ QImage LivePreviewManager::loadImageFrame(const Request& request, QString& error
         }
     }
 
+    // Final fit-to-bounds with aspect ratio preserved (handles upscaling when needed)
     if (!image.isNull() && request.targetSize.isValid()) {
         image = image.scaled(request.targetSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
     }

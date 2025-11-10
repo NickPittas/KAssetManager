@@ -539,7 +539,7 @@ void PreviewOverlay::setupUi()
     mediaPlayer->setAudioOutput(audioOutput);
     // Create a QVideoSink for optional software processing (inactive by default)
     videoSink = new QVideoSink(this);
-    // Default to hardware video path for stability
+    // Default to hardware video path for full-resolution playback
     mediaPlayer->setVideoOutput(videoItem);
     connect(videoSink, &QVideoSink::videoFrameChanged, this, [this](const QVideoFrame &frame){
         if (!frame.isValid()) return;
@@ -547,15 +547,8 @@ void PreviewOverlay::setupUi()
         if (img.isNull()) return;
         lastVideoFrameRaw = img; // cache raw frame (unscaled)
 
-        // Scale to viewport first to keep per-frame cost manageable
-        int targetW = 0, targetH = 0;
-        if (imageView && imageView->viewport()) {
-            targetW = imageView->viewport()->width();
-            targetH = imageView->viewport()->height();
-        }
-        if (targetW <= 0 || targetH <= 0) { targetW = 1600; targetH = 1200; }
-
-        QImage out = lastVideoFrameRaw.scaled(targetW, targetH, Qt::KeepAspectRatio, Qt::FastTransformation);
+        // Use full-resolution frame for display; the view will scale down as needed
+        QImage out = lastVideoFrameRaw;
 
         auto toLinear709 = [](float v){ return (v < 0.081f) ? (v / 4.5f) : std::pow((v + 0.099f) / 1.099f, 1.0f/0.45f); };
         auto linearToSRGB = [](float v){ v = std::clamp(v, 0.0f, 1.0f); return (v <= 0.0031308f) ? 12.92f*v : 1.055f*std::pow(v, 1.0f/2.4f) - 0.055f; };
@@ -602,6 +595,19 @@ void PreviewOverlay::setupUi()
                     imageView->fitInView(imageItem, Qt::KeepAspectRatio);
                 }
             }
+        // Size window on first frame for QVideoSink path
+        if (!initialSized) {
+            const QRect avail = QGuiApplication::primaryScreen()->availableGeometry();
+            const int contentW = out.width();
+            const int contentH = out.height();
+            int w = qMin(contentW + 40, avail.width() - 80);
+            int h = qMin(50 + contentH + 120 + 40, avail.height() - 80);
+            resize(w, h);
+            const QPoint center = avail.center();
+            move(center.x() - width()/2, center.y() - height()/2);
+            initialSized = true;
+        }
+
         }
     });
 
@@ -778,10 +784,6 @@ void PreviewOverlay::showImage(const QString &filePath)
     if (newPixmap.isNull()) {
         QImageReader reader(filePath);
         reader.setAutoTransform(true);
-        // Scale to viewport to avoid huge allocations
-        int targetW = imageView && imageView->viewport() ? imageView->viewport()->width() : 1600;
-        int targetH = imageView && imageView->viewport() ? imageView->viewport()->height() : 1200;
-        reader.setScaledSize(QSize(targetW, targetH));
         QImage img = reader.read();
         if (!img.isNull()) newPixmap = QPixmap::fromImage(img);
         isHDRImage = false; // Qt loader doesn't support HDR
@@ -933,11 +935,13 @@ void PreviewOverlay::showVideo(const QString &filePath)
 
     originalPixmap = QPixmap(); // Clear the pixmap
 
-    // Select rendering pipeline based on current color space: Rec709 -> hardware, others -> sink
-
+    // Use hardware path (QGraphicsVideoItem) for full-resolution playback; disable transforms for videos
     mediaPlayer->setVideoOutput(videoItem);
     if (videoItem) videoItem->setVisible(true);
     if (imageItem) imageItem->setVisible(false);
+    if (colorSpaceLabel) colorSpaceLabel->show();
+    if (colorSpaceCombo) { colorSpaceCombo->show(); colorSpaceCombo->setCurrentIndex(2); colorSpaceCombo->setEnabled(false); }
+    if (alphaCheck) alphaCheck->hide();
     // Normalize geometry and ensure initial fit in case nativeSizeChanged is not emitted
     if (videoItem && imageView) {
         videoItem->setPos(0, 0);
@@ -1916,7 +1920,47 @@ void PreviewOverlay::onColorSpaceChanged(int index)
     } else if (!currentFilePath.isEmpty() && isHDRImage) {
         showImage(currentFilePath);
     } else if (isVideo) {
-        // Videos use hardware path (Rec.709). Ignore color space changes.
+        // Re-render last frame for current pipeline (QVideoSink or FFmpeg)
+    #ifdef HAVE_FFMPEG
+        if (usingFallbackVideo && !lastFallbackFrameRaw.isNull()) {
+            // Reuse fallback rendering path for current frame
+            onFallbackFrameReady(lastFallbackFrameRaw, positionSlider ? positionSlider->value() : 0);
+            return;
+        }
+    #endif
+        if (!lastVideoFrameRaw.isNull()) {
+            // Apply current color transform to the last received hardware frame at full resolution
+            QImage out = lastVideoFrameRaw;
+            auto toLinear709 = [](float v){ return (v < 0.081f) ? (v / 4.5f) : std::pow((v + 0.099f) / 1.099f, 1.0f/0.45f); };
+            auto linearToSRGB = [](float v){ v = std::clamp(v, 0.0f, 1.0f); return (v <= 0.0031308f) ? 12.92f*v : 1.055f*std::pow(v, 1.0f/2.4f) - 0.055f; };
+            if (currentColorSpace != OIIOImageLoader::ColorSpace::Rec709) {
+                out = out.convertToFormat(QImage::Format_RGBA8888);
+                const int w = out.width(), h = out.height();
+                for (int y = 0; y < h; ++y) {
+                    uchar* p = out.scanLine(y);
+                    for (int x = 0; x < w; ++x) {
+                        float r = p[4*x+0] / 255.0f;
+                        float g = p[4*x+1] / 255.0f;
+                        float b = p[4*x+2] / 255.0f;
+                        r = toLinear709(r); g = toLinear709(g); b = toLinear709(b);
+                        if (currentColorSpace == OIIOImageLoader::ColorSpace::sRGB) {
+                            r = linearToSRGB(r); g = linearToSRGB(g); b = linearToSRGB(b);
+                        } else { // Linear target
+                            r = std::clamp(r, 0.0f, 1.0f);
+                            g = std::clamp(g, 0.0f, 1.0f);
+                            b = std::clamp(b, 0.0f, 1.0f);
+                        }
+                        p[4*x+0] = uchar(r * 255.0f + 0.5f);
+                        p[4*x+1] = uchar(g * 255.0f + 0.5f);
+                        p[4*x+2] = uchar(b * 255.0f + 0.5f);
+                    }
+                }
+            }
+            if (!imageItem) { imageItem = imageScene->addPixmap(QPixmap::fromImage(out)); }
+            else { imageItem->setPixmap(QPixmap::fromImage(out)); }
+            imageScene->setSceneRect(imageItem->boundingRect());
+            if (fitToView && imageView) { imageView->resetTransform(); imageView->fitInView(imageItem, Qt::KeepAspectRatio); }
+        }
         return;
     }
 }
@@ -1976,7 +2020,7 @@ void PreviewOverlay::startFallbackVideo(const QString &filePath)
     // Videos: keep color controls visible but disable transforms (force Rec.709)
     currentColorSpace = OIIOImageLoader::ColorSpace::Rec709;
     if (colorSpaceLabel) colorSpaceLabel->show();
-    if (colorSpaceCombo) { colorSpaceCombo->show(); colorSpaceCombo->setCurrentIndex(2); colorSpaceCombo->setEnabled(false); }
+    if (colorSpaceCombo) { colorSpaceCombo->show(); colorSpaceCombo->setCurrentIndex(2); colorSpaceCombo->setEnabled(true); }
     if (alphaCheck) alphaCheck->hide();
 
     // Reset zoom/pan for new clip
@@ -2842,5 +2886,3 @@ int SequenceFrameCache::calculateOptimalCacheSize(int percentOfFreeRAM)
 }
 
 
-// Required because this .cpp defines a QObject with Q_OBJECT (FallbackPngMovReader)
-#include "preview_overlay.moc"

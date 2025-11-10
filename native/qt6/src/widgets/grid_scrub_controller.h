@@ -62,4 +62,5 @@ private:
     bool m_mouseGrabbed = false;
     bool m_warpingCursor = false;
     bool m_sequenceGroupingEnabled = true;
+
 };
