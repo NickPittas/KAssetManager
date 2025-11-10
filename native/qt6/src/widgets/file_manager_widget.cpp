@@ -6,6 +6,7 @@
 #include "widgets/fm_drag_views.h"
 #include "ui/icon_helpers.h"
 #include "ui/file_type_helpers.h"
+#include "ui/preview_helpers.h"
 #include "log_manager.h"
 #include "file_ops_dialog.h"
 #include "file_ops.h"
@@ -2458,57 +2459,100 @@ void FileManagerWidget::updateFmPreviewForIndex(const QModelIndex &idx)
 void FileManagerWidget::changeFmPreview(int delta)
 {
     if (!m_host || !m_host->previewOverlay) return;
+
+    // Establish current context
     QModelIndex cur = fmOverlayCurrentIndex;
+    QAbstractItemView* view = fmIsGridMode ? static_cast<QAbstractItemView*>(fmGridView)
+                                           : static_cast<QAbstractItemView*>(fmListView);
     if (!cur.isValid()) {
-        QAbstractItemView* view = fmIsGridMode ? static_cast<QAbstractItemView*>(fmGridView)
-                                               : static_cast<QAbstractItemView*>(fmListView);
         if (view) cur = view->currentIndex();
         if (!cur.isValid()) return;
         cur = cur.sibling(cur.row(), 0);
         fmOverlayCurrentIndex = QPersistentModelIndex(cur);
         fmOverlaySourceView = view;
     }
+
     QAbstractItemModel* model = const_cast<QAbstractItemModel*>(cur.model());
     if (!model) return;
-    int newRow = cur.row() + delta;
-    if (newRow < 0 || newRow >= model->rowCount(cur.parent())) return;
-    QModelIndex next = model->index(newRow, 0, cur.parent());
-    if (!next.isValid()) return;
 
-    // Update context
-    fmOverlayCurrentIndex = QPersistentModelIndex(next);
-    if (fmOverlaySourceView) {
-        fmOverlaySourceView->setCurrentIndex(next);
-        fmOverlaySourceView->scrollTo(next, QAbstractItemView::PositionAtCenter);
-    }
+    auto isPreviewableIndex = [this](const QModelIndex& idx) -> bool {
+        if (!idx.isValid()) return false;
 
-    // Grouped sequence representative
-    if (fmProxyModel && fmGroupSequences && next.model() == fmProxyModel && fmProxyModel->isRepresentativeProxyIndex(next)) {
-        auto info = fmProxyModel->infoForProxyIndex(next);
-        QStringList frames = m_host ? m_host->reconstructSequenceFramePaths(info.reprPath, info.start, info.end) : QStringList();
-        if (!frames.isEmpty()) {
-
-            int pad = 0;
-            auto m = SequenceDetector::mainPattern().match(QFileInfo(info.reprPath).fileName());
-            if (m.hasMatch()) pad = m.captured(3).length(); else pad = QString::number(info.start).length();
-            QString s0 = QString("%1").arg(info.start, pad, 10, QLatin1Char('0'));
-            QString s1 = QString("%1").arg(info.end, pad, 10, QLatin1Char('0'));
-            QString seqName = QString("%1.[%2-%3].%4").arg(info.base, s0, s1, info.ext);
-            m_host->previewOverlay->showSequence(frames, seqName, info.start, info.end);
-            return;
+        // Grouped sequence representatives are previewable
+        if (fmProxyModel && fmGroupSequences && idx.model() == fmProxyModel && fmProxyModel->isRepresentativeProxyIndex(idx)) {
+            return true;
         }
+
+        QModelIndex srcIdx = idx;
+        if (fmProxyModel && idx.model() == fmProxyModel)
+            srcIdx = fmProxyModel->mapToSource(idx);
+
+        const QString path = fmDirModel ? fmDirModel->filePath(srcIdx) : QString();
+        if (path.isEmpty()) return false;
+        const QString ext = QFileInfo(path).suffix().toLower();
+        if (ext.isEmpty()) return false;
+
+        if (isPreviewableSuffix(ext)) return true; // images + videos
+
+        static const QSet<QString> kExtras = {
+            "txt","log","csv",
+            "pdf","ai",
+            "svg","svgz",
+            "doc","docx","xlsx"
+        };
+        return kExtras.contains(ext);
+    };
+
+    const int direction = (delta >= 0) ? 1 : -1;
+    int row = cur.row();
+    while (true) {
+        row += direction;
+        if (row < 0 || row >= model->rowCount(cur.parent())) {
+            return; // No further previewable item
+        }
+        QModelIndex candidate = model->index(row, 0, cur.parent());
+        if (!candidate.isValid()) continue;
+
+        if (!isPreviewableIndex(candidate)) {
+            continue; // skip non-previewable
+        }
+
+        // Update context and view selection
+        fmOverlayCurrentIndex = QPersistentModelIndex(candidate);
+        if (view) {
+            view->setCurrentIndex(candidate);
+            view->scrollTo(candidate, QAbstractItemView::PositionAtCenter);
+        }
+
+        // If grouped representative, show sequence
+        if (fmProxyModel && fmGroupSequences && candidate.model() == fmProxyModel && fmProxyModel->isRepresentativeProxyIndex(candidate)) {
+            auto info = fmProxyModel->infoForProxyIndex(candidate);
+            QStringList frames = m_host ? m_host->reconstructSequenceFramePaths(info.reprPath, info.start, info.end) : QStringList();
+            if (!frames.isEmpty()) {
+                int pad = 0;
+                auto m = SequenceDetector::mainPattern().match(QFileInfo(info.reprPath).fileName());
+                if (m.hasMatch()) pad = m.captured(3).length(); else pad = QString::number(info.start).length();
+                QString s0 = QString("%1").arg(info.start, pad, 10, QLatin1Char('0'));
+                QString s1 = QString("%1").arg(info.end, pad, 10, QLatin1Char('0'));
+                QString seqName = QString("%1.[%2-%3].%4").arg(info.base, s0, s1, info.ext);
+                m_host->previewOverlay->showSequence(frames, seqName, info.start, info.end);
+                return;
+            }
+            // fallback to regular asset path if sequence frames could not be reconstructed
+        }
+
+        // Map to source and show asset
+        QModelIndex srcIdx = candidate;
+        if (fmProxyModel && candidate.model() == fmProxyModel)
+            srcIdx = fmProxyModel->mapToSource(candidate);
+        const QString path = fmDirModel ? fmDirModel->filePath(srcIdx) : QString();
+        if (path.isEmpty()) return;
+        QFileInfo fi(path);
+        if (!fi.exists()) return;
+
+        m_host->previewOverlay->showAsset(path, fi.fileName(), fi.suffix());
+        return;
     }
-
-    // Map to source and show asset
-    QModelIndex srcIdx = next;
-    if (fmProxyModel && next.model() == fmProxyModel)
-        srcIdx = fmProxyModel->mapToSource(next);
-    const QString path = fmDirModel ? fmDirModel->filePath(srcIdx) : QString();
-    if (path.isEmpty()) return;
-    QFileInfo fi(path);
-    if (!fi.exists()) return;
-
-    m_host->previewOverlay->showAsset(path, fi.fileName(), fi.suffix());
 }
 
 

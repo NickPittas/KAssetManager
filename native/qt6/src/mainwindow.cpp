@@ -1493,14 +1493,9 @@ void MainWindow::setupConnections()
                 }
                 recursiveCheckBox->setChecked(ctx.recursiveMode);
 
-                // Restore scroll position
-                if (ctx.scrollPosition > 0) {
-                    if (isGridMode && assetGridView) {
-                        assetGridView->verticalScrollBar()->setValue(ctx.scrollPosition);
-                    } else if (!isGridMode && assetTableView) {
-                        assetTableView->verticalScrollBar()->setValue(ctx.scrollPosition);
-                    }
-                }
+                // Always reset scroll position to top for new folder selection (per UX requirement)
+                if (assetGridView) assetGridView->scrollToTop();
+                if (assetTableView) assetTableView->scrollToTop();
 
                 // Note: Asset selection restoration would need to wait for model to load
                 // This is a future enhancement
@@ -2067,11 +2062,56 @@ void MainWindow::closePreview()
 
 void MainWindow::changePreview(int delta)
 {
-    if (previewIndex < 0) return;
+    if (previewIndex < 0 || !assetsModel) return;
 
-    int newIndex = previewIndex + delta;
-    if (newIndex >= 0 && newIndex < assetsModel->rowCount(QModelIndex())) {
-        showPreview(newIndex);
+    const int rowCount = assetsModel->rowCount(QModelIndex());
+    if (rowCount <= 0) return;
+
+    auto isPreviewableRow = [this](int row) -> bool {
+        QModelIndex idx = assetsModel->index(row, 0);
+        if (!idx.isValid()) return false;
+        // Sequences are always previewable
+        if (idx.data(AssetsModel::IsSequenceRole).toBool()) return true;
+        const QString ext = idx.data(AssetsModel::FileTypeRole).toString().toLower();
+        if (ext.isEmpty()) return false;
+        // Images and videos
+        if (isPreviewableSuffix(ext)) return true;
+        // Overlay-supported extras: text, PDF/AI, SVG, Office docs
+        static const QSet<QString> kExtras = {
+            "txt","log","csv",
+            "pdf","ai",
+            "svg","svgz",
+            "doc","docx","xlsx"
+        };
+        return kExtras.contains(ext);
+    };
+
+    const int direction = (delta >= 0) ? 1 : -1;
+    int i = previewIndex;
+    while (true) {
+        i += direction;
+        if (i < 0 || i >= rowCount) {
+            return; // No further previewable item in this direction
+        }
+        if (isPreviewableRow(i)) {
+            // Update selection in the Asset Manager to follow the preview
+            if (isGridMode && assetGridView && assetsModel) {
+                QModelIndex idx = assetsModel->index(i, 0);
+                if (idx.isValid()) {
+                    assetGridView->setCurrentIndex(idx);
+                    assetGridView->scrollTo(idx, QAbstractItemView::PositionAtCenter);
+                }
+            } else if (assetTableView && assetTableView->model()) {
+                QModelIndex idx = assetTableView->model()->index(i, 0);
+                if (idx.isValid()) {
+                    assetTableView->setCurrentIndex(idx);
+                    assetTableView->scrollTo(idx, QAbstractItemView::PositionAtCenter);
+                }
+            }
+            // Show the new preview
+            showPreview(i);
+            return;
+        }
     }
 }
 
