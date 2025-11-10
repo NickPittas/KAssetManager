@@ -3686,6 +3686,7 @@ void MainWindow::onFmTreeActivated(const QModelIndex &index)
 // Forward declarations for file-type helpers used by File Manager handlers
 static bool isImageFile(const QString &ext);
 static bool isVideoFile(const QString &ext);
+static bool isPreviewOverlayViewable(const QString &ext);
 
 // Helper function to get file type icon based on extension
 static QIcon getFileTypeIcon(const QString &ext) {
@@ -5054,7 +5055,9 @@ void MainWindow::showPreview(int index)
         connect(previewOverlay, &PreviewOverlay::closed, this, &MainWindow::closePreview);
         connect(previewOverlay, &PreviewOverlay::navigateRequested, this, &MainWindow::changePreview);
     } else {
-        // CRITICAL FIX: Stop any playing media before loading new content
+        // Stop any playing media before loading new content
+        // Note: This may be called twice during navigation (once in changePreview, once here)
+        // but that's safe - stopPlayback is idempotent
         previewOverlay->stopPlayback();
     }
 
@@ -5127,16 +5130,47 @@ void MainWindow::changePreview(int delta)
 {
     if (previewIndex < 0) return;
 
-    int newIndex = previewIndex + delta;
-    if (newIndex >= 0 && newIndex < assetsModel->rowCount(QModelIndex())) {
-        showPreview(newIndex);
+    // Stop playback ONCE before searching for next file
+    if (previewOverlay) {
+        previewOverlay->stopPlayback();
     }
+
+    const int rowCount = assetsModel->rowCount(QModelIndex());
+    const int step = (delta > 0) ? 1 : -1;
+    int searchIndex = previewIndex + delta;
+
+    // Search for next viewable file
+    while (searchIndex >= 0 && searchIndex < rowCount) {
+        QModelIndex modelIndex = assetsModel->index(searchIndex, 0);
+        if (!modelIndex.isValid()) {
+            searchIndex += step;
+            continue;
+        }
+
+        // Check if it's a sequence (always viewable) or a viewable file type
+        bool isSequence = modelIndex.data(AssetsModel::IsSequenceRole).toBool();
+        QString fileType = modelIndex.data(AssetsModel::FileTypeRole).toString();
+
+        if (isSequence || isPreviewOverlayViewable(fileType)) {
+            showPreview(searchIndex);
+            return;
+        }
+
+        // Not viewable, continue searching
+        searchIndex += step;
+    }
+
+    // No viewable file found in the direction - do nothing
 }
 
 
 void MainWindow::changeFmPreview(int delta)
 {
     if (!previewOverlay) return;
+
+    // Stop playback ONCE before searching for next file
+    previewOverlay->stopPlayback();
+
     QModelIndex cur = fmOverlayCurrentIndex;
     if (!cur.isValid()) {
         // fallback: try current selection from focused view
@@ -5149,46 +5183,70 @@ void MainWindow::changeFmPreview(int delta)
     }
     QAbstractItemModel* model = const_cast<QAbstractItemModel*>(cur.model());
     if (!model) return;
-    int newRow = cur.row() + delta;
-    if (newRow < 0) return;
-    if (newRow >= model->rowCount(cur.parent())) return;
-    QModelIndex next = model->index(newRow, 0, cur.parent());
-    if (!next.isValid()) return;
 
-    // Update context
-    fmOverlayCurrentIndex = QPersistentModelIndex(next);
-    if (fmOverlaySourceView) {
-        fmOverlaySourceView->setCurrentIndex(next);
-        fmOverlaySourceView->scrollTo(next, QAbstractItemView::PositionAtCenter);
-    }
+    // Search for next viewable file in the direction of delta
+    int searchRow = cur.row() + delta;
+    const int rowCount = model->rowCount(cur.parent());
+    const int step = (delta > 0) ? 1 : -1;
 
-    // Handle grouping representative
-    if (fmProxyModel && fmGroupSequences && next.model() == fmProxyModel && fmProxyModel->isRepresentativeProxyIndex(next)) {
-        auto info = fmProxyModel->infoForProxyIndex(next);
-        QStringList frames = reconstructSequenceFramePaths(info.reprPath, info.start, info.end);
-        if (!frames.isEmpty()) {
-            previewOverlay->stopPlayback();
-            int pad = 0;
-            auto m = SequenceDetector::mainPattern().match(QFileInfo(info.reprPath).fileName());
-            if (m.hasMatch()) pad = m.captured(3).length(); else pad = QString::number(info.start).length();
-            QString s0 = QString("%1").arg(info.start, pad, 10, QLatin1Char('0'));
-            QString s1 = QString("%1").arg(info.end, pad, 10, QLatin1Char('0'));
-            QString seqName = QString("%1.[%2-%3].%4").arg(info.base, s0, s1, info.ext);
-            previewOverlay->showSequence(frames, seqName, info.start, info.end);
-            return;
+    // Search up to the end/beginning of the list
+    while (searchRow >= 0 && searchRow < rowCount) {
+        QModelIndex next = model->index(searchRow, 0, cur.parent());
+        if (!next.isValid()) {
+            searchRow += step;
+            continue;
         }
+
+        // Check if this is a sequence representative (always viewable)
+        if (fmProxyModel && fmGroupSequences && next.model() == fmProxyModel && fmProxyModel->isRepresentativeProxyIndex(next)) {
+            auto info = fmProxyModel->infoForProxyIndex(next);
+            QStringList frames = reconstructSequenceFramePaths(info.reprPath, info.start, info.end);
+            if (!frames.isEmpty()) {
+                // Update context
+                fmOverlayCurrentIndex = QPersistentModelIndex(next);
+                if (fmOverlaySourceView) {
+                    fmOverlaySourceView->setCurrentIndex(next);
+                    fmOverlaySourceView->scrollTo(next, QAbstractItemView::PositionAtCenter);
+                }
+
+                // Show sequence (stopPlayback already called at function start)
+                int pad = 0;
+                auto m = SequenceDetector::mainPattern().match(QFileInfo(info.reprPath).fileName());
+                if (m.hasMatch()) pad = m.captured(3).length(); else pad = QString::number(info.start).length();
+                QString s0 = QString("%1").arg(info.start, pad, 10, QLatin1Char('0'));
+                QString s1 = QString("%1").arg(info.end, pad, 10, QLatin1Char('0'));
+                QString seqName = QString("%1.[%2-%3].%4").arg(info.base, s0, s1, info.ext);
+                previewOverlay->showSequence(frames, seqName, info.start, info.end);
+                return;
+            }
+        }
+
+        // Map to source if needed and check if file is viewable
+        QModelIndex srcIdx = next;
+        if (fmProxyModel && next.model() == fmProxyModel)
+            srcIdx = fmProxyModel->mapToSource(next);
+        QString path = fmDirModel ? fmDirModel->filePath(srcIdx) : QString();
+        if (!path.isEmpty()) {
+            QFileInfo fi(path);
+            if (fi.exists() && fi.isFile() && isPreviewOverlayViewable(fi.suffix())) {
+                // Found a viewable file - update context and show it
+                fmOverlayCurrentIndex = QPersistentModelIndex(next);
+                if (fmOverlaySourceView) {
+                    fmOverlaySourceView->setCurrentIndex(next);
+                    fmOverlaySourceView->scrollTo(next, QAbstractItemView::PositionAtCenter);
+                }
+
+                // Show asset (stopPlayback already called at function start)
+                previewOverlay->showAsset(path, fi.fileName(), fi.suffix());
+                return;
+            }
+        }
+
+        // Not viewable, continue searching
+        searchRow += step;
     }
 
-    // Map to source if needed and show asset
-    QModelIndex srcIdx = next;
-    if (fmProxyModel && next.model() == fmProxyModel)
-        srcIdx = fmProxyModel->mapToSource(next);
-    QString path = fmDirModel ? fmDirModel->filePath(srcIdx) : QString();
-    if (path.isEmpty()) return;
-    QFileInfo fi(path);
-    if (!fi.exists()) return;
-    previewOverlay->stopPlayback();
-    previewOverlay->showAsset(path, fi.fileName(), fi.suffix());
+    // No viewable file found in the direction - do nothing
 }
 
 
@@ -7470,6 +7528,14 @@ static inline bool isDocFile(const QString &ext)
 static inline bool isAiFile(const QString &ext)
 {
     return ext.compare("ai", Qt::CaseInsensitive) == 0;
+}
+static inline bool isPreviewOverlayViewable(const QString &ext)
+{
+    // Check if file type is viewable in PreviewOverlay
+    // Includes: images, videos, PDFs, SVG, text files, CSV, Office docs
+    return isImageFile(ext) || isVideoFile(ext) || isPdfFile(ext) ||
+           isSvgFile(ext) || isTextFile(ext) || isCsvFile(ext) ||
+           isExcelFile(ext) || isDocxFile(ext) || isDocFile(ext) || isAiFile(ext);
 }
 static inline bool isPptxFile(const QString &ext)
 {

@@ -15,6 +15,7 @@
 #include <QGraphicsScene>
 #include <QGraphicsPixmapItem>
 #include <QGraphicsSvgItem>
+#include <QGraphicsVideoItem>
 #include <QComboBox>
 #include <QCheckBox>
 #ifdef HAVE_QT_PDF
@@ -325,6 +326,7 @@ private:
     QGraphicsScene *imageScene;
     QGraphicsPixmapItem *imageItem;
     QGraphicsSvgItem *svgItem;
+    QGraphicsVideoItem *videoItem;
     QVideoWidget *videoWidget;
     QWidget *controlsWidget;
     QPushButton *playPauseBtn;
@@ -389,10 +391,6 @@ private:
     QPixmap originalPixmap;
     QPoint lastPanPoint;
     bool isPanning;
-
-
-	    // Drag from overlay preview (image/video)
-	    QPoint overlayDragStartPos; bool overlayDragPending = false;
 
     // Image sequence playback state
     bool isSequence;

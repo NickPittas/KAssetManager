@@ -209,6 +209,7 @@ PreviewOverlay::PreviewOverlay(QWidget *parent)
     , imageView(nullptr)
     , imageScene(nullptr)
     , imageItem(nullptr)
+    , videoItem(nullptr)
     , videoWidget(nullptr)
     , mediaPlayer(nullptr)
     , audioOutput(nullptr)
@@ -274,22 +275,24 @@ void PreviewOverlay::setupUi()
     setStyleSheet("QWidget { background-color: #000000; }");
     setAttribute(Qt::WA_StyledBackground, true);
 
+    // Set window flags to ensure overlay stays on top of parent window
+    setWindowFlags(Qt::Window | Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint);
+    setAttribute(Qt::WA_DeleteOnClose, false); // Don't auto-delete when closed
+
     QVBoxLayout *mainLayout = new QVBoxLayout(this);
-    // Lift the entire controls area up from the bottom to avoid OS/taskbar overlap
-    mainLayout->setContentsMargins(0, 0, 0, 80); // bottom offset ~80px
+    // No bottom margin - controls will be at the very bottom with internal padding
+    mainLayout->setContentsMargins(0, 0, 0, 0);
     mainLayout->setSpacing(0);
 
     // Top bar with filename and close button
     QWidget *topBar = new QWidget(this);
     topBar->setStyleSheet("QWidget { background-color: rgba(0, 0, 0, 180); }");
     topBar->setFixedHeight(50);
+    topBar->setFocusPolicy(Qt::NoFocus); // Ensure top bar doesn't steal focus
     QHBoxLayout *topLayout = new QHBoxLayout(topBar);
+    topLayout->setContentsMargins(10, 0, 10, 0);
 
-    fileNameLabel = new QLabel(this);
-    fileNameLabel->setStyleSheet("QLabel { color: white; font-size: 16px; padding: 10px; }");
-    topLayout->addWidget(fileNameLabel);
-
-    // Alpha toggle (for images with alpha)
+    // Alpha toggle (for images with alpha) - left side
     alphaCheck = new QCheckBox("Alpha", this);
     alphaCheck->setFocusPolicy(Qt::NoFocus);
     alphaCheck->setToolTip("Show alpha channel (grayscale)");
@@ -314,11 +317,19 @@ void PreviewOverlay::setupUi()
         }
         imageView->viewport()->update();
     });
-    topLayout->addSpacing(12);
     topLayout->addWidget(alphaCheck);
+    topLayout->addStretch();
+
+    // Centered filename label
+    fileNameLabel = new QLabel(this);
+    fileNameLabel->setStyleSheet("QLabel { color: white; font-size: 16px; padding: 10px; }");
+    fileNameLabel->setAlignment(Qt::AlignCenter);
+    fileNameLabel->setFocusPolicy(Qt::NoFocus); // Ensure label doesn't steal focus
+    topLayout->addWidget(fileNameLabel);
 
     topLayout->addStretch();
 
+    // Close button - right side
     closeBtn = new QPushButton("✕", this);
     closeBtn->setFocusPolicy(Qt::NoFocus);
     closeBtn->setStyleSheet(
@@ -336,7 +347,7 @@ void PreviewOverlay::setupUi()
     QVBoxLayout *contentLayout = new QVBoxLayout(contentWidget);
     contentLayout->setContentsMargins(0, 0, 0, 0);
 
-    // Image view with zoom/pan support (for images)
+    // Image view with zoom/pan support (for images and videos)
     imageView = new QGraphicsView(this);
     imageScene = new QGraphicsScene(this);
     imageView->setScene(imageScene);
@@ -351,6 +362,20 @@ void PreviewOverlay::setupUi()
     imageView->viewport()->installEventFilter(this);
     imageView->hide();
     contentLayout->addWidget(imageView);
+
+    // Create video item for rendering videos in the graphics scene (enables zoom/pan)
+    videoItem = new QGraphicsVideoItem();
+    videoItem->setAspectRatioMode(Qt::KeepAspectRatio);
+    // Connect to nativeSizeChanged to fit video to view when size is known
+    connect(videoItem, &QGraphicsVideoItem::nativeSizeChanged, this, [this](const QSizeF &size) {
+        if (isVideo && videoItem && videoItem->scene() == imageScene && size.isValid()) {
+            // Set scene rect to video size and fit to view
+            imageScene->setSceneRect(videoItem->boundingRect());
+            imageView->fitInView(videoItem, Qt::KeepAspectRatio);
+            currentZoom = imageView->transform().m11(); // Store the fit-to-view zoom level
+        }
+    });
+    // Don't add to scene yet - will be added when showing video
 #ifdef HAVE_QT_PDF
     // PDF view
     pdfDoc = new QPdfDocument(this);
@@ -391,15 +416,17 @@ void PreviewOverlay::setupUi()
 
     mainLayout->addWidget(contentWidget, 1);
 
-    // Bottom controls (for video)
+    // Bottom controls (for video) - positioned at the very bottom
     controlsWidget = new QWidget(this);
     controlsWidget->setStyleSheet("QWidget { background-color: rgba(0, 0, 0, 180); }");
-    controlsWidget->setFixedHeight(120);
+    controlsWidget->setFixedHeight(110); // Reduced to minimize dead space
     controlsWidget->installEventFilter(this);
     controlsWidget->hide();
 
     QVBoxLayout *controlsLayout = new QVBoxLayout(controlsWidget);
-    controlsLayout->setContentsMargins(20, 10, 20, 10);
+    // Minimal margins to reduce dead space, with small bottom padding for taskbar
+    controlsLayout->setContentsMargins(20, 5, 20, 10);
+    controlsLayout->setSpacing(2); // Tight spacing between rows
 
     // Position slider with cached frame visualization
     positionSlider = new CachedFrameSlider(Qt::Horizontal, this);
@@ -442,7 +469,7 @@ void PreviewOverlay::setupUi()
 
     {
         QHBoxLayout *timelineRow = new QHBoxLayout();
-        timelineRow->setContentsMargins(0, 4, 0, 4);
+        timelineRow->setContentsMargins(0, 2, 0, 2); // Reduced vertical margins
         timelineRow->setSpacing(8);
         timelineRow->addWidget(currentTimeLabel);
         timelineRow->addWidget(positionSlider, /*stretch*/ 1);
@@ -598,11 +625,11 @@ void PreviewOverlay::setupUi()
     navNextBtn->raise();
 
 
-    // Initialize media player
+    // Initialize media player - use videoItem for zoom/pan support
     mediaPlayer = new QMediaPlayer(this);
     audioOutput = new QAudioOutput(this);
     mediaPlayer->setAudioOutput(audioOutput);
-    mediaPlayer->setVideoOutput(videoWidget);
+    mediaPlayer->setVideoOutput(videoItem);
 
     connect(mediaPlayer, &QMediaPlayer::positionChanged, this, &PreviewOverlay::onPositionChanged);
     // Initial positioning
@@ -833,19 +860,22 @@ void PreviewOverlay::showVideo(const QString &filePath)
     if (mediaPlayer->playbackState() != QMediaPlayer::StoppedState) {
         mediaPlayer->stop();
     }
+    // Wait for media player to fully stop before changing source
+    QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+
     mediaPlayer->setSource(QUrl()); // clear previous source to avoid stray signals
     mediaPlayer->setPosition(0);
 
-    // CRITICAL: Hide other content and show video widget
-    if (imageView) imageView->hide();
+    // CRITICAL: Hide other content and show imageView with videoItem for zoom/pan support
     if (textView) textView->hide();
     if (tableView) tableView->hide();
 #ifdef HAVE_QT_PDF
     if (pdfView) pdfView->hide();
 #endif
-    videoWidget->show();
-    // Anchor nav arrows to the video widget when showing video (handles native window stacking)
-    positionNavButtons(videoWidget);
+    videoWidget->hide(); // Hide the old video widget, we use videoItem in imageView now
+    imageView->show();
+    // Anchor nav arrows to the image viewport when showing video
+    positionNavButtons(imageView->viewport());
     controlsWidget->show();
     // Cache bar is only for sequences
     if (cacheBar) cacheBar->hide();
@@ -861,9 +891,26 @@ void PreviewOverlay::showVideo(const QString &filePath)
     // Hide alpha toggle for videos
     if (alphaCheck) alphaCheck->hide();
 
-    // CRITICAL: Clear the scene to free memory
-    imageScene->clear();
-    imageItem = nullptr;
+    // CRITICAL: Only clear scene if videoItem is not already in it
+    // Removing and re-adding videoItem while media player is active can cause crashes
+    if (videoItem->scene() != imageScene) {
+        imageScene->clear();
+        imageItem = nullptr;
+        imageScene->addItem(videoItem);
+    } else {
+        // videoItem is already in the scene, just remove other items
+        QList<QGraphicsItem*> items = imageScene->items();
+        for (QGraphicsItem* item : items) {
+            if (item != videoItem) {
+                imageScene->removeItem(item);
+                if (item != imageItem) { // Don't delete imageItem if it's managed elsewhere
+                    delete item;
+                }
+            }
+        }
+        imageItem = nullptr;
+    }
+
     // Probe metadata for FPS/timecode via FFmpeg (if available)
     {
         MediaInfo::VideoMetadata vm;
@@ -879,8 +926,10 @@ void PreviewOverlay::showVideo(const QString &filePath)
 
     mediaPlayer->setSource(QUrl::fromLocalFile(filePath));
 
-    // Set video to fill the widget while maintaining aspect ratio
-    videoWidget->setAspectRatioMode(Qt::KeepAspectRatio);
+    // Video will be rendered through videoItem which is already in the scene
+    // Reset zoom to fit video in view
+    currentZoom = 1.0;
+    imageView->resetTransform();
 
     mediaPlayer->play();
 
@@ -1334,8 +1383,7 @@ void PreviewOverlay::keyPressEvent(QKeyEvent *event)
                 if (isVideo || isSequence) { onStepPrevFrame(); return; }
                 break;
             }
-            // Always stop any playback before navigating to avoid mixing
-            stopPlayback();
+            // Navigate to previous file (MainWindow will handle stopPlayback)
             navigatePrevious();
             break;
         case Qt::Key_Right:
@@ -1344,8 +1392,7 @@ void PreviewOverlay::keyPressEvent(QKeyEvent *event)
                 if (isVideo || isSequence) { onStepNextFrame(); return; }
                 break;
             }
-            // Always stop any playback before navigating to avoid mixing
-            stopPlayback();
+            // Navigate to next file (MainWindow will handle stopPlayback)
             navigateNext();
             break;
         case Qt::Key_Period: // '.' next frame
@@ -1395,10 +1442,16 @@ void PreviewOverlay::resizeEvent(QResizeEvent *event)
 
 void PreviewOverlay::mousePressEvent(QMouseEvent *event)
 {
+    // Right-click resets zoom for both images and videos
+    if (event->button() == Qt::RightButton) {
+        resetImageZoom();
+        event->accept();
+        return;
+    }
+
     if (isVideo) {
         // Show controls on click
         controlsWidget->show();
-
         controlsTimer->start();
     } else if (event->button() == Qt::MiddleButton) {
         // Start panning for images
@@ -1411,11 +1464,9 @@ void PreviewOverlay::mousePressEvent(QMouseEvent *event)
 
 void PreviewOverlay::wheelEvent(QWheelEvent *event)
 {
-    if (!isVideo && !originalPixmap.isNull()) {
-        // Zoom with mouse wheel (fallback if event reached overlay)
+    // Enable zoom for images, videos, and sequences (fallback if event reached overlay)
+    if (!originalPixmap.isNull() || (videoItem && videoItem->scene() == imageScene) || isSequence) {
         double factor = event->angleDelta().y() > 0 ? 1.15 : 0.85;
-
-
         zoomImage(factor);
         event->accept();
         return;
@@ -1425,9 +1476,10 @@ void PreviewOverlay::wheelEvent(QWheelEvent *event)
 
 bool PreviewOverlay::eventFilter(QObject* watched, QEvent* event)
 {
-    // Handle wheel events for image zoom
+    // Handle wheel events for image/video zoom
     if ((watched == imageView || (imageView && watched == imageView->viewport())) && event->type() == QEvent::Wheel) {
-        if (!isVideo && !originalPixmap.isNull()) {
+        // Enable zoom for images (when pixmap is loaded) or videos (when videoItem is in scene) or sequences
+        if (!originalPixmap.isNull() || (videoItem && videoItem->scene() == imageScene) || isSequence) {
             QWheelEvent* wheel = static_cast<QWheelEvent*>(event);
             double factor = wheel->angleDelta().y() > 0 ? 1.15 : 0.85;
             zoomImage(factor);
@@ -1436,42 +1488,8 @@ bool PreviewOverlay::eventFilter(QObject* watched, QEvent* event)
         }
     }
 
-    // Start drag from overlay preview (image/video)
-    if (((imageView && (watched == imageView || watched == imageView->viewport())) || (videoWidget && watched == videoWidget))) {
-        if (event->type() == QEvent::MouseButtonPress) {
-            QMouseEvent *me = static_cast<QMouseEvent*>(event);
-            if (me->button() == Qt::LeftButton) {
-                overlayDragStartPos = me->pos();
-                overlayDragPending = true;
-            }
-        } else if (event->type() == QEvent::MouseMove) {
-            QMouseEvent *me = static_cast<QMouseEvent*>(event);
-            if (overlayDragPending && (me->buttons() & Qt::LeftButton)) {
-                if ((me->pos() - overlayDragStartPos).manhattanLength() >= QApplication::startDragDistance()) {
-                    // Begin adaptive native drag: frames for Explorer/self; folder for sequences to DCCs
-                    QVector<QString> frameVec; QVector<QString> folderVec;
-                    if (isSequence && !sequenceFramePaths.isEmpty()) {
-                        for (const QString &p : sequenceFramePaths) frameVec.push_back(p);
-                        const QString dirPath = QFileInfo(sequenceFramePaths.first()).absolutePath();
-                        folderVec.push_back(dirPath);
-                    } else if (!currentFilePath.isEmpty()) {
-                        frameVec.push_back(currentFilePath);
-                        folderVec.push_back(currentFilePath); // allow direct file to DCCs
-                    }
-                    if (!frameVec.isEmpty() || !folderVec.isEmpty()) {
-                        VirtualDrag::startAdaptivePathsDrag(frameVec, folderVec);
-                    }
-                    overlayDragPending = false;
-                    return true;
-                }
-            }
-        } else if (event->type() == QEvent::MouseButtonRelease) {
-            QMouseEvent *me = static_cast<QMouseEvent*>(event);
-            if (me->button() == Qt::LeftButton) {
-                overlayDragPending = false;
-            }
-        }
-    }
+    // Drag-and-drop from overlay preview is disabled
+    // (User requested to disable DnD from full screen preview player)
 
     // Handle keyboard events from child widgets (videoWidget, imageView, etc.)
     if (event->type() == QEvent::KeyPress) {
@@ -1539,9 +1557,18 @@ void PreviewOverlay::fitImageToView()
 
 void PreviewOverlay::resetImageZoom()
 {
-    currentZoom = 1.0;
-    imageView->resetTransform();
-    imageView->centerOn(imageItem);
+    // Reset zoom for both images and videos
+    if (isVideo && videoItem && videoItem->scene() == imageScene) {
+        // For videos, fit to view
+        imageScene->setSceneRect(videoItem->boundingRect());
+        imageView->fitInView(videoItem, Qt::KeepAspectRatio);
+        currentZoom = imageView->transform().m11();
+    } else if (imageItem) {
+        // For images and sequences, reset to 1:1
+        currentZoom = 1.0;
+        imageView->resetTransform();
+        imageView->centerOn(imageItem);
+    }
 }
 
 void PreviewOverlay::showSequence(const QStringList &framePaths, const QString &sequenceName, int startFrame, int endFrame)
@@ -1900,8 +1927,10 @@ void PreviewOverlay::stopPlayback()
         frameCache->stopPrefetch();
     }
 
-    // Clear the media source to release the file
-    mediaPlayer->setSource(QUrl());
+    // Clear the media source to release the file (only if it has a source)
+    if (!mediaPlayer->source().isEmpty()) {
+        mediaPlayer->setSource(QUrl());
+    }
 }
 
 
