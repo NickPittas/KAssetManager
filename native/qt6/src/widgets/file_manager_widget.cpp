@@ -1460,8 +1460,8 @@ void FileManagerWidget::ensurePreviewInfoLayout()
     fmAudioOutput = new QAudioOutput(fmPreviewPanel);
     // Create a QVideoSink for optional software processing (inactive by default)
     fmVideoSink = new QVideoSink(fmPreviewPanel);
-    // Default to hardware video path for stability
-    fmMediaPlayer->setVideoOutput(fmVideoSink);
+    // Default to hardware video path for stability (full resolution)
+    fmMediaPlayer->setVideoOutput(fmVideoItem);
     fmMediaPlayer->setAudioOutput(fmAudioOutput);
 
     // Handle incoming video frames and apply color transform
@@ -1471,15 +1471,8 @@ void FileManagerWidget::ensurePreviewInfoLayout()
         if (img.isNull()) return;
         fmLastVideoFrameRaw = img; // cache raw frame (unscaled)
 
-        // Scale to viewport first to keep per-frame cost manageable
-        int targetW = 0, targetH = 0;
-        if (fmImageView && fmImageView->viewport()) {
-            targetW = fmImageView->viewport()->width();
-            targetH = fmImageView->viewport()->height();
-        }
-        if (targetW <= 0 || targetH <= 0) { targetW = 1600; targetH = 1200; }
-
-        QImage out = fmLastVideoFrameRaw.scaled(targetW, targetH, Qt::KeepAspectRatio, Qt::FastTransformation);
+        // Use full-resolution frame for display; view will scale down as needed
+        QImage out = fmLastVideoFrameRaw;
 
         auto toLinear709 = [](float v){ return (v < 0.081f) ? (v / 4.5f) : std::pow((v + 0.099f) / 1.099f, 1.0f/0.45f); };
         auto linearToSRGB = [](float v){ v = std::clamp(v, 0.0f, 1.0f); return (v <= 0.0031308f) ? 12.92f*v : 1.055f*std::pow(v, 1.0f/2.4f) - 0.055f; };
@@ -1787,9 +1780,7 @@ void FileManagerWidget::ensurePreviewInfoLayout()
             // Video: re-render last captured frame with new color space
             if (isVideoFile(ext) && !fmLastVideoFrameRaw.isNull() && fmImageItem) {
                 // Scale to viewport first
-                int targetW = fmImageView && fmImageView->viewport() ? fmImageView->viewport()->width() : 1600;
-                int targetH = fmImageView && fmImageView->viewport() ? fmImageView->viewport()->height() : 1200;
-                QImage out = fmLastVideoFrameRaw.scaled(targetW, targetH, Qt::KeepAspectRatio, Qt::FastTransformation);
+                QImage out = fmLastVideoFrameRaw;
                 auto toLinear709 = [](float v){ return (v < 0.081f) ? (v / 4.5f) : std::pow((v + 0.099f) / 1.099f, 1.0f/0.45f); };
                 auto linearToSRGB = [](float v){ v = std::clamp(v, 0.0f, 1.0f); return (v <= 0.0031308f) ? 12.92f*v : 1.055f*std::pow(v, 1.0f/2.4f) - 0.055f; };
                 OIIOImageLoader::ColorSpace cs = OIIOImageLoader::ColorSpace::Rec709;
@@ -2390,7 +2381,7 @@ void FileManagerWidget::updateFmPreviewForIndex(const QModelIndex &idx)
             if (fmTimeLabel) { fmTimeLabel->setText("00:00 / 00:00"); }
             // Show color space controls for videos (disabled for now; Rec.709)
             if (fmColorSpaceLabel) fmColorSpaceLabel->show();
-            if (fmColorSpaceCombo) { fmColorSpaceCombo->show(); fmColorSpaceCombo->setEnabled(true); }
+            if (fmColorSpaceCombo) { fmColorSpaceCombo->show(); fmColorSpaceCombo->setCurrentIndex(2); fmColorSpaceCombo->setEnabled(false); }
 
 #ifdef HAVE_FFMPEG
             // Probe and route deterministically
@@ -2419,9 +2410,9 @@ void FileManagerWidget::updateFmPreviewForIndex(const QModelIndex &idx)
                     if (fmImageScene) fmImageScene->setSceneRect(QRectF(QPointF(0, 0), ns));
                 }
             }
-            fmMediaPlayer->setVideoOutput(fmVideoSink);
-            if (fmImageItem) fmImageItem->setVisible(true);
-            if (fmVideoItem) fmVideoItem->setVisible(false);
+            fmMediaPlayer->setVideoOutput(fmVideoItem);
+            if (fmImageItem) fmImageItem->setVisible(false);
+            if (fmVideoItem) fmVideoItem->setVisible(true);
             if (fmVideoItem && fmImageView && fmVideoItem->nativeSize().isValid() && fmImageFitToView) {
                 fmImageView->resetTransform();
                 fmImageView->fitInView(fmVideoItem, Qt::KeepAspectRatio);
