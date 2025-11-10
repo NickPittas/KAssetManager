@@ -85,6 +85,7 @@ static size_t currentWorkingSetMB() {
 #include <QScrollBar>
 #include <QTableView>
 #include <QStackedWidget>
+#include <QStack>
 #include <QCheckBox>
 #include <QFileDialog>
 #include <QSortFilterProxyModel>
@@ -861,7 +862,8 @@ private:
             QFont nameFont("Segoe UI", 9);
             painter->setFont(nameFont);
             painter->setPen(QColor(230,230,230));
-            QRect nameRect(option.rect.x()+4, thumbRect.bottom()+4, option.rect.width()-8, option.rect.bottom()-thumbRect.bottom()-6);
+            // Use compact text area: closer to thumbnail with minimal padding
+            QRect nameRect(option.rect.x()+2, thumbRect.bottom()+2, option.rect.width()-4, 30);
             QString elided = QFontMetrics(nameFont).elidedText(fileName, Qt::ElideRight, nameRect.width());
             painter->drawText(nameRect, Qt::AlignHCenter | Qt::AlignTop, elided);
         } catch (const std::exception& e) {
@@ -877,7 +879,7 @@ public:
     {
         Q_UNUSED(option);
         Q_UNUSED(index);
-        int height = m_thumbnailSize + 60; // Add space for text overlay
+        int height = m_thumbnailSize + 35; // Compact layout: thumbnail + smaller text area
         return QSize(m_thumbnailSize, height);
     }
 };
@@ -921,7 +923,7 @@ public:
             painter->drawRect(option.rect.adjusted(1, 1, -1, -1));
         }
 
-        const int margin = 6;
+        const int margin = 2; // Reduced margin for tighter layout
         const int thumbSide = m_thumbnailSize;
         QRect thumbRect(option.rect.x() + (option.rect.width()-thumbSide)/2, option.rect.y() + margin, thumbSide, thumbSide);
         const QString filePath = index.data(QFileSystemModel::FilePathRole).toString();
@@ -1105,6 +1107,19 @@ protected:
                 const qreal x = bounds.left() + (bounds.width() - scaled.width()) / 2.0;
                 const qreal y = bounds.top() + (bounds.height() - scaled.height()) / 2.0;
                 painter.drawPixmap(QPointF(x, y), scaled);
+                
+                // Draw vertical scrubbing line on top of the frame
+                const qreal lineX = x + scaled.width() * m_progress;
+                const qreal lineTop = y;
+                const qreal lineBottom = y + scaled.height();
+                
+                // Draw the main line (bright blue)
+                painter.setPen(QPen(QColor(88, 166, 255, 255), 2.0));
+                painter.drawLine(QPointF(lineX, lineTop), QPointF(lineX, lineBottom));
+                
+                // Draw a subtle shadow line for better visibility
+                painter.setPen(QPen(QColor(0, 0, 0, 120), 1.0));
+                painter.drawLine(QPointF(lineX + 1, lineTop), QPointF(lineX + 1, lineBottom));
             }
         } else {
             painter.setPen(QPen(QColor(80, 80, 80, 160), 1.0));
@@ -1112,28 +1127,7 @@ protected:
             painter.setPen(Qt::NoPen);
         }
 
-        const qreal hudHeight = 26.0;
-        QRectF hudRect = bounds.adjusted(8, bounds.height() - hudHeight - 10, -8, -6);
-        painter.setPen(Qt::NoPen);
-        painter.setBrush(QColor(0, 0, 0, 170));
-        painter.drawRoundedRect(hudRect, 6, 6);
-
-        const qreal barHeight = 4.0;
-        QRectF barRect(hudRect.left() + 10, hudRect.bottom() - barHeight - 6, hudRect.width() - 20, barHeight);
-        painter.setBrush(QColor(60, 60, 60, 220));
-        painter.drawRoundedRect(barRect, 2, 2);
-
-        QRectF fillRect = barRect;
-        fillRect.setWidth(barRect.width() * m_progress);
-        if (fillRect.width() > 0) {
-            painter.setBrush(QColor(88, 166, 255, 230));
-            painter.drawRoundedRect(fillRect, 3, 3);
-        }
-
-        painter.setPen(Qt::white);
-        painter.setFont(QFont(QStringLiteral("Segoe UI"), 8, QFont::DemiBold));
-        QRectF textRect(hudRect.left() + 10, hudRect.top() + 6, hudRect.width() - 20, hudRect.height() - barHeight - 14);
-        painter.drawText(textRect, Qt::AlignLeft | Qt::AlignVCenter, m_statusText);
+        // Text and timeline display removed - keeping only the vertical line
     }
 
 private:
@@ -1959,8 +1953,6 @@ void MainWindow::setupUi()
         "QTreeView::item:hover { background-color: #202020; }"
     );
 
-    // Expand root folder by default
-    folderTreeView->expandToDepth(0);
 
     leftLayout->addWidget(folderTreeView);
 
@@ -2623,6 +2615,9 @@ void MainWindow::setupUi()
     // Load initial data
     folderModel->reload();
     tagsModel->reload();
+    
+    // Expand root folder AFTER model is loaded with actual data
+    folderTreeView->expandToDepth(0);
 
     // Restore last active tab
     int lastTab = ContextPreserver::instance().loadLastActiveTab();
@@ -4599,9 +4594,6 @@ void MainWindow::setupConnections()
     connect(folderTreeView, &QTreeView::clicked, this, &MainWindow::onFolderSelected);
     connect(folderTreeView, &QTreeView::customContextMenuRequested, this, &MainWindow::onFolderContextMenu);
 
-    // Save/restore folder expansion state when model reloads
-    connect(folderModel, &VirtualFolderTreeModel::modelAboutToBeReset, this, &MainWindow::saveFolderExpansionState);
-    connect(folderModel, &VirtualFolderTreeModel::modelReset, this, &MainWindow::restoreFolderExpansionState);
 
     connect(assetGridView->selectionModel(), &QItemSelectionModel::selectionChanged, this, &MainWindow::onAssetSelectionChanged);
     connect(assetGridView, &QListView::doubleClicked, this, &MainWindow::onAssetDoubleClicked);

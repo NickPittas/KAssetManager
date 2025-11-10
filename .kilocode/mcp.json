@@ -6,6 +6,9 @@
         "-y",
         "@modelcontextprotocol/server-filesystem",
         "E:/KAssetManager"
+      ],
+      "alwaysAllow": [
+        "read_file"
       ]
     }
   }
