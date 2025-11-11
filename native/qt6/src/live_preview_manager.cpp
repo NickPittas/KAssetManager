@@ -97,6 +97,11 @@ LivePreviewManager& LivePreviewManager::instance()
 LivePreviewManager::LivePreviewManager(QObject* parent)
     : QObject(parent)
 {
+#if 1
+    // Explicitly log which renderer/backend is active for verification in app.log
+    // tlRender is not integrated; we use OIIO for images + Qt for presentation
+    qInfo() << "[LivePreview] Renderer backend:" << "OIIO+Qt (no tlRender)";
+#endif
 #if defined(HAVE_FFMPEG) && HAVE_FFMPEG
     av_log_set_level(AV_LOG_ERROR);
     static bool s_loggedVersion = false;

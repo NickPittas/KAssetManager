@@ -1,4 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
+cmake_minimum_required(VERSION 3.21)
 
 # Set vcpkg toolchain file from environment if not already set
 if(NOT DEFINED CMAKE_TOOLCHAIN_FILE)
@@ -56,6 +57,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Option to build the main application (allows CI to build tests-only)
 option(BUILD_APP "Build main application" ON)
 
+## SuperBuild bootstrap option was removed — using external package only
+
 
 # Allow building only tests in CI without full app dependencies
 # Code coverage (GCC/Clang only)
@@ -105,7 +108,7 @@ if(OpenImageIO_FOUND)
     message(STATUS "OpenImageIO found - advanced format support enabled")
     add_compile_definitions(HAVE_OPENIMAGEIO)
 else()
-    message(WARNING "OpenImageIO not found - will use placeholder thumbnails for EXR/PSD/HDR formats")
+    message(WARNING "OpenImageIO not found - will use placeholder thumbnails for EXR/PSD/HDR formats. HINTS: ${_OIIO_HINTS}")
 endif()
 
 # OOXML ZIP reading (minizip-ng via vcpkg)
@@ -296,6 +299,9 @@ endif()
 if(OpenImageIO_FOUND)
     target_link_libraries(kassetmanagerqt PRIVATE OpenImageIO::OpenImageIO)
 endif()
+
+# Link tlRender if enabled and found
+## tlRender linking removed
 # Link minizip-ng (vcpkg target)
 target_link_libraries(kassetmanagerqt PRIVATE MINIZIP::minizip-ng)
 target_compile_definitions(kassetmanagerqt PRIVATE HAVE_MINIZIP_NG)
@@ -347,11 +353,20 @@ if (WIN32)
   elseif(EXISTS "${_QT_PLUGINS_PATH}/sqldrivers/qsqlite.dll")
     install(FILES "${_QT_PLUGINS_PATH}/sqldrivers/qsqlite.dll" DESTINATION plugins/sqldrivers)
   endif()
+  # Always ship qwindows platform plugin for GUI. Also include qoffscreen for headless.
+  if(EXISTS "${_QT_PLUGINS_PATH}/platforms/qwindows.dll")
+    install(FILES "${_QT_PLUGINS_PATH}/platforms/qwindows.dll" DESTINATION plugins/platforms)
+  endif()
   if(EXISTS "${_QT_PLUGINS_PATH}/platforms/qoffscreend.dll")
     install(FILES "${_QT_PLUGINS_PATH}/platforms/qoffscreend.dll" DESTINATION plugins/platforms)
   elseif(EXISTS "${_QT_PLUGINS_PATH}/platforms/qoffscreen.dll")
     install(FILES "${_QT_PLUGINS_PATH}/platforms/qoffscreen.dll" DESTINATION plugins/platforms)
   endif()
+
+  # Ensure Qt loads plugins from "plugins" next to the exe (more robust than relying on PATH)
+  set(_QT_CONF "${CMAKE_CURRENT_BINARY_DIR}/qt.conf")
+  file(WRITE "${_QT_CONF}" "[Paths]\nPlugins=plugins\n")
+  install(FILES "${_QT_CONF}" DESTINATION bin)
 
   # Install all vcpkg DLLs (OpenImageIO, zlib, bzip2, liblzma, libpng, libjpeg, etc.)
   set(_VCPKG_BIN "")
@@ -413,3 +428,5 @@ set(CPACK_GENERATOR "ZIP;NSIS")
 include(CPack)
 
 
+# tlRender (optional external package)
+## tlRender integration removed; build without it

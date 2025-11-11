@@ -259,14 +259,17 @@ PreviewOverlay::PreviewOverlay(QWidget *parent)
     controlsTimer->setInterval(3000);
     connect(controlsTimer, &QTimer::timeout, this, &PreviewOverlay::hideControls);
 
-    // Sequence playback timer (24 fps default)
+    // Sequence playback timer (target 25 fps minimum for realtime)
     sequenceTimer = new QTimer(this);
-    sequenceTimer->setInterval(1000 / 24); // 24 fps
+    sequenceTimer->setTimerType(Qt::PreciseTimer);
+    sequenceTimer->setInterval(40); // 25 fps
     connect(sequenceTimer, &QTimer::timeout, this, &PreviewOverlay::onSequenceTimerTick);
 
     // Initialize frame cache for image sequence playback
     frameCache = new SequenceFrameCache(this);
     qDebug() << "[PreviewOverlay] Frame cache initialized with QRecursiveMutex (deadlock fix)";
+
+    // tlRender integration removed
 }
 
 PreviewOverlay::~PreviewOverlay()
@@ -487,12 +490,15 @@ void PreviewOverlay::setupUi()
         controlsLayout->addLayout(cacheRow);
     }
 
-    // ========== ROW 2: Timeline (Current | Slider | Duration) ==========
+    // ========== ROW 2: Timeline (Current | Slider | Duration | FPS) ==========
     currentTimeLabel = new QLabel("00:00:00:00", this);
     currentTimeLabel->setStyleSheet("QLabel { color: white; font-size: 14px; padding: 0 8px; }");
 
     durationTimeLabel = new QLabel("00:00:00:00", this);
     durationTimeLabel->setStyleSheet("QLabel { color: white; font-size: 14px; padding: 0 8px; }");
+
+    fpsLabel = new QLabel("-- fps", this);
+    fpsLabel->setStyleSheet("QLabel { color: #9aa7b0; font-size: 13px; padding: 0 8px; }");
 
     positionSlider->setFixedHeight(20);
 
@@ -503,19 +509,21 @@ void PreviewOverlay::setupUi()
         timelineRow->addWidget(currentTimeLabel);
         timelineRow->addWidget(positionSlider, /*stretch*/ 1);
         timelineRow->addWidget(durationTimeLabel);
+        timelineRow->addWidget(fpsLabel);
         controlsLayout->addLayout(timelineRow);
     }
 
-    // Optional color space selector (kept hidden by default)
-    colorSpaceLabel = new QLabel("Color Space:", this);
+    // Optional colorspace selector (hidden until relevant)
+    colorSpaceLabel = new QLabel("Colorspace", this);
     colorSpaceLabel->setStyleSheet("QLabel { color: white; font-size: 14px; padding: 0 5px; }");
     colorSpaceLabel->hide();
 
     colorSpaceCombo = new QComboBox(this);
-    colorSpaceCombo->addItem("Linear");
+    // Order: sRGB, Rec.709, Linear
     colorSpaceCombo->addItem("sRGB");
     colorSpaceCombo->addItem("Rec.709");
-    colorSpaceCombo->setCurrentIndex(1);
+    colorSpaceCombo->addItem("Linear");
+    colorSpaceCombo->setCurrentIndex(0);
     colorSpaceCombo->setFocusPolicy(Qt::NoFocus);
     colorSpaceCombo->setStyleSheet(
         "QComboBox { background-color: #333; color: white; border: 1px solid #555; "
@@ -618,7 +626,7 @@ void PreviewOverlay::setupUi()
     csLayout->setSpacing(6);
     csLayout->addWidget(colorSpaceLabel);
     csLayout->addWidget(colorSpaceCombo);
-    csGroup->setVisible(false);
+    // Do not forcibly hide the container; children visibility will control it
     bottomGrid->addWidget(csGroup, 0, 2, Qt::AlignVCenter);
 
     bottomGrid->addWidget(audioGroup, 0, 3, Qt::AlignRight | Qt::AlignVCenter);
@@ -860,16 +868,16 @@ void PreviewOverlay::showImage(const QString &filePath)
         imageView->update();
         imageScene->update();
 
-        // Show/hide color space selector based on whether this is HDR
-        if (isHDRImage) {
-            colorSpaceLabel->show();
-            colorSpaceCombo->show();
-            controlsWidget->show();
-        } else {
-            colorSpaceLabel->hide();
-            colorSpaceCombo->hide();
-            controlsWidget->hide();
-        }
+    // For single images, only show colorspace selector when HDR
+    if (isHDRImage) {
+        colorSpaceLabel->show();
+        colorSpaceCombo->show();
+        controlsWidget->show();
+    } else {
+        colorSpaceLabel->hide();
+        colorSpaceCombo->hide();
+        controlsWidget->hide();
+    }
     } else {
         qWarning() << "[PreviewOverlay::showImage] Failed to load image:" << filePath;
     }
@@ -941,6 +949,9 @@ void PreviewOverlay::showVideo(const QString &filePath)
         }
         imageItem = nullptr;
     }
+
+    // If tlRender backend is preferred, attempt to open container via tlRender
+    // tlRender container path removed
 
     // Probe metadata for FPS/timecode via FFmpeg (if available)
     {
@@ -1654,13 +1665,24 @@ void PreviewOverlay::showSequence(const QStringList &framePaths, const QString &
     // Update file name label
     fileNameLabel->setText(sequenceName);
 
-    // Show/hide color space selector based on whether this is HDR
-    if (isHDRImage) {
-        colorSpaceLabel->show();
-        colorSpaceCombo->show();
-    } else {
-        colorSpaceLabel->hide();
-        colorSpaceCombo->hide();
+    // Always show colorspace selector for image sequences.
+    // Default: EXR -> Linear; others -> sRGB (user-changeable).
+    colorSpaceLabel->show();
+    colorSpaceCombo->show();
+    if (!sequenceFramePaths.isEmpty()) {
+        QFileInfo fi(sequenceFramePaths.first());
+        const QString extLower = fi.suffix().toLower();
+        if (extLower == "exr") {
+            currentColorSpace = OIIOImageLoader::ColorSpace::Linear;
+            colorSpaceCombo->blockSignals(true);
+            colorSpaceCombo->setCurrentIndex(2); // Linear
+            colorSpaceCombo->blockSignals(false);
+        } else {
+            currentColorSpace = OIIOImageLoader::ColorSpace::sRGB;
+            colorSpaceCombo->blockSignals(true);
+            colorSpaceCombo->setCurrentIndex(0); // sRGB
+            colorSpaceCombo->blockSignals(false);
+        }
     }
 
     // Clear cached frame visualization
@@ -1675,17 +1697,34 @@ void PreviewOverlay::showSequence(const QStringList &framePaths, const QString &
         disconnect(frameCache, &SequenceFrameCache::frameCached, nullptr, nullptr);
         // We no longer paint cache on the slider; only the cache bar reflects caching
 
-        // Update the separate cache bar as frames are cached
+        // Update the separate cache bar as frames are cached (incremental)
         connect(frameCache, &SequenceFrameCache::frameCached, this, [this](int frameIndex){
-            if (cacheBar) {
+            if (!cacheBar) return;
+            if (!cacheBarUpdateTimer.isValid()) cacheBarUpdateTimer.start();
+            if (cacheBarUpdateTimer.elapsed() >= 16) {
                 cacheBar->markFrameCached(frameIndex);
                 cacheBar->show();
+                cacheBarUpdateTimer.restart();
             }
+        });
+
+        // Snapshots replace stale marks when window slides or evictions happen
+        connect(frameCache, &SequenceFrameCache::cacheSnapshot, this, [this](const QSet<int>& frames){
+            if (!cacheBar) return;
+            cacheBar->setCachedFrames(frames);
+            cacheBar->show();
         });
         // Start pre-fetching immediately (this will load frames in background)
         frameCache->startPrefetch(0);
         qDebug() << "[PreviewOverlay] Started pre-fetching frames from index 0";
     }
+
+    // tlRender sequence path removed
+
+    // FPS UI reset for sequences
+    if (fpsLabel) fpsLabel->setText("-- fps");
+    sequenceFpsFrames = 0;
+    sequenceFpsTimer.invalidate();
 
     // Load first frame (synchronously for immediate display)
     if (!sequenceFramePaths.isEmpty()) {
@@ -1751,33 +1790,13 @@ void PreviewOverlay::loadSequenceFrame(int frameIndex)
 
         // If cache returned empty pixmap (frame not ready), pause playback and wait
         if (newPixmap.isNull()) {
-            // Pause playback (professional RAM player behavior)
-            if (sequencePlaying) {
-                sequenceTimer->stop();
-            }
-
-            // Keep showing previous frame
-            // Update slider and time label anyway
+            // Keep realtime cadence: do NOT pause the timer.
+            // Maintain last displayed frame and just update UI positions.
             positionSlider->blockSignals(true);
             positionSlider->setValue(frameIndex);
             positionSlider->blockSignals(false);
             updateSequenceTimeDisplays(frameIndex, true);
-
-            // Schedule a retry after a short delay to check if frame is ready
-            QTimer::singleShot(50, this, [this, frameIndex]() {
-                if (frameCache && frameCache->hasFrame(frameIndex)) {
-                    // Resume playback
-                    if (sequencePlaying) {
-                        sequenceTimer->start();
-                    }
-                    // Load the frame now that it's ready
-                    loadSequenceFrame(frameIndex);
-                } else {
-                    // Frame still not ready, schedule another retry
-                    loadSequenceFrame(frameIndex);
-                }
-            });
-            return;
+            return; // skip displaying until frame becomes ready; timer continues
         }
 
         // Frame is ready from cache, use it
@@ -1805,25 +1824,57 @@ void PreviewOverlay::loadSequenceFrame(int frameIndex)
     }
 
     if (!originalPixmap.isNull()) {
-        imageScene->clear();
-        imageItem = imageScene->addPixmap(originalPixmap);
-        imageScene->setSceneRect(originalPixmap.rect());
+        if (!imageItem) {
+            imageItem = imageScene->addPixmap(originalPixmap);
+        } else {
+            imageItem->setPixmap(originalPixmap);
+        }
+        // Only update scene rect if size changed
+        if (lastFrameSize != originalPixmap.size()) {
+            imageScene->setSceneRect(originalPixmap.rect());
+            lastFrameSize = originalPixmap.size();
+            // Ensure fit on first frame or when dimensions change
+            fitPending = true;
+        }
 
         // Determine alpha availability and reset toggle for new frame/sequence
         previewHasAlpha = originalPixmap.hasAlphaChannel();
         if (alphaCheck) { alphaCheck->setVisible(previewHasAlpha); alphaCheck->blockSignals(true); alphaCheck->setChecked(false); alphaOnlyMode = false; alphaCheck->blockSignals(false); }
 
-        fitImageToView();
+        // Fit once per sequence or when requested
+        if (fitPending) {
+            fitImageToView();
+            fitPending = false;
+        }
+
+        // FPS update (real measured)
+        if (sequencePlaying) {
+            ++sequenceFpsFrames;
+            if (!sequenceFpsTimer.isValid()) sequenceFpsTimer.start();
+            qint64 elapsed = sequenceFpsTimer.elapsed();
+            if (elapsed >= 500) { // update twice per second
+                double fps = (sequenceFpsFrames * 1000.0) / qMax<qint64>(1, elapsed);
+                currentPlaybackFps = fps;
+                if (fpsLabel) fpsLabel->setText(QString::number(fps, 'f', 1) + " fps");
+                sequenceFpsFrames = 0;
+                sequenceFpsTimer.restart();
+            }
+        }
     } else {
         qWarning() << "[PreviewOverlay::loadSequenceFrame] Failed to load frame - pixmap is null!";
     }
 
-    // Update slider and time label
-    positionSlider->blockSignals(true);
-    positionSlider->setValue(frameIndex);
-    positionSlider->blockSignals(false);
-
-    updateSequenceTimeDisplays(frameIndex);
+    // Update slider and time label (throttled)
+    bool doUiUpdate = true;
+    if (!uiUpdateTimer.isValid()) uiUpdateTimer.start();
+    else if (uiUpdateTimer.elapsed() < 30) doUiUpdate = false; // ~33 fps UI updates
+    if (doUiUpdate) {
+        uiUpdateTimer.restart();
+        positionSlider->blockSignals(true);
+        positionSlider->setValue(frameIndex);
+        positionSlider->blockSignals(false);
+        updateSequenceTimeDisplays(frameIndex);
+    }
 }
 
 void PreviewOverlay::playSequence()
@@ -1832,17 +1883,40 @@ void PreviewOverlay::playSequence()
         return;
     }
 
+    // Optional: require full warm before playback (defaults to false)
+    bool requireFullWarm = false;
+    {
+        QSettings s("AugmentCode", "KAssetManager");
+        requireFullWarm = s.value("SequenceCache/RequireFullWarmBeforePlay", false).toBool();
+    }
+    if (requireFullWarm) {
+        // If RAM cache is enabled, warm the FULL cache window before starting
+        if (frameCache && useCacheForSequences) {
+            const int target = qMin(frameCache->maxCacheSize(), positionSlider ? (positionSlider->maximum()+1) : sequenceFramePaths.size());
+            if (frameCache->cachedFrameCount() < target) {
+                frameCache->startPrefetch(currentSequenceFrame);
+                QTimer::singleShot(15, this, &PreviewOverlay::playSequence);
+                return; // wait until warmed to target window
+            }
+        }
+    }
+
     sequencePlaying = true;
     sequenceTimer->start();
     updatePlayPauseButton();
 
-    // Start pre-fetching frames ahead of current position (only if cache is enabled)
+    // Keep prefetching while playing (only if cache is enabled)
     if (frameCache && useCacheForSequences) {
         frameCache->startPrefetch(currentSequenceFrame);
-        qDebug() << "[PreviewOverlay] Playing sequence at 24 fps with pre-fetching enabled";
+        qDebug() << "[PreviewOverlay] Playing sequence at 25 fps with pre-fetching enabled";
     } else {
-        qDebug() << "[PreviewOverlay] Playing sequence at 24 fps (cache disabled)";
+        qDebug() << "[PreviewOverlay] Playing sequence at 25 fps (cache disabled)";
     }
+
+    // Start FPS measurement
+    sequenceFpsFrames = 0;
+    sequenceFpsTimer.restart();
+    if (fpsLabel) fpsLabel->setText("-- fps");
 }
 
 void PreviewOverlay::pauseSequence()
@@ -1855,6 +1929,7 @@ void PreviewOverlay::pauseSequence()
     // This allows smooth scrubbing and instant resume
 
     qDebug() << "[PreviewOverlay] Paused sequence";
+    if (fpsLabel) fpsLabel->setText("Paused");
 }
 
 void PreviewOverlay::stopSequence()
@@ -1870,6 +1945,7 @@ void PreviewOverlay::stopSequence()
 
     loadSequenceFrame(0);
     updatePlayPauseButton();
+    if (fpsLabel) fpsLabel->setText("-- fps");
 }
 
 void PreviewOverlay::onSequenceTimerTick()
@@ -1884,11 +1960,13 @@ void PreviewOverlay::onSequenceTimerTick()
     // Loop back to start if at end
     if (currentSequenceFrame >= sequenceFramePaths.size()) {
         currentSequenceFrame = 0;
-
-        // When looping, restart prefetch from frame 0 to ensure smooth playback
+        // When looping, only kick prefetch if cache isn’t already full
         if (frameCache && useCacheForSequences) {
-            qDebug() << "[PreviewOverlay] Sequence looped to start, restarting prefetch";
-            frameCache->startPrefetch(0);
+            const int need = qMin(frameCache->maxCacheSize(), sequenceFramePaths.size());
+            if (frameCache->cachedFrameCount() < need) {
+                qDebug() << "[PreviewOverlay] Sequence looped; cache not full, restarting prefetch";
+                frameCache->startPrefetch(0);
+            }
         }
     }
 
@@ -1902,16 +1980,16 @@ void PreviewOverlay::onColorSpaceChanged(int index)
     // Update current color space
     switch (index) {
         case 0:
-            currentColorSpace = OIIOImageLoader::ColorSpace::Linear;
-            qDebug() << "[PreviewOverlay] Switched to Linear color space";
-            break;
-        case 1:
             currentColorSpace = OIIOImageLoader::ColorSpace::sRGB;
             qDebug() << "[PreviewOverlay] Switched to sRGB color space";
             break;
-        case 2:
+        case 1:
             currentColorSpace = OIIOImageLoader::ColorSpace::Rec709;
             qDebug() << "[PreviewOverlay] Switched to Rec.709 color space";
+            break;
+        case 2:
+            currentColorSpace = OIIOImageLoader::ColorSpace::Linear;
+            qDebug() << "[PreviewOverlay] Switched to Linear color space";
             break;
         default:
             currentColorSpace = OIIOImageLoader::ColorSpace::sRGB;
@@ -1925,6 +2003,13 @@ void PreviewOverlay::onColorSpaceChanged(int index)
         // Clear cache and reinitialize with new color space (only if cache is enabled)
         if (frameCache && useCacheForSequences) {
             frameCache->setSequence(sequenceFramePaths, currentColorSpace);
+            // Clear cache bar visualization and restart prefetch for accurate redraw
+            if (cacheBar) {
+                cacheBar->clearCachedFrames();
+                cacheBar->setTotalFrames(sequenceFramePaths.size());
+                cacheBar->show();
+            }
+            frameCache->startPrefetch(currentSequenceFrame);
         }
 
         loadSequenceFrame(currentSequenceFrame);
@@ -1937,6 +2022,8 @@ void PreviewOverlay::onColorSpaceChanged(int index)
 void PreviewOverlay::stopPlayback()
 {
     qDebug() << "[PreviewOverlay] Stopping playback";
+
+    // tlRender cleanup removed
 
     // Stop video playback
     if (mediaPlayer->playbackState() == QMediaPlayer::PlayingState) {
@@ -2454,6 +2541,15 @@ void SequenceFrameCache::setSequence(const QStringList &framePaths, OIIOImageLoa
     m_framePaths = framePaths;
     m_colorSpace = colorSpace;
     m_currentFrame = 0;
+    m_windowStart = 0;
+    m_windowEnd = qMax(-1, qMin((int)framePaths.size()-1, m_maxCacheSize-1));
+    m_nextToEnqueue = m_windowStart;
+    // Load optional concurrency setting
+    {
+        QSettings s("AugmentCode", "KAssetManager");
+        int conc = s.value("SequenceCache/PrefetchConcurrency", 4).toInt();
+        m_prefetchConcurrency = qMax(1, conc);
+    }
     qDebug() << "[SequenceFrameCache] Set sequence with" << framePaths.size() << "frames";
 }
 
@@ -2462,6 +2558,8 @@ void SequenceFrameCache::clearCache()
     QMutexLocker locker(&m_mutex);
     m_cache.clear();
     m_pendingFrames.clear();
+    // Notify listeners that cache is empty
+    emit cacheSnapshot(QSet<int>());
 }
 
 QPixmap SequenceFrameCache::getFrame(int frameIndex)
@@ -2522,36 +2620,29 @@ void SequenceFrameCache::setCurrentFrame(int frameIndex)
         // The prefetch will load any missing frames from the new position
     }
 
-    // Only clean up cache if it's getting close to the limit
-    // This prevents aggressive cleanup during normal playback
-    int currentCacheSize = m_cache.count();
-    int cacheThreshold = static_cast<int>(m_maxCacheSize * 0.9); // 90% of max
-
-    if (currentCacheSize >= cacheThreshold) {
-        // Remove frames that are too far behind the current position (sliding window)
-        // Scale the window based on max cache size
-        // Keep 40% of cache behind, 60% ahead for smooth forward playback
-        const int behindWindow = static_cast<int>(m_maxCacheSize * 0.4);
-        const int aheadWindow = static_cast<int>(m_maxCacheSize * 0.6);
-
-        // Remove frames that are outside the window
-        QList<int> keysToRemove;
-        for (int i = 0; i < m_framePaths.size(); ++i) {
-            if (m_cache.contains(i)) {
-                // Remove if too far behind or too far ahead
-                if (i < frameIndex - behindWindow || i > frameIndex + aheadWindow) {
-                    keysToRemove.append(i);
-                }
-            }
+    // Strict sliding window forward: [windowStart .. windowEnd]
+    const int total = m_framePaths.size();
+    const int window = qMin(m_maxCacheSize, total);
+    int desiredStart = qBound(0, frameIndex, qMax(0, total - window));
+    int desiredEnd = qMin(total - 1, desiredStart + window - 1);
+    if (desiredStart != m_windowStart || desiredEnd != m_windowEnd) {
+        m_windowStart = desiredStart;
+        m_windowEnd = desiredEnd;
+        // Ensure next enqueue pointer is at least current frame
+        m_nextToEnqueue = qMax(m_nextToEnqueue, m_windowStart);
+        // Hard-evict anything outside the window to prevent fragmentation
+        QList<int> keys;
+        for (int i = 0; i < total; ++i) {
+            if (m_cache.contains(i) && (i < m_windowStart || i > m_windowEnd)) keys.append(i);
         }
-
-        // Remove old frames
-        for (int key : keysToRemove) {
-            m_cache.remove(key);
+        for (int k : keys) m_cache.remove(k);
+        m_pendingFrames.clear();
+        // Emit fresh snapshot limited to window
+        QSet<int> snap;
+        for (int i = m_windowStart; i <= m_windowEnd; ++i) {
+            if (m_cache.contains(i)) snap.insert(i);
         }
-
-        // Frames removed silently to avoid log spam
-        Q_UNUSED(keysToRemove);
+        emit cacheSnapshot(snap);
     }
 
     m_currentFrame = frameIndex;
@@ -2591,52 +2682,66 @@ void SequenceFrameCache::prefetchFrames(int startFrame)
         return;
     }
 
-    // Pre-fetch frames ahead of current position for smooth playback
-    // Scale prefetch count based on max cache size (60% of cache for forward playback)
-    const int prefetchCount = static_cast<int>(m_maxCacheSize * 0.6);
+    // Strict sequential fill within [m_windowStart..m_windowEnd]
+    const int totalFrames = m_framePaths.size();
+    if (m_windowEnd < m_windowStart || totalFrames == 0) return;
 
-    for (int i = 0; i <= prefetchCount; ++i) {
-        int frameIndex = startFrame + i;
+    // Back up nextToEnqueue to current frame if user seeked backwards
+    if (startFrame < m_nextToEnqueue) m_nextToEnqueue = qMax(m_windowStart, startFrame);
 
-        // Stop if we've reached the end
-        if (frameIndex >= m_framePaths.size()) {
-            break;
-        }
+    int inFlight = m_pendingFrames.size();
+    while (inFlight < m_prefetchConcurrency && m_nextToEnqueue <= m_windowEnd) {
+        const int idx = m_nextToEnqueue;
+        ++m_nextToEnqueue;
+        if (m_cache.contains(idx) || m_pendingFrames.contains(idx)) continue;
+        scheduleFrameIfNeeded(idx, epoch, /*highPriority*/true);
+        ++inFlight;
+    }
+}
 
-        // Skip if already cached or being loaded
-        if (m_cache.contains(frameIndex) || m_pendingFrames.contains(frameIndex)) {
-            continue;
-        }
+bool SequenceFrameCache::isRangeMostlyCached(int start, int end, double threshold) const
+{
+    int total = qMax(0, end - start + 1);
+    if (total == 0) return true;
+    int cached = 0;
+    for (int i=start; i<=end; ++i) {
+        if (m_cache.contains(i)) ++cached;
+    }
+    return (static_cast<double>(cached) / total) >= threshold;
+}
 
-        // Mark as pending
-        m_pendingFrames.insert(frameIndex);
-
-        // Create worker to load frame in background
-        QString framePath = m_framePaths[frameIndex];
-        FrameLoaderWorker *worker = new FrameLoaderWorker(this, frameIndex, framePath, m_colorSpace, epoch);
-
-        // Use Qt::AutoConnection - Qt will automatically choose the right connection type
-        // This ensures proper thread safety without blocking
-        connect(worker, &FrameLoaderWorker::frameLoaded, this, [this](int idx, QPixmap pixmap) {
+void SequenceFrameCache::scheduleFrameIfNeeded(int frameIndex, quint64 epoch, bool highPriority)
+{
+    if (m_cache.contains(frameIndex) || m_pendingFrames.contains(frameIndex) || frameIndex < 0 || frameIndex >= m_framePaths.size()) return;
+    m_pendingFrames.insert(frameIndex);
+    QString framePath = m_framePaths[frameIndex];
+    FrameLoaderWorker *worker = new FrameLoaderWorker(this, frameIndex, framePath, m_colorSpace, epoch);
+    connect(worker, &FrameLoaderWorker::frameLoaded, this, [this](int idx, QPixmap pixmap) {
+        {
             QMutexLocker locker(&m_mutex);
             m_pendingFrames.remove(idx);
-
             if (!pixmap.isNull() && m_prefetchActive) {
-                // Insert into cache
-                int cost = pixmap.width() * pixmap.height() * 4 / 1024; // Cost in KB
-
-                // Check if cache is full before inserting
-                int currentCost = m_cache.totalCost();
-                int maxCost = m_cache.maxCost();
+                int cost = pixmap.width() * pixmap.height() * 4 / 1024; // KB
                 m_cache.insert(idx, new QPixmap(pixmap), cost);
-                emit frameCached(idx);
             } else if (pixmap.isNull()) {
                 qWarning() << "[SequenceFrameCache] Failed to load frame" << idx;
             }
-        }, Qt::AutoConnection);
-
-        m_threadPool->start(worker);
-    }
+        }
+        emit frameCached(idx);
+        // Optional: emit a throttled snapshot for accurate UI; keep cheap by limiting to window
+        {
+            QSet<int> snap;
+            QMutexLocker locker(&m_mutex);
+            for (int i = m_windowStart; i <= m_windowEnd; ++i) {
+                if (m_cache.contains(i)) snap.insert(i);
+            }
+            locker.unlock();
+            emit cacheSnapshot(snap);
+        }
+        // Queue more work to respect concurrency limit
+        QMetaObject::invokeMethod(this, [this](){ prefetchFrames(m_currentFrame); }, Qt::QueuedConnection);
+    }, Qt::AutoConnection);
+    m_threadPool->start(worker, highPriority ? QThread::HighestPriority : QThread::LowPriority);
 }
 
 QPixmap SequenceFrameCache::loadFrame(int frameIndex)
