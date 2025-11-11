@@ -135,6 +135,7 @@ private slots:
     void onFmShowContextMenu(const QPoint &pos);
     void onFmBackToParent();
     void onFmRefresh();
+    void onFmLightRefresh();
     void onFmGroupSequencesToggled(bool checked);
     void onFmHideFoldersToggled(bool checked);
 

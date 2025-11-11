@@ -125,7 +125,7 @@ namespace {
 QHash<QString, QString> g_lastPreviewError;
 
 constexpr qreal kScrubDefaultPosition = 0.0;
-constexpr int kPreviewInset = 8;
+constexpr int kPreviewInset = 1; // minimize border between thumbnail and preview
 
 QRect insetPreviewRect(const QRect &source)
 {
@@ -899,31 +899,19 @@ public:
     {
         painter->save();
 
-        // Outline on hover/selection only
+        // Outline on hover/selection only (no card fill to minimize borders)
         const bool isSelected = option.state & QStyle::State_Selected;
         const bool isHovered = option.state & QStyle::State_MouseOver;
-        const QRect cardRect = option.rect.adjusted(2, 2, -2, -2);
-        QColor baseColor(26, 26, 26);
-        QColor hoverColor(38, 38, 38);
-        QColor selectedColor(62, 90, 140);
-        QColor cardColor = baseColor;
-        if (isSelected) {
-            cardColor = selectedColor;
-        } else if (isHovered) {
-            cardColor = hoverColor;
-        }
-        painter->setPen(Qt::NoPen);
-        painter->setBrush(cardColor);
-        painter->drawRoundedRect(cardRect, 6, 6);
+        // Do not draw background card to keep layout as compact as possible
 
         if (isSelected || isHovered) {
             QColor c = isSelected ? QColor(88,166,255) : QColor(80,80,80);
-            painter->setPen(QPen(c, 1.5));
+            painter->setPen(QPen(c, 1));
             painter->setBrush(Qt::NoBrush);
-            painter->drawRect(option.rect.adjusted(1, 1, -1, -1));
+            painter->drawRect(option.rect.adjusted(0, 0, -1, -1));
         }
 
-        const int margin = 2; // Reduced margin for tighter layout
+        const int margin = 1; // Minimal margin for tighter layout
         const int thumbSide = m_thumbnailSize;
         QRect thumbRect(option.rect.x() + (option.rect.width()-thumbSide)/2, option.rect.y() + margin, thumbSide, thumbSide);
         const QString filePath = index.data(QFileSystemModel::FilePathRole).toString();
@@ -938,8 +926,8 @@ public:
             // Draw folder icon using Qt's standard folder icon
             QIcon folderIcon = option.widget->style()->standardIcon(QStyle::SP_DirIcon);
             QRect iconRect = insetPreviewRect(thumbRect);
-            // Scale icon to fit nicely in the preview area (80% of available space)
-            int iconSize = qMin(iconRect.width(), iconRect.height()) * 0.8;
+            // Scale icon to fit within the preview area with minimal padding
+            int iconSize = qMin(iconRect.width(), iconRect.height());
             QRect centeredIconRect(
                 iconRect.x() + (iconRect.width() - iconSize) / 2,
                 iconRect.y() + (iconRect.height() - iconSize) / 2,
@@ -979,8 +967,8 @@ public:
             QIcon fileIcon = getFileTypeIcon(suffix);
 
             QRect iconRect = insetPreviewRect(thumbRect);
-            // Scale icon to fit nicely in the preview area (60% of available space)
-            int iconSize = qMin(iconRect.width(), iconRect.height()) * 0.6;
+            // Fit icon within preview area
+            int iconSize = qMin(iconRect.width(), iconRect.height());
             QRect centeredIconRect(
                 iconRect.x() + (iconRect.width() - iconSize) / 2,
                 iconRect.y() + (iconRect.height() - iconSize) / 2,
@@ -994,10 +982,10 @@ public:
         QFont f("Segoe UI", 9);
         painter->setFont(f);
         painter->setPen(QColor(230,230,230));
-        const int textTop = thumbRect.bottom() - 2; // Start slightly overlapping thumbnail area
-        int textHeight = option.rect.bottom() - textTop; // Use all remaining space
-        if (textHeight < 35) textHeight = 35; // Ensure at least 2 lines
-        QRect nameRect(option.rect.x() + 4, textTop, option.rect.width() - 8, textHeight);
+        const int textTop = thumbRect.bottom() + 3; // 3px below image inside the thumbnail
+        int textHeight = option.rect.bottom() - textTop; // Use remaining space
+        if (textHeight < 24) textHeight = 24; // Ensure at least a couple lines with compact spacing
+        QRect nameRect(option.rect.x() + 2, textTop, option.rect.width() - 4, textHeight);
 
         // Draw text with word wrapping instead of eliding
         painter->drawText(nameRect, Qt::AlignHCenter | Qt::AlignTop | Qt::TextWordWrap, name);
@@ -1014,8 +1002,8 @@ public:
         QFont f("Segoe UI", 9);
         QFontMetrics fm(f);
 
-        // Calculate text area width (card width minus margins)
-        int textWidth = m_thumbnailSize + 24 - 8; // grid width minus horizontal margins
+        // Calculate text area width (cell width minus margins)
+        int textWidth = m_thumbnailSize + 8 - 4; // grid width minus horizontal margins
 
         // Calculate how many lines the text will need
         QRect boundingRect = fm.boundingRect(QRect(0, 0, textWidth, 1000),
@@ -1023,11 +1011,10 @@ public:
                                              name);
         int textHeight = boundingRect.height();
 
-        // Total height: thumbnail + margins + text height
-        // Text starts slightly overlapping: top(6) + thumbnail - overlap(2) + text + extra padding(10)
-        int totalHeight = m_thumbnailSize + 6 - 2 + textHeight + 10;
+        // Total height: thumbnail + gap(3) + text + bottom padding(4)
+        int totalHeight = m_thumbnailSize + 3 + textHeight + 4;
 
-        return QSize(m_thumbnailSize + 24, totalHeight);
+        return QSize(m_thumbnailSize + 8, totalHeight);
     }
 
 private:
@@ -1810,9 +1797,10 @@ MainWindow::MainWindow(QWidget *parent)
     // File Manager auto-refresh: watch current directory and debounce refreshes
     fmDirectoryWatcher = new QFileSystemWatcher(this);
     fmDirChangeTimer.setSingleShot(true);
-    connect(&fmDirChangeTimer, &QTimer::timeout, this, &MainWindow::onFmRefresh);
+    // Light refresh on FS events to avoid flicker and massive re-requests
+    connect(&fmDirChangeTimer, &QTimer::timeout, this, &MainWindow::onFmLightRefresh);
     connect(fmDirectoryWatcher, &QFileSystemWatcher::directoryChanged,
-            this, [this](const QString&){ fmDirChangeTimer.start(200); });
+            this, [this](const QString&){ fmDirChangeTimer.start(1200); });
 
     visibleThumbTimer.setSingleShot(true);
     connect(&visibleThumbTimer, &QTimer::timeout, this, &MainWindow::updateVisibleThumbProgress);
@@ -2896,7 +2884,7 @@ void MainWindow::setupFileManagerUi()
     fmGridView->setModel(fmProxyModel);
     fmGridView->setViewMode(QListView::IconMode);
     fmGridView->setResizeMode(QListView::Adjust);
-    fmGridView->setSpacing(4);
+    fmGridView->setSpacing(1); // minimize empty space between thumbnails
     // Don't use uniform item sizes since text wrapping creates variable heights
     fmGridView->setUniformItemSizes(false);
     fmGridView->setSelectionMode(QAbstractItemView::ExtendedSelection);
@@ -2911,7 +2899,7 @@ void MainWindow::setupFileManagerUi()
         int fmThumb = s.value("FileManager/GridThumbSize", 120).toInt();
         d->setThumbnailSize(fmThumb);
         fmGridView->setIconSize(QSize(fmThumb, fmThumb));
-        fmGridView->setGridSize(QSize(fmThumb + 24, fmThumb + 40));
+        fmGridView->setGridSize(QSize(fmThumb + 8, fmThumb + 36));
         if (fmThumbnailSizeSlider) fmThumbnailSizeSlider->setValue(fmThumb);
     }
     fmGridView->setStyleSheet("QListView { background-color: #0a0a0a; border: none; }");
@@ -3713,7 +3701,8 @@ void MainWindow::onFmItemDoubleClicked(const QModelIndex &index)
         if (!frames.isEmpty()) {
             if (!previewOverlay) {
                 previewOverlay = new PreviewOverlay(this);
-                previewOverlay->setGeometry(rect());
+                // Center overlay to the app window instead of screen top-left
+                previewOverlay->setGeometry(geometry());
                 connect(previewOverlay, &PreviewOverlay::closed, this, &MainWindow::closePreview);
                 connect(previewOverlay, &PreviewOverlay::navigateRequested, this, &MainWindow::changePreview);
             } else {
@@ -3745,7 +3734,8 @@ void MainWindow::onFmItemDoubleClicked(const QModelIndex &index)
     if (isImageFile(ext) || isVideoFile(ext)) {
         if (!previewOverlay) {
             previewOverlay = new PreviewOverlay(this);
-            previewOverlay->setGeometry(rect());
+            // Center overlay to the app window instead of screen top-left
+            previewOverlay->setGeometry(geometry());
             connect(previewOverlay, &PreviewOverlay::closed, this, &MainWindow::closePreview);
             connect(previewOverlay, &PreviewOverlay::navigateRequested, this, &MainWindow::changePreview);
         } else {
@@ -3913,7 +3903,8 @@ void MainWindow::onFmRefresh()
         return;
     }
 
-    // Clear any cached thumbnails for this directory
+    // Manual refresh: optionally clear preview cache for a full rebuild
+    // Note: Do NOT clear cache on automatic (watcher) refreshes to avoid flicker
     LivePreviewManager::instance().clear();
 
     // Force QFileSystemModel to re-read the directory
@@ -3941,6 +3932,14 @@ void MainWindow::onFmRefresh()
     }
 
     statusBar()->showMessage("Folder refreshed", 2000);
+}
+
+// Lightweight refresh used by QFileSystemWatcher; avoid heavy model resets
+void MainWindow::onFmLightRefresh()
+{
+    if (fmGridView && fmGridView->viewport()) fmGridView->viewport()->update();
+    if (fmListView && fmListView->viewport()) fmListView->viewport()->update();
+    // Do not rebuild models, clear caches, or flip root paths here.
 }
 
 void MainWindow::onFmRename()
@@ -4409,7 +4408,7 @@ void MainWindow::onFmThumbnailSizeChanged(int size)
 {
     if (fmGridView) {
         fmGridView->setIconSize(QSize(size, size));
-        fmGridView->setGridSize(QSize(size + 24, size + 40));
+        fmGridView->setGridSize(QSize(size + 8, size + 36));
         if (auto *d = dynamic_cast<FmItemDelegate*>(fmGridView->itemDelegate())) d->setThumbnailSize(size);
         // Trigger viewport update without resetting view state (which would clear root index)
         fmGridView->viewport()->update();
@@ -5035,6 +5034,29 @@ void MainWindow::showPreview(int index)
     previewIndex = index;
     QModelIndex modelIndex = assetsModel->index(index, 0);
 
+    // Keep underlying selection in sync while navigating in overlay
+    // so that when the overlay is closed, the last-viewed item is already selected.
+    if (assetGridView && assetGridView->model() == assetsModel) {
+        if (QItemSelectionModel* sel = assetGridView->selectionModel()) {
+            sel->setCurrentIndex(modelIndex, QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+        } else {
+            assetGridView->setCurrentIndex(modelIndex);
+        }
+        assetGridView->scrollTo(modelIndex, QAbstractItemView::PositionAtCenter);
+    }
+    if (assetTableView && assetTableView->model()) {
+        // Table view may use a different model; fall back to row index
+        QModelIndex tIdx = assetTableView->model()->index(index, 0);
+        if (tIdx.isValid()) {
+            if (QItemSelectionModel* sel = assetTableView->selectionModel()) {
+                sel->setCurrentIndex(tIdx, QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+            } else {
+                assetTableView->setCurrentIndex(tIdx);
+            }
+            assetTableView->scrollTo(tIdx, QAbstractItemView::PositionAtCenter);
+        }
+    }
+
     QString filePath = modelIndex.data(AssetsModel::FilePathRole).toString();
     QString fileName = modelIndex.data(AssetsModel::FileNameRole).toString();
     QString fileType = modelIndex.data(AssetsModel::FileTypeRole).toString();
@@ -5042,7 +5064,8 @@ void MainWindow::showPreview(int index)
 
     if (!previewOverlay) {
         previewOverlay = new PreviewOverlay(this);
-        previewOverlay->setGeometry(rect());
+        // Center overlay to the app window instead of screen top-left
+        previewOverlay->setGeometry(geometry());
 
         connect(previewOverlay, &PreviewOverlay::closed, this, &MainWindow::closePreview);
         connect(previewOverlay, &PreviewOverlay::navigateRequested, this, &MainWindow::changePreview);
@@ -8335,7 +8358,8 @@ void MainWindow::onFmOpenOverlay()
         if (!frames.isEmpty()) {
             if (!previewOverlay) {
                 previewOverlay = new PreviewOverlay(this);
-                previewOverlay->setGeometry(rect());
+                // Center overlay to the app window instead of screen top-left
+                previewOverlay->setGeometry(geometry());
                 connect(previewOverlay, &PreviewOverlay::closed, this, &MainWindow::closePreview);
                 connect(previewOverlay, &PreviewOverlay::navigateRequested, this, &MainWindow::changeFmPreview);
             } else {
@@ -8362,7 +8386,8 @@ void MainWindow::onFmOpenOverlay()
     if (!info.exists()) return;
     if (!previewOverlay) {
         previewOverlay = new PreviewOverlay(this);
-        previewOverlay->setGeometry(rect());
+        // Center overlay to the app window instead of screen top-left
+        previewOverlay->setGeometry(geometry());
         connect(previewOverlay, &PreviewOverlay::closed, this, &MainWindow::closePreview);
         connect(previewOverlay, &PreviewOverlay::navigateRequested, this, &MainWindow::changeFmPreview);
     } else {

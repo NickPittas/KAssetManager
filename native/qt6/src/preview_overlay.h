@@ -419,6 +419,9 @@ private:
     // Alpha channel toggle state
     bool alphaOnlyMode = false;
     bool previewHasAlpha = false;
+
+    // Fit-to-window staging flag so we only run expensive fit once
+    bool fitPending = false;
 };
 
 // ============================================================================

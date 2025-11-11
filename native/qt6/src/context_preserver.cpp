@@ -1,5 +1,8 @@
 #include "context_preserver.h"
 #include <QDebug>
+#include <QMetaType>
+#include <QList>
+#include <QDataStream>
 
 ContextPreserver& ContextPreserver::instance() {
     static ContextPreserver s;
@@ -9,6 +12,13 @@ ContextPreserver& ContextPreserver::instance() {
 ContextPreserver::ContextPreserver(QObject* parent)
     : QObject(parent)
 {
+    // Register legacy type used in older settings to avoid QVariant::load warnings
+    // Keys "SelectedTagIds" and "SelectedAssetIds" previously stored as QVariant(QList<int>).
+    // This registration lets Qt deserialize existing values so we can migrate them.
+    // Register legacy type name so QSettings can deserialize existing values.
+    // In Qt 6 the free function qRegisterMetaTypeStreamOperators was removed;
+    // stream operators for QList<int> are already available via templates.
+    qRegisterMetaType<QList<int>>("QList<int>");
     m_settings = new QSettings("AugmentCode", "KAssetManager", this);
 }
 
@@ -37,13 +47,17 @@ void ContextPreserver::saveFolderContext(int folderId, const FolderContext& cont
     s->setValue("SortOrder", static_cast<int>(context.sortOrder));
     s->setValue("RecursiveMode", context.recursiveMode);
     
-    // Save selected tag IDs
-    QList<int> tagIdList = context.selectedTagIds.values();
-    s->setValue("SelectedTagIds", QVariant::fromValue(tagIdList));
-    
-    // Save selected asset IDs
-    QList<int> assetIdList = context.selectedAssetIds.values();
-    s->setValue("SelectedAssetIds", QVariant::fromValue(assetIdList));
+    // Save selected tag IDs (store as QVariantList of ints for portability)
+    QVariantList tagList;
+    tagList.reserve(context.selectedTagIds.size());
+    for (int id : context.selectedTagIds) tagList.push_back(id);
+    s->setValue("SelectedTagIds", tagList);
+
+    // Save selected asset IDs (store as QVariantList of ints)
+    QVariantList assetList;
+    assetList.reserve(context.selectedAssetIds.size());
+    for (int id : context.selectedAssetIds) assetList.push_back(id);
+    s->setValue("SelectedAssetIds", assetList);
     
     s->endGroup();
     s->sync();
@@ -71,13 +85,39 @@ ContextPreserver::FolderContext ContextPreserver::loadFolderContext(int folderId
     context.sortOrder = static_cast<Qt::SortOrder>(s->value("SortOrder", Qt::AscendingOrder).toInt());
     context.recursiveMode = s->value("RecursiveMode", false).toBool();
     
-    // Load selected tag IDs
-    QList<int> tagIdList = s->value("SelectedTagIds").value<QList<int>>();
-    context.selectedTagIds = QSet<int>(tagIdList.begin(), tagIdList.end());
-    
-    // Load selected asset IDs
-    QList<int> assetIdList = s->value("SelectedAssetIds").value<QList<int>>();
-    context.selectedAssetIds = QSet<int>(assetIdList.begin(), assetIdList.end());
+    // Load selected tag IDs (prefer QVariantList; fall back to legacy QList<int>)
+    if (s->contains("SelectedTagIds")) {
+        QVariant v = s->value("SelectedTagIds");
+        QSet<int> out;
+        if (v.canConvert<QVariantList>()) {
+            const QVariantList lst = v.toList();
+            for (const QVariant& qv : lst) out.insert(qv.toInt());
+        } else {
+            // Legacy path
+            QList<int> legacy = v.value<QList<int>>();
+            out = QSet<int>(legacy.begin(), legacy.end());
+            // Migrate by re-saving in the new format
+            QVariantList asList; for (int id : out) asList.push_back(id);
+            s->setValue("SelectedTagIds", asList);
+        }
+        context.selectedTagIds = out;
+    }
+
+    // Load selected asset IDs (prefer QVariantList; fall back to legacy QList<int>)
+    if (s->contains("SelectedAssetIds")) {
+        QVariant v = s->value("SelectedAssetIds");
+        QSet<int> out;
+        if (v.canConvert<QVariantList>()) {
+            const QVariantList lst = v.toList();
+            for (const QVariant& qv : lst) out.insert(qv.toInt());
+        } else {
+            QList<int> legacy = v.value<QList<int>>();
+            out = QSet<int>(legacy.begin(), legacy.end());
+            QVariantList asList; for (int id : out) asList.push_back(id);
+            s->setValue("SelectedAssetIds", asList);
+        }
+        context.selectedAssetIds = out;
+    }
     
     s->endGroup();
     

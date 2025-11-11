@@ -26,6 +26,11 @@
 #endif
 #include <QFontDatabase>
 #include <QTextOption>
+#if __has_include(<QOpenGLWidget>)
+#  include <QOpenGLWidget>
+#  define KAM_HAVE_QOPENGLWIDGET 1
+#endif
+#include <QElapsedTimer>
 
 #include <QVector>
 #include <QSettings>
@@ -93,6 +98,8 @@ public slots:
     void start() {
         if (!open()) { emit finished(); return; }
         const double intervalMs = m_fps > 0.0 ? (1000.0 / m_fps) : (1000.0 / 24.0);
+        QElapsedTimer wall; wall.start();
+        qint64 lastWallMs = wall.elapsed();
         AVPacket pkt; av_init_packet(&pkt);
         const uint8_t sig[8] = {0x89, 'P','N','G', 0x0D, 0x0A, 0x1A, 0x0A};
         qint64 lastPtsMs = 0;
@@ -136,8 +143,21 @@ public slots:
                         }
                         lastPtsMs = ptsMs;
                         emit frameReady(img, ptsMs);
-                        // Pace roughly to FPS; keep it simple
-                        QThread::msleep(static_cast<unsigned long>(intervalMs));
+                        // Pace to the media clock using PTS when available
+                        qint64 frameDelta = (lastPtsMs > 0) ? (ptsMs - lastPtsMs) : static_cast<qint64>(intervalMs);
+                        if (frameDelta <= 0) frameDelta = static_cast<qint64>(intervalMs);
+                        qint64 target = lastWallMs + frameDelta;
+                        qint64 now = wall.elapsed();
+                        if (!m_paused) {
+                            if (target > now) {
+                                QThread::msleep(static_cast<unsigned long>(target - now));
+                                lastWallMs = target;
+                            } else {
+                                lastWallMs = now;
+                            }
+                        } else {
+                            lastWallMs = now;
+                        }
                     }
                 }
             }
@@ -349,9 +369,17 @@ void PreviewOverlay::setupUi()
 
     // Image view with zoom/pan support (for images and videos)
     imageView = new QGraphicsView(this);
+#ifdef KAM_HAVE_QOPENGLWIDGET
+    // Use OpenGL-backed viewport for smoother video/image scaling when available
+    imageView->setViewport(new QOpenGLWidget());
+// else: fall back to default raster viewport
+#endif
     imageScene = new QGraphicsScene(this);
     imageView->setScene(imageScene);
     imageView->setStyleSheet("QGraphicsView { background-color: #000000; border: none; }");
+    imageView->setRenderHints(QPainter::SmoothPixmapTransform | QPainter::TextAntialiasing);
+    imageView->setViewportUpdateMode(QGraphicsView::SmartViewportUpdate);
+    imageView->setOptimizationFlags(QGraphicsView::DontSavePainterState);
     imageView->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     imageView->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     imageView->setDragMode(QGraphicsView::ScrollHandDrag);
@@ -373,6 +401,7 @@ void PreviewOverlay::setupUi()
             imageScene->setSceneRect(videoItem->boundingRect());
             imageView->fitInView(videoItem, Qt::KeepAspectRatio);
             currentZoom = imageView->transform().m11(); // Store the fit-to-view zoom level
+            fitPending = false;
         }
     });
     // Don't add to scene yet - will be added when showing video
@@ -821,8 +850,10 @@ void PreviewOverlay::showImage(const QString &filePath)
         // Update scene rect
         imageScene->setSceneRect(newPixmap.rect());
 
-        // Fit to view
+        // Fit to view once on first frame for this media
+        fitPending = true;
         fitImageToView();
+        fitPending = false;
 
         // CRITICAL: Force complete view refresh
         imageView->viewport()->update();
@@ -923,11 +954,12 @@ void PreviewOverlay::showVideo(const QString &filePath)
     }
 
     originalPixmap = QPixmap(); // Clear the pixmap
+    fitPending = true; // next size-known signal will fit; avoid repeated fit calls
 
     mediaPlayer->setSource(QUrl::fromLocalFile(filePath));
 
     // Video will be rendered through videoItem which is already in the scene
-    // Reset zoom to fit video in view
+    // Reset zoom; fit will occur when native size is known / media is loaded
     currentZoom = 1.0;
     imageView->resetTransform();
 
@@ -1610,6 +1642,7 @@ void PreviewOverlay::showSequence(const QStringList &framePaths, const QString &
     controlsWidget->show();
     // Disable audio controls for image sequences (no audio)
     if (muteBtn) { muteBtn->setEnabled(false); muteBtn->setIcon(noAudioIcon); }
+    fitPending = true; // ensure first loaded frame fits once
     if (volumeSlider) volumeSlider->setEnabled(false);
 
 
@@ -2048,9 +2081,23 @@ void PreviewOverlay::onPlayerError(QMediaPlayer::Error error, const QString &err
 
 void PreviewOverlay::onMediaStatusChanged(QMediaPlayer::MediaStatus status)
 {
-    Q_UNUSED(status);
     // Update FPS when metadata becomes available
     updateDetectedFps();
+
+    // Ensure newly loaded videos are fit to the current overlay window
+    // when stepping between items or when media finishes loading.
+    if (isVideo && imageView && videoItem && videoItem->scene() == imageScene) {
+        switch (status) {
+        case QMediaPlayer::LoadedMedia:
+        case QMediaPlayer::BufferedMedia:
+            imageScene->setSceneRect(videoItem->boundingRect());
+            imageView->fitInView(videoItem, Qt::KeepAspectRatio);
+            currentZoom = imageView->transform().m11();
+            break;
+        default:
+            break;
+        }
+    }
 }
 
 void PreviewOverlay::onFallbackFrameReady(const QImage &image, qint64 ptsMs)
@@ -2069,10 +2116,14 @@ void PreviewOverlay::onFallbackFrameReady(const QImage &image, qint64 ptsMs)
 
     if (!imageItem) {
         imageItem = imageScene->addPixmap(originalPixmap);
+        // Fit exactly once for the new media to avoid per-frame jank
+        if (fitPending) {
+            fitImageToView();
+            fitPending = false;
+        }
     } else {
         imageItem->setPixmap(originalPixmap);
     }
-    fitImageToView();
 
     // Update UI time/slider
     if (fallbackDurationMs > 0) {
