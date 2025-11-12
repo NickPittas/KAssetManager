@@ -9,6 +9,16 @@
 #include <QtConcurrent/QtConcurrent>
 #include <QCoreApplication>
 #include <QSettings>
+#include <QTimer>
+#include <QEventLoop>
+#include <QStandardPaths>
+#include <QMutex>
+#include <QMutexLocker>
+#include <QRecursiveMutex>
+#include <QThreadPool>
+#include <QThread>
+#include <QObject>
+#include <QDateTime>
 #include <algorithm>
 #include <cmath>
 
@@ -17,10 +27,6 @@ extern "C" {
 #include <libavformat/avio.h>
 #include <libavutil/error.h>
 #include <libavutil/hwcontext.h>
-#include <libavutil/hwcontext_cuda.h>
-#include <libavutil/hwcontext_d3d11va.h>
-#include <libavutil/hwcontext_videotoolbox.h>
-#include <libavutil/hwcontext_vaapi.h>
 }
 #endif
 
@@ -507,8 +513,7 @@ bool FFmpegPlayer::initializeHardwareContext()
 {
 #if !defined(HAVE_FFMPEG) || !HAVE_FFMPEG
     return false;
-#endif
-    
+#else
     if (!m_enableHardwareAcceleration || m_mediaInfo.supportedAccelerations.isEmpty()) {
         return false;
     }
@@ -549,6 +554,7 @@ bool FFmpegPlayer::initializeHardwareContext()
     
     qInfo() << "[FFmpegPlayer] Failed to initialize any hardware acceleration, using software decoding";
     return false;
+#endif
 }
 
 void FFmpegPlayer::cleanupHardwareContext()
@@ -967,7 +973,7 @@ void FFmpegPlayer::evictLRUEntries()
     });
     
     // Remove oldest 25% of entries
-    int toRemove = std::max(1, m_frameCache.size() / 4);
+    int toRemove = std::max(1, static_cast<int>(m_frameCache.size() / 4));
     for (int i = 0; i < toRemove && i < keys.size(); ++i) {
         CacheEntry& entry = m_frameCache[keys[i]];
         m_currentMemoryUsage -= entry.compressedSize;
@@ -986,6 +992,3 @@ void FFmpegPlayer::startPrefetch()
         prefetchSequenceFrames(0);
     }
 }
-
-// Include MOC file for Qt meta-object compiler
-#include "ffmpeg_player.moc"

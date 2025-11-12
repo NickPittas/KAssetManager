@@ -40,6 +40,7 @@
 
 
 #include "oiio_image_loader.h"
+#include "media/ffmpeg_player.h"
 
 // Forward declarations
 class SequenceFrameCache;
@@ -289,8 +290,12 @@ private slots:
     void onColorSpaceChanged(int index);
     void onPlayerError(QMediaPlayer::Error error, const QString &errorString);
     void onMediaStatusChanged(QMediaPlayer::MediaStatus status);
-    void onFallbackFrameReady(const QImage &image, qint64 ptsMs);
-    void onFallbackFinished();
+
+    // FFmpegPlayer signal handlers
+    void onFFmpegFrameReady(const FFmpegPlayer::VideoFrame& frame);
+    void onFFmpegMediaInfo(const FFmpegPlayer::MediaInfo& info);
+    void onFFmpegPlaybackState(FFmpegPlayer::PlaybackState state);
+    void onFFmpegError(const QString& errorString);
 
 private:
     void setupUi();
@@ -316,8 +321,6 @@ private:
     void playSequence();
     void pauseSequence();
     void stopSequence();
-    void startFallbackVideo(const QString &filePath);
-    void stopFallbackVideo();
     // Seeking helpers
     double frameDurationMs() const; // based on detectedFps (from metadata) or fallbackFps
     void updateDetectedFps();
@@ -405,14 +408,6 @@ private:
     SequenceFrameCache *frameCache;
     bool useCacheForSequences; // Flag to enable/disable cache (disabled by default)
 
-    // Fallback (software) video playback state for unsupported codecs (e.g., PNG-in-MOV)
-    bool usingFallbackVideo = false;
-    class FallbackPngMovReader; // defined in .cpp
-    FallbackPngMovReader* fallbackReader = nullptr;
-    QThread* fallbackThread = nullptr;
-    qint64 fallbackDurationMs = 0;
-    double fallbackFps = 0.0;
-    bool fallbackPaused = false;
 
     // Color space for HDR/EXR images
     OIIOImageLoader::ColorSpace currentColorSpace;
@@ -435,6 +430,8 @@ private:
     QSize lastFrameSize; // track to avoid resetting scene rect
 
     // Cache bar update throttle
+    // Unified FFmpegPlayer for video and image sequence playback
+    FFmpegPlayer* m_ffmpegPlayer = nullptr;
     QElapsedTimer cacheBarUpdateTimer;
 
 };

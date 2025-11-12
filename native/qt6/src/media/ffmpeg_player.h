@@ -8,6 +8,8 @@
 #include <QMutex>
 #include <QTimer>
 #include <QElapsedTimer>
+#include <QHash>
+#include <QSet>
 #include <memory>
 #include <atomic>
 
@@ -104,6 +106,9 @@ public:
     void nextFrame();
     void previousFrame();
     
+    // Direct frame decoding (for external integration)
+    VideoFrame decodeVideoFrame(qint64 targetMs, Quality quality = Quality::Full);
+    
     // Getters
     PlaybackState playbackState() const { return m_playbackState.load(); }
     MediaInfo mediaInfo() const;
@@ -111,7 +116,13 @@ public:
     qint64 duration() const { return m_duration.load(); }
     int currentFrame() const { return m_currentFrame.load(); }
     int totalFrames() const { return m_totalFrames.load(); }
-    bool isHardwareAccelerated() const { return m_hardwareAcceleration && m_hwContext != nullptr; }
+    bool isHardwareAccelerated() const {
+#if defined(HAVE_FFMPEG) && HAVE_FFMPEG
+        return m_hardwareAcceleration && m_hwContext != nullptr;
+#else
+        return false;
+#endif
+    }
     
     // Configuration
     void setHardwareAcceleration(bool enabled) { m_enableHardwareAcceleration = enabled; }
@@ -143,8 +154,7 @@ private:
     StreamType detectStreamType(const QString& filePath);
     MediaInfo probeMediaInfo(const QString& filePath);
     
-    // Decoding methods
-    VideoFrame decodeVideoFrame(qint64 targetMs, Quality quality = Quality::Full);
+    // Decoding methods (public for external integration)
     VideoFrame decodeSequenceFrame(int frameIndex, Quality quality = Quality::Full);
     VideoFrame decodeFrameWithFFmpeg(qint64 targetMs, const QString& filePath);
     
@@ -159,6 +169,9 @@ private:
     void prefetchVideoFrames(int currentFrame);
     VideoFrame getCachedFrame(qint64 timestampMs, int frameIndex);
     void cacheFrame(const VideoFrame& frame, qint64 timestampMs, int frameIndex);
+    bool isFrameInCache(qint64 timestampMs, int frameIndex) const;
+    void evictLRUEntries();
+    void startPrefetch();
     
     // Utility
     QString getFFmpegErrorString(int errorCode) const;
@@ -166,6 +179,7 @@ private:
     QString sequenceHead(const QString& filePath) const;
 
     // RAII wrappers for FFmpeg resources
+#if defined(HAVE_FFMPEG) && HAVE_FFMPEG
     struct AvFormatCtxDeleter {
         void operator()(AVFormatContext* p) const {
             if (p) avformat_close_input(&p);
@@ -195,6 +209,7 @@ private:
             if (p) sws_freeContext(p);
         }
     };
+#endif
 
     // State
     std::atomic<PlaybackState> m_playbackState{PlaybackState::Stopped};

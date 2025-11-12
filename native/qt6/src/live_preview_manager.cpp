@@ -20,10 +20,9 @@
 extern "C" {
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
-#include <libswscale/swscale.h>
-#include <libavutil/imgutils.h>
-#include <libavutil/avutil.h>
 #include <libavutil/error.h>
+#include <libavutil/frame.h>
+#include <libswscale/swscale.h>
 }
 #endif
 
@@ -102,23 +101,19 @@ LivePreviewManager::LivePreviewManager(QObject* parent)
     // tlRender is not integrated; we use OIIO for images + Qt for presentation
     qInfo() << "[LivePreview] Renderer backend:" << "OIIO+Qt (no tlRender)";
 #endif
-#if defined(HAVE_FFMPEG) && HAVE_FFMPEG
-    av_log_set_level(AV_LOG_ERROR);
-    static bool s_loggedVersion = false;
-    if (!s_loggedVersion) {
-        const unsigned version = avcodec_version();
-        const unsigned major = AV_VERSION_MAJOR(version);
-        const unsigned minor = AV_VERSION_MINOR(version);
-        const unsigned micro = AV_VERSION_MICRO(version);
-        qInfo() << "[LivePreview] FFmpeg version"
-                << QStringLiteral("%1.%2.%3").arg(major).arg(minor).arg(micro)
-                << QString::fromUtf8(avcodec_configuration());
-        s_loggedVersion = true;
-    }
-#endif
     // Initialize QCache capacity based on default setting
     m_cache.setMaxCost(m_maxCacheEntries);
     m_sequenceMetaCache.setMaxCost(m_sequenceMetaLimit);
+    
+    // Initialize unified FFmpeg player
+    m_ffmpegPlayer = std::make_unique<FFmpegPlayer>(this);
+    
+    // Connect to FFmpegPlayer signals for unified video/image sequence playback
+    connect(m_ffmpegPlayer.get(), &FFmpegPlayer::frameReady, this, &LivePreviewManager::onFFmpegFrameReady);
+    connect(m_ffmpegPlayer.get(), &FFmpegPlayer::error, this, &LivePreviewManager::onFFmpegError);
+    connect(m_ffmpegPlayer.get(), &FFmpegPlayer::cacheStatus, this, &LivePreviewManager::cacheStatus);
+    
+    qInfo() << "[LivePreview] Unified FFmpegPlayer initialized with hardware acceleration";
 }
 
 LivePreviewManager::FrameHandle LivePreviewManager::cachedFrame(const QString& filePath, const QSize& targetSize, qreal position)
@@ -599,156 +594,192 @@ QImage LivePreviewManager::loadSequenceFrame(const Request& request, QString& er
 
 QImage LivePreviewManager::loadVideoFrame(const Request& request, QString& error)
 {
-#if !defined(HAVE_FFMPEG) || !HAVE_FFMPEG
-    Q_UNUSED(request);
-    error = QStringLiteral("FFmpeg support not available");
-    return {};
-#else
-    static bool ffmpegInit = false;
-    if (!ffmpegInit) {
-        av_log_set_level(AV_LOG_ERROR);
-        ffmpegInit = true;
+#if defined(HAVE_FFMPEG) && HAVE_FFMPEG
+    // For thumbnail generation, we need synchronous decoding
+    // DO NOT use m_ffmpegPlayer which is designed for async preview playback
+    // Instead, use direct FFmpeg calls with a temporary context
+    
+    QFileInfo info(request.filePath);
+    if (!info.exists()) {
+        error = QStringLiteral("File does not exist");
+        return {};
     }
-
-    // RAII deleters for FFmpeg resources
-    struct AvFormatCtxDeleter { void operator()(AVFormatContext* p) const { if (p) avformat_close_input(&p); } };
-    struct AvCodecCtxDeleter  { void operator()(AVCodecContext* p) const { if (p) avcodec_free_context(&p); } };
-    struct AvPacketDeleter    { void operator()(AVPacket* p) const { if (p) av_packet_free(&p); } };
-    struct AvFrameDeleter     { void operator()(AVFrame* p) const { if (p) av_frame_free(&p); } };
-    struct SwsCtxDeleter      { void operator()(SwsContext* p) const { if (p) sws_freeContext(p); } };
-
+    
+    qDebug() << "[LivePreview] Decoding video thumbnail:" << request.filePath << "position:" << request.position;
+    
+    // Open video file with FFmpeg
+    AVFormatContext* fmtCtx = nullptr;
     QByteArray localPath = QFile::encodeName(request.filePath);
-    AVFormatContext* fmtRaw = nullptr;
-    int openResult = avformat_open_input(&fmtRaw, localPath.constData(), nullptr, nullptr);
-    if (openResult < 0) {
-        error = QStringLiteral("avformat_open_input failed: %1").arg(ffmpegErrorString(openResult));
+    
+    int openRet = avformat_open_input(&fmtCtx, localPath.constData(), nullptr, nullptr);
+    if (openRet < 0) {
+        error = QString("Failed to open video file: %1").arg(ffmpegErrorString(openRet));
+        qWarning() << "[LivePreview] avformat_open_input failed:" << error;
         return {};
     }
-    std::unique_ptr<AVFormatContext, AvFormatCtxDeleter> fmt(fmtRaw);
-
-    int infoResult = avformat_find_stream_info(fmt.get(), nullptr);
-    if (infoResult < 0) {
-        error = QStringLiteral("avformat_find_stream_info failed: %1").arg(ffmpegErrorString(infoResult));
+    
+    if (avformat_find_stream_info(fmtCtx, nullptr) < 0) {
+        error = QStringLiteral("Failed to find stream info");
+        avformat_close_input(&fmtCtx);
         return {};
     }
-
-    int vIdx = av_find_best_stream(fmt.get(), AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
-    if (vIdx < 0) {
-        error = QStringLiteral("No video stream");
+    
+    // Find video stream
+    int videoStream = av_find_best_stream(fmtCtx, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
+    if (videoStream < 0) {
+        error = QStringLiteral("No video stream found");
+        avformat_close_input(&fmtCtx);
         return {};
     }
-
-    AVStream* stream = fmt->streams[vIdx];
+    
+    AVStream* stream = fmtCtx->streams[videoStream];
     AVCodecParameters* params = stream->codecpar;
+    
+    // Find decoder
     const AVCodec* decoder = avcodec_find_decoder(params->codec_id);
     if (!decoder) {
-        const AVCodecDescriptor* desc = avcodec_descriptor_get(params->codec_id);
-        QString codecName = desc ? QString::fromUtf8(desc->name) : QStringLiteral("?");
-        error = QStringLiteral("Decoder not found (%1). Rebuild FFmpeg with this codec enabled.").arg(codecName);
-        qWarning() << "[LivePreview] decoder missing for" << request.filePath << "codec" << codecName;
+        error = QStringLiteral("Decoder not found");
+        avformat_close_input(&fmtCtx);
         return {};
     }
-
-    std::unique_ptr<AVCodecContext, AvCodecCtxDeleter> ctx(avcodec_alloc_context3(decoder));
-    if (!ctx) {
-        error = QStringLiteral("avcodec_alloc_context3 failed");
+    
+    // Create codec context
+    AVCodecContext* codecCtx = avcodec_alloc_context3(decoder);
+    if (!codecCtx) {
+        error = QStringLiteral("Failed to allocate codec context");
+        avformat_close_input(&fmtCtx);
         return {};
     }
-
-    int paramsResult = avcodec_parameters_to_context(ctx.get(), params);
-    if (paramsResult < 0) {
-        error = QStringLiteral("avcodec_parameters_to_context failed: %1").arg(ffmpegErrorString(paramsResult));
+    
+    if (avcodec_parameters_to_context(codecCtx, params) < 0) {
+        error = QStringLiteral("Failed to copy codec parameters");
+        avcodec_free_context(&codecCtx);
+        avformat_close_input(&fmtCtx);
         return {};
     }
-
-    int openCodecResult = avcodec_open2(ctx.get(), decoder, nullptr);
-    if (openCodecResult < 0) {
-        error = QStringLiteral("avcodec_open2 failed: %1").arg(ffmpegErrorString(openCodecResult));
+    
+    if (avcodec_open2(codecCtx, decoder, nullptr) < 0) {
+        error = QStringLiteral("Failed to open codec");
+        avcodec_free_context(&codecCtx);
+        avformat_close_input(&fmtCtx);
         return {};
     }
-
-    qreal pos = request.position;
-    if (pos < 0.0) pos = 0.0;
-    if (pos > 1.0) pos = 1.0;
-    if (pos == 0.0) pos = kDefaultPosterPosition;
-
-    if (stream->duration > 0) {
-        const double duration = stream->duration * av_q2d(stream->time_base);
-        const double targetSec = duration * pos;
+    
+    // Calculate target timestamp
+    qint64 durationMs = 0;
+    if (fmtCtx->duration > 0) {
+        durationMs = (fmtCtx->duration * 1000) / AV_TIME_BASE;
+    } else if (stream->duration > 0) {
+        durationMs = (stream->duration * stream->time_base.num * 1000) / stream->time_base.den;
+    }
+    
+    qint64 targetMs = durationMs > 0 ? static_cast<qint64>(request.position * durationMs) : 0;
+    
+    // Seek to target position
+    if (targetMs > 0 && stream->duration > 0) {
+        double targetSec = static_cast<double>(targetMs) / 1000.0;
         int64_t ts = static_cast<int64_t>(targetSec / av_q2d(stream->time_base));
-        av_seek_frame(fmt.get(), vIdx, ts, AVSEEK_FLAG_BACKWARD);
-        avcodec_flush_buffers(ctx.get());
+        av_seek_frame(fmtCtx, videoStream, ts, AVSEEK_FLAG_BACKWARD);
+        avcodec_flush_buffers(codecCtx);
     }
-
-    std::unique_ptr<AVPacket, AvPacketDeleter> packet(av_packet_alloc());
-    std::unique_ptr<AVFrame, AvFrameDeleter> frame(av_frame_alloc());
-    QImage result;
-
-    std::unique_ptr<SwsContext, SwsCtxDeleter> sws;
-    bool done = false;
+    
+    // Decode frame
+    AVPacket* packet = av_packet_alloc();
+    AVFrame* frame = av_frame_alloc();
+    QImage resultImage;
+    
+    bool frameFound = false;
     int safety = 0;
-
-    while (!done && av_read_frame(fmt.get(), packet.get()) >= 0) {
-        if (packet->stream_index != vIdx) {
-            av_packet_unref(packet.get());
+    
+    while (!frameFound && av_read_frame(fmtCtx, packet) >= 0 && safety++ < 256) {
+        if (packet->stream_index != videoStream) {
+            av_packet_unref(packet);
             continue;
         }
-
-        int sendResult = avcodec_send_packet(ctx.get(), packet.get());
-        if (sendResult < 0) {
-            qWarning() << "[LivePreview] avcodec_send_packet failed for" << request.filePath << ":" << ffmpegErrorString(sendResult);
-            av_packet_unref(packet.get());
+        
+        if (avcodec_send_packet(codecCtx, packet) < 0) {
+            av_packet_unref(packet);
             continue;
         }
-        av_packet_unref(packet.get());
-
-        while (!done) {
-            int ret = avcodec_receive_frame(ctx.get(), frame.get());
-            if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
+        
+        av_packet_unref(packet);
+        
+        while (avcodec_receive_frame(codecCtx, frame) == 0) {
+            // Convert to QImage
+            int width = frame->width;
+            int height = frame->height;
+            AVPixelFormat format = static_cast<AVPixelFormat>(frame->format);
+            
+            SwsContext* swsCtx = sws_getContext(width, height, format,
+                                               width, height, AV_PIX_FMT_RGBA,
+                                               SWS_BICUBIC, nullptr, nullptr, nullptr);
+            if (!swsCtx) {
                 break;
             }
-            if (ret < 0) {
-                qWarning() << "[LivePreview] avcodec_receive_frame failed for" << request.filePath << ":" << ffmpegErrorString(ret);
-                done = true;
-                break;
-            }
-
-            const int width = frame->width;
-            const int height = frame->height;
-            if (!sws) {
-                sws.reset(sws_getContext(width, height, static_cast<AVPixelFormat>(frame->format),
-                                         width, height, AV_PIX_FMT_RGBA,
-                                         SWS_BICUBIC, nullptr, nullptr, nullptr));
-            }
-            if (!sws) {
-                error = QStringLiteral("Failed to create sws context");
-                done = true;
-                break;
-            }
-
+            
             QImage image(width, height, QImage::Format_RGBA8888);
             uint8_t* dstData[4] = { image.bits(), nullptr, nullptr, nullptr };
             int dstLinesize[4] = { static_cast<int>(image.bytesPerLine()), 0, 0, 0 };
-            sws_scale(sws.get(), frame->data, frame->linesize, 0, height, dstData, dstLinesize);
-
-            if (request.targetSize.isValid()) {
-                image = image.scaled(request.targetSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+            
+            sws_scale(swsCtx, frame->data, frame->linesize, 0, height, dstData, dstLinesize);
+            sws_freeContext(swsCtx);
+            
+            // Scale to target size if specified
+            if (request.targetSize.isValid() && (width > request.targetSize.width() || height > request.targetSize.height())) {
+                resultImage = image.scaled(request.targetSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+            } else {
+                resultImage = image;
             }
-            result = image;
-            done = true;
-            break;
-        }
-
-        if (++safety > kDecodeSafetyIterMax) {
+            
+            frameFound = true;
             break;
         }
     }
-
-    // RAII handles cleanup of packet, frame, ctx, fmt, and sws
-
-    if (result.isNull() && error.isEmpty()) {
-        error = QStringLiteral("No frame decoded");
+    
+    // Cleanup
+    av_frame_free(&frame);
+    av_packet_free(&packet);
+    avcodec_free_context(&codecCtx);
+    avformat_close_input(&fmtCtx);
+    
+    if (!frameFound || resultImage.isNull()) {
+        error = QStringLiteral("Failed to decode video frame");
+        return {};
     }
-    return result;
+    
+    qDebug() << "[LivePreview] Successfully decoded video thumbnail:" << resultImage.width() << "x" << resultImage.height();
+    return resultImage;
+#else
+    Q_UNUSED(request);
+    Q_UNUSED(error);
+    // FFmpeg not available - return empty image
+    return QImage();
 #endif
+}
+
+void LivePreviewManager::onFFmpegFrameReady(const FFmpegPlayer::VideoFrame& frame)
+{
+    // Convert FFmpegPlayer::VideoFrame to LivePreviewManager format
+    if (!frame.isValid()) {
+        return;
+    }
+    
+    QPixmap pixmap = QPixmap::fromImage(frame.image);
+    if (!pixmap.isNull()) {
+        // Convert position from timestamp to normalized [0,1] range
+        qreal normalizedPos = frame.timestampMs > 0 ?
+            static_cast<qreal>(frame.timestampMs) / 1000.0 / (frame.fps > 0 ? frame.fps : 25.0) : 0.0;
+        
+        // Cache the frame for future requests
+        QString cacheKey = makeCacheKey(m_currentFilePath, QSize(frame.width, frame.height), normalizedPos);
+        storeFrame(cacheKey, pixmap, normalizedPos, QSize(frame.width, frame.height));
+        
+        // Emit in the expected format for LivePreviewManager
+        emit frameReady(m_currentFilePath, normalizedPos, QSize(frame.width, frame.height), pixmap);
+    }
+}
+
+void LivePreviewManager::onFFmpegError(const QString& errorString)
+{
+    emit frameFailed(m_currentFilePath, errorString);
 }

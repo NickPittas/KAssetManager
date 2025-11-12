@@ -105,6 +105,8 @@ add_executable(test_live_preview_manager
     test_live_preview_manager.cpp
     ../src/live_preview_manager.cpp
     ../src/live_preview_manager.h
+    ../src/media/ffmpeg_player.cpp
+    ../src/media/ffmpeg_player.h
     ../src/oiio_image_loader.cpp
     ../src/oiio_image_loader.h
     ../src/utils.cpp
