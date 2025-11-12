@@ -432,6 +432,7 @@ private:
     // Cache bar update throttle
     // Unified FFmpegPlayer for video and image sequence playback
     FFmpegPlayer* m_ffmpegPlayer = nullptr;
+    bool m_useFFmpegVideo = false; // true when playing videos via FFmpeg backend (e.g., MOV with alpha)
     QElapsedTimer cacheBarUpdateTimer;
 
 };

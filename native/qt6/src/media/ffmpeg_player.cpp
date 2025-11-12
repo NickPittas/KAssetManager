@@ -670,11 +670,23 @@ FFmpegPlayer::VideoFrame FFmpegPlayer::decodeFrameWithFFmpeg(qint64 targetMs, co
     if (!m_formatCtx) {
         AVFormatContext* fmtRaw = nullptr;
         QByteArray localPath = QFile::encodeName(filePath);
-        
-        if (avformat_open_input(&fmtRaw, localPath.constData(), nullptr, nullptr) < 0) {
+
+#if defined(HAVE_FFMPEG) && HAVE_FFMPEG
+        // Use smaller probe/analyze to speed up first frame on heavy MOV/alpha codecs
+        AVDictionary* fmtOpts = nullptr;
+        av_dict_set(&fmtOpts, "probesize", "512k", 0);
+        av_dict_set(&fmtOpts, "analyzeduration", "200000", 0); // 200ms
+#endif
+
+        if (avformat_open_input(&fmtRaw, localPath.constData(), nullptr, &fmtOpts) < 0) {
             emit error(QString("Failed to open input: %1").arg(filePath));
             return VideoFrame();
         }
+#if defined(HAVE_FFMPEG) && HAVE_FFMPEG
+        if (fmtOpts) {
+            av_dict_free(&fmtOpts);
+        }
+#endif
         m_formatCtx.reset(fmtRaw);
         
         if (avformat_find_stream_info(m_formatCtx.get(), nullptr) < 0) {
@@ -739,6 +751,7 @@ FFmpegPlayer::VideoFrame FFmpegPlayer::decodeFrameWithFFmpeg(qint64 targetMs, co
     
     // Decode frame
     bool frameFound = false;
+    VideoFrame result; // will hold the first decoded frame
     int safety = 0;
     
     while (!frameFound && av_read_frame(m_formatCtx.get(), m_packet.get()) >= 0) {
@@ -771,15 +784,18 @@ FFmpegPlayer::VideoFrame FFmpegPlayer::decodeFrameWithFFmpeg(qint64 targetMs, co
             const int height = m_frame->height;
             AVPixelFormat format = static_cast<AVPixelFormat>(m_frame->format);
             
-            // Create scaling context if needed
-            if (!m_swsCtx || format != AV_PIX_FMT_RGBA) {
+            // Create/reuse scaling context only when src params change
+            if (!m_swsCtx || m_swsWidth != width || m_swsHeight != height || m_swsSrcFormat != format) {
                 m_swsCtx.reset(sws_getContext(width, height, format,
-                                            width, height, AV_PIX_FMT_RGBA,
-                                            SWS_BICUBIC, nullptr, nullptr, nullptr));
+                                              width, height, AV_PIX_FMT_RGBA,
+                                              SWS_BILINEAR, nullptr, nullptr, nullptr));
                 if (!m_swsCtx) {
                     emit error("Failed to create scaling context");
                     return VideoFrame();
                 }
+                m_swsWidth = width;
+                m_swsHeight = height;
+                m_swsSrcFormat = format;
             }
             
             QImage image(width, height, QImage::Format_RGBA8888);
@@ -788,7 +804,6 @@ FFmpegPlayer::VideoFrame FFmpegPlayer::decodeFrameWithFFmpeg(qint64 targetMs, co
             
             sws_scale(m_swsCtx.get(), m_frame->data, m_frame->linesize, 0, height, dstData, dstLinesize);
             
-            VideoFrame result;
             result.image = image;
             result.timestampMs = targetMs;
             result.fps = m_mediaInfo.fps;
@@ -809,7 +824,7 @@ FFmpegPlayer::VideoFrame FFmpegPlayer::decodeFrameWithFFmpeg(qint64 targetMs, co
     m_totalDecodedFrames++;
     m_averageDecodeTime = (m_averageDecodeTime * (m_totalDecodedFrames - 1) + m_performanceTimer.elapsed()) / m_totalDecodedFrames;
     
-    return frameFound ? VideoFrame() : VideoFrame(); // Return empty if not found
+    return frameFound ? result : VideoFrame();
 #endif
 }
 

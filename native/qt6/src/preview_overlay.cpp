@@ -767,17 +767,25 @@ void PreviewOverlay::showImage(const QString &filePath)
 
 void PreviewOverlay::showVideo(const QString &filePath)
 {
+    // Decide backend: prefer FFmpeg for MOV (esp. alpha) to minimize startup latency
+    QFileInfo fi(filePath);
+    const QString ext = fi.suffix().toLower();
+    m_useFFmpegVideo = (ext == "mov" || ext == "mxf" || ext == "qt");
 
-
-    // Ensure media player is in a clean state
-    if (mediaPlayer->playbackState() != QMediaPlayer::StoppedState) {
-        mediaPlayer->stop();
+    // Ensure media player is in a clean state if we are NOT using FFmpeg
+    if (!m_useFFmpegVideo) {
+        if (mediaPlayer->playbackState() != QMediaPlayer::StoppedState) {
+            mediaPlayer->stop();
+        }
+        QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+        mediaPlayer->setSource(QUrl());
+        mediaPlayer->setPosition(0);
+    } else {
+        // Stop and clear any previous FFmpeg playback
+        if (m_ffmpegPlayer) {
+            m_ffmpegPlayer->stop();
+        }
     }
-    // Wait for media player to fully stop before changing source
-    QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
-
-    mediaPlayer->setSource(QUrl()); // clear previous source to avoid stray signals
-    mediaPlayer->setPosition(0);
 
     // CRITICAL: Hide other content and show imageView with videoItem for zoom/pan support
     if (textView) textView->hide();
@@ -827,31 +835,30 @@ void PreviewOverlay::showVideo(const QString &filePath)
     // If tlRender backend is preferred, attempt to open container via tlRender
     // tlRender container path removed
 
-    // Probe metadata for FPS/timecode via FFmpeg (if available)
-    {
-        MediaInfo::VideoMetadata vm;
-        QString err;
-        if (MediaInfo::probeVideoFile(filePath, vm, &err)) {
-            if (vm.fps > 0.0) detectedFps = vm.fps;
-            hasEmbeddedTimecode = vm.hasTimecode;
-            embeddedStartTimecode = vm.timecodeStart;
-        }
-    }
+    // Reset FPS/timecode; will be filled by chosen backend
+    detectedFps = 0.0;
+    hasEmbeddedTimecode = false;
+    embeddedStartTimecode.clear();
 
     originalPixmap = QPixmap(); // Clear the pixmap
     fitPending = true; // next size-known signal will fit; avoid repeated fit calls
 
-    mediaPlayer->setSource(QUrl::fromLocalFile(filePath));
-
-    // Video will be rendered through videoItem which is already in the scene
-    // Reset zoom; fit will occur when native size is known / media is loaded
+    // Start playback via chosen backend
+    // Reset zoom; fit will occur when size is known / first frame arrives
     currentZoom = 1.0;
     imageView->resetTransform();
 
-    mediaPlayer->play();
-
-    // Try to detect FPS from metadata early (may be updated later)
-    updateDetectedFps();
+    if (m_useFFmpegVideo && m_ffmpegPlayer) {
+        // Fit pending ensures the first decoded frame triggers a single fit
+        fitPending = true;
+        m_ffmpegPlayer->loadVideo(filePath); // async: will emit mediaInfoReady + frameReady quickly
+        // Auto-play once first frame arrives; handled by user clicking play
+    } else {
+        mediaPlayer->setSource(QUrl::fromLocalFile(filePath));
+        mediaPlayer->play();
+        // Try to detect FPS from metadata early (may be updated later)
+        updateDetectedFps();
+    }
 
     controlsTimer->start();
 }
@@ -867,10 +874,18 @@ void PreviewOverlay::onPlayPauseClicked()
         }
     } else {
         // Handle video playback
-        if (mediaPlayer->playbackState() == QMediaPlayer::PlayingState) {
-            mediaPlayer->pause();
+        if (m_useFFmpegVideo && m_ffmpegPlayer) {
+            if (m_ffmpegPlayer->playbackState() == FFmpegPlayer::PlaybackState::Playing) {
+                m_ffmpegPlayer->pause();
+            } else {
+                m_ffmpegPlayer->play();
+            }
         } else {
-            mediaPlayer->play();
+            if (mediaPlayer->playbackState() == QMediaPlayer::PlayingState) {
+                mediaPlayer->pause();
+            } else {
+                mediaPlayer->play();
+            }
         }
         updatePlayPauseButton();
     }
@@ -900,11 +915,15 @@ void PreviewOverlay::onSliderMoved(int position)
         controlsTimer->start();
         return;
     }
-    
-    // QMediaPlayer path - always do live scrubbing
-    mediaPlayer->setPosition(position);
-    qint64 duration = mediaPlayer->duration();
-    updateVideoTimeDisplays(position, duration);
+    // Video path
+    if (m_useFFmpegVideo && m_ffmpegPlayer) {
+        m_ffmpegPlayer->seek(position);
+        updateVideoTimeDisplays(position, m_ffmpegPlayer->duration());
+    } else {
+        mediaPlayer->setPosition(position);
+        qint64 duration = mediaPlayer->duration();
+        updateVideoTimeDisplays(position, duration);
+    }
     controlsTimer->start();
 }
 
@@ -933,9 +952,13 @@ void PreviewOverlay::onSliderPressed()
         if (sequencePlaying) pauseSequence();
         return;
     }
-    
-    wasPlayingBeforeSeek = (mediaPlayer->playbackState() == QMediaPlayer::PlayingState);
-    mediaPlayer->pause();
+    if (m_useFFmpegVideo && m_ffmpegPlayer) {
+        wasPlayingBeforeSeek = (m_ffmpegPlayer->playbackState() == FFmpegPlayer::PlaybackState::Playing);
+        if (wasPlayingBeforeSeek) m_ffmpegPlayer->pause();
+    } else {
+        wasPlayingBeforeSeek = (mediaPlayer->playbackState() == QMediaPlayer::PlayingState);
+        mediaPlayer->pause();
+    }
 }
 
 void PreviewOverlay::onSliderReleased()
@@ -949,9 +972,13 @@ void PreviewOverlay::onSliderReleased()
         controlsTimer->start();
         return;
     }
-    
-    mediaPlayer->setPosition(pos);
-    if (wasPlayingBeforeSeek) mediaPlayer->play();
+    if (m_useFFmpegVideo && m_ffmpegPlayer) {
+        m_ffmpegPlayer->seek(pos);
+        if (wasPlayingBeforeSeek) m_ffmpegPlayer->play();
+    } else {
+        mediaPlayer->setPosition(pos);
+        if (wasPlayingBeforeSeek) mediaPlayer->play();
+    }
     userSeeking = false;
     updatePlayPauseButton();
     controlsTimer->start();
@@ -968,18 +995,25 @@ void PreviewOverlay::onStepNextFrame()
         return;
     }
     
-    // QMediaPlayer path - always pause when stepping frames
-    mediaPlayer->pause();
-    qint64 pos = mediaPlayer->position();
-    qint64 dt = static_cast<qint64>(qRound64(frameDurationMs()));
-    qint64 target = qMin(pos + dt, mediaPlayer->duration());
-    mediaPlayer->setPosition(target);
-    // Use play/pause trick to force frame update, then keep paused
-    mediaPlayer->play();
-    QTimer::singleShot(30, this, [this]() {
+    if (m_useFFmpegVideo && m_ffmpegPlayer) {
+        m_ffmpegPlayer->pause();
+        qint64 pos = m_ffmpegPlayer->currentPosition();
+        qint64 dt = static_cast<qint64>(qRound64(frameDurationMs()));
+        qint64 target = qMin(pos + dt, m_ffmpegPlayer->duration());
+        m_ffmpegPlayer->seek(target);
+    } else {
         mediaPlayer->pause();
-        updatePlayPauseButton();
-    });
+        qint64 pos = mediaPlayer->position();
+        qint64 dt = static_cast<qint64>(qRound64(frameDurationMs()));
+        qint64 target = qMin(pos + dt, mediaPlayer->duration());
+        mediaPlayer->setPosition(target);
+        // Use play/pause trick to force frame update, then keep paused
+        mediaPlayer->play();
+        QTimer::singleShot(30, this, [this]() {
+            mediaPlayer->pause();
+            updatePlayPauseButton();
+        });
+    }
 }
 
 void PreviewOverlay::onStepPrevFrame()
@@ -993,18 +1027,25 @@ void PreviewOverlay::onStepPrevFrame()
         return;
     }
     
-    // QMediaPlayer path - always pause when stepping frames
-    mediaPlayer->pause();
-    qint64 pos = mediaPlayer->position();
-    qint64 dt = static_cast<qint64>(qRound64(frameDurationMs()));
-    qint64 target = pos - dt; if (target < 0) target = 0;
-    mediaPlayer->setPosition(target);
-    // Use play/pause trick to force frame update, then keep paused
-    mediaPlayer->play();
-    QTimer::singleShot(30, this, [this]() {
+    if (m_useFFmpegVideo && m_ffmpegPlayer) {
+        m_ffmpegPlayer->pause();
+        qint64 pos = m_ffmpegPlayer->currentPosition();
+        qint64 dt = static_cast<qint64>(qRound64(frameDurationMs()));
+        qint64 target = pos - dt; if (target < 0) target = 0;
+        m_ffmpegPlayer->seek(target);
+    } else {
         mediaPlayer->pause();
-        updatePlayPauseButton();
-    });
+        qint64 pos = mediaPlayer->position();
+        qint64 dt = static_cast<qint64>(qRound64(frameDurationMs()));
+        qint64 target = pos - dt; if (target < 0) target = 0;
+        mediaPlayer->setPosition(target);
+        // Use play/pause trick to force frame update, then keep paused
+        mediaPlayer->play();
+        QTimer::singleShot(30, this, [this]() {
+            mediaPlayer->pause();
+            updatePlayPauseButton();
+        });
+    }
 }
 
 double PreviewOverlay::frameDurationMs() const
@@ -1807,6 +1848,9 @@ void PreviewOverlay::stopPlayback()
     if (mediaPlayer->playbackState() == QMediaPlayer::PlayingState) {
         mediaPlayer->stop();
     }
+    if (m_ffmpegPlayer) {
+        m_ffmpegPlayer->stop();
+    }
 
     // Stop sequence playback
     if (sequencePlaying) {
@@ -2572,7 +2616,8 @@ void PreviewOverlay::onFFmpegFrameReady(const FFmpegPlayer::VideoFrame& frame)
     // Update UI time/slider with frame timestamp
     if (frame.timestampMs >= 0) {
         positionSlider->setValue(static_cast<int>(frame.timestampMs));
-        updateVideoTimeDisplays(frame.timestampMs, mediaPlayer->duration());
+        const qint64 dur = m_ffmpegPlayer ? m_ffmpegPlayer->duration() : 0;
+        updateVideoTimeDisplays(frame.timestampMs, dur);
     }
 }
 
@@ -2587,7 +2632,7 @@ void PreviewOverlay::onFFmpegMediaInfo(const FFmpegPlayer::MediaInfo& info)
     // Update duration display
     if (info.durationMs > 0) {
         positionSlider->setRange(0, info.durationMs);
-        updateVideoTimeDisplays(0, info.durationMs);
+        updateVideoTimeDisplays(positionSlider->value(), info.durationMs);
     }
     
     // Update FPS display

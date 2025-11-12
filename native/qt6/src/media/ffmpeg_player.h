@@ -242,6 +242,10 @@ private:
     std::unique_ptr<AVPacket, AvPacketDeleter> m_packet;
     std::unique_ptr<AVFrame, AvFrameDeleter> m_frame;
     std::unique_ptr<SwsContext, SwsCtxDeleter> m_swsCtx;
+    // Cache the last configured SWS source to avoid rebuilding per frame
+    int m_swsWidth = 0;
+    int m_swsHeight = 0;
+    int m_swsSrcFormat = -1; // AVPixelFormat as int to avoid ff headers here
     AVBufferRef* m_hwContext = nullptr;
     AVBufferRef* m_hwDeviceCtx = nullptr;
     
