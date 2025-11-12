@@ -13,6 +13,8 @@
 
 #include <QCache>
 
+#include "media/ffmpeg_player.h"
+
 /**
  * LivePreviewManager streams preview frames for stills, video clips, and image sequences
  * without persisting thumbnails to disk. It exposes a lightweight request API that returns
@@ -82,6 +84,11 @@ public:
 signals:
     void frameReady(const QString& filePath, qreal position, QSize targetSize, const QPixmap& pixmap);
     void frameFailed(const QString& filePath, QString errorString);
+    void cacheStatus(const QString& status);
+
+private slots:
+    void onFFmpegFrameReady(const FFmpegPlayer::VideoFrame& frame);
+    void onFFmpegError(const QString& errorString);
 
 private:
     explicit LivePreviewManager(QObject* parent = nullptr);
@@ -91,7 +98,7 @@ private:
     void enqueueSequenceDecode(const Request& request, const QString& cacheKey);
     void startDecodeTask(const Request& request, const QString& cacheKey, bool fromSequenceQueue);
     static QImage loadImageFrame(const Request& request, QString& error);
-    static QImage loadVideoFrame(const Request& request, QString& error);
+    QImage loadVideoFrame(const Request& request, QString& error);
     static QImage loadSequenceFrame(const Request& request, QString& error);
     bool isImageSequence(const QString& filePath) const;
     static QString sequenceHead(const QString& filePath);
@@ -143,4 +150,10 @@ private:
     // Metrics (protected by m_mutex)
     quint64 m_cacheHits = 0;
     quint64 m_cacheMisses = 0;
+    
+    // Unified FFmpeg player for video and image sequence playback
+    std::unique_ptr<FFmpegPlayer> m_ffmpegPlayer;
+    
+    // Track current file path for signal forwarding
+    QString m_currentFilePath;
 };

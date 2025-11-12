@@ -88,6 +88,8 @@ void SettingsDialog::setupGeneralTab()
     themeLayout->addWidget(themeCombo);
 
     layout->addWidget(themeGroup);
+
+    // Playback backend (tlRender removed)
     layout->addStretch();
 
     tabWidget->addTab(generalTab, "General");

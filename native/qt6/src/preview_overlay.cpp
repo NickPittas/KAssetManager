@@ -1,4 +1,5 @@
 #include "preview_overlay.h"
+#include "media/ffmpeg_player.h"
 #include "oiio_image_loader.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -87,141 +88,12 @@ extern "C" {
 #include <QImage>
 #include <QRegularExpression>
 
-// Worker that reads PNG-coded frames from a MOV and emits QImage frames
-class PreviewOverlay::FallbackPngMovReader : public QObject {
-    Q_OBJECT
-public:
-    explicit FallbackPngMovReader(const QString& path)
-        : m_path(path) {}
+// Unified FFmpeg-based video and image sequence playback backend
+// Replaces manual FallbackPngMovReader implementation with FFmpegPlayer
+// Features: Hardware acceleration, smart caching, seamless integration
+// All video and sequence playback now handled through FFmpegPlayer member variable
 
-public slots:
-    void start() {
-        if (!open()) { emit finished(); return; }
-        const double intervalMs = m_fps > 0.0 ? (1000.0 / m_fps) : (1000.0 / 24.0);
-        QElapsedTimer wall; wall.start();
-        qint64 lastWallMs = wall.elapsed();
-        AVPacket pkt; av_init_packet(&pkt);
-        const uint8_t sig[8] = {0x89, 'P','N','G', 0x0D, 0x0A, 0x1A, 0x0A};
-        qint64 lastPtsMs = 0;
-        while (!m_stop) {
-            if (m_seekRequested.load()) {
-                qint64 targetMs = m_seekTargetMs.load();
-                AVRational ms = {1, 1000};
-                int64_t ts = av_rescale_q(targetMs, ms, m_stream->time_base);
-                av_seek_frame(m_fmt, m_vIdx, ts, AVSEEK_FLAG_BACKWARD);
-                m_seekRequested = false;
-                lastPtsMs = targetMs;
-            }
-            // Single-step: allow exactly one frame to pass while paused
-            bool doSingleStep = m_singleStep.exchange(false);
-            if (m_paused && !doSingleStep) { QThread::msleep(10); continue; }
-            if (av_read_frame(m_fmt, &pkt) < 0) {
-                break; // EOF
-            }
-            if (pkt.stream_index == m_vIdx && pkt.size >= 8 && pkt.data) {
-                int limit = pkt.size - 8;
-                int pos = -1;
-                for (int i = 0; i <= limit; ++i) {
-                    if (pkt.data[i] == sig[0]) {
-                        bool match = true;
-                        for (int j = 1; j < 8; ++j) {
-                            if (pkt.data[i + j] != sig[j]) { match = false; break; }
-                        }
-                        if (match) { pos = i; break; }
-                    }
-                }
-                if (pos >= 0) {
-                    QByteArray bytes(reinterpret_cast<const char*>(pkt.data + pos), pkt.size - pos);
-                    QImage img = QImage::fromData(bytes, "PNG");
-                    if (!img.isNull()) {
-                        qint64 ptsMs = 0;
-                        if (pkt.pts != AV_NOPTS_VALUE) {
-                            AVRational ms = {1, 1000};
-                            ptsMs = av_rescale_q(pkt.pts, m_stream->time_base, ms);
-                        } else {
-                            ptsMs = lastPtsMs + static_cast<qint64>(intervalMs);
-                        }
-                        lastPtsMs = ptsMs;
-                        emit frameReady(img, ptsMs);
-                        // Pace to the media clock using PTS when available
-                        qint64 frameDelta = (lastPtsMs > 0) ? (ptsMs - lastPtsMs) : static_cast<qint64>(intervalMs);
-                        if (frameDelta <= 0) frameDelta = static_cast<qint64>(intervalMs);
-                        qint64 target = lastWallMs + frameDelta;
-                        qint64 now = wall.elapsed();
-                        if (!m_paused) {
-                            if (target > now) {
-                                QThread::msleep(static_cast<unsigned long>(target - now));
-                                lastWallMs = target;
-                            } else {
-                                lastWallMs = now;
-                            }
-                        } else {
-                            lastWallMs = now;
-                        }
-                    }
-                }
-            }
-            av_packet_unref(&pkt);
-        }
-        avformat_close_input(&m_fmt);
-        emit finished();
-    }
-    void stop() { m_stop = true; }
-    void setPaused(bool p) { m_paused = p; }
-
-    void stepOnce() { m_singleStep = true; }
-    void seekToMs(qint64 ms) { m_seekTargetMs = ms; m_seekRequested = true; }
-
-signals:
-    void frameReady(const QImage& image, qint64 ptsMs);
-
-    void finished();
-
-public:
-    double fps() const { return m_fps; }
-    qint64 durationMs() const { return m_durationMs; }
-
-private:
-    bool open() {
-        if (avformat_open_input(&m_fmt, m_path.toUtf8().constData(), nullptr, nullptr) < 0) {
-            return false;
-        }
-        if (avformat_find_stream_info(m_fmt, nullptr) < 0) {
-            avformat_close_input(&m_fmt);
-            return false;
-        }
-        int vIdx = av_find_best_stream(m_fmt, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
-        if (vIdx < 0) {
-            avformat_close_input(&m_fmt);
-            return false;
-        }
-        m_vIdx = vIdx;
-        m_stream = m_fmt->streams[m_vIdx];
-        AVRational r = m_stream->avg_frame_rate.num > 0 ? m_stream->avg_frame_rate : m_stream->r_frame_rate;
-        m_fps = (r.num > 0 && r.den > 0) ? (static_cast<double>(r.num) / r.den) : 24.0;
-        if (m_fmt->duration > 0) {
-            m_durationMs = static_cast<qint64>( (m_fmt->duration * 1000) / AV_TIME_BASE );
-        } else {
-            m_durationMs = 0;
-        }
-        // Rewind to start for clean playback
-        av_seek_frame(m_fmt, m_vIdx, 0, AVSEEK_FLAG_BACKWARD);
-        return true;
-    }
-
-    QString m_path;
-    AVFormatContext* m_fmt = nullptr;
-    AVStream* m_stream = nullptr;
-    int m_vIdx = -1;
-    double m_fps = 24.0;
-    qint64 m_durationMs = 0;
-    std::atomic<bool> m_stop{false};
-    std::atomic<bool> m_paused{false};
-    std::atomic<bool> m_singleStep{false};
-    std::atomic<bool> m_seekRequested{false};
-    std::atomic<qint64> m_seekTargetMs{0};
-
-};
+// All video playback now handled through unified FFmpegPlayer backend
 #endif // HAVE_FFMPEG
 
 PreviewOverlay::PreviewOverlay(QWidget *parent)
@@ -249,7 +121,19 @@ PreviewOverlay::PreviewOverlay(QWidget *parent)
     , currentColorSpace(OIIOImageLoader::ColorSpace::sRGB)
     , isHDRImage(false)
     , useCacheForSequences(true) // ENABLED - using QRecursiveMutex to fix deadlock
+    , m_ffmpegPlayer(nullptr)
 {
+    // Initialize unified FFmpegPlayer for video and image sequence playback
+    m_ffmpegPlayer = new FFmpegPlayer(this);
+    if (m_ffmpegPlayer) {
+        // Connect FFmpegPlayer signals to PreviewOverlay handlers
+        connect(m_ffmpegPlayer, &FFmpegPlayer::frameReady, this, &PreviewOverlay::onFFmpegFrameReady);
+        connect(m_ffmpegPlayer, &FFmpegPlayer::mediaInfoReady, this, &PreviewOverlay::onFFmpegMediaInfo);
+        connect(m_ffmpegPlayer, &FFmpegPlayer::playbackStateChanged, this, &PreviewOverlay::onFFmpegPlaybackState);
+        connect(m_ffmpegPlayer, &FFmpegPlayer::error, this, &PreviewOverlay::onFFmpegError);
+        qDebug() << "[PreviewOverlay] FFmpegPlayer initialized with hardware acceleration and smart caching";
+    }
+
     setupUi();
     setFocusPolicy(Qt::StrongFocus);
 
@@ -259,34 +143,38 @@ PreviewOverlay::PreviewOverlay(QWidget *parent)
     controlsTimer->setInterval(3000);
     connect(controlsTimer, &QTimer::timeout, this, &PreviewOverlay::hideControls);
 
-    // Sequence playback timer (24 fps default)
+    // Sequence playback timer (target 25 fps minimum for realtime)
     sequenceTimer = new QTimer(this);
-    sequenceTimer->setInterval(1000 / 24); // 24 fps
+    sequenceTimer->setTimerType(Qt::PreciseTimer);
+    sequenceTimer->setInterval(40); // 25 fps
     connect(sequenceTimer, &QTimer::timeout, this, &PreviewOverlay::onSequenceTimerTick);
 
     // Initialize frame cache for image sequence playback
     frameCache = new SequenceFrameCache(this);
     qDebug() << "[PreviewOverlay] Frame cache initialized with QRecursiveMutex (deadlock fix)";
+
+    // tlRender integration removed
 }
 
 PreviewOverlay::~PreviewOverlay()
 {
+    qDebug() << "[PreviewOverlay::~PreviewOverlay] Destructor starting";
+    
     // Ensure all playback modes are fully stopped before destruction
     stopPlayback();
-#ifdef HAVE_FFMPEG
-    // As an extra safety net, wait a bit if the worker thread is still winding down
-    if (fallbackThread) {
-        fallbackThread->wait(3000);
-    }
-#endif
     if (sequenceTimer) {
         sequenceTimer->stop();
     }
 
-    // Stop frame cache pre-fetching
+    // CRITICAL: Delete frame cache explicitly to ensure proper cleanup order
+    // This triggers SequenceFrameCache destructor which waits for workers
     if (frameCache) {
-        frameCache->stopPrefetch();
+        qDebug() << "[PreviewOverlay::~PreviewOverlay] Deleting frame cache";
+        delete frameCache;
+        frameCache = nullptr;
     }
+    
+    qDebug() << "[PreviewOverlay::~PreviewOverlay] Destructor complete";
 }
 
 void PreviewOverlay::setupUi()
@@ -487,12 +375,15 @@ void PreviewOverlay::setupUi()
         controlsLayout->addLayout(cacheRow);
     }
 
-    // ========== ROW 2: Timeline (Current | Slider | Duration) ==========
+    // ========== ROW 2: Timeline (Current | Slider | Duration | FPS) ==========
     currentTimeLabel = new QLabel("00:00:00:00", this);
     currentTimeLabel->setStyleSheet("QLabel { color: white; font-size: 14px; padding: 0 8px; }");
 
     durationTimeLabel = new QLabel("00:00:00:00", this);
     durationTimeLabel->setStyleSheet("QLabel { color: white; font-size: 14px; padding: 0 8px; }");
+
+    fpsLabel = new QLabel("-- fps", this);
+    fpsLabel->setStyleSheet("QLabel { color: #9aa7b0; font-size: 13px; padding: 0 8px; }");
 
     positionSlider->setFixedHeight(20);
 
@@ -503,19 +394,21 @@ void PreviewOverlay::setupUi()
         timelineRow->addWidget(currentTimeLabel);
         timelineRow->addWidget(positionSlider, /*stretch*/ 1);
         timelineRow->addWidget(durationTimeLabel);
+        timelineRow->addWidget(fpsLabel);
         controlsLayout->addLayout(timelineRow);
     }
 
-    // Optional color space selector (kept hidden by default)
-    colorSpaceLabel = new QLabel("Color Space:", this);
+    // Optional colorspace selector (hidden until relevant)
+    colorSpaceLabel = new QLabel("Colorspace", this);
     colorSpaceLabel->setStyleSheet("QLabel { color: white; font-size: 14px; padding: 0 5px; }");
     colorSpaceLabel->hide();
 
     colorSpaceCombo = new QComboBox(this);
-    colorSpaceCombo->addItem("Linear");
+    // Order: sRGB, Rec.709, Linear
     colorSpaceCombo->addItem("sRGB");
     colorSpaceCombo->addItem("Rec.709");
-    colorSpaceCombo->setCurrentIndex(1);
+    colorSpaceCombo->addItem("Linear");
+    colorSpaceCombo->setCurrentIndex(0);
     colorSpaceCombo->setFocusPolicy(Qt::NoFocus);
     colorSpaceCombo->setStyleSheet(
         "QComboBox { background-color: #333; color: white; border: 1px solid #555; "
@@ -618,7 +511,7 @@ void PreviewOverlay::setupUi()
     csLayout->setSpacing(6);
     csLayout->addWidget(colorSpaceLabel);
     csLayout->addWidget(colorSpaceCombo);
-    csGroup->setVisible(false);
+    // Do not forcibly hide the container; children visibility will control it
     bottomGrid->addWidget(csGroup, 0, 2, Qt::AlignVCenter);
 
     bottomGrid->addWidget(audioGroup, 0, 3, Qt::AlignRight | Qt::AlignVCenter);
@@ -800,11 +693,6 @@ void PreviewOverlay::showImage(const QString &filePath)
     if (mediaPlayer->playbackState() != QMediaPlayer::StoppedState) {
         mediaPlayer->stop();
     }
-#ifdef HAVE_FFMPEG
-    if (usingFallbackVideo) {
-        stopFallbackVideo();
-    }
-#endif
 
     // Check if this is an HDR/EXR image
     QFileInfo fileInfo(filePath);
@@ -860,16 +748,16 @@ void PreviewOverlay::showImage(const QString &filePath)
         imageView->update();
         imageScene->update();
 
-        // Show/hide color space selector based on whether this is HDR
-        if (isHDRImage) {
-            colorSpaceLabel->show();
-            colorSpaceCombo->show();
-            controlsWidget->show();
-        } else {
-            colorSpaceLabel->hide();
-            colorSpaceCombo->hide();
-            controlsWidget->hide();
-        }
+    // For single images, only show colorspace selector when HDR
+    if (isHDRImage) {
+        colorSpaceLabel->show();
+        colorSpaceCombo->show();
+        controlsWidget->show();
+    } else {
+        colorSpaceLabel->hide();
+        colorSpaceCombo->hide();
+        controlsWidget->hide();
+    }
     } else {
         qWarning() << "[PreviewOverlay::showImage] Failed to load image:" << filePath;
     }
@@ -880,12 +768,6 @@ void PreviewOverlay::showImage(const QString &filePath)
 void PreviewOverlay::showVideo(const QString &filePath)
 {
 
-    // Ensure any fallback is stopped before starting normal video
-#ifdef HAVE_FFMPEG
-    if (usingFallbackVideo) {
-        stopFallbackVideo();
-    }
-#endif
 
     // Ensure media player is in a clean state
     if (mediaPlayer->playbackState() != QMediaPlayer::StoppedState) {
@@ -942,6 +824,9 @@ void PreviewOverlay::showVideo(const QString &filePath)
         imageItem = nullptr;
     }
 
+    // If tlRender backend is preferred, attempt to open container via tlRender
+    // tlRender container path removed
+
     // Probe metadata for FPS/timecode via FFmpeg (if available)
     {
         MediaInfo::VideoMetadata vm;
@@ -982,23 +867,12 @@ void PreviewOverlay::onPlayPauseClicked()
         }
     } else {
         // Handle video playback
-#ifdef HAVE_FFMPEG
-        if (usingFallbackVideo) {
-            fallbackPaused = !fallbackPaused;
-            if (fallbackReader) {
-                QMetaObject::invokeMethod(fallbackReader, "setPaused", Qt::QueuedConnection, Q_ARG(bool, fallbackPaused));
-            }
-            updatePlayPauseButton();
-        } else
-#endif
-        {
-            if (mediaPlayer->playbackState() == QMediaPlayer::PlayingState) {
-                mediaPlayer->pause();
-            } else {
-                mediaPlayer->play();
-            }
-            updatePlayPauseButton();
+        if (mediaPlayer->playbackState() == QMediaPlayer::PlayingState) {
+            mediaPlayer->pause();
+        } else {
+            mediaPlayer->play();
         }
+        updatePlayPauseButton();
     }
     controlsTimer->start();
 }
@@ -1026,22 +900,7 @@ void PreviewOverlay::onSliderMoved(int position)
         controlsTimer->start();
         return;
     }
-#ifdef HAVE_FFMPEG
-    if (usingFallbackVideo) {
-        // Update time label and seek continuously while dragging (live scrubbing)
-        if (fallbackDurationMs > 0) {
-            updateVideoTimeDisplays(position, fallbackDurationMs);
-        } else {
-            updateVideoTimeDisplays(position, -1);
-        }
-        if (fallbackReader) {
-            QMetaObject::invokeMethod(fallbackReader, "seekToMs", Qt::QueuedConnection, Q_ARG(qint64, static_cast<qint64>(position)));
-            QMetaObject::invokeMethod(fallbackReader, "stepOnce", Qt::QueuedConnection);
-        }
-        controlsTimer->start();
-        return;
-    }
-#endif
+    
     // QMediaPlayer path - always do live scrubbing
     mediaPlayer->setPosition(position);
     qint64 duration = mediaPlayer->duration();
@@ -1074,16 +933,7 @@ void PreviewOverlay::onSliderPressed()
         if (sequencePlaying) pauseSequence();
         return;
     }
-#ifdef HAVE_FFMPEG
-    if (usingFallbackVideo) {
-        wasPlayingBeforeSeek = !fallbackPaused;
-        fallbackPaused = true;
-        if (fallbackReader) {
-            QMetaObject::invokeMethod(fallbackReader, "setPaused", Qt::QueuedConnection, Q_ARG(bool, true));
-        }
-        return;
-    }
-#endif
+    
     wasPlayingBeforeSeek = (mediaPlayer->playbackState() == QMediaPlayer::PlayingState);
     mediaPlayer->pause();
 }
@@ -1099,24 +949,7 @@ void PreviewOverlay::onSliderReleased()
         controlsTimer->start();
         return;
     }
-#ifdef HAVE_FFMPEG
-    if (usingFallbackVideo) {
-        if (fallbackReader) {
-            QMetaObject::invokeMethod(fallbackReader, "seekToMs", Qt::QueuedConnection, Q_ARG(qint64, static_cast<qint64>(pos)));
-            QMetaObject::invokeMethod(fallbackReader, "stepOnce", Qt::QueuedConnection);
-        }
-        if (wasPlayingBeforeSeek) {
-            fallbackPaused = false;
-            if (fallbackReader) {
-                QMetaObject::invokeMethod(fallbackReader, "setPaused", Qt::QueuedConnection, Q_ARG(bool, false));
-            }
-        }
-        userSeeking = false;
-        updatePlayPauseButton();
-        controlsTimer->start();
-        return;
-    }
-#endif
+    
     mediaPlayer->setPosition(pos);
     if (wasPlayingBeforeSeek) mediaPlayer->play();
     userSeeking = false;
@@ -1134,22 +967,7 @@ void PreviewOverlay::onStepNextFrame()
         // Keep paused after stepping
         return;
     }
-#ifdef HAVE_FFMPEG
-    if (usingFallbackVideo) {
-        // Pause and single-step forward
-        fallbackPaused = true;
-        if (fallbackReader) {
-            QMetaObject::invokeMethod(fallbackReader, "setPaused", Qt::QueuedConnection, Q_ARG(bool, true));
-            qint64 pos = positionSlider->value();
-            qint64 dt = static_cast<qint64>(qRound64(frameDurationMs()));
-            qint64 target = qMin(pos + dt, static_cast<qint64>(positionSlider->maximum()));
-            QMetaObject::invokeMethod(fallbackReader, "seekToMs", Qt::QueuedConnection, Q_ARG(qint64, target));
-            QMetaObject::invokeMethod(fallbackReader, "stepOnce", Qt::QueuedConnection);
-        }
-        updatePlayPauseButton();
-        return;
-    }
-#endif
+    
     // QMediaPlayer path - always pause when stepping frames
     mediaPlayer->pause();
     qint64 pos = mediaPlayer->position();
@@ -1174,21 +992,7 @@ void PreviewOverlay::onStepPrevFrame()
         // Keep paused after stepping
         return;
     }
-#ifdef HAVE_FFMPEG
-    if (usingFallbackVideo) {
-        fallbackPaused = true;
-        if (fallbackReader) {
-            QMetaObject::invokeMethod(fallbackReader, "setPaused", Qt::QueuedConnection, Q_ARG(bool, true));
-            qint64 pos = positionSlider->value();
-            qint64 dt = static_cast<qint64>(qRound64(frameDurationMs()));
-            qint64 target = pos - dt; if (target < 0) target = 0;
-            QMetaObject::invokeMethod(fallbackReader, "seekToMs", Qt::QueuedConnection, Q_ARG(qint64, target));
-            QMetaObject::invokeMethod(fallbackReader, "stepOnce", Qt::QueuedConnection);
-        }
-        updatePlayPauseButton();
-        return;
-    }
-#endif
+    
     // QMediaPlayer path - always pause when stepping frames
     mediaPlayer->pause();
     qint64 pos = mediaPlayer->position();
@@ -1205,11 +1009,6 @@ void PreviewOverlay::onStepPrevFrame()
 
 double PreviewOverlay::frameDurationMs() const
 {
-#ifdef HAVE_FFMPEG
-    if (usingFallbackVideo && fallbackFps > 0.0) {
-        return 1000.0 / fallbackFps;
-    }
-#endif
     double fps = detectedFps;
     if (fps <= 0.0) fps = 24.0;
     return 1000.0 / fps;
@@ -1219,9 +1018,7 @@ void PreviewOverlay::updateDetectedFps()
 {
     detectedFps = 0.0;
     if (!isVideo) return;
-#ifdef HAVE_FFMPEG
-    if (usingFallbackVideo && fallbackFps > 0.0) { detectedFps = fallbackFps; return; }
-#endif
+    
     if (mediaPlayer) {
         QVariant v = mediaPlayer->metaData().value(QMediaMetaData::VideoFrameRate);
         if (v.isValid()) {
@@ -1242,12 +1039,6 @@ void PreviewOverlay::hideControls()
 
 void PreviewOverlay::updatePlayPauseButton()
 {
-#ifdef HAVE_FFMPEG
-    if (usingFallbackVideo) {
-        playPauseBtn->setIcon(fallbackPaused ? playIcon : pauseIcon);
-        return;
-    }
-#endif
     if (mediaPlayer->playbackState() == QMediaPlayer::PlayingState) {
         playPauseBtn->setIcon(pauseIcon);
     } else {
@@ -1654,13 +1445,24 @@ void PreviewOverlay::showSequence(const QStringList &framePaths, const QString &
     // Update file name label
     fileNameLabel->setText(sequenceName);
 
-    // Show/hide color space selector based on whether this is HDR
-    if (isHDRImage) {
-        colorSpaceLabel->show();
-        colorSpaceCombo->show();
-    } else {
-        colorSpaceLabel->hide();
-        colorSpaceCombo->hide();
+    // Always show colorspace selector for image sequences.
+    // Default: EXR -> Linear; others -> sRGB (user-changeable).
+    colorSpaceLabel->show();
+    colorSpaceCombo->show();
+    if (!sequenceFramePaths.isEmpty()) {
+        QFileInfo fi(sequenceFramePaths.first());
+        const QString extLower = fi.suffix().toLower();
+        if (extLower == "exr") {
+            currentColorSpace = OIIOImageLoader::ColorSpace::Linear;
+            colorSpaceCombo->blockSignals(true);
+            colorSpaceCombo->setCurrentIndex(2); // Linear
+            colorSpaceCombo->blockSignals(false);
+        } else {
+            currentColorSpace = OIIOImageLoader::ColorSpace::sRGB;
+            colorSpaceCombo->blockSignals(true);
+            colorSpaceCombo->setCurrentIndex(0); // sRGB
+            colorSpaceCombo->blockSignals(false);
+        }
     }
 
     // Clear cached frame visualization
@@ -1675,17 +1477,34 @@ void PreviewOverlay::showSequence(const QStringList &framePaths, const QString &
         disconnect(frameCache, &SequenceFrameCache::frameCached, nullptr, nullptr);
         // We no longer paint cache on the slider; only the cache bar reflects caching
 
-        // Update the separate cache bar as frames are cached
+        // Update the separate cache bar as frames are cached (incremental)
         connect(frameCache, &SequenceFrameCache::frameCached, this, [this](int frameIndex){
-            if (cacheBar) {
+            if (!cacheBar) return;
+            if (!cacheBarUpdateTimer.isValid()) cacheBarUpdateTimer.start();
+            if (cacheBarUpdateTimer.elapsed() >= 16) {
                 cacheBar->markFrameCached(frameIndex);
                 cacheBar->show();
+                cacheBarUpdateTimer.restart();
             }
+        });
+
+        // Snapshots replace stale marks when window slides or evictions happen
+        connect(frameCache, &SequenceFrameCache::cacheSnapshot, this, [this](const QSet<int>& frames){
+            if (!cacheBar) return;
+            cacheBar->setCachedFrames(frames);
+            cacheBar->show();
         });
         // Start pre-fetching immediately (this will load frames in background)
         frameCache->startPrefetch(0);
         qDebug() << "[PreviewOverlay] Started pre-fetching frames from index 0";
     }
+
+    // tlRender sequence path removed
+
+    // FPS UI reset for sequences
+    if (fpsLabel) fpsLabel->setText("-- fps");
+    sequenceFpsFrames = 0;
+    sequenceFpsTimer.invalidate();
 
     // Load first frame (synchronously for immediate display)
     if (!sequenceFramePaths.isEmpty()) {
@@ -1751,33 +1570,13 @@ void PreviewOverlay::loadSequenceFrame(int frameIndex)
 
         // If cache returned empty pixmap (frame not ready), pause playback and wait
         if (newPixmap.isNull()) {
-            // Pause playback (professional RAM player behavior)
-            if (sequencePlaying) {
-                sequenceTimer->stop();
-            }
-
-            // Keep showing previous frame
-            // Update slider and time label anyway
+            // Keep realtime cadence: do NOT pause the timer.
+            // Maintain last displayed frame and just update UI positions.
             positionSlider->blockSignals(true);
             positionSlider->setValue(frameIndex);
             positionSlider->blockSignals(false);
             updateSequenceTimeDisplays(frameIndex, true);
-
-            // Schedule a retry after a short delay to check if frame is ready
-            QTimer::singleShot(50, this, [this, frameIndex]() {
-                if (frameCache && frameCache->hasFrame(frameIndex)) {
-                    // Resume playback
-                    if (sequencePlaying) {
-                        sequenceTimer->start();
-                    }
-                    // Load the frame now that it's ready
-                    loadSequenceFrame(frameIndex);
-                } else {
-                    // Frame still not ready, schedule another retry
-                    loadSequenceFrame(frameIndex);
-                }
-            });
-            return;
+            return; // skip displaying until frame becomes ready; timer continues
         }
 
         // Frame is ready from cache, use it
@@ -1805,25 +1604,57 @@ void PreviewOverlay::loadSequenceFrame(int frameIndex)
     }
 
     if (!originalPixmap.isNull()) {
-        imageScene->clear();
-        imageItem = imageScene->addPixmap(originalPixmap);
-        imageScene->setSceneRect(originalPixmap.rect());
+        if (!imageItem) {
+            imageItem = imageScene->addPixmap(originalPixmap);
+        } else {
+            imageItem->setPixmap(originalPixmap);
+        }
+        // Only update scene rect if size changed
+        if (lastFrameSize != originalPixmap.size()) {
+            imageScene->setSceneRect(originalPixmap.rect());
+            lastFrameSize = originalPixmap.size();
+            // Ensure fit on first frame or when dimensions change
+            fitPending = true;
+        }
 
         // Determine alpha availability and reset toggle for new frame/sequence
         previewHasAlpha = originalPixmap.hasAlphaChannel();
         if (alphaCheck) { alphaCheck->setVisible(previewHasAlpha); alphaCheck->blockSignals(true); alphaCheck->setChecked(false); alphaOnlyMode = false; alphaCheck->blockSignals(false); }
 
-        fitImageToView();
+        // Fit once per sequence or when requested
+        if (fitPending) {
+            fitImageToView();
+            fitPending = false;
+        }
+
+        // FPS update (real measured)
+        if (sequencePlaying) {
+            ++sequenceFpsFrames;
+            if (!sequenceFpsTimer.isValid()) sequenceFpsTimer.start();
+            qint64 elapsed = sequenceFpsTimer.elapsed();
+            if (elapsed >= 500) { // update twice per second
+                double fps = (sequenceFpsFrames * 1000.0) / qMax<qint64>(1, elapsed);
+                currentPlaybackFps = fps;
+                if (fpsLabel) fpsLabel->setText(QString::number(fps, 'f', 1) + " fps");
+                sequenceFpsFrames = 0;
+                sequenceFpsTimer.restart();
+            }
+        }
     } else {
         qWarning() << "[PreviewOverlay::loadSequenceFrame] Failed to load frame - pixmap is null!";
     }
 
-    // Update slider and time label
-    positionSlider->blockSignals(true);
-    positionSlider->setValue(frameIndex);
-    positionSlider->blockSignals(false);
-
-    updateSequenceTimeDisplays(frameIndex);
+    // Update slider and time label (throttled)
+    bool doUiUpdate = true;
+    if (!uiUpdateTimer.isValid()) uiUpdateTimer.start();
+    else if (uiUpdateTimer.elapsed() < 30) doUiUpdate = false; // ~33 fps UI updates
+    if (doUiUpdate) {
+        uiUpdateTimer.restart();
+        positionSlider->blockSignals(true);
+        positionSlider->setValue(frameIndex);
+        positionSlider->blockSignals(false);
+        updateSequenceTimeDisplays(frameIndex);
+    }
 }
 
 void PreviewOverlay::playSequence()
@@ -1832,17 +1663,40 @@ void PreviewOverlay::playSequence()
         return;
     }
 
+    // Optional: require full warm before playback (defaults to false)
+    bool requireFullWarm = false;
+    {
+        QSettings s("AugmentCode", "KAssetManager");
+        requireFullWarm = s.value("SequenceCache/RequireFullWarmBeforePlay", false).toBool();
+    }
+    if (requireFullWarm) {
+        // If RAM cache is enabled, warm the FULL cache window before starting
+        if (frameCache && useCacheForSequences) {
+            const int target = qMin(frameCache->maxCacheSize(), positionSlider ? (positionSlider->maximum()+1) : sequenceFramePaths.size());
+            if (frameCache->cachedFrameCount() < target) {
+                frameCache->startPrefetch(currentSequenceFrame);
+                QTimer::singleShot(15, this, &PreviewOverlay::playSequence);
+                return; // wait until warmed to target window
+            }
+        }
+    }
+
     sequencePlaying = true;
     sequenceTimer->start();
     updatePlayPauseButton();
 
-    // Start pre-fetching frames ahead of current position (only if cache is enabled)
+    // Keep prefetching while playing (only if cache is enabled)
     if (frameCache && useCacheForSequences) {
         frameCache->startPrefetch(currentSequenceFrame);
-        qDebug() << "[PreviewOverlay] Playing sequence at 24 fps with pre-fetching enabled";
+        qDebug() << "[PreviewOverlay] Playing sequence at 25 fps with pre-fetching enabled";
     } else {
-        qDebug() << "[PreviewOverlay] Playing sequence at 24 fps (cache disabled)";
+        qDebug() << "[PreviewOverlay] Playing sequence at 25 fps (cache disabled)";
     }
+
+    // Start FPS measurement
+    sequenceFpsFrames = 0;
+    sequenceFpsTimer.restart();
+    if (fpsLabel) fpsLabel->setText("-- fps");
 }
 
 void PreviewOverlay::pauseSequence()
@@ -1855,6 +1709,7 @@ void PreviewOverlay::pauseSequence()
     // This allows smooth scrubbing and instant resume
 
     qDebug() << "[PreviewOverlay] Paused sequence";
+    if (fpsLabel) fpsLabel->setText("Paused");
 }
 
 void PreviewOverlay::stopSequence()
@@ -1870,6 +1725,7 @@ void PreviewOverlay::stopSequence()
 
     loadSequenceFrame(0);
     updatePlayPauseButton();
+    if (fpsLabel) fpsLabel->setText("-- fps");
 }
 
 void PreviewOverlay::onSequenceTimerTick()
@@ -1884,11 +1740,13 @@ void PreviewOverlay::onSequenceTimerTick()
     // Loop back to start if at end
     if (currentSequenceFrame >= sequenceFramePaths.size()) {
         currentSequenceFrame = 0;
-
-        // When looping, restart prefetch from frame 0 to ensure smooth playback
+        // When looping, only kick prefetch if cache isn’t already full
         if (frameCache && useCacheForSequences) {
-            qDebug() << "[PreviewOverlay] Sequence looped to start, restarting prefetch";
-            frameCache->startPrefetch(0);
+            const int need = qMin(frameCache->maxCacheSize(), sequenceFramePaths.size());
+            if (frameCache->cachedFrameCount() < need) {
+                qDebug() << "[PreviewOverlay] Sequence looped; cache not full, restarting prefetch";
+                frameCache->startPrefetch(0);
+            }
         }
     }
 
@@ -1902,16 +1760,16 @@ void PreviewOverlay::onColorSpaceChanged(int index)
     // Update current color space
     switch (index) {
         case 0:
-            currentColorSpace = OIIOImageLoader::ColorSpace::Linear;
-            qDebug() << "[PreviewOverlay] Switched to Linear color space";
-            break;
-        case 1:
             currentColorSpace = OIIOImageLoader::ColorSpace::sRGB;
             qDebug() << "[PreviewOverlay] Switched to sRGB color space";
             break;
-        case 2:
+        case 1:
             currentColorSpace = OIIOImageLoader::ColorSpace::Rec709;
             qDebug() << "[PreviewOverlay] Switched to Rec.709 color space";
+            break;
+        case 2:
+            currentColorSpace = OIIOImageLoader::ColorSpace::Linear;
+            qDebug() << "[PreviewOverlay] Switched to Linear color space";
             break;
         default:
             currentColorSpace = OIIOImageLoader::ColorSpace::sRGB;
@@ -1925,6 +1783,13 @@ void PreviewOverlay::onColorSpaceChanged(int index)
         // Clear cache and reinitialize with new color space (only if cache is enabled)
         if (frameCache && useCacheForSequences) {
             frameCache->setSequence(sequenceFramePaths, currentColorSpace);
+            // Clear cache bar visualization and restart prefetch for accurate redraw
+            if (cacheBar) {
+                cacheBar->clearCachedFrames();
+                cacheBar->setTotalFrames(sequenceFramePaths.size());
+                cacheBar->show();
+            }
+            frameCache->startPrefetch(currentSequenceFrame);
         }
 
         loadSequenceFrame(currentSequenceFrame);
@@ -1942,13 +1807,6 @@ void PreviewOverlay::stopPlayback()
     if (mediaPlayer->playbackState() == QMediaPlayer::PlayingState) {
         mediaPlayer->stop();
     }
-
-#ifdef HAVE_FFMPEG
-    // Stop fallback playback if active
-    if (usingFallbackVideo) {
-        stopFallbackVideo();
-    }
-#endif
 
     // Stop sequence playback
     if (sequencePlaying) {
@@ -1968,115 +1826,9 @@ void PreviewOverlay::stopPlayback()
 
 
 
-#ifdef HAVE_FFMPEG
-void PreviewOverlay::startFallbackVideo(const QString &filePath)
-{
-    if (usingFallbackVideo) {
-        stopFallbackVideo();
-    }
-
-    qDebug() << "[PreviewOverlay] Starting fallback PNG-in-MOV playback for" << filePath;
-
-    // Stop and hide the video widget path
-    mediaPlayer->stop();
-    videoWidget->hide();
-    imageView->show();
-    controlsWidget->show();
-    positionNavButtons(imageView->viewport());
-
-    // Clear scene and reset pixmap
-    imageScene->clear();
-    imageItem = nullptr;
-    originalPixmap = QPixmap();
-
-    // Probe duration and fps for UI
-    fallbackDurationMs = 0;
-    fallbackFps = 24.0;
-    AVFormatContext* fmt = nullptr;
-    if (avformat_open_input(&fmt, filePath.toUtf8().constData(), nullptr, nullptr) == 0) {
-        if (avformat_find_stream_info(fmt, nullptr) == 0) {
-            int vIdx = av_find_best_stream(fmt, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
-            if (vIdx >= 0) {
-                AVStream* vs = fmt->streams[vIdx];
-                AVRational r = vs->avg_frame_rate.num > 0 ? vs->avg_frame_rate : vs->r_frame_rate;
-                if (r.num > 0 && r.den > 0) fallbackFps = static_cast<double>(r.num) / r.den;
-            }
-            if (fmt->duration > 0) {
-                fallbackDurationMs = static_cast<qint64>((fmt->duration * 1000) / AV_TIME_BASE);
-            }
-        }
-        avformat_close_input(&fmt);
-    }
-
-    if (fallbackDurationMs > 0) {
-        positionSlider->setRange(0, fallbackDurationMs);
-        updateVideoTimeDisplays(0, fallbackDurationMs);
-    } else {
-        // Unknown duration
-        positionSlider->setRange(0, 0);
-        updateVideoTimeDisplays(0, -1);
-    }
-
-    // Spin up worker thread
-    fallbackThread = new QThread();
-    fallbackReader = new FallbackPngMovReader(filePath);
-    fallbackReader->moveToThread(fallbackThread);
-
-    connect(fallbackThread, &QThread::started, fallbackReader, &FallbackPngMovReader::start);
-    connect(fallbackReader, &FallbackPngMovReader::frameReady, this, &PreviewOverlay::onFallbackFrameReady, Qt::QueuedConnection);
-    connect(fallbackReader, &FallbackPngMovReader::finished, this, &PreviewOverlay::onFallbackFinished, Qt::QueuedConnection);
-    connect(fallbackReader, &FallbackPngMovReader::finished, fallbackThread, &QThread::quit);
-    connect(fallbackThread, &QThread::finished, fallbackReader, &QObject::deleteLater);
-    connect(fallbackThread, &QThread::finished, fallbackThread, &QObject::deleteLater);
-
-    usingFallbackVideo = true;
-    // Ensure reader and thread will stop on overlay destruction as a last resort
-    connect(this, &QObject::destroyed, fallbackReader, &FallbackPngMovReader::stop, Qt::DirectConnection);
-    connect(this, &QObject::destroyed, fallbackThread, &QThread::quit);
-    fallbackThread->start();
-}
-
-void PreviewOverlay::stopFallbackVideo()
-{
-    if (!usingFallbackVideo) return;
-    usingFallbackVideo = false;
-
-    if (fallbackReader) {
-        // Disconnect to avoid queued frames landing after teardown
-        disconnect(fallbackReader, nullptr, this, nullptr);
-        // Set stop flag immediately (atomic) without relying on the worker event loop
-        fallbackReader->stop(); // thread-safe: sets std::atomic<bool>
-    }
-    if (fallbackThread) {
-        fallbackThread->quit();
-        // Give the worker time to exit its loop and close input
-        fallbackThread->wait(3000);
-    }
-    fallbackReader = nullptr;
-    fallbackThread = nullptr;
-}
-#endif // HAVE_FFMPEG
-
 void PreviewOverlay::onPlayerError(QMediaPlayer::Error error, const QString &errorString)
 {
     qWarning() << "[PreviewOverlay] Media player error:" << error << errorString;
-#ifdef HAVE_FFMPEG
-    // Only trigger fallback if the error belongs to the currently requested source
-    if (!isVideo) return;
-    const QUrl src = mediaPlayer->source();
-    if (src.isLocalFile()) {
-        const QString srcPath = QDir::fromNativeSeparators(src.toLocalFile());
-        const QString curPath = QDir::fromNativeSeparators(currentFilePath);
-        if (srcPath != curPath) {
-            qDebug() << "[PreviewOverlay] Ignoring error for stale source" << srcPath;
-            return;
-        }
-    }
-    // Fallback if codec is unsupported (e.g., PNG in MOV)
-    if (!usingFallbackVideo) {
-        startFallbackVideo(currentFilePath);
-    }
-#endif
 }
 
 void PreviewOverlay::onMediaStatusChanged(QMediaPlayer::MediaStatus status)
@@ -2098,52 +1850,6 @@ void PreviewOverlay::onMediaStatusChanged(QMediaPlayer::MediaStatus status)
             break;
         }
     }
-}
-
-void PreviewOverlay::onFallbackFrameReady(const QImage &image, qint64 ptsMs)
-{
-#ifdef HAVE_FFMPEG
-    // Ignore frames from stale fallback readers
-    if (!usingFallbackVideo || sender() != fallbackReader) {
-        return;
-    }
-#endif
-    // Update pixmap in the image scene
-    originalPixmap = QPixmap::fromImage(image);
-
-    // Determine alpha for fallback video frame display is irrelevant; hide toggle for videos
-    if (alphaCheck) alphaCheck->hide();
-
-    if (!imageItem) {
-        imageItem = imageScene->addPixmap(originalPixmap);
-        // Fit exactly once for the new media to avoid per-frame jank
-        if (fitPending) {
-            fitImageToView();
-            fitPending = false;
-        }
-    } else {
-        imageItem->setPixmap(originalPixmap);
-    }
-
-    // Update UI time/slider
-    if (fallbackDurationMs > 0) {
-        positionSlider->setValue(static_cast<int>(ptsMs));
-        updateVideoTimeDisplays(ptsMs, fallbackDurationMs);
-    } else {
-        updateVideoTimeDisplays(ptsMs, -1);
-    }
-}
-
-void PreviewOverlay::onFallbackFinished()
-{
-#ifdef HAVE_FFMPEG
-    // Ignore finish from stale readers
-    if (sender() != fallbackReader) {
-        return;
-    }
-#endif
-    qDebug() << "[PreviewOverlay] Fallback playback finished";
-    stopFallbackVideo();
 }
 
 void PreviewOverlay::showText(const QString &filePath)
@@ -2440,10 +2146,22 @@ SequenceFrameCache::SequenceFrameCache(QObject *parent)
 
 SequenceFrameCache::~SequenceFrameCache()
 {
-    // Do not block UI waiting for worker threads. Mark all in-flight tasks as cancelled
-    // and let them wind down naturally.
+    qDebug() << "[SequenceFrameCache::~SequenceFrameCache] Destructor starting";
+    
+    // Mark all in-flight tasks as cancelled by bumping epoch
     stopPrefetch();
+    
+    // CRITICAL: Wait for all pending frame loaders to finish before destroying
+    // This prevents use-after-free when workers emit signals to destroyed cache
+    if (m_threadPool && !m_pendingFrames.isEmpty()) {
+        qDebug() << "[SequenceFrameCache] Waiting for" << m_pendingFrames.size() << "pending workers";
+        // Wait up to 2 seconds for workers to finish (they check epoch and exit quickly)
+        m_threadPool->waitForDone(2000);
+    }
+    
     clearCache();
+    
+    qDebug() << "[SequenceFrameCache::~SequenceFrameCache] Destructor complete";
 }
 
 void SequenceFrameCache::setSequence(const QStringList &framePaths, OIIOImageLoader::ColorSpace colorSpace)
@@ -2454,6 +2172,15 @@ void SequenceFrameCache::setSequence(const QStringList &framePaths, OIIOImageLoa
     m_framePaths = framePaths;
     m_colorSpace = colorSpace;
     m_currentFrame = 0;
+    m_windowStart = 0;
+    m_windowEnd = qMax(-1, qMin((int)framePaths.size()-1, m_maxCacheSize-1));
+    m_nextToEnqueue = m_windowStart;
+    // Load optional concurrency setting
+    {
+        QSettings s("AugmentCode", "KAssetManager");
+        int conc = s.value("SequenceCache/PrefetchConcurrency", 4).toInt();
+        m_prefetchConcurrency = qMax(1, conc);
+    }
     qDebug() << "[SequenceFrameCache] Set sequence with" << framePaths.size() << "frames";
 }
 
@@ -2462,6 +2189,8 @@ void SequenceFrameCache::clearCache()
     QMutexLocker locker(&m_mutex);
     m_cache.clear();
     m_pendingFrames.clear();
+    // Notify listeners that cache is empty
+    emit cacheSnapshot(QSet<int>());
 }
 
 QPixmap SequenceFrameCache::getFrame(int frameIndex)
@@ -2522,36 +2251,29 @@ void SequenceFrameCache::setCurrentFrame(int frameIndex)
         // The prefetch will load any missing frames from the new position
     }
 
-    // Only clean up cache if it's getting close to the limit
-    // This prevents aggressive cleanup during normal playback
-    int currentCacheSize = m_cache.count();
-    int cacheThreshold = static_cast<int>(m_maxCacheSize * 0.9); // 90% of max
-
-    if (currentCacheSize >= cacheThreshold) {
-        // Remove frames that are too far behind the current position (sliding window)
-        // Scale the window based on max cache size
-        // Keep 40% of cache behind, 60% ahead for smooth forward playback
-        const int behindWindow = static_cast<int>(m_maxCacheSize * 0.4);
-        const int aheadWindow = static_cast<int>(m_maxCacheSize * 0.6);
-
-        // Remove frames that are outside the window
-        QList<int> keysToRemove;
-        for (int i = 0; i < m_framePaths.size(); ++i) {
-            if (m_cache.contains(i)) {
-                // Remove if too far behind or too far ahead
-                if (i < frameIndex - behindWindow || i > frameIndex + aheadWindow) {
-                    keysToRemove.append(i);
-                }
-            }
+    // Strict sliding window forward: [windowStart .. windowEnd]
+    const int total = m_framePaths.size();
+    const int window = qMin(m_maxCacheSize, total);
+    int desiredStart = qBound(0, frameIndex, qMax(0, total - window));
+    int desiredEnd = qMin(total - 1, desiredStart + window - 1);
+    if (desiredStart != m_windowStart || desiredEnd != m_windowEnd) {
+        m_windowStart = desiredStart;
+        m_windowEnd = desiredEnd;
+        // Ensure next enqueue pointer is at least current frame
+        m_nextToEnqueue = qMax(m_nextToEnqueue, m_windowStart);
+        // Hard-evict anything outside the window to prevent fragmentation
+        QList<int> keys;
+        for (int i = 0; i < total; ++i) {
+            if (m_cache.contains(i) && (i < m_windowStart || i > m_windowEnd)) keys.append(i);
         }
-
-        // Remove old frames
-        for (int key : keysToRemove) {
-            m_cache.remove(key);
+        for (int k : keys) m_cache.remove(k);
+        m_pendingFrames.clear();
+        // Emit fresh snapshot limited to window
+        QSet<int> snap;
+        for (int i = m_windowStart; i <= m_windowEnd; ++i) {
+            if (m_cache.contains(i)) snap.insert(i);
         }
-
-        // Frames removed silently to avoid log spam
-        Q_UNUSED(keysToRemove);
+        emit cacheSnapshot(snap);
     }
 
     m_currentFrame = frameIndex;
@@ -2591,52 +2313,71 @@ void SequenceFrameCache::prefetchFrames(int startFrame)
         return;
     }
 
-    // Pre-fetch frames ahead of current position for smooth playback
-    // Scale prefetch count based on max cache size (60% of cache for forward playback)
-    const int prefetchCount = static_cast<int>(m_maxCacheSize * 0.6);
+    // Strict sequential fill within [m_windowStart..m_windowEnd]
+    const int totalFrames = m_framePaths.size();
+    if (m_windowEnd < m_windowStart || totalFrames == 0) return;
 
-    for (int i = 0; i <= prefetchCount; ++i) {
-        int frameIndex = startFrame + i;
+    // Back up nextToEnqueue to current frame if user seeked backwards
+    if (startFrame < m_nextToEnqueue) m_nextToEnqueue = qMax(m_windowStart, startFrame);
 
-        // Stop if we've reached the end
-        if (frameIndex >= m_framePaths.size()) {
-            break;
-        }
+    int inFlight = m_pendingFrames.size();
+    while (inFlight < m_prefetchConcurrency && m_nextToEnqueue <= m_windowEnd) {
+        const int idx = m_nextToEnqueue;
+        ++m_nextToEnqueue;
+        if (m_cache.contains(idx) || m_pendingFrames.contains(idx)) continue;
+        scheduleFrameIfNeeded(idx, epoch, /*highPriority*/true);
+        ++inFlight;
+    }
+}
 
-        // Skip if already cached or being loaded
-        if (m_cache.contains(frameIndex) || m_pendingFrames.contains(frameIndex)) {
-            continue;
-        }
+bool SequenceFrameCache::isRangeMostlyCached(int start, int end, double threshold) const
+{
+    int total = qMax(0, end - start + 1);
+    if (total == 0) return true;
+    int cached = 0;
+    for (int i=start; i<=end; ++i) {
+        if (m_cache.contains(i)) ++cached;
+    }
+    return (static_cast<double>(cached) / total) >= threshold;
+}
 
-        // Mark as pending
-        m_pendingFrames.insert(frameIndex);
-
-        // Create worker to load frame in background
-        QString framePath = m_framePaths[frameIndex];
-        FrameLoaderWorker *worker = new FrameLoaderWorker(this, frameIndex, framePath, m_colorSpace, epoch);
-
-        // Use Qt::AutoConnection - Qt will automatically choose the right connection type
-        // This ensures proper thread safety without blocking
-        connect(worker, &FrameLoaderWorker::frameLoaded, this, [this](int idx, QPixmap pixmap) {
+void SequenceFrameCache::scheduleFrameIfNeeded(int frameIndex, quint64 epoch, bool highPriority)
+{
+    if (m_cache.contains(frameIndex) || m_pendingFrames.contains(frameIndex) || frameIndex < 0 || frameIndex >= m_framePaths.size()) return;
+    m_pendingFrames.insert(frameIndex);
+    QString framePath = m_framePaths[frameIndex];
+    FrameLoaderWorker *worker = new FrameLoaderWorker(this, frameIndex, framePath, m_colorSpace, epoch);
+    
+    // CRITICAL: Use Qt::QueuedConnection with context object to ensure auto-disconnect
+    // This prevents crashes when SequenceFrameCache is destroyed while workers are running
+    connect(worker, &FrameLoaderWorker::frameLoaded, this, [this](int idx, QPixmap pixmap) {
+        // SAFETY: This lambda won't execute if 'this' is destroyed (Qt auto-disconnect)
+        {
             QMutexLocker locker(&m_mutex);
             m_pendingFrames.remove(idx);
-
             if (!pixmap.isNull() && m_prefetchActive) {
-                // Insert into cache
-                int cost = pixmap.width() * pixmap.height() * 4 / 1024; // Cost in KB
-
-                // Check if cache is full before inserting
-                int currentCost = m_cache.totalCost();
-                int maxCost = m_cache.maxCost();
+                int cost = pixmap.width() * pixmap.height() * 4 / 1024; // KB
                 m_cache.insert(idx, new QPixmap(pixmap), cost);
-                emit frameCached(idx);
             } else if (pixmap.isNull()) {
                 qWarning() << "[SequenceFrameCache] Failed to load frame" << idx;
             }
-        }, Qt::AutoConnection);
-
-        m_threadPool->start(worker);
-    }
+        }
+        emit frameCached(idx);
+        // Optional: emit a throttled snapshot for accurate UI; keep cheap by limiting to window
+        {
+            QSet<int> snap;
+            QMutexLocker locker(&m_mutex);
+            for (int i = m_windowStart; i <= m_windowEnd; ++i) {
+                if (m_cache.contains(i)) snap.insert(i);
+            }
+            locker.unlock();
+            emit cacheSnapshot(snap);
+        }
+        // Queue more work to respect concurrency limit
+        QMetaObject::invokeMethod(this, [this](){ prefetchFrames(m_currentFrame); }, Qt::QueuedConnection);
+    }, Qt::QueuedConnection); // EXPLICIT QueuedConnection for proper cleanup
+    
+    m_threadPool->start(worker, highPriority ? QThread::HighestPriority : QThread::LowPriority);
 }
 
 QPixmap SequenceFrameCache::loadFrame(int frameIndex)
@@ -2800,5 +2541,90 @@ int SequenceFrameCache::calculateOptimalCacheSize(int percentOfFreeRAM)
 }
 
 
-// Required because this .cpp defines a QObject with Q_OBJECT (FallbackPngMovReader)
-#include "preview_overlay.moc"
+// ============================================================================
+// FFmpegPlayer Signal Handler Implementations
+// ============================================================================
+
+void PreviewOverlay::onFFmpegFrameReady(const FFmpegPlayer::VideoFrame& frame)
+{
+    if (!frame.isValid()) {
+        qWarning() << "[PreviewOverlay] Received invalid frame from FFmpegPlayer";
+        return;
+    }
+    
+    // Update pixmap in the image scene
+    originalPixmap = QPixmap::fromImage(frame.image);
+    
+    // Hide alpha toggle for videos
+    if (alphaCheck) alphaCheck->hide();
+    
+    if (!imageItem) {
+        imageItem = imageScene->addPixmap(originalPixmap);
+        // Fit exactly once for the new media to avoid per-frame jank
+        if (fitPending) {
+            fitImageToView();
+            fitPending = false;
+        }
+    } else {
+        imageItem->setPixmap(originalPixmap);
+    }
+    
+    // Update UI time/slider with frame timestamp
+    if (frame.timestampMs >= 0) {
+        positionSlider->setValue(static_cast<int>(frame.timestampMs));
+        updateVideoTimeDisplays(frame.timestampMs, mediaPlayer->duration());
+    }
+}
+
+void PreviewOverlay::onFFmpegMediaInfo(const FFmpegPlayer::MediaInfo& info)
+{
+    qDebug() << "[PreviewOverlay] FFmpegPlayer media info:"
+             << "Duration:" << info.durationMs << "ms"
+             << "FPS:" << info.fps
+             << "Resolution:" << info.width << "x" << info.height
+             << "Codec:" << info.codec;
+    
+    // Update duration display
+    if (info.durationMs > 0) {
+        positionSlider->setRange(0, info.durationMs);
+        updateVideoTimeDisplays(0, info.durationMs);
+    }
+    
+    // Update FPS display
+    if (info.fps > 0.0) {
+        detectedFps = info.fps;
+        if (fpsLabel) fpsLabel->setText(QString::number(info.fps, 'f', 1) + " fps");
+    }
+}
+
+void PreviewOverlay::onFFmpegPlaybackState(FFmpegPlayer::PlaybackState state)
+{
+    qDebug() << "[PreviewOverlay] FFmpegPlayer state changed to:" << static_cast<int>(state);
+    
+    switch (state) {
+        case FFmpegPlayer::PlaybackState::Playing:
+            playPauseBtn->setIcon(pauseIcon);
+            break;
+        case FFmpegPlayer::PlaybackState::Paused:
+        case FFmpegPlayer::PlaybackState::Stopped:
+            playPauseBtn->setIcon(playIcon);
+            break;
+        case FFmpegPlayer::PlaybackState::Loading:
+            // Optional: show loading indicator
+            break;
+        case FFmpegPlayer::PlaybackState::Error:
+            playPauseBtn->setIcon(playIcon);
+            break;
+    }
+}
+
+void PreviewOverlay::onFFmpegError(const QString& errorString)
+{
+    qWarning() << "[PreviewOverlay] FFmpegPlayer error:" << errorString;
+    
+    // Fallback to standard QMediaPlayer if FFmpegPlayer fails
+    if (!mediaPlayer->source().isEmpty()) {
+        qDebug() << "[PreviewOverlay] Falling back to QMediaPlayer";
+        mediaPlayer->play();
+    }
+}

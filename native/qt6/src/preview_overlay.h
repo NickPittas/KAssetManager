@@ -36,9 +36,11 @@
 #include <QSet>
 #include <QPointer>
 #include <atomic>
+#include <QElapsedTimer>
 
 
 #include "oiio_image_loader.h"
+#include "media/ffmpeg_player.h"
 
 // Forward declarations
 class SequenceFrameCache;
@@ -288,8 +290,12 @@ private slots:
     void onColorSpaceChanged(int index);
     void onPlayerError(QMediaPlayer::Error error, const QString &errorString);
     void onMediaStatusChanged(QMediaPlayer::MediaStatus status);
-    void onFallbackFrameReady(const QImage &image, qint64 ptsMs);
-    void onFallbackFinished();
+
+    // FFmpegPlayer signal handlers
+    void onFFmpegFrameReady(const FFmpegPlayer::VideoFrame& frame);
+    void onFFmpegMediaInfo(const FFmpegPlayer::MediaInfo& info);
+    void onFFmpegPlaybackState(FFmpegPlayer::PlaybackState state);
+    void onFFmpegError(const QString& errorString);
 
 private:
     void setupUi();
@@ -315,8 +321,6 @@ private:
     void playSequence();
     void pauseSequence();
     void stopSequence();
-    void startFallbackVideo(const QString &filePath);
-    void stopFallbackVideo();
     // Seeking helpers
     double frameDurationMs() const; // based on detectedFps (from metadata) or fallbackFps
     void updateDetectedFps();
@@ -336,6 +340,7 @@ private:
     CachedFrameSlider *positionSlider;
     QLabel *currentTimeLabel;
     QLabel *durationTimeLabel;
+    QLabel *fpsLabel;
     QSlider *volumeSlider;
     QPushButton *muteBtn;
 
@@ -403,14 +408,6 @@ private:
     SequenceFrameCache *frameCache;
     bool useCacheForSequences; // Flag to enable/disable cache (disabled by default)
 
-    // Fallback (software) video playback state for unsupported codecs (e.g., PNG-in-MOV)
-    bool usingFallbackVideo = false;
-    class FallbackPngMovReader; // defined in .cpp
-    FallbackPngMovReader* fallbackReader = nullptr;
-    QThread* fallbackThread = nullptr;
-    qint64 fallbackDurationMs = 0;
-    double fallbackFps = 0.0;
-    bool fallbackPaused = false;
 
     // Color space for HDR/EXR images
     OIIOImageLoader::ColorSpace currentColorSpace;
@@ -422,6 +419,21 @@ private:
 
     // Fit-to-window staging flag so we only run expensive fit once
     bool fitPending = false;
+
+    // FPS measurement for sequences
+    QElapsedTimer sequenceFpsTimer;
+    int sequenceFpsFrames = 0;
+    double currentPlaybackFps = 0.0;
+
+    // UI throttling to avoid heavy repaints
+    QElapsedTimer uiUpdateTimer; // for slider/time label throttling
+    QSize lastFrameSize; // track to avoid resetting scene rect
+
+    // Cache bar update throttle
+    // Unified FFmpegPlayer for video and image sequence playback
+    FFmpegPlayer* m_ffmpegPlayer = nullptr;
+    QElapsedTimer cacheBarUpdateTimer;
+
 };
 
 // ============================================================================
@@ -445,6 +457,9 @@ public:
     void startPrefetch(int currentFrame);
     void stopPrefetch();
     void setCurrentFrame(int frameIndex);
+    // Tunables
+    void setPrefetchConcurrency(int n) { m_prefetchConcurrency = qMax(1, n); }
+    int prefetchConcurrency() const { return m_prefetchConcurrency; }
 
     // Configuration
     void setMaxCacheSize(int maxFrames); // Default: 100 frames
@@ -462,9 +477,12 @@ public:
 
 signals:
     void frameCached(int frameIndex);
+    void cacheSnapshot(const QSet<int>& frames);
 
 private:
     void prefetchFrames(int startFrame);
+    bool isRangeMostlyCached(int start, int end, double threshold) const;
+    void scheduleFrameIfNeeded(int frameIndex, quint64 epoch, bool highPriority);
     QPixmap loadFrame(int frameIndex);
 
     QStringList m_framePaths;
@@ -477,6 +495,12 @@ private:
     bool m_prefetchActive;
     QSet<int> m_pendingFrames; // Track frames being loaded
     std::atomic<quint64> m_epoch; // cancellation epoch; increment to invalidate in-flight workers
+    int m_prefetchConcurrency = 4; // default limited concurrency for near-sequential fills
+
+    // Strict sequential sliding window state
+    int m_windowStart = 0;
+    int m_windowEnd = -1;
+    int m_nextToEnqueue = 0;
 };
 
 // Worker for loading frames in background

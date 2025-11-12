@@ -113,6 +113,14 @@ if ($Generator -eq "Ninja") {
     $build = Join-Path $buildBase "vs2022"
 }
 
+# HARD-CODE vcpkg location to avoid env flakiness and spaces-in-path issues
+$vcpkgRoot = "C:/vcpkg"
+if (Test-Path $vcpkgRoot) {
+    $env:VCPKG_ROOT = $vcpkgRoot
+} else {
+    Write-Warning "Expected vcpkg root not found at $vcpkgRoot. Install vcpkg there or update scripts/build-windows.ps1."
+}
+
 # Auto-load custom FFmpeg root if present
 $defaultFfmpeg = Join-Path $repoRoot "third_party/ffmpeg"
 if (-not $env:FFMPEG_ROOT -and (Test-Path $defaultFfmpeg)) {
@@ -159,9 +167,29 @@ Initialize-QtToolchain -QtPrefix $QtPrefix
 $configureArgs = @(
     "-S", $src,
     "-B", $build,
-    "-G", $Generator,
-    "-DCMAKE_PREFIX_PATH=$QtPrefix"
+    "-G", $Generator
 )
+
+# Always drive CMake with the vcpkg toolchain from C:/vcpkg and make search paths explicit
+if (Test-Path (Join-Path $vcpkgRoot 'scripts/buildsystems/vcpkg.cmake')) {
+    $tc = (Join-Path $vcpkgRoot 'scripts/buildsystems/vcpkg.cmake') -replace '\\','/'
+    $prefixQt = $QtPrefix -replace '\\','/'
+    $prefixVcpkg = (Join-Path $vcpkgRoot 'installed/x64-windows') -replace '\\','/'
+    $configureArgs += @(
+        "-DCMAKE_TOOLCHAIN_FILE=$tc",
+        "-DVCPKG_TARGET_TRIPLET=x64-windows",
+        "-DCMAKE_PREFIX_PATH=$prefixVcpkg;$prefixQt",
+        "-DOpenImageIO_DIR=$prefixVcpkg/share/openimageio",
+        "-Dminizip-ng_DIR=$prefixVcpkg/share/minizip-ng"
+    )
+    Write-Host "Using vcpkg toolchain: $tc" -ForegroundColor Green
+    Write-Host "vcpkg prefix added: $prefixVcpkg" -ForegroundColor Green
+} else {
+    # Fall back to at least include Qt in prefix
+    $configureArgs += @("-DCMAKE_PREFIX_PATH=$QtPrefix")
+}
+
+# tlRender is intentionally not integrated in-repo. Do not auto-enable anything related to it.
 
 # For Ninja, set build type during configuration
 if ($Generator -eq "Ninja") {
@@ -231,6 +259,20 @@ if ($Package) {
                 Write-Host "Copied $ffmpegCount FFmpeg DLL files" -ForegroundColor Green
             } else {
                 Write-Warning "FFMPEG_ROOT specified ($ffmpegRoot) but bin/ not found. Skipping custom FFmpeg copy."
+            }
+        } else {
+            # No custom FFmpeg runtime; copy vcpkg FFmpeg DLLs if available
+            $vcpkgBin = 'C:\vcpkg\installed\x64-windows\bin'
+            if (Test-Path $vcpkgBin) {
+                $stageBinDir = Join-Path $stage 'bin'
+                $ffmpegDlls = Get-ChildItem -Path $vcpkgBin -Filter "*.dll" -ErrorAction SilentlyContinue |
+                    Where-Object { $_.Name -match '^(avcodec|avdevice|avfilter|avformat|avutil|postproc|swresample|swscale).*\.dll$' }
+                $n = 0
+                foreach ($dll in $ffmpegDlls) {
+                    Copy-Item $dll.FullName -Destination $stageBinDir -Force
+                    $n++
+                }
+                Write-Host "Copied $n FFmpeg DLLs from vcpkg" -ForegroundColor Green
             }
         }
 
