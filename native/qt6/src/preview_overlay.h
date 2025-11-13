@@ -5,9 +5,6 @@
 #include <QLabel>
 #include <QPushButton>
 #include <QSlider>
-#include <QMediaPlayer>
-#include <QVideoWidget>
-#include <QAudioOutput>
 #include <QKeyEvent>
 #include <QTimer>
 #include <QThread>
@@ -15,7 +12,6 @@
 #include <QGraphicsScene>
 #include <QGraphicsPixmapItem>
 #include <QGraphicsSvgItem>
-#include <QGraphicsVideoItem>
 #include <QComboBox>
 #include <QCheckBox>
 #ifdef HAVE_QT_PDF
@@ -40,7 +36,7 @@
 
 
 #include "oiio_image_loader.h"
-#include "media/ffmpeg_player.h"
+#include "media/gstreamer_player.h"
 
 // Forward declarations
 class SequenceFrameCache;
@@ -288,14 +284,14 @@ private slots:
     void hideControls();
     void onSequenceTimerTick();
     void onColorSpaceChanged(int index);
-    void onPlayerError(QMediaPlayer::Error error, const QString &errorString);
-    void onMediaStatusChanged(QMediaPlayer::MediaStatus status);
 
-    // FFmpegPlayer signal handlers
-    void onFFmpegFrameReady(const FFmpegPlayer::VideoFrame& frame);
-    void onFFmpegMediaInfo(const FFmpegPlayer::MediaInfo& info);
-    void onFFmpegPlaybackState(FFmpegPlayer::PlaybackState state);
-    void onFFmpegError(const QString& errorString);
+    // GStreamerPlayer signal handlers
+    void onGStreamerPositionChanged(qint64 positionMs);
+    void onGStreamerDurationChanged(qint64 durationMs);
+    void onGStreamerMediaInfo(const GStreamerPlayer::MediaInfo& info);
+    void onGStreamerPlaybackStateChanged(GStreamerPlayer::PlaybackState state);
+    void onGStreamerError(const QString& errorString);
+    void onGStreamerEndOfStream();
 
 private:
     void setupUi();
@@ -330,8 +326,7 @@ private:
     QGraphicsScene *imageScene;
     QGraphicsPixmapItem *imageItem;
     QGraphicsSvgItem *svgItem;
-    QGraphicsVideoItem *videoItem;
-    QVideoWidget *videoWidget;
+    QWidget *videoWidget; // Widget for GStreamer video rendering
     QWidget *controlsWidget;
     QPushButton *playPauseBtn;
     QPushButton *prevFrameBtn;
@@ -363,9 +358,8 @@ private:
     QTableView *tableView;
     QStandardItemModel *tableModel;
 
-    // Media player
-    QMediaPlayer *mediaPlayer;
-    QAudioOutput *audioOutput;
+    // GStreamer media player
+    GStreamerPlayer *m_gstreamerPlayer;
 #ifdef HAVE_QT_PDF
     QPdfDocument *pdfDoc;
     QPdfView *pdfView;
@@ -430,8 +424,6 @@ private:
     QSize lastFrameSize; // track to avoid resetting scene rect
 
     // Cache bar update throttle
-    // Unified FFmpegPlayer for video and image sequence playback
-    FFmpegPlayer* m_ffmpegPlayer = nullptr;
     QElapsedTimer cacheBarUpdateTimer;
 
 };

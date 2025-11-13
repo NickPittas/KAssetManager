@@ -1,0 +1,304 @@
+<?xml version="1.0"?>
+<!-- This file was automatically generated from C sources - DO NOT EDIT!
+To affect the contents of this file, edit the original C definitions,
+and/or use gtk-doc annotations.  -->
+<repository version="1.2"
+            xmlns="http://www.gtk.org/introspection/core/1.0"
+            xmlns:c="http://www.gtk.org/introspection/c/1.0"
+            xmlns:glib="http://www.gtk.org/introspection/glib/1.0">
+  <include name="Gio" version="2.0"/>
+  <package name="libsoup-3.0"/>
+  <c:include name="libsoup/soup.h"/>
+  <namespace name="Soup"
+             version="3.0"
+             shared-library="soup-3.0-0.dll"
+             c:identifier-prefixes="Soup"
+             c:symbol-prefixes="soup">
+    <function-macro name="CHECK_VERSION"
+                    c:identifier="SOUP_CHECK_VERSION"
+                    introspectable="0">
+      <doc xml:space="preserve"
+           filename="libsoup\soup-version.c"
+           line="41">Macro to test the version of libsoup being compiled against.
+
+Returns %TRUE if the version of the libsoup header files
+is the same as or newer than the passed-in version.</doc>
+      <source-position filename="libsoup\soup-version.h" line="18"/>
+      <parameters>
+        <parameter name="major">
+          <doc xml:space="preserve"
+               filename="libsoup\soup-version.c"
+               line="43">major version (e.g. 2 for version 2.42.0)</doc>
+        </parameter>
+        <parameter name="minor">
+          <doc xml:space="preserve"
+               filename="libsoup\soup-version.c"
+               line="44">minor version (e.g. 42 for version 2.42.0)</doc>
+        </parameter>
+        <parameter name="micro">
+          <doc xml:space="preserve"
+               filename="libsoup\soup-version.c"
+               line="45">micro version (e.g. 0 for version 2.42.0)</doc>
+        </parameter>
+      </parameters>
+    </function-macro>
+    <constant name="COOKIE_MAX_AGE_ONE_DAY"
+              value="0"
+              c:type="SOUP_COOKIE_MAX_AGE_ONE_DAY">
+      <doc xml:space="preserve"
+           filename="libsoup\cookies\soup-cookie.c"
+           line="590">A constant corresponding to 1 day.
+
+For use with [ctor@Cookie.new] and [method@Cookie.set_max_age].</doc>
+      <source-position filename="libsoup\cookies\soup-cookie.h" line="33"/>
+      <type name="gint" c:type="gint"/>
+    </constant>
+    <constant name="COOKIE_MAX_AGE_ONE_HOUR"
+              value="3600"
+              c:type="SOUP_COOKIE_MAX_AGE_ONE_HOUR">
+      <doc xml:space="preserve"
+           filename="libsoup\cookies\soup-cookie.c"
+           line="583">A constant corresponding to 1 hour.
+
+For use with [ctor@Cookie.new] and [method@Cookie.set_max_age].</doc>
+      <source-position filename="libsoup\cookies\soup-cookie.h" line="32"/>
+      <type name="gint" c:type="gint"/>
+    </constant>
+    <constant name="COOKIE_MAX_AGE_ONE_WEEK"
+              value="0"
+              c:type="SOUP_COOKIE_MAX_AGE_ONE_WEEK">
+      <doc xml:space="preserve"
+           filename="libsoup\cookies\soup-cookie.c"
+           line="597">A constant corresponding to 1 week.
+
+For use with [ctor@Cookie.new] and [method@Cookie.set_max_age].</doc>
+      <source-position filename="libsoup\cookies\soup-cookie.h" line="34"/>
+      <type name="gint" c:type="gint"/>
+    </constant>
+    <constant name="COOKIE_MAX_AGE_ONE_YEAR"
+              value="0"
+              c:type="SOUP_COOKIE_MAX_AGE_ONE_YEAR">
+      <doc xml:space="preserve"
+           filename="libsoup\cookies\soup-cookie.c"
+           line="604">A constant corresponding to 1 year.
+
+For use with [ctor@Cookie.new] and [method@Cookie.set_max_age].</doc>
+      <source-position filename="libsoup\cookies\soup-cookie.h" line="35"/>
+      <type name="gint" c:type="gint"/>
+    </constant>
+    <function-macro name="DEPRECATED_FOR"
+                    c:identifier="SOUP_DEPRECATED_FOR"
+                    introspectable="0">
+      <source-position filename="libsoup\soup-version.h" line="168"/>
+      <parameters>
+        <parameter name="f">
+        </parameter>
+      </parameters>
+    </function-macro>
+    <function-macro name="DEPRECATED_IN_3_0_FOR"
+                    c:identifier="SOUP_DEPRECATED_IN_3_0_FOR"
+                    introspectable="0">
+      <source-position filename="libsoup\soup-version.h" line="190"/>
+      <parameters>
+        <parameter name="f">
+        </parameter>
+      </parameters>
+    </function-macro>
+    <function-macro name="DEPRECATED_IN_3_2_FOR"
+                    c:identifier="SOUP_DEPRECATED_IN_3_2_FOR"
+                    introspectable="0">
+      <source-position filename="libsoup\soup-version.h" line="217"/>
+      <parameters>
+        <parameter name="f">
+        </parameter>
+      </parameters>
+    </function-macro>
+    <function-macro name="DEPRECATED_IN_3_4_FOR"
+                    c:identifier="SOUP_DEPRECATED_IN_3_4_FOR"
+                    introspectable="0">
+      <source-position filename="libsoup\soup-version.h" line="244"/>
+      <parameters>
+        <parameter name="f">
+        </parameter>
+      </parameters>
+    </function-macro>
+    <function-macro name="DEPRECATED_IN_3_6_FOR"
+                    c:identifier="SOUP_DEPRECATED_IN_3_6_FOR"
+                    introspectable="0">
+      <source-position filename="libsoup\soup-version.h" line="271"/>
+      <parameters>
+        <parameter name="f">
+        </parameter>
+      </parameters>
+    </function-macro>
+    <constant name="FORM_MIME_TYPE_MULTIPART"
+              value="multipart/form-data"
+              c:type="SOUP_FORM_MIME_TYPE_MULTIPART">
+      <doc xml:space="preserve"
+           filename="libsoup\soup-form.c"
+           line="25">A macro containing the value
+`multipart/form-data`; the MIME type used for
+posting form data that contains files to be uploaded.</doc>
+      <source-position filename="libsoup\soup-form.h" line="15"/>
+      <type name="utf8" c:type="gchar*"/>
+    </constant>
+    <constant name="FORM_MIME_TYPE_URLENCODED"
+              value="application/x-www-form-urlencoded"
+              c:type="SOUP_FORM_MIME_TYPE_URLENCODED">
+      <doc xml:space="preserve"
+           filename="libsoup\soup-form.c"
+           line="17">A macro containing the value
+`application/x-www-form-urlencoded`; the default
+MIME type for POSTing HTML form data.</doc>
+      <source-position filename="libsoup\soup-form.h" line="14"/>
+      <type name="utf8" c:type="gchar*"/>
+    </constant>
+    <constant name="HSTS_POLICY_MAX_AGE_PAST"
+              value="0"
+              c:type="SOUP_HSTS_POLICY_MAX_AGE_PAST">
+      <source-position filename="libsoup\hsts\soup-hsts-policy.h" line="24"/>
+      <type name="gint" c:type="gint"/>
+    </constant>
+    <constant name="HTTP_URI_FLAGS" value="482" c:type="SOUP_HTTP_URI_FLAGS">
+      <doc xml:space="preserve"
+           filename="libsoup\soup-uri-utils.c"
+           line="35">The set of #GUriFlags libsoup expects all #GUri to use.</doc>
+      <source-position filename="libsoup\soup-uri-utils.h" line="40"/>
+      <type name="gint" c:type="gint"/>
+    </constant>
+    <constant name="MAJOR_VERSION" value="3" c:type="SOUP_MAJOR_VERSION">
+      <doc xml:space="preserve"
+           filename="libsoup\soup-version.c"
+           line="14">Like [func@get_major_version], but from the headers used at application
+compile time, rather than from the library linked against at application run
+time.</doc>
+      <source-position filename="libsoup\soup-version.h" line="14"/>
+      <type name="gint" c:type="gint"/>
+    </constant>
+    <constant name="MICRO_VERSION" value="0" c:type="SOUP_MICRO_VERSION">
+      <doc xml:space="preserve"
+           filename="libsoup\soup-version.c"
+           line="32">Like [func@get_micro_version], but from the headers used at
+application compile time, rather than from the library linked
+against at application run time.</doc>
+      <source-position filename="libsoup\soup-version.h" line="16"/>
+      <type name="gint" c:type="gint"/>
+    </constant>
+    <constant name="MINOR_VERSION" value="6" c:type="SOUP_MINOR_VERSION">
+      <doc xml:space="preserve"
+           filename="libsoup\soup-version.c"
+           line="23">Like [func@get_minor_version], but from the headers used at
+application compile time, rather than from the library linked
+against at application run time.</doc>
+      <source-position filename="libsoup\soup-version.h" line="15"/>
+      <type name="gint" c:type="gint"/>
+    </constant>
+    <function-macro name="STATUS_IS_CLIENT_ERROR"
+                    c:identifier="SOUP_STATUS_IS_CLIENT_ERROR"
+                    introspectable="0">
+      <doc xml:space="preserve"
+           filename="libsoup\soup-status.c"
+           line="39">Tests if @status is a Client Error (4xx) response.</doc>
+      <source-position filename="libsoup\soup-status.h" line="17"/>
+      <parameters>
+        <parameter name="status">
+          <doc xml:space="preserve"
+               filename="libsoup\soup-status.c"
+               line="41">an HTTP status code</doc>
+        </parameter>
+      </parameters>
+    </function-macro>
+    <function-macro name="STATUS_IS_INFORMATIONAL"
+                    c:identifier="SOUP_STATUS_IS_INFORMATIONAL"
+                    introspectable="0">
+      <doc xml:space="preserve"
+           filename="libsoup\soup-status.c"
+           line="15">Tests if @status is an Informational (1xx) response.</doc>
+      <source-position filename="libsoup\soup-status.h" line="14"/>
+      <parameters>
+        <parameter name="status">
+          <doc xml:space="preserve"
+               filename="libsoup\soup-status.c"
+               line="17">an HTTP status code</doc>
+        </parameter>
+      </parameters>
+    </function-macro>
+    <function-macro name="STATUS_IS_REDIRECTION"
+                    c:identifier="SOUP_STATUS_IS_REDIRECTION"
+                    introspectable="0">
+      <doc xml:space="preserve"
+           filename="libsoup\soup-status.c"
+           line="31">Tests if @status is a Redirection (3xx) response.</doc>
+      <source-position filename="libsoup\soup-status.h" line="16"/>
+      <parameters>
+        <parameter name="status">
+          <doc xml:space="preserve"
+               filename="libsoup\soup-status.c"
+               line="33">an HTTP status code</doc>
+        </parameter>
+      </parameters>
+    </function-macro>
+    <function-macro name="STATUS_IS_SERVER_ERROR"
+                    c:identifier="SOUP_STATUS_IS_SERVER_ERROR"
+                    introspectable="0">
+      <doc xml:space="preserve"
+           filename="libsoup\soup-status.c"
+           line="47">Tests if @status is a Server Error (5xx) response.</doc>
+      <source-position filename="libsoup\soup-status.h" line="18"/>
+      <parameters>
+        <parameter name="status">
+          <doc xml:space="preserve"
+               filename="libsoup\soup-status.c"
+               line="49">an HTTP status code</doc>
+        </parameter>
+      </parameters>
+    </function-macro>
+    <function-macro name="STATUS_IS_SUCCESSFUL"
+                    c:identifier="SOUP_STATUS_IS_SUCCESSFUL"
+                    introspectable="0">
+      <doc xml:space="preserve"
+           filename="libsoup\soup-status.c"
+           line="23">Tests if @status is a Successful (2xx) response.</doc>
+      <source-position filename="libsoup\soup-status.h" line="15"/>
+      <parameters>
+        <parameter name="status">
+          <doc xml:space="preserve"
+               filename="libsoup\soup-status.c"
+               line="25">an HTTP status code</doc>
+        </parameter>
+      </parameters>
+    </function-macro>
+    <function-macro name="UNAVAILABLE"
+                    c:identifier="SOUP_UNAVAILABLE"
+                    introspectable="0">
+      <source-position filename="libsoup\soup-version.h" line="169"/>
+      <parameters>
+        <parameter name="maj">
+        </parameter>
+        <parameter name="min">
+        </parameter>
+      </parameters>
+    </function-macro>
+    <constant name="VERSION_MIN_REQUIRED"
+              value="2"
+              c:type="SOUP_VERSION_MIN_REQUIRED">
+      <doc xml:space="preserve"
+           filename="libsoup\soup-version.c"
+           line="136">A macro that should be defined by the user prior to including
+`libsoup.h`.
+
+The definition should be one of the predefined libsoup
+version macros: %SOUP_VERSION_2_24, %SOUP_VERSION_2_26, ...
+
+This macro defines the earliest version of libsoup that the package
+is required to be able to compile against.
+
+If the compiler is configured to warn about the use of deprecated
+functions, then using functions that were deprecated in version
+%SOUP_VERSION_MIN_REQUIRED or earlier will cause warnings (but
+using functions deprecated in later releases will not).</doc>
+      <source-position filename="libsoup\soup-version.h" line="111"/>
+      <type name="gint" c:type="gint"/>
+    </constant>
+  </namespace>
+</repository>

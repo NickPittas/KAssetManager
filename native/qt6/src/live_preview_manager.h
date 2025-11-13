@@ -14,6 +14,7 @@
 #include <QCache>
 
 #include "media/ffmpeg_player.h"
+#include "media/gstreamer_player.h"
 
 /**
  * LivePreviewManager streams preview frames for stills, video clips, and image sequences
@@ -86,10 +87,6 @@ signals:
     void frameFailed(const QString& filePath, QString errorString);
     void cacheStatus(const QString& status);
 
-private slots:
-    void onFFmpegFrameReady(const FFmpegPlayer::VideoFrame& frame);
-    void onFFmpegError(const QString& errorString);
-
 private:
     explicit LivePreviewManager(QObject* parent = nullptr);
 
@@ -150,10 +147,5 @@ private:
     // Metrics (protected by m_mutex)
     quint64 m_cacheHits = 0;
     quint64 m_cacheMisses = 0;
-    
-    // Unified FFmpeg player for video and image sequence playback
-    std::unique_ptr<FFmpegPlayer> m_ffmpegPlayer;
-    
-    // Track current file path for signal forwarding
-    QString m_currentFilePath;
+
 };

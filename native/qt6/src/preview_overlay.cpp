@@ -1,6 +1,7 @@
 #include "preview_overlay.h"
-#include "media/ffmpeg_player.h"
+#include "media/gstreamer_player.h"
 #include "oiio_image_loader.h"
+#include <QMessageBox>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QPixmap>
@@ -101,10 +102,8 @@ PreviewOverlay::PreviewOverlay(QWidget *parent)
     , imageView(nullptr)
     , imageScene(nullptr)
     , imageItem(nullptr)
-    , videoItem(nullptr)
     , videoWidget(nullptr)
-    , mediaPlayer(nullptr)
-    , audioOutput(nullptr)
+    , m_gstreamerPlayer(nullptr)
 #ifdef HAVE_QT_PDF
     , pdfDoc(nullptr)
     , pdfView(nullptr)
@@ -121,18 +120,22 @@ PreviewOverlay::PreviewOverlay(QWidget *parent)
     , currentColorSpace(OIIOImageLoader::ColorSpace::sRGB)
     , isHDRImage(false)
     , useCacheForSequences(true) // ENABLED - using QRecursiveMutex to fix deadlock
-    , m_ffmpegPlayer(nullptr)
 {
-    // Initialize unified FFmpegPlayer for video and image sequence playback
-    m_ffmpegPlayer = new FFmpegPlayer(this);
-    if (m_ffmpegPlayer) {
-        // Connect FFmpegPlayer signals to PreviewOverlay handlers
-        connect(m_ffmpegPlayer, &FFmpegPlayer::frameReady, this, &PreviewOverlay::onFFmpegFrameReady);
-        connect(m_ffmpegPlayer, &FFmpegPlayer::mediaInfoReady, this, &PreviewOverlay::onFFmpegMediaInfo);
-        connect(m_ffmpegPlayer, &FFmpegPlayer::playbackStateChanged, this, &PreviewOverlay::onFFmpegPlaybackState);
-        connect(m_ffmpegPlayer, &FFmpegPlayer::error, this, &PreviewOverlay::onFFmpegError);
-        qDebug() << "[PreviewOverlay] FFmpegPlayer initialized with hardware acceleration and smart caching";
-    }
+    // Initialize GStreamer globally (call once)
+    GStreamerPlayer::initialize();
+
+    // Create GStreamer player for video and image sequence playback
+    m_gstreamerPlayer = new GStreamerPlayer(this);
+
+    // Connect GStreamerPlayer signals to PreviewOverlay handlers
+    connect(m_gstreamerPlayer, &GStreamerPlayer::positionChanged, this, &PreviewOverlay::onGStreamerPositionChanged);
+    connect(m_gstreamerPlayer, &GStreamerPlayer::durationChanged, this, &PreviewOverlay::onGStreamerDurationChanged);
+    connect(m_gstreamerPlayer, &GStreamerPlayer::mediaInfoReady, this, &PreviewOverlay::onGStreamerMediaInfo);
+    connect(m_gstreamerPlayer, &GStreamerPlayer::playbackStateChanged, this, &PreviewOverlay::onGStreamerPlaybackStateChanged);
+    connect(m_gstreamerPlayer, &GStreamerPlayer::error, this, &PreviewOverlay::onGStreamerError);
+    connect(m_gstreamerPlayer, &GStreamerPlayer::endOfStream, this, &PreviewOverlay::onGStreamerEndOfStream);
+
+    qDebug() << "[PreviewOverlay] GStreamerPlayer initialized with hardware-accelerated playback";
 
     setupUi();
     setFocusPolicy(Qt::StrongFocus);
@@ -279,20 +282,19 @@ void PreviewOverlay::setupUi()
     imageView->hide();
     contentLayout->addWidget(imageView);
 
-    // Create video item for rendering videos in the graphics scene (enables zoom/pan)
-    videoItem = new QGraphicsVideoItem();
-    videoItem->setAspectRatioMode(Qt::KeepAspectRatio);
-    // Connect to nativeSizeChanged to fit video to view when size is known
-    connect(videoItem, &QGraphicsVideoItem::nativeSizeChanged, this, [this](const QSizeF &size) {
-        if (isVideo && videoItem && videoItem->scene() == imageScene && size.isValid()) {
-            // Set scene rect to video size and fit to view
-            imageScene->setSceneRect(videoItem->boundingRect());
-            imageView->fitInView(videoItem, Qt::KeepAspectRatio);
-            currentZoom = imageView->transform().m11(); // Store the fit-to-view zoom level
-            fitPending = false;
-        }
-    });
-    // Don't add to scene yet - will be added when showing video
+    // Video widget for GStreamer direct rendering
+    videoWidget = new QWidget(this);
+    videoWidget->setStyleSheet("QWidget { background-color: #000000; }");
+
+    // CRITICAL: Set widget attributes for native window embedding
+    // These attributes tell Qt to create a native window that GStreamer can render into
+    videoWidget->setAttribute(Qt::WA_NativeWindow);
+    videoWidget->setAttribute(Qt::WA_PaintOnScreen);
+    videoWidget->setAttribute(Qt::WA_OpaquePaintEvent);
+
+    videoWidget->installEventFilter(this);
+    videoWidget->hide();
+    contentLayout->addWidget(videoWidget);
 #ifdef HAVE_QT_PDF
     // PDF view
     pdfDoc = new QPdfDocument(this);
@@ -324,12 +326,6 @@ void PreviewOverlay::setupUi()
     );
     tableView->hide();
     contentLayout->addWidget(tableView);
-
-    // Video widget (for videos)
-    videoWidget = new QVideoWidget(this);
-    videoWidget->installEventFilter(this);
-    videoWidget->hide();
-    contentLayout->addWidget(videoWidget);
 
     mainLayout->addWidget(contentWidget, 1);
 
@@ -546,14 +542,6 @@ void PreviewOverlay::setupUi()
     connect(navNextBtn, &QPushButton::clicked, this, &PreviewOverlay::navigateNext);
     navNextBtn->raise();
 
-
-    // Initialize media player - use videoItem for zoom/pan support
-    mediaPlayer = new QMediaPlayer(this);
-    audioOutput = new QAudioOutput(this);
-    mediaPlayer->setAudioOutput(audioOutput);
-    mediaPlayer->setVideoOutput(videoItem);
-
-    connect(mediaPlayer, &QMediaPlayer::positionChanged, this, &PreviewOverlay::onPositionChanged);
     // Initial positioning
     if (navPrevBtn && navNextBtn) {
         int y = height() / 2 - navPrevBtn->height() / 2;
@@ -563,11 +551,11 @@ void PreviewOverlay::setupUi()
         navNextBtn->show();
     }
 
-    connect(mediaPlayer, &QMediaPlayer::durationChanged, this, &PreviewOverlay::onDurationChanged);
-    connect(mediaPlayer, &QMediaPlayer::errorOccurred, this, &PreviewOverlay::onPlayerError);
-    connect(mediaPlayer, &QMediaPlayer::mediaStatusChanged, this, &PreviewOverlay::onMediaStatusChanged);
+    // Set video widget for GStreamer rendering
+    m_gstreamerPlayer->setVideoWidget(videoWidget);
 
-    audioOutput->setVolume(0.5);
+    // Set initial volume
+    m_gstreamerPlayer->setVolume(0.5);
 }
 
 void PreviewOverlay::showAsset(const QString &filePath, const QString &fileName, const QString &fileType)
@@ -690,9 +678,7 @@ void PreviewOverlay::showImage(const QString &filePath)
     positionNavButtons(imageView->viewport());
 
     // CRITICAL: Stop any video playback
-    if (mediaPlayer->playbackState() != QMediaPlayer::StoppedState) {
-        mediaPlayer->stop();
-    }
+    m_gstreamerPlayer->stop();
 
     // Check if this is an HDR/EXR image
     QFileInfo fileInfo(filePath);
@@ -767,91 +753,54 @@ void PreviewOverlay::showImage(const QString &filePath)
 
 void PreviewOverlay::showVideo(const QString &filePath)
 {
+    // Stop any existing playback
+    m_gstreamerPlayer->stop();
 
-
-    // Ensure media player is in a clean state
-    if (mediaPlayer->playbackState() != QMediaPlayer::StoppedState) {
-        mediaPlayer->stop();
-    }
-    // Wait for media player to fully stop before changing source
-    QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
-
-    mediaPlayer->setSource(QUrl()); // clear previous source to avoid stray signals
-    mediaPlayer->setPosition(0);
-
-    // CRITICAL: Hide other content and show imageView with videoItem for zoom/pan support
+    // Hide other content and show video widget
     if (textView) textView->hide();
     if (tableView) tableView->hide();
 #ifdef HAVE_QT_PDF
     if (pdfView) pdfView->hide();
 #endif
-    videoWidget->hide(); // Hide the old video widget, we use videoItem in imageView now
-    imageView->show();
-    // Anchor nav arrows to the image viewport when showing video
-    positionNavButtons(imageView->viewport());
+    if (imageView) imageView->hide();
+
+    videoWidget->show();
+
+    // CRITICAL: Set video widget AFTER show() to ensure valid window handle
+    // GStreamer needs the native window handle (WId) which is only available after the widget is shown
+    m_gstreamerPlayer->setVideoWidget(videoWidget);
+
+    // Anchor nav arrows to the video widget
+    positionNavButtons(videoWidget);
     controlsWidget->show();
+
     // Cache bar is only for sequences
     if (cacheBar) cacheBar->hide();
-    // Enable audio controls for video
+
+    // Enable and show audio controls for video
     if (muteBtn) {
         muteBtn->setEnabled(true);
-        const bool m = (audioOutput && audioOutput->isMuted());
-        muteBtn->setIcon(m ? muteIcon : audioIcon);
+        muteBtn->setIcon(m_gstreamerPlayer->isMuted() ? muteIcon : audioIcon);
+        muteBtn->show();
     }
-    if (volumeSlider) volumeSlider->setEnabled(true);
-
+    if (volumeSlider) {
+        volumeSlider->setEnabled(true);
+        volumeSlider->show();
+    }
 
     // Hide alpha toggle for videos
     if (alphaCheck) alphaCheck->hide();
 
-    // CRITICAL: Only clear scene if videoItem is not already in it
-    // Removing and re-adding videoItem while media player is active can cause crashes
-    if (videoItem->scene() != imageScene) {
-        imageScene->clear();
-        imageItem = nullptr;
-        imageScene->addItem(videoItem);
-    } else {
-        // videoItem is already in the scene, just remove other items
-        QList<QGraphicsItem*> items = imageScene->items();
-        for (QGraphicsItem* item : items) {
-            if (item != videoItem) {
-                imageScene->removeItem(item);
-                if (item != imageItem) { // Don't delete imageItem if it's managed elsewhere
-                    delete item;
-                }
-            }
-        }
-        imageItem = nullptr;
-    }
-
-    // If tlRender backend is preferred, attempt to open container via tlRender
-    // tlRender container path removed
-
-    // Probe metadata for FPS/timecode via FFmpeg (if available)
-    {
-        MediaInfo::VideoMetadata vm;
-        QString err;
-        if (MediaInfo::probeVideoFile(filePath, vm, &err)) {
-            if (vm.fps > 0.0) detectedFps = vm.fps;
-            hasEmbeddedTimecode = vm.hasTimecode;
-            embeddedStartTimecode = vm.timecodeStart;
-        }
-    }
+    // Hide colorspace selector for videos (GStreamer handles colorspace automatically)
+    if (colorSpaceLabel) colorSpaceLabel->hide();
+    if (colorSpaceCombo) colorSpaceCombo->hide();
 
     originalPixmap = QPixmap(); // Clear the pixmap
-    fitPending = true; // next size-known signal will fit; avoid repeated fit calls
+    fitPending = true;
 
-    mediaPlayer->setSource(QUrl::fromLocalFile(filePath));
-
-    // Video will be rendered through videoItem which is already in the scene
-    // Reset zoom; fit will occur when native size is known / media is loaded
-    currentZoom = 1.0;
-    imageView->resetTransform();
-
-    mediaPlayer->play();
-
-    // Try to detect FPS from metadata early (may be updated later)
-    updateDetectedFps();
+    // Load and play video with GStreamer
+    m_gstreamerPlayer->loadMedia(filePath);
+    m_gstreamerPlayer->play();
 
     controlsTimer->start();
 }
@@ -866,30 +815,14 @@ void PreviewOverlay::onPlayPauseClicked()
             playSequence();
         }
     } else {
-        // Handle video playback
-        if (mediaPlayer->playbackState() == QMediaPlayer::PlayingState) {
-            mediaPlayer->pause();
+        // Handle video playback with GStreamer
+        if (m_gstreamerPlayer->state() == GStreamerPlayer::PlaybackState::Playing) {
+            m_gstreamerPlayer->pause();
         } else {
-            mediaPlayer->play();
+            m_gstreamerPlayer->play();
         }
-        updatePlayPauseButton();
     }
     controlsTimer->start();
-}
-
-void PreviewOverlay::onPositionChanged(qint64 position)
-{
-    if (!positionSlider->isSliderDown()) {
-        positionSlider->setValue(position);
-    }
-
-    qint64 duration = mediaPlayer->duration();
-    updateVideoTimeDisplays(position, duration);
-}
-
-void PreviewOverlay::onDurationChanged(qint64 duration)
-{
-    positionSlider->setRange(0, duration);
 }
 
 void PreviewOverlay::onSliderMoved(int position)
@@ -900,25 +833,22 @@ void PreviewOverlay::onSliderMoved(int position)
         controlsTimer->start();
         return;
     }
-    
-    // QMediaPlayer path - always do live scrubbing
-    mediaPlayer->setPosition(position);
-    qint64 duration = mediaPlayer->duration();
-    updateVideoTimeDisplays(position, duration);
+
+    // GStreamer path - always do live scrubbing
+    m_gstreamerPlayer->seek(position);
     controlsTimer->start();
 }
 
 void PreviewOverlay::onVolumeChanged(int value)
 {
-    audioOutput->setVolume(value / 100.0);
+    m_gstreamerPlayer->setVolume(value / 100.0);
     controlsTimer->start();
 }
 
 void PreviewOverlay::onToggleMute()
 {
-    if (!audioOutput) return;
-    const bool newMuted = !audioOutput->isMuted();
-    audioOutput->setMuted(newMuted);
+    const bool newMuted = !m_gstreamerPlayer->isMuted();
+    m_gstreamerPlayer->setMuted(newMuted);
     if (muteBtn) {
         muteBtn->setIcon(newMuted ? muteIcon : audioIcon);
     }
@@ -933,9 +863,9 @@ void PreviewOverlay::onSliderPressed()
         if (sequencePlaying) pauseSequence();
         return;
     }
-    
-    wasPlayingBeforeSeek = (mediaPlayer->playbackState() == QMediaPlayer::PlayingState);
-    mediaPlayer->pause();
+
+    wasPlayingBeforeSeek = (m_gstreamerPlayer->state() == GStreamerPlayer::PlaybackState::Playing);
+    m_gstreamerPlayer->pause();
 }
 
 void PreviewOverlay::onSliderReleased()
@@ -945,15 +875,13 @@ void PreviewOverlay::onSliderReleased()
         loadSequenceFrame(pos);
         if (wasPlayingBeforeSeek) playSequence();
         userSeeking = false;
-        updatePlayPauseButton();
         controlsTimer->start();
         return;
     }
-    
-    mediaPlayer->setPosition(pos);
-    if (wasPlayingBeforeSeek) mediaPlayer->play();
+
+    m_gstreamerPlayer->seek(pos);
+    if (wasPlayingBeforeSeek) m_gstreamerPlayer->play();
     userSeeking = false;
-    updatePlayPauseButton();
     controlsTimer->start();
 }
 
@@ -967,19 +895,9 @@ void PreviewOverlay::onStepNextFrame()
         // Keep paused after stepping
         return;
     }
-    
-    // QMediaPlayer path - always pause when stepping frames
-    mediaPlayer->pause();
-    qint64 pos = mediaPlayer->position();
-    qint64 dt = static_cast<qint64>(qRound64(frameDurationMs()));
-    qint64 target = qMin(pos + dt, mediaPlayer->duration());
-    mediaPlayer->setPosition(target);
-    // Use play/pause trick to force frame update, then keep paused
-    mediaPlayer->play();
-    QTimer::singleShot(30, this, [this]() {
-        mediaPlayer->pause();
-        updatePlayPauseButton();
-    });
+
+    // GStreamer path - professional frame stepping
+    m_gstreamerPlayer->stepForward();
 }
 
 void PreviewOverlay::onStepPrevFrame()
@@ -992,19 +910,9 @@ void PreviewOverlay::onStepPrevFrame()
         // Keep paused after stepping
         return;
     }
-    
-    // QMediaPlayer path - always pause when stepping frames
-    mediaPlayer->pause();
-    qint64 pos = mediaPlayer->position();
-    qint64 dt = static_cast<qint64>(qRound64(frameDurationMs()));
-    qint64 target = pos - dt; if (target < 0) target = 0;
-    mediaPlayer->setPosition(target);
-    // Use play/pause trick to force frame update, then keep paused
-    mediaPlayer->play();
-    QTimer::singleShot(30, this, [this]() {
-        mediaPlayer->pause();
-        updatePlayPauseButton();
-    });
+
+    // GStreamer path - professional frame stepping
+    m_gstreamerPlayer->stepBackward();
 }
 
 double PreviewOverlay::frameDurationMs() const
@@ -1019,12 +927,8 @@ void PreviewOverlay::updateDetectedFps()
     detectedFps = 0.0;
     if (!isVideo) return;
     
-    if (mediaPlayer) {
-        QVariant v = mediaPlayer->metaData().value(QMediaMetaData::VideoFrameRate);
-        if (v.isValid()) {
-            detectedFps = v.toDouble();
-        }
-    }
+    // FPS is now provided by GStreamer media info callback
+    // No need to query metadata here
     if (detectedFps <= 0.0) detectedFps = 24.0;
 }
 
@@ -1039,10 +943,10 @@ void PreviewOverlay::hideControls()
 
 void PreviewOverlay::updatePlayPauseButton()
 {
-    if (mediaPlayer->playbackState() == QMediaPlayer::PlayingState) {
-        playPauseBtn->setIcon(pauseIcon);
+    if (isSequence) {
+        playPauseBtn->setIcon(sequencePlaying ? pauseIcon : playIcon);
     } else {
-        playPauseBtn->setIcon(playIcon);
+        playPauseBtn->setIcon(m_gstreamerPlayer->state() == GStreamerPlayer::PlaybackState::Playing ? pauseIcon : playIcon);
     }
 }
 void PreviewOverlay::positionNavButtons(QWidget* container)
@@ -1287,8 +1191,8 @@ void PreviewOverlay::mousePressEvent(QMouseEvent *event)
 
 void PreviewOverlay::wheelEvent(QWheelEvent *event)
 {
-    // Enable zoom for images, videos, and sequences (fallback if event reached overlay)
-    if (!originalPixmap.isNull() || (videoItem && videoItem->scene() == imageScene) || isSequence) {
+    // Enable zoom for images and sequences (fallback if event reached overlay)
+    if (!originalPixmap.isNull() || isSequence) {
         double factor = event->angleDelta().y() > 0 ? 1.15 : 0.85;
         zoomImage(factor);
         event->accept();
@@ -1299,10 +1203,10 @@ void PreviewOverlay::wheelEvent(QWheelEvent *event)
 
 bool PreviewOverlay::eventFilter(QObject* watched, QEvent* event)
 {
-    // Handle wheel events for image/video zoom
+    // Handle wheel events for image/sequence zoom
     if ((watched == imageView || (imageView && watched == imageView->viewport())) && event->type() == QEvent::Wheel) {
-        // Enable zoom for images (when pixmap is loaded) or videos (when videoItem is in scene) or sequences
-        if (!originalPixmap.isNull() || (videoItem && videoItem->scene() == imageScene) || isSequence) {
+        // Enable zoom for images (when pixmap is loaded) or sequences
+        if (!originalPixmap.isNull() || isSequence) {
             QWheelEvent* wheel = static_cast<QWheelEvent*>(event);
             double factor = wheel->angleDelta().y() > 0 ? 1.15 : 0.85;
             zoomImage(factor);
@@ -1380,13 +1284,8 @@ void PreviewOverlay::fitImageToView()
 
 void PreviewOverlay::resetImageZoom()
 {
-    // Reset zoom for both images and videos
-    if (isVideo && videoItem && videoItem->scene() == imageScene) {
-        // For videos, fit to view
-        imageScene->setSceneRect(videoItem->boundingRect());
-        imageView->fitInView(videoItem, Qt::KeepAspectRatio);
-        currentZoom = imageView->transform().m11();
-    } else if (imageItem) {
+    // Reset zoom for images and sequences
+    if (imageItem) {
         // For images and sequences, reset to 1:1
         currentZoom = 1.0;
         imageView->resetTransform();
@@ -1432,15 +1331,20 @@ void PreviewOverlay::showSequence(const QStringList &framePaths, const QString &
     imageView->show();
     controlsWidget->show();
     // Disable audio controls for image sequences (no audio)
-    if (muteBtn) { muteBtn->setEnabled(false); muteBtn->setIcon(noAudioIcon); }
+    if (muteBtn) {
+        muteBtn->setEnabled(false);
+        muteBtn->setIcon(noAudioIcon);
+        muteBtn->show();
+    }
     fitPending = true; // ensure first loaded frame fits once
-    if (volumeSlider) volumeSlider->setEnabled(false);
+    if (volumeSlider) {
+        volumeSlider->setEnabled(false);
+        volumeSlider->show();
+    }
 
 
     // Stop video player if running
-    if (mediaPlayer->playbackState() != QMediaPlayer::StoppedState) {
-        mediaPlayer->stop();
-    }
+    m_gstreamerPlayer->stop();
 
     // Update file name label
     fileNameLabel->setText(sequenceName);
@@ -1803,10 +1707,8 @@ void PreviewOverlay::stopPlayback()
 {
     qDebug() << "[PreviewOverlay] Stopping playback";
 
-    // Stop video playback
-    if (mediaPlayer->playbackState() == QMediaPlayer::PlayingState) {
-        mediaPlayer->stop();
-    }
+    // Stop GStreamer video playback
+    m_gstreamerPlayer->stop();
 
     // Stop sequence playback
     if (sequencePlaying) {
@@ -1817,39 +1719,99 @@ void PreviewOverlay::stopPlayback()
     if (frameCache && useCacheForSequences) {
         frameCache->stopPrefetch();
     }
-
-    // Clear the media source to release the file (only if it has a source)
-    if (!mediaPlayer->source().isEmpty()) {
-        mediaPlayer->setSource(QUrl());
-    }
 }
 
 
 
-void PreviewOverlay::onPlayerError(QMediaPlayer::Error error, const QString &errorString)
+// ============================================================================
+// Legacy Signal Handlers (for compatibility)
+// ============================================================================
+
+void PreviewOverlay::onPositionChanged(qint64 position)
 {
-    qWarning() << "[PreviewOverlay] Media player error:" << error << errorString;
+    // Forward to GStreamer handler
+    onGStreamerPositionChanged(position);
 }
 
-void PreviewOverlay::onMediaStatusChanged(QMediaPlayer::MediaStatus status)
+void PreviewOverlay::onDurationChanged(qint64 duration)
 {
-    // Update FPS when metadata becomes available
-    updateDetectedFps();
+    // Forward to GStreamer handler
+    onGStreamerDurationChanged(duration);
+}
 
-    // Ensure newly loaded videos are fit to the current overlay window
-    // when stepping between items or when media finishes loading.
-    if (isVideo && imageView && videoItem && videoItem->scene() == imageScene) {
-        switch (status) {
-        case QMediaPlayer::LoadedMedia:
-        case QMediaPlayer::BufferedMedia:
-            imageScene->setSceneRect(videoItem->boundingRect());
-            imageView->fitInView(videoItem, Qt::KeepAspectRatio);
-            currentZoom = imageView->transform().m11();
-            break;
-        default:
-            break;
-        }
+// ============================================================================
+// GStreamerPlayer Signal Handlers
+// ============================================================================
+
+void PreviewOverlay::onGStreamerPositionChanged(qint64 positionMs)
+{
+    if (!positionSlider->isSliderDown()) {
+        positionSlider->setValue(static_cast<int>(positionMs));
     }
+
+    qint64 durationMs = m_gstreamerPlayer->duration();
+    updateVideoTimeDisplays(positionMs, durationMs);
+}
+
+void PreviewOverlay::onGStreamerDurationChanged(qint64 durationMs)
+{
+    positionSlider->setRange(0, static_cast<int>(durationMs));
+}
+
+void PreviewOverlay::onGStreamerMediaInfo(const GStreamerPlayer::MediaInfo& info)
+{
+    qDebug() << "[PreviewOverlay] GStreamer media info:"
+             << "Duration:" << info.durationMs << "ms"
+             << "FPS:" << info.fps
+             << "Resolution:" << info.width << "x" << info.height
+             << "Codec:" << info.codec
+             << "Has Audio:" << info.hasAudio;
+
+    // Update duration display
+    if (info.durationMs > 0) {
+        positionSlider->setRange(0, info.durationMs);
+        updateVideoTimeDisplays(0, info.durationMs);
+    }
+
+    // Update FPS display
+    if (info.fps > 0.0) {
+        detectedFps = info.fps;
+        if (fpsLabel) fpsLabel->setText(QString::number(info.fps, 'f', 1) + " fps");
+    }
+}
+
+void PreviewOverlay::onGStreamerPlaybackStateChanged(GStreamerPlayer::PlaybackState state)
+{
+    qDebug() << "[PreviewOverlay] GStreamer state changed to:" << static_cast<int>(state);
+
+    switch (state) {
+        case GStreamerPlayer::PlaybackState::Playing:
+            if (playPauseBtn) playPauseBtn->setIcon(pauseIcon);
+            break;
+        case GStreamerPlayer::PlaybackState::Paused:
+        case GStreamerPlayer::PlaybackState::Stopped:
+            if (playPauseBtn) playPauseBtn->setIcon(playIcon);
+            break;
+    }
+}
+
+void PreviewOverlay::onGStreamerError(const QString& errorString)
+{
+    qWarning() << "[PreviewOverlay] GStreamer error:" << errorString;
+
+    // Show error message to user
+    QMessageBox::warning(this, "Playback Error",
+                        QString("Failed to play media:\n%1").arg(errorString));
+}
+
+void PreviewOverlay::onGStreamerEndOfStream()
+{
+    qDebug() << "[PreviewOverlay] GStreamer end of stream reached";
+
+    // Stop playback and reset to beginning
+    m_gstreamerPlayer->stop();
+    m_gstreamerPlayer->seek(0);
+    if (playPauseBtn) playPauseBtn->setIcon(playIcon);
 }
 
 void PreviewOverlay::showText(const QString &filePath)
@@ -2541,90 +2503,4 @@ int SequenceFrameCache::calculateOptimalCacheSize(int percentOfFreeRAM)
 }
 
 
-// ============================================================================
-// FFmpegPlayer Signal Handler Implementations
-// ============================================================================
 
-void PreviewOverlay::onFFmpegFrameReady(const FFmpegPlayer::VideoFrame& frame)
-{
-    if (!frame.isValid()) {
-        qWarning() << "[PreviewOverlay] Received invalid frame from FFmpegPlayer";
-        return;
-    }
-    
-    // Update pixmap in the image scene
-    originalPixmap = QPixmap::fromImage(frame.image);
-    
-    // Hide alpha toggle for videos
-    if (alphaCheck) alphaCheck->hide();
-    
-    if (!imageItem) {
-        imageItem = imageScene->addPixmap(originalPixmap);
-        // Fit exactly once for the new media to avoid per-frame jank
-        if (fitPending) {
-            fitImageToView();
-            fitPending = false;
-        }
-    } else {
-        imageItem->setPixmap(originalPixmap);
-    }
-    
-    // Update UI time/slider with frame timestamp
-    if (frame.timestampMs >= 0) {
-        positionSlider->setValue(static_cast<int>(frame.timestampMs));
-        updateVideoTimeDisplays(frame.timestampMs, mediaPlayer->duration());
-    }
-}
-
-void PreviewOverlay::onFFmpegMediaInfo(const FFmpegPlayer::MediaInfo& info)
-{
-    qDebug() << "[PreviewOverlay] FFmpegPlayer media info:"
-             << "Duration:" << info.durationMs << "ms"
-             << "FPS:" << info.fps
-             << "Resolution:" << info.width << "x" << info.height
-             << "Codec:" << info.codec;
-    
-    // Update duration display
-    if (info.durationMs > 0) {
-        positionSlider->setRange(0, info.durationMs);
-        updateVideoTimeDisplays(0, info.durationMs);
-    }
-    
-    // Update FPS display
-    if (info.fps > 0.0) {
-        detectedFps = info.fps;
-        if (fpsLabel) fpsLabel->setText(QString::number(info.fps, 'f', 1) + " fps");
-    }
-}
-
-void PreviewOverlay::onFFmpegPlaybackState(FFmpegPlayer::PlaybackState state)
-{
-    qDebug() << "[PreviewOverlay] FFmpegPlayer state changed to:" << static_cast<int>(state);
-    
-    switch (state) {
-        case FFmpegPlayer::PlaybackState::Playing:
-            playPauseBtn->setIcon(pauseIcon);
-            break;
-        case FFmpegPlayer::PlaybackState::Paused:
-        case FFmpegPlayer::PlaybackState::Stopped:
-            playPauseBtn->setIcon(playIcon);
-            break;
-        case FFmpegPlayer::PlaybackState::Loading:
-            // Optional: show loading indicator
-            break;
-        case FFmpegPlayer::PlaybackState::Error:
-            playPauseBtn->setIcon(playIcon);
-            break;
-    }
-}
-
-void PreviewOverlay::onFFmpegError(const QString& errorString)
-{
-    qWarning() << "[PreviewOverlay] FFmpegPlayer error:" << errorString;
-    
-    // Fallback to standard QMediaPlayer if FFmpegPlayer fails
-    if (!mediaPlayer->source().isEmpty()) {
-        qDebug() << "[PreviewOverlay] Falling back to QMediaPlayer";
-        mediaPlayer->play();
-    }
-}
