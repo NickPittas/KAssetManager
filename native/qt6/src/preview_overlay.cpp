@@ -777,12 +777,16 @@ void PreviewOverlay::showVideo(const QString &filePath)
     // Cache bar is only for sequences
     if (cacheBar) cacheBar->hide();
 
-    // Enable audio controls for video
+    // Enable and show audio controls for video
     if (muteBtn) {
         muteBtn->setEnabled(true);
         muteBtn->setIcon(m_gstreamerPlayer->isMuted() ? muteIcon : audioIcon);
+        muteBtn->show();
     }
-    if (volumeSlider) volumeSlider->setEnabled(true);
+    if (volumeSlider) {
+        volumeSlider->setEnabled(true);
+        volumeSlider->show();
+    }
 
     // Hide alpha toggle for videos
     if (alphaCheck) alphaCheck->hide();
@@ -1327,9 +1331,16 @@ void PreviewOverlay::showSequence(const QStringList &framePaths, const QString &
     imageView->show();
     controlsWidget->show();
     // Disable audio controls for image sequences (no audio)
-    if (muteBtn) { muteBtn->setEnabled(false); muteBtn->setIcon(noAudioIcon); }
+    if (muteBtn) {
+        muteBtn->setEnabled(false);
+        muteBtn->setIcon(noAudioIcon);
+        muteBtn->show();
+    }
     fitPending = true; // ensure first loaded frame fits once
-    if (volumeSlider) volumeSlider->setEnabled(false);
+    if (volumeSlider) {
+        volumeSlider->setEnabled(false);
+        volumeSlider->show();
+    }
 
 
     // Stop video player if running

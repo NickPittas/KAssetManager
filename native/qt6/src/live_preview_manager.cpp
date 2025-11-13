@@ -114,15 +114,7 @@ LivePreviewManager::LivePreviewManager(QObject* parent)
     m_cache.setMaxCost(m_maxCacheEntries);
     m_sequenceMetaCache.setMaxCost(m_sequenceMetaLimit);
 
-    // Initialize unified FFmpeg player
-    m_ffmpegPlayer = std::make_unique<FFmpegPlayer>(this);
-
-    // Connect to FFmpegPlayer signals for unified video/image sequence playback
-    connect(m_ffmpegPlayer.get(), &FFmpegPlayer::frameReady, this, &LivePreviewManager::onFFmpegFrameReady);
-    connect(m_ffmpegPlayer.get(), &FFmpegPlayer::error, this, &LivePreviewManager::onFFmpegError);
-    connect(m_ffmpegPlayer.get(), &FFmpegPlayer::cacheStatus, this, &LivePreviewManager::cacheStatus);
-
-    qInfo() << "[LivePreview] Unified FFmpegPlayer initialized with hardware acceleration";
+    qInfo() << "[LivePreview] LivePreviewManager initialized with GStreamer backend";
 }
 
 LivePreviewManager::FrameHandle LivePreviewManager::cachedFrame(const QString& filePath, const QSize& targetSize, qreal position)
@@ -674,31 +666,4 @@ QImage LivePreviewManager::loadVideoFrame(const Request& request, QString& error
     // GStreamer not available - return empty image
     return QImage();
 #endif
-}
-
-void LivePreviewManager::onFFmpegFrameReady(const FFmpegPlayer::VideoFrame& frame)
-{
-    // Convert FFmpegPlayer::VideoFrame to LivePreviewManager format
-    if (!frame.isValid()) {
-        return;
-    }
-    
-    QPixmap pixmap = QPixmap::fromImage(frame.image);
-    if (!pixmap.isNull()) {
-        // Convert position from timestamp to normalized [0,1] range
-        qreal normalizedPos = frame.timestampMs > 0 ?
-            static_cast<qreal>(frame.timestampMs) / 1000.0 / (frame.fps > 0 ? frame.fps : 25.0) : 0.0;
-        
-        // Cache the frame for future requests
-        QString cacheKey = makeCacheKey(m_currentFilePath, QSize(frame.width, frame.height), normalizedPos);
-        storeFrame(cacheKey, pixmap, normalizedPos, QSize(frame.width, frame.height));
-        
-        // Emit in the expected format for LivePreviewManager
-        emit frameReady(m_currentFilePath, normalizedPos, QSize(frame.width, frame.height), pixmap);
-    }
-}
-
-void LivePreviewManager::onFFmpegError(const QString& errorString)
-{
-    emit frameFailed(m_currentFilePath, errorString);
 }

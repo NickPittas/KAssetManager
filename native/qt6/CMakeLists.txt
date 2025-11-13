@@ -272,8 +272,6 @@ qt_add_executable(kassetmanagerqt WIN32
     src/media_convert_dialog.cpp
     src/media_converter_worker.h
     src/media_converter_worker.cpp
-    src/media/ffmpeg_player.h
-    src/media/ffmpeg_player.cpp
     src/media/gstreamer_player.h
     src/media/gstreamer_player.cpp
     ${APP_RESOURCES}
