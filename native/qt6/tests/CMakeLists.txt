@@ -105,8 +105,8 @@ add_executable(test_live_preview_manager
     test_live_preview_manager.cpp
     ../src/live_preview_manager.cpp
     ../src/live_preview_manager.h
-    ../src/media/ffmpeg_player.cpp
-    ../src/media/ffmpeg_player.h
+    ../src/media/gstreamer_player.cpp
+    ../src/media/gstreamer_player.h
     ../src/oiio_image_loader.cpp
     ../src/oiio_image_loader.h
     ../src/utils.cpp
@@ -114,9 +114,18 @@ add_executable(test_live_preview_manager
 )
 
 # Needs Widgets for QPixmap, and Concurrent for QtConcurrent::run
-target_link_libraries(test_live_preview_manager PRIVATE Qt6::Test Qt6::Core Qt6::Widgets Qt6::Concurrent)
+target_link_libraries(test_live_preview_manager PRIVATE
+    Qt6::Test
+    Qt6::Core
+    Qt6::Widgets
+    Qt6::Concurrent
+    ${GSTREAMER_LIBRARIES}
+)
 
-target_include_directories(test_live_preview_manager PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+target_include_directories(test_live_preview_manager PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src
+    ${GSTREAMER_INCLUDE_DIRS}
+)
 
 add_test(NAME test_live_preview_manager COMMAND test_live_preview_manager)
 set_tests_properties(test_live_preview_manager PROPERTIES WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/install_run/bin")
@@ -125,7 +134,11 @@ set_tests_properties(test_live_preview_manager PROPERTIES WORKING_DIRECTORY "${C
 # Ensure external heavy features are disabled for this unit test to avoid extra SDK deps
 # Use value-0 so we can leave directory-level defines intact and rely on #if defined(X) && X guards
 # This keeps other tests and the main app unaffected
-target_compile_definitions(test_live_preview_manager PRIVATE HAVE_OPENIMAGEIO=0 HAVE_FFMPEG=0)
+target_compile_definitions(test_live_preview_manager PRIVATE
+    HAVE_OPENIMAGEIO=0
+    HAVE_FFMPEG=0
+    HAVE_GSTREAMER=1
+)
 
 install(TARGETS test_live_preview_manager DESTINATION bin)
 

@@ -71,6 +71,9 @@ public:
     void setVideoWidget(QWidget* widget);
     QWidget* videoWidget() const { return m_videoWidget; }
 
+    // Update video render rectangle (call when widget is resized)
+    void updateRenderRectangle();
+
     // Load media (video file or image sequence)
     void loadMedia(const QString& filePath);
 

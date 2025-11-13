@@ -227,6 +227,10 @@ void GStreamerPlayer::setupPipeline(const QString& uri)
 #endif
 
         if (videoSink) {
+            // Enable force-aspect-ratio to scale video to fit widget while maintaining aspect ratio
+            // This ensures video fills the available space on all displays including HiDPI
+            g_object_set(videoSink, "force-aspect-ratio", TRUE, nullptr);
+
             g_object_set(m_pipeline, "video-sink", videoSink, nullptr);
             qInfo() << "[GStreamerPlayer] Using video sink:" << GST_ELEMENT_NAME(videoSink);
         } else {
@@ -373,12 +377,94 @@ void GStreamerPlayer::setWindowHandle()
                 << "on element:" << GST_ELEMENT_NAME(actualSink);
 
         // Also set render rectangle to match widget size
+        // CRITICAL: Use physical pixels (device pixel ratio) for HiDPI displays
+        qreal dpr = m_videoWidget->devicePixelRatio();
+        int physicalWidth = static_cast<int>(m_videoWidget->width() * dpr);
+        int physicalHeight = static_cast<int>(m_videoWidget->height() * dpr);
+
+        qInfo() << "[GStreamerPlayer] Setting initial render rectangle:"
+                << "logical size:" << m_videoWidget->width() << "x" << m_videoWidget->height()
+                << "DPR:" << dpr
+                << "physical size:" << physicalWidth << "x" << physicalHeight;
+
         gst_video_overlay_set_render_rectangle(GST_VIDEO_OVERLAY(actualSink),
                                                 0, 0,
-                                                m_videoWidget->width(),
-                                                m_videoWidget->height());
+                                                physicalWidth,
+                                                physicalHeight);
     } else {
         qWarning() << "[GStreamerPlayer] Video sink does not support overlay interface";
+    }
+
+    // Clean up references
+    if (actualSink != videoSink) {
+        gst_object_unref(actualSink);
+    }
+    gst_object_unref(videoSink);
+#endif
+}
+
+void GStreamerPlayer::updateRenderRectangle()
+{
+#ifdef HAVE_GSTREAMER
+    if (!m_pipeline || !m_videoWidget) return;
+
+    // Get the video sink from playbin
+    GstElement* videoSink = nullptr;
+    g_object_get(m_pipeline, "video-sink", &videoSink, nullptr);
+
+    if (!videoSink) {
+        return;
+    }
+
+    // The video sink might be wrapped in a bin, so we need to find the actual overlay element
+    GstElement* actualSink = videoSink;
+
+    // If it's a bin, try to find the actual video sink inside
+    if (GST_IS_BIN(videoSink)) {
+        GstIterator* it = gst_bin_iterate_sinks(GST_BIN(videoSink));
+        GValue item = G_VALUE_INIT;
+        bool found = false;
+
+        while (gst_iterator_next(it, &item) == GST_ITERATOR_OK) {
+            GstElement* element = GST_ELEMENT(g_value_get_object(&item));
+            if (GST_IS_VIDEO_OVERLAY(element)) {
+                actualSink = element;
+                gst_object_ref(actualSink);
+                found = true;
+                g_value_reset(&item);
+                break;
+            }
+            g_value_reset(&item);
+        }
+
+        g_value_unset(&item);
+        gst_iterator_free(it);
+
+        if (!found) {
+            gst_object_unref(videoSink);
+            return;
+        }
+    }
+
+    // Update render rectangle to match current widget size
+    // CRITICAL: Use physical pixels (device pixel ratio) for HiDPI displays
+    if (GST_IS_VIDEO_OVERLAY(actualSink)) {
+        qreal dpr = m_videoWidget->devicePixelRatio();
+        int physicalWidth = static_cast<int>(m_videoWidget->width() * dpr);
+        int physicalHeight = static_cast<int>(m_videoWidget->height() * dpr);
+
+        qDebug() << "[GStreamerPlayer] Updating render rectangle:"
+                 << "logical size:" << m_videoWidget->width() << "x" << m_videoWidget->height()
+                 << "DPR:" << dpr
+                 << "physical size:" << physicalWidth << "x" << physicalHeight;
+
+        gst_video_overlay_set_render_rectangle(GST_VIDEO_OVERLAY(actualSink),
+                                                0, 0,
+                                                physicalWidth,
+                                                physicalHeight);
+
+        // Force expose to refresh the video rendering
+        gst_video_overlay_expose(GST_VIDEO_OVERLAY(actualSink));
     }
 
     // Clean up references
@@ -671,6 +757,10 @@ void GStreamerPlayer::onBusMessage()
                         << "@" << m_mediaInfo.fps << "fps"
                         << "duration:" << m_mediaInfo.durationMs << "ms"
                         << "audio:" << m_mediaInfo.hasAudio;
+
+                // CRITICAL: Update render rectangle after preroll completes
+                // This ensures video is properly sized on HiDPI displays
+                updateRenderRectangle();
                 break;
             case GST_MESSAGE_BUFFERING: {
                 gint percent = 0;

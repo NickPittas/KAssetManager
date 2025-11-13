@@ -1161,6 +1161,11 @@ void PreviewOverlay::resizeEvent(QResizeEvent *event)
         fitImageToView();
     }
 
+    // Update video render rectangle if showing a video
+    if (isVideo && videoWidget && videoWidget->isVisible()) {
+        m_gstreamerPlayer->updateRenderRectangle();
+    }
+
     // Reposition nav arrows within their container on overlay resize
     if (navContainer) {
         positionNavButtons(navContainer);
