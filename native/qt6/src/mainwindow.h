@@ -340,7 +340,7 @@ private:
     class QGraphicsView *fmImageView = nullptr;
     class QGraphicsScene *fmImageScene = nullptr;
     class QGraphicsPixmapItem *fmImageItem = nullptr;
-    class QVideoWidget *fmVideoWidget = nullptr;
+    QWidget *fmVideoWidget = nullptr; // Changed from QVideoWidget to QWidget for GStreamer
     // Additional preview widgets
     class QPlainTextEdit *fmTextView = nullptr;           // TXT/LOG
     class QTableView *fmCsvView = nullptr;                // CSV table
@@ -355,9 +355,8 @@ private:
     bool fmImageFitToView = true; // auto fit image to view and refit on resize until user zooms manually
     QImage fmOriginalImage; QString fmCurrentPreviewPath; bool fmPreviewHasAlpha = false; bool fmAlphaOnlyMode = false;
     QPoint fmPreviewDragStartPos; bool fmPreviewDragPending = false;
-    // Media
-    class QMediaPlayer *fmMediaPlayer;
-    class QAudioOutput *fmAudioOutput;
+    // Media - GStreamer player
+    class GStreamerPlayer *fmGStreamerPlayer = nullptr;
     QPushButton *fmPlayPauseBtn;
     QPushButton *fmPrevFrameBtn = nullptr;
     QPushButton *fmNextFrameBtn = nullptr;

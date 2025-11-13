@@ -2,6 +2,7 @@
 
 #include "oiio_image_loader.h"
 #include "utils.h"
+#include "media/gstreamer_player.h"
 
 
 #include <QtConcurrent/QtConcurrentRun>
@@ -26,6 +27,10 @@ extern "C" {
 }
 #endif
 
+#if defined(HAVE_GSTREAMER) && HAVE_GSTREAMER
+#include <gst/gst.h>
+#endif
+
 namespace {
 
 constexpr int kMinCacheEntries = 64;
@@ -37,6 +42,10 @@ constexpr int kDecodeSafetyIterMax = 256;
 
 constexpr qreal kDefaultPosterPosition = 0.05; // pick early frame for motion clips
 constexpr int kSequenceMetaTtlMs = 30000;
+
+// Cache for video durations to avoid repeated GStreamer queries during scrubbing
+static QHash<QString, qint64> s_durationCache;
+static QMutex s_durationCacheMutex;
 
 #if defined(HAVE_FFMPEG) && HAVE_FFMPEG
 QString ffmpegErrorString(int err)
@@ -104,15 +113,15 @@ LivePreviewManager::LivePreviewManager(QObject* parent)
     // Initialize QCache capacity based on default setting
     m_cache.setMaxCost(m_maxCacheEntries);
     m_sequenceMetaCache.setMaxCost(m_sequenceMetaLimit);
-    
+
     // Initialize unified FFmpeg player
     m_ffmpegPlayer = std::make_unique<FFmpegPlayer>(this);
-    
+
     // Connect to FFmpegPlayer signals for unified video/image sequence playback
     connect(m_ffmpegPlayer.get(), &FFmpegPlayer::frameReady, this, &LivePreviewManager::onFFmpegFrameReady);
     connect(m_ffmpegPlayer.get(), &FFmpegPlayer::error, this, &LivePreviewManager::onFFmpegError);
     connect(m_ffmpegPlayer.get(), &FFmpegPlayer::cacheStatus, this, &LivePreviewManager::cacheStatus);
-    
+
     qInfo() << "[LivePreview] Unified FFmpegPlayer initialized with hardware acceleration";
 }
 
@@ -405,13 +414,18 @@ QImage LivePreviewManager::loadImageFrame(const Request& request, QString& error
     const QString suffix = info.suffix().toLower();
     QImage image;
 
-    if (isHdrExtension(suffix) && OIIOImageLoader::isOIIOSupported(request.filePath)) {
+    // Try OpenImageIO first for formats it supports (PSD, TIFF, EXR, HDR, etc.)
+    if (OIIOImageLoader::isOIIOSupported(request.filePath)) {
 #if defined(HAVE_OPENIMAGEIO) && HAVE_OPENIMAGEIO
         image = OIIOImageLoader::loadImage(request.filePath, request.targetSize.width(), request.targetSize.height());
-#else
-        image = QImage();
+        if (image.isNull()) {
+            qDebug() << "[LivePreview] OIIO failed to load, falling back to Qt:" << request.filePath;
+        }
 #endif
-    } else {
+    }
+
+    // Fall back to Qt's image reader if OIIO didn't work or isn't available
+    if (image.isNull()) {
         QImageReader reader(request.filePath);
         reader.setAutoTransform(true);
         if (request.targetSize.isValid()) {
@@ -594,165 +608,70 @@ QImage LivePreviewManager::loadSequenceFrame(const Request& request, QString& er
 
 QImage LivePreviewManager::loadVideoFrame(const Request& request, QString& error)
 {
-#if defined(HAVE_FFMPEG) && HAVE_FFMPEG
-    // For thumbnail generation, we need synchronous decoding
-    // DO NOT use m_ffmpegPlayer which is designed for async preview playback
-    // Instead, use direct FFmpeg calls with a temporary context
-    
+#if defined(HAVE_GSTREAMER) && HAVE_GSTREAMER
+    // Treat thumbnails EXACTLY like the preview pane:
+    // - Use a PERSISTENT headless GStreamer pipeline with appsink (no video windows!)
+    // - Load the video once and keep it in PAUSED state
+    // - For each scrub position, just SEEK (like preview pane timeline scrubbing)
+    // - Pull the frame from appsink
+    // This is EXACTLY how preview pane works, just with appsink instead of video widget
+
     QFileInfo info(request.filePath);
     if (!info.exists()) {
         error = QStringLiteral("File does not exist");
         return {};
     }
-    
-    qDebug() << "[LivePreview] Decoding video thumbnail:" << request.filePath << "position:" << request.position;
-    
-    // Open video file with FFmpeg
-    AVFormatContext* fmtCtx = nullptr;
-    QByteArray localPath = QFile::encodeName(request.filePath);
-    
-    int openRet = avformat_open_input(&fmtCtx, localPath.constData(), nullptr, nullptr);
-    if (openRet < 0) {
-        error = QString("Failed to open video file: %1").arg(ffmpegErrorString(openRet));
-        qWarning() << "[LivePreview] avformat_open_input failed:" << error;
-        return {};
-    }
-    
-    if (avformat_find_stream_info(fmtCtx, nullptr) < 0) {
-        error = QStringLiteral("Failed to find stream info");
-        avformat_close_input(&fmtCtx);
-        return {};
-    }
-    
-    // Find video stream
-    int videoStream = av_find_best_stream(fmtCtx, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
-    if (videoStream < 0) {
-        error = QStringLiteral("No video stream found");
-        avformat_close_input(&fmtCtx);
-        return {};
-    }
-    
-    AVStream* stream = fmtCtx->streams[videoStream];
-    AVCodecParameters* params = stream->codecpar;
-    
-    // Find decoder
-    const AVCodec* decoder = avcodec_find_decoder(params->codec_id);
-    if (!decoder) {
-        error = QStringLiteral("Decoder not found");
-        avformat_close_input(&fmtCtx);
-        return {};
-    }
-    
-    // Create codec context
-    AVCodecContext* codecCtx = avcodec_alloc_context3(decoder);
-    if (!codecCtx) {
-        error = QStringLiteral("Failed to allocate codec context");
-        avformat_close_input(&fmtCtx);
-        return {};
-    }
-    
-    if (avcodec_parameters_to_context(codecCtx, params) < 0) {
-        error = QStringLiteral("Failed to copy codec parameters");
-        avcodec_free_context(&codecCtx);
-        avformat_close_input(&fmtCtx);
-        return {};
-    }
-    
-    if (avcodec_open2(codecCtx, decoder, nullptr) < 0) {
-        error = QStringLiteral("Failed to open codec");
-        avcodec_free_context(&codecCtx);
-        avformat_close_input(&fmtCtx);
-        return {};
-    }
-    
-    // Calculate target timestamp
+
+    // Use a static cache to avoid repeated duration queries
+    static QHash<QString, qint64> s_durationCache;
+    static QMutex s_durationMutex;
+
     qint64 durationMs = 0;
-    if (fmtCtx->duration > 0) {
-        durationMs = (fmtCtx->duration * 1000) / AV_TIME_BASE;
-    } else if (stream->duration > 0) {
-        durationMs = (stream->duration * stream->time_base.num * 1000) / stream->time_base.den;
-    }
-    
-    qint64 targetMs = durationMs > 0 ? static_cast<qint64>(request.position * durationMs) : 0;
-    
-    // Seek to target position
-    if (targetMs > 0 && stream->duration > 0) {
-        double targetSec = static_cast<double>(targetMs) / 1000.0;
-        int64_t ts = static_cast<int64_t>(targetSec / av_q2d(stream->time_base));
-        av_seek_frame(fmtCtx, videoStream, ts, AVSEEK_FLAG_BACKWARD);
-        avcodec_flush_buffers(codecCtx);
-    }
-    
-    // Decode frame
-    AVPacket* packet = av_packet_alloc();
-    AVFrame* frame = av_frame_alloc();
-    QImage resultImage;
-    
-    bool frameFound = false;
-    int safety = 0;
-    
-    while (!frameFound && av_read_frame(fmtCtx, packet) >= 0 && safety++ < 256) {
-        if (packet->stream_index != videoStream) {
-            av_packet_unref(packet);
-            continue;
-        }
-        
-        if (avcodec_send_packet(codecCtx, packet) < 0) {
-            av_packet_unref(packet);
-            continue;
-        }
-        
-        av_packet_unref(packet);
-        
-        while (avcodec_receive_frame(codecCtx, frame) == 0) {
-            // Convert to QImage
-            int width = frame->width;
-            int height = frame->height;
-            AVPixelFormat format = static_cast<AVPixelFormat>(frame->format);
-            
-            SwsContext* swsCtx = sws_getContext(width, height, format,
-                                               width, height, AV_PIX_FMT_RGBA,
-                                               SWS_BICUBIC, nullptr, nullptr, nullptr);
-            if (!swsCtx) {
-                break;
-            }
-            
-            QImage image(width, height, QImage::Format_RGBA8888);
-            uint8_t* dstData[4] = { image.bits(), nullptr, nullptr, nullptr };
-            int dstLinesize[4] = { static_cast<int>(image.bytesPerLine()), 0, 0, 0 };
-            
-            sws_scale(swsCtx, frame->data, frame->linesize, 0, height, dstData, dstLinesize);
-            sws_freeContext(swsCtx);
-            
-            // Scale to target size if specified
-            if (request.targetSize.isValid() && (width > request.targetSize.width() || height > request.targetSize.height())) {
-                resultImage = image.scaled(request.targetSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
-            } else {
-                resultImage = image;
-            }
-            
-            frameFound = true;
-            break;
+
+    // Check cache first
+    {
+        QMutexLocker locker(&s_durationMutex);
+        if (s_durationCache.contains(request.filePath)) {
+            durationMs = s_durationCache[request.filePath];
         }
     }
-    
-    // Cleanup
-    av_frame_free(&frame);
-    av_packet_free(&packet);
-    avcodec_free_context(&codecCtx);
-    avformat_close_input(&fmtCtx);
-    
-    if (!frameFound || resultImage.isNull()) {
-        error = QStringLiteral("Failed to decode video frame");
+
+    // If not cached, query duration using the new lightweight function
+    if (durationMs == 0) {
+        durationMs = GStreamerPlayer::queryDuration(request.filePath);
+
+        if (durationMs <= 0) {
+            error = QStringLiteral("Failed to get video duration");
+            return {};
+        }
+
+        // Cache the duration
+        QMutexLocker locker(&s_durationMutex);
+        s_durationCache[request.filePath] = durationMs;
+        qDebug() << "[LivePreview] Cached duration for" << request.filePath << ":" << durationMs << "ms";
+    }
+
+    // Calculate absolute position from normalized position (0.0 to 1.0)
+    // Left edge of thumbnail = 0.0 (first frame), Right edge = 1.0 (last frame)
+    qint64 positionMs = static_cast<qint64>(request.position * durationMs);
+    positionMs = std::clamp(positionMs, 0LL, durationMs);
+
+    qDebug() << "[LivePreview] Scrubbing to position:" << request.position << "-> " << positionMs << "ms (duration:" << durationMs << "ms)";
+
+    // Use extractThumbnail - it uses the SAME seeking mechanism as the media player
+    QImage thumbnail = GStreamerPlayer::extractThumbnail(request.filePath, request.targetSize, positionMs);
+
+    if (thumbnail.isNull()) {
+        error = QStringLiteral("Failed to decode video frame with GStreamer");
         return {};
     }
-    
-    qDebug() << "[LivePreview] Successfully decoded video thumbnail:" << resultImage.width() << "x" << resultImage.height();
-    return resultImage;
+
+    return thumbnail;
+
 #else
     Q_UNUSED(request);
     Q_UNUSED(error);
-    // FFmpeg not available - return empty image
+    // GStreamer not available - return empty image
     return QImage();
 #endif
 }

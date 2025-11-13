@@ -633,14 +633,11 @@ private:
     Qt::SortOrder m_sortOrder = Qt::AscendingOrder;
 };
 
-#include <QMediaPlayer>
-#include <QMediaMetaData>
-#include <QVideoWidget>
+#include "media/gstreamer_player.h"
 #include <QScrollArea>
 #include <QFrame>
 #include <QDockWidget>
 #include <QEventLoop>
-#include <QAudioOutput>
 
 #include <QDesktopServices>
 #include <QSize>
@@ -1726,6 +1723,10 @@ MainWindow::MainWindow(QWidget *parent)
 {
     fileOpsDialog = nullptr;
     LogManager::instance().addLog("[MAINWINDOW] ctor begin");
+
+    // CRITICAL: Initialize GStreamer early to avoid 8+ second delay on first video
+    // This must be done before any thumbnail generation or video playback
+    GStreamerPlayer::initialize();
 
     // Load LivePreview cache size setting
     {
@@ -3178,15 +3179,22 @@ void MainWindow::setupFileManagerUi()
 
     pv->addLayout(alphaRow);
 
-    fmVideoWidget = new QVideoWidget(fmPreviewPanel);
+    // Video widget for GStreamer rendering
+    fmVideoWidget = new QWidget(fmPreviewPanel);
     fmVideoWidget->setMinimumHeight(160);
     fmVideoWidget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    fmVideoWidget->setStyleSheet("QWidget { background-color: #000000; }");
+
+    // CRITICAL: Set widget attributes for native window embedding
+    // These attributes tell Qt to create a native window that GStreamer can render into
+    fmVideoWidget->setAttribute(Qt::WA_NativeWindow);
+    fmVideoWidget->setAttribute(Qt::WA_PaintOnScreen);
+    fmVideoWidget->setAttribute(Qt::WA_OpaquePaintEvent);
+
     fmVideoWidget->hide();
 
-    fmMediaPlayer = new QMediaPlayer(fmPreviewPanel);
-    fmAudioOutput = new QAudioOutput(fmPreviewPanel);
-    fmMediaPlayer->setAudioOutput(fmAudioOutput);
-    fmMediaPlayer->setVideoOutput(fmVideoWidget);
+    // Create GStreamer player for video playback
+    fmGStreamerPlayer = new GStreamerPlayer(fmPreviewPanel);
 
     // Media controls (Explorer-like): Prev - Play/Pause - Next - Slider - Time - Audio
     QHBoxLayout *mc = new QHBoxLayout();
@@ -3249,23 +3257,24 @@ void MainWindow::setupFileManagerUi()
             if (fmSequencePlaying) pauseFmSequence(); else playFmSequence();
             return;
         }
-        if (!fmMediaPlayer) return;
-        if (fmMediaPlayer->playbackState() == QMediaPlayer::PlayingState) {
-            fmMediaPlayer->pause();
+        if (!fmGStreamerPlayer) return;
+        if (fmGStreamerPlayer->state() == GStreamerPlayer::PlaybackState::Playing) {
+            fmGStreamerPlayer->pause();
             fmPlayPauseBtn->setIcon(icoMediaPlay());
         } else {
-            fmMediaPlayer->play();
+            fmGStreamerPlayer->play();
             fmPlayPauseBtn->setIcon(icoMediaPause());
         }
     });
 
-    connect(fmMediaPlayer, &QMediaPlayer::positionChanged, this, [this](qint64 pos){
+    connect(fmGStreamerPlayer, &GStreamerPlayer::positionChanged, this, [this](qint64 pos){
         if (fmIsSequence) return; // sequence updates handled separately
-        if (fmMediaPlayer && fmMediaPlayer->duration()>0){
+        qint64 duration = fmGStreamerPlayer->duration();
+        if (fmGStreamerPlayer && duration > 0){
             fmPositionSlider->blockSignals(true);
-            fmPositionSlider->setValue(int(pos*1000/fmMediaPlayer->duration()));
+            fmPositionSlider->setValue(int(pos*1000/duration));
             fmPositionSlider->blockSignals(false);
-            fmTimeLabel->setText(QString("%1 / %2").arg(QTime::fromMSecsSinceStartOfDay(int(pos)).toString("mm:ss")).arg(QTime::fromMSecsSinceStartOfDay(int(fmMediaPlayer->duration())).toString("mm:ss")));
+            fmTimeLabel->setText(QString("%1 / %2").arg(QTime::fromMSecsSinceStartOfDay(int(pos)).toString("mm:ss")).arg(QTime::fromMSecsSinceStartOfDay(int(duration)).toString("mm:ss")));
         }
     });
 
@@ -3274,14 +3283,15 @@ void MainWindow::setupFileManagerUi()
             loadFmSequenceFrame(v);
             return;
         }
-        if (fmMediaPlayer && fmMediaPlayer->duration()>0) fmMediaPlayer->setPosition(qint64(v) * fmMediaPlayer->duration() / 1000);
+        qint64 duration = fmGStreamerPlayer->duration();
+        if (fmGStreamerPlayer && duration > 0) fmGStreamerPlayer->seek(qint64(v) * duration / 1000);
     });
 
-    connect(fmVolumeSlider, &QSlider::valueChanged, this, [this](int v){ if (fmAudioOutput) fmAudioOutput->setVolume(v/100.0); });
+    connect(fmVolumeSlider, &QSlider::valueChanged, this, [this](int v){ if (fmGStreamerPlayer) fmGStreamerPlayer->setVolume(v/100.0); });
     connect(fmMuteBtn, &QPushButton::clicked, this, [this]{
-        if (!fmAudioOutput) return;
-        bool newMuted = !fmAudioOutput->isMuted();
-        fmAudioOutput->setMuted(newMuted);
+        if (!fmGStreamerPlayer) return;
+        bool newMuted = !fmGStreamerPlayer->isMuted();
+        fmGStreamerPlayer->setMuted(newMuted);
         fmMuteBtn->setIcon(newMuted ? icoMediaMute() : icoMediaAudio());
     });
 
@@ -3826,7 +3836,7 @@ void MainWindow::onFmPaste()
     const QString destDir = fmDirModel->rootPath();
 
     // Ensure any preview locks are released before file ops
-    if (fmMediaPlayer) { fmMediaPlayer->stop(); fmMediaPlayer->setSource(QUrl()); }
+    if (fmGStreamerPlayer) { fmGStreamerPlayer->stop(); }
     // Release any locks held by previews
     releaseAnyPreviewLocksForPaths(fmClipboard);
     // Enqueue async operation
@@ -4317,7 +4327,7 @@ void MainWindow::releaseAnyPreviewLocksForPaths(const QStringList& paths)
 {
     QSet<QString> s; for (const QString &p : paths) s.insert(QFileInfo(p).absoluteFilePath());
     // Embedded FM preview: stop media and clear if current preview is among paths
-    if (fmMediaPlayer) { fmMediaPlayer->stop(); fmMediaPlayer->setSource(QUrl()); }
+    if (fmGStreamerPlayer) { fmGStreamerPlayer->stop(); }
     if (!fmCurrentPreviewPath.isEmpty()) {
         QString abs = QFileInfo(fmCurrentPreviewPath).absoluteFilePath();
         if (s.contains(abs)) {
@@ -5382,7 +5392,9 @@ void MainWindow::updateInfoPanel()
                 QStringList videoExts = {"mp4", "mov", "avi", "mkv", "wmv", "flv", "webm",
                                         "m4v", "mpg", "mpeg", "3gp", "mts", "m2ts", "mxf"};
                 if (videoExts.contains(fileType.toLower())) {
-                    // Extract video metadata using QMediaPlayer
+                    // TODO: Extract video metadata using GStreamer
+                    // Temporarily disabled during GStreamer migration
+                    /*
                     QMediaPlayer tempPlayer;
                     QAudioOutput tempAudio;
                     tempPlayer.setAudioOutput(&tempAudio);
@@ -5478,55 +5490,11 @@ void MainWindow::updateInfoPanel()
                             videoInfo << QString("FPS: %1").arg(fps, 0, 'f', 0);
                         }
                     }
+                    */
 
                     // FFmpeg probing for reliable codecs, profiles, and details
-#ifdef HAVE_FFMPEG
-                    MediaInfo::VideoMetadata ff;
-                    QString ffErr;
-                    if (MediaInfo::probeVideoFile(filePath, ff, &ffErr)) {
-                        // Fill missing audio/bitrate/resolution/fps
-                        if (audioCodec.isEmpty() && !ff.audioCodec.isEmpty()) {
-                            videoInfo << QString("Audio Codec: %1").arg(ff.audioCodec.toUpper());
-                        }
-                        if (!hasBitrate && ff.bitrate > 0) {
-                            double mbps = ff.bitrate / 1000000.0;
-                            videoInfo << QString("Bitrate: %1 Mbps").arg(mbps, 0, 'f', 2);
-                        }
-                        if (!hasResolution && ff.width > 0 && ff.height > 0) {
-                            videoInfo << QString("Frame Size: %1x%2").arg(ff.width).arg(ff.height);
-                        }
-                        if (!hasFps && ff.fps > 0) {
-                            videoInfo << QString("FPS: %1").arg(ff.fps, 0, 'f', 0);
-                        }
-                    }
-#endif
-
-
-                    // Compose final Video Codec line once (prefer Qt value unless empty/unspecified; append FFmpeg profile if available)
-                    {
-                        QString finalCodec = videoCodec;
-                        QString finalProfile;
-#ifdef HAVE_FFMPEG
-                        if (finalCodec.isEmpty() && !ff.videoCodec.isEmpty()) {
-                            finalCodec = ff.videoCodec;
-                        }
-                        if (!ff.videoProfile.isEmpty()) {
-                            finalProfile = ff.videoProfile;
-                        }
-#endif
-                        if (!finalCodec.isEmpty()) {
-                            const QString line = finalProfile.isEmpty()
-                                ? QString("Video Codec: %1").arg(finalCodec.toUpper())
-                                : QString("Video Codec: %1 %2").arg(finalCodec.toUpper(), finalProfile.toUpper());
-                            videoInfo << line;
-                        }
-                    }
-
-                    if (!videoInfo.isEmpty()) {
-                        dimensionsStr = videoInfo.join("\n");
-                    } else {
-                        dimensionsStr = "Video file";
-                    }
+                    // For now, just show "Video file" during GStreamer migration
+                    dimensionsStr = "Video file";
                 }
             }
         }
@@ -6425,7 +6393,7 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
 
                 const bool shift = dropEvent->keyboardModifiers().testFlag(Qt::ShiftModifier);
                 // Ensure any preview locks are released before file ops
-                if (fmMediaPlayer) { fmMediaPlayer->stop(); fmMediaPlayer->setSource(QUrl()); }
+                if (fmGStreamerPlayer) { fmGStreamerPlayer->stop(); }
                 if (shift) FileOpsQueue::instance().enqueueMove(sources, destDir);
                 else FileOpsQueue::instance().enqueueCopy(sources, destDir);
                 if (!fileOpsDialog) fileOpsDialog = new FileOpsProgressDialog(this);
@@ -6531,7 +6499,7 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
 
                 const bool shift = dropEvent->keyboardModifiers().testFlag(Qt::ShiftModifier);
                 // Ensure any preview locks are released before file ops
-                if (fmMediaPlayer) { fmMediaPlayer->stop(); fmMediaPlayer->setSource(QUrl()); }
+                if (fmGStreamerPlayer) { fmGStreamerPlayer->stop(); }
                 if (shift) FileOpsQueue::instance().enqueueMove(sources, destDir);
                 else       FileOpsQueue::instance().enqueueCopy(sources, destDir);
                 if (!fileOpsDialog) fileOpsDialog = new FileOpsProgressDialog(this);
@@ -7456,7 +7424,7 @@ void MainWindow::onAssetVersionsChanged(int assetId)
 // ===== File Manager Preview handlers =====
 void MainWindow::clearFmPreview()
 {
-    if (fmMediaPlayer) { fmMediaPlayer->stop(); fmMediaPlayer->setSource(QUrl()); }
+    if (fmGStreamerPlayer) { fmGStreamerPlayer->stop(); }
     if (fmVideoWidget) fmVideoWidget->hide();
     if (fmPrevFrameBtn) fmPrevFrameBtn->hide();
     if (fmPlayPauseBtn) fmPlayPauseBtn->hide();
@@ -7584,7 +7552,7 @@ void MainWindow::updateFmPreviewForIndex(const QModelIndex &idx)
         if (frames.isEmpty()) { clearFmPreview(); return; }
 
         // Stop any video playback and show image-based sequence view
-        if (fmMediaPlayer) { fmMediaPlayer->stop(); fmMediaPlayer->setSource(QUrl()); }
+        if (fmGStreamerPlayer) { fmGStreamerPlayer->stop(); }
         if (fmVideoWidget) fmVideoWidget->hide();
         if (fmImageView) fmImageView->show();
 
@@ -7649,7 +7617,7 @@ void MainWindow::updateFmPreviewForIndex(const QModelIndex &idx)
 
     if (isImageFile(ext)) {
         // Stop any media playback and hide media-specific widgets/controls
-        if (fmMediaPlayer) { fmMediaPlayer->stop(); fmMediaPlayer->setSource(QUrl()); }
+        if (fmGStreamerPlayer) { fmGStreamerPlayer->stop(); }
         hideNonImageWidgets();
 
         // Try OpenImageIO first for advanced formats (PSD/EXR/TIFF/etc.)
@@ -7921,7 +7889,11 @@ if (isExcelFile(ext)) {
         // Media branch: audio/video
         if (isVideoFile(ext)) {
             fmCurrentPreviewPath = path;
-            if (fmVideoWidget) fmVideoWidget->show();
+            if (fmVideoWidget) {
+                fmVideoWidget->show();
+                // CRITICAL: Set video widget AFTER show() to ensure valid window handle
+                if (fmGStreamerPlayer) fmGStreamerPlayer->setVideoWidget(fmVideoWidget);
+            }
             if (fmImageView) fmImageView->hide();
         } else {
             fmCurrentPreviewPath = path;
@@ -7934,9 +7906,9 @@ if (isExcelFile(ext)) {
         if (fmVolumeSlider) fmVolumeSlider->show();
         if (fmMuteBtn) fmMuteBtn->show();
 
-        if (fmMediaPlayer) {
-            fmMediaPlayer->setSource(QUrl::fromLocalFile(path));
-            fmMediaPlayer->pause();
+        if (fmGStreamerPlayer) {
+            fmGStreamerPlayer->loadMedia(path);
+            fmGStreamerPlayer->pause();
             if (fmPlayPauseBtn) fmPlayPauseBtn->setIcon(icoMediaPlay());
         }
         return;
@@ -8099,7 +8071,7 @@ void MainWindow::onFmTogglePreview()
     const bool show = fmPreviewToggleButton ? fmPreviewToggleButton->isChecked() : !fmPreviewInfoSplitter->isVisible();
     fmPreviewInfoSplitter->setVisible(show);
     if (!show) {
-        if (fmMediaPlayer) { fmMediaPlayer->stop(); fmMediaPlayer->setSource(QUrl()); }
+        if (fmGStreamerPlayer) { fmGStreamerPlayer->stop(); }
     } else {
         onFmSelectionChanged();
     }
@@ -8209,7 +8181,9 @@ void MainWindow::updateFmInfoPanel()
             QStringList videoExts = {"mp4", "mov", "avi", "mkv", "wmv", "flv", "webm",
                                     "m4v", "mpg", "mpeg", "3gp", "mts", "m2ts", "mxf"};
             if (videoExts.contains(ext)) {
-                // Extract video metadata using QMediaPlayer
+                // TODO: Extract video metadata using GStreamer
+                // Temporarily disabled during GStreamer migration
+                /*
                 QMediaPlayer tempPlayer;
                 QAudioOutput tempAudio;
                 tempPlayer.setAudioOutput(&tempAudio);
@@ -8269,43 +8243,10 @@ void MainWindow::updateFmInfoPanel()
                         hasResolution = true;
                     }
                 }
+                */
 
-                // FFmpeg probing for reliable codecs, profiles, and details
-#ifdef HAVE_FFMPEG
-                MediaInfo::VideoMetadata ff;
-                QString ffErr;
-                if (MediaInfo::probeVideoFile(filePath, ff, &ffErr)) {
-                    // Fill missing resolution
-                    if (!hasResolution && ff.width > 0 && ff.height > 0) {
-                        resolution = QSize(ff.width, ff.height);
-                        hasResolution = true;
-                    }
-                    // Use FFmpeg codec if Qt didn't provide one
-                    if (videoCodec.isEmpty() && !ff.videoCodec.isEmpty()) {
-                        videoCodec = ff.videoCodec;
-                    }
-                    // Append profile if available
-                    if (!ff.videoProfile.isEmpty()) {
-                        videoCodec = QString("%1 %2").arg(videoCodec, ff.videoProfile);
-                    }
-                }
-#endif
-
-                // Build dimensions string: "Resolution Codec" format
-                if (hasResolution && !videoCodec.isEmpty()) {
-                    dimensionsStr = QString("%1x%2 %3")
-                        .arg(resolution.width())
-                        .arg(resolution.height())
-                        .arg(videoCodec.toUpper());
-                } else if (hasResolution) {
-                    dimensionsStr = QString("%1x%2")
-                        .arg(resolution.width())
-                        .arg(resolution.height());
-                } else if (!videoCodec.isEmpty()) {
-                    dimensionsStr = QString("Video: %1").arg(videoCodec.toUpper());
-                } else {
-                    dimensionsStr = "Video file";
-                }
+                // For now, just show "Video file" during GStreamer migration
+                dimensionsStr = "Video file";
             }
         }
 

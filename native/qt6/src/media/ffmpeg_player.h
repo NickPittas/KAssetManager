@@ -108,7 +108,10 @@ public:
     
     // Direct frame decoding (for external integration)
     VideoFrame decodeVideoFrame(qint64 targetMs, Quality quality = Quality::Full);
-    
+
+    // Static thumbnail extraction (fast, no state required)
+    static QImage extractThumbnail(const QString& filePath, const QSize& targetSize = QSize(), qint64 positionMs = 0);
+
     // Getters
     PlaybackState playbackState() const { return m_playbackState.load(); }
     MediaInfo mediaInfo() const;

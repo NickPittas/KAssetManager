@@ -114,7 +114,45 @@ endif()
 # OOXML ZIP reading (minizip-ng via vcpkg)
 find_package(minizip-ng CONFIG REQUIRED)
 
-# Find FFmpeg for log suppression
+# Find GStreamer (required for video/image sequence playback)
+find_package(PkgConfig QUIET)
+if(PkgConfig_FOUND)
+    pkg_check_modules(GSTREAMER QUIET gstreamer-1.0 gstreamer-video-1.0 gstreamer-audio-1.0 gstreamer-app-1.0)
+endif()
+if(NOT GSTREAMER_FOUND)
+    # Check for bundled GStreamer in third_party
+    set(_gstreamer_candidates
+        "${CMAKE_SOURCE_DIR}/../third_party/gstreamer"
+        "${CMAKE_SOURCE_DIR}/../../third_party/gstreamer"
+        "${CMAKE_CURRENT_LIST_DIR}/../third_party/gstreamer"
+        "${CMAKE_CURRENT_LIST_DIR}/../../third_party/gstreamer"
+    )
+    foreach(_candidate IN LISTS _gstreamer_candidates)
+        get_filename_component(_abs_candidate "${_candidate}" ABSOLUTE)
+        if(EXISTS "${_abs_candidate}/include" AND EXISTS "${_abs_candidate}/lib")
+            set(GSTREAMER_ROOT "${_abs_candidate}")
+            break()
+        endif()
+    endforeach()
+
+    if(GSTREAMER_ROOT AND EXISTS "${GSTREAMER_ROOT}")
+        set(GSTREAMER_INCLUDE_DIRS
+            "${GSTREAMER_ROOT}/include/gstreamer-1.0"
+            "${GSTREAMER_ROOT}/include/glib-2.0"
+            "${GSTREAMER_ROOT}/lib/glib-2.0/include"
+        )
+        set(GSTREAMER_LIBRARY_DIRS "${GSTREAMER_ROOT}/lib")
+        if(EXISTS "${GSTREAMER_ROOT}/include/gstreamer-1.0")
+            set(GSTREAMER_FOUND TRUE)
+            message(STATUS "Using bundled GStreamer from ${GSTREAMER_ROOT}")
+        endif()
+    endif()
+endif()
+if(NOT GSTREAMER_FOUND)
+    message(FATAL_ERROR "GStreamer not found. Please install GStreamer 1.0 development packages.")
+endif()
+
+# Find FFmpeg for conversion tool only (not for playback)
 find_package(PkgConfig QUIET)
 if(PkgConfig_FOUND)
     pkg_check_modules(FFMPEG QUIET libavutil)
@@ -236,12 +274,21 @@ qt_add_executable(kassetmanagerqt WIN32
     src/media_converter_worker.cpp
     src/media/ffmpeg_player.h
     src/media/ffmpeg_player.cpp
+    src/media/gstreamer_player.h
+    src/media/gstreamer_player.cpp
     ${APP_RESOURCES}
 )
 
 target_include_directories(kassetmanagerqt PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
+
+# Add GStreamer include directories
+if(GSTREAMER_FOUND)
+    if(GSTREAMER_INCLUDE_DIRS)
+        target_include_directories(kassetmanagerqt PRIVATE ${GSTREAMER_INCLUDE_DIRS})
+    endif()
+endif()
 
 # Add FFmpeg include directory if found
 if(FFMPEG_FOUND)
@@ -251,7 +298,40 @@ if(FFMPEG_FOUND)
         target_include_directories(kassetmanagerqt PRIVATE ${FFMPEG_INCLUDE_DIRS})
     endif()
 endif()
-# Try to link FFmpeg core libs when headers are present
+# Link GStreamer libraries
+if(GSTREAMER_FOUND)
+    if(NOT DEFINED GSTREAMER_LIBRARY_DIRS)
+        if(GSTREAMER_ROOT)
+            set(GSTREAMER_LIBRARY_DIRS "${GSTREAMER_ROOT}/lib")
+        endif()
+    endif()
+
+    find_library(GSTREAMER_LIB gstreamer-1.0 HINTS ${GSTREAMER_LIBRARY_DIRS})
+    find_library(GSTREAMER_VIDEO_LIB gstvideo-1.0 HINTS ${GSTREAMER_LIBRARY_DIRS})
+    find_library(GSTREAMER_AUDIO_LIB gstaudio-1.0 HINTS ${GSTREAMER_LIBRARY_DIRS})
+    find_library(GSTREAMER_APP_LIB gstapp-1.0 HINTS ${GSTREAMER_LIBRARY_DIRS})
+    find_library(GSTREAMER_BASE_LIB gstbase-1.0 HINTS ${GSTREAMER_LIBRARY_DIRS})
+    find_library(GLIB_LIB glib-2.0 HINTS ${GSTREAMER_LIBRARY_DIRS})
+    find_library(GOBJECT_LIB gobject-2.0 HINTS ${GSTREAMER_LIBRARY_DIRS})
+
+    if(GSTREAMER_LIB AND GSTREAMER_VIDEO_LIB AND GSTREAMER_AUDIO_LIB AND GSTREAMER_APP_LIB AND GLIB_LIB AND GOBJECT_LIB)
+        target_link_libraries(kassetmanagerqt PRIVATE
+            ${GSTREAMER_LIB}
+            ${GSTREAMER_VIDEO_LIB}
+            ${GSTREAMER_AUDIO_LIB}
+            ${GSTREAMER_APP_LIB}
+            ${GSTREAMER_BASE_LIB}
+            ${GLIB_LIB}
+            ${GOBJECT_LIB}
+        )
+        target_compile_definitions(kassetmanagerqt PRIVATE HAVE_GSTREAMER)
+        message(STATUS "GStreamer libraries linked successfully")
+    else()
+        message(FATAL_ERROR "GStreamer libraries not found in ${GSTREAMER_LIBRARY_DIRS}")
+    endif()
+endif()
+
+# Try to link FFmpeg core libs when headers are present (for conversion tool only)
 if(FFMPEG_FOUND)
     if(NOT DEFINED FFMPEG_LIBRARY_DIRS)
         if(DEFINED ENV{VCPKG_ROOT})
@@ -260,8 +340,9 @@ if(FFMPEG_FOUND)
     endif()
     find_library(FFMPEG_AVFORMAT avformat HINTS ${FFMPEG_LIBRARY_DIRS})
     find_library(FFMPEG_AVCODEC  avcodec  HINTS ${FFMPEG_LIBRARY_DIRS})
-    find_library(FFMPEG_AVUTIL   avutil   HINTS ${FFMPEG_LIBRARY_DIRS})
-    find_library(FFMPEG_SWSCALE  swscale  HINTS ${FFMPEG_LIBRARY_DIRS})
+    find_library(FFMPEG_AVUTIL     avutil     HINTS ${FFMPEG_LIBRARY_DIRS})
+    find_library(FFMPEG_SWSCALE    swscale    HINTS ${FFMPEG_LIBRARY_DIRS})
+    find_library(FFMPEG_SWRESAMPLE swresample HINTS ${FFMPEG_LIBRARY_DIRS})
 
     if(FFMPEG_AVFORMAT AND FFMPEG_AVCODEC AND FFMPEG_AVUTIL)
         target_link_libraries(kassetmanagerqt PRIVATE ${FFMPEG_AVFORMAT} ${FFMPEG_AVCODEC} ${FFMPEG_AVUTIL})
@@ -270,6 +351,12 @@ if(FFMPEG_FOUND)
             message(STATUS "FFmpeg swscale linked: ${FFMPEG_SWSCALE}")
         else()
             message(WARNING "FFmpeg swscale not found. FFmpeg thumbnail fallback will be disabled.")
+        endif()
+        if(FFMPEG_SWRESAMPLE)
+            target_link_libraries(kassetmanagerqt PRIVATE ${FFMPEG_SWRESAMPLE})
+            message(STATUS "FFmpeg swresample linked: ${FFMPEG_SWRESAMPLE}")
+        else()
+            message(WARNING "FFmpeg swresample not found. FFmpeg audio playback will be disabled.")
         endif()
         target_compile_definitions(kassetmanagerqt PRIVATE HAVE_FFMPEG)
         message(STATUS "FFmpeg libraries linked: ${FFMPEG_AVFORMAT}; ${FFMPEG_AVCODEC}; ${FFMPEG_AVUTIL}")
@@ -405,6 +492,22 @@ if (WIN32)
   else()
     message(WARNING "Everything64.dll not found at ${_EVERYTHING_DLL}")
     message(WARNING "Run scripts/download-everything-sdk.ps1 to download the Everything SDK")
+  endif()
+
+  # Install GStreamer runtime files
+  if(GSTREAMER_ROOT AND EXISTS "${GSTREAMER_ROOT}")
+    # Install GStreamer DLLs from bin directory
+    file(GLOB _GSTREAMER_DLLS "${GSTREAMER_ROOT}/bin/*.dll")
+    foreach(_dll ${_GSTREAMER_DLLS})
+      install(FILES "${_dll}" DESTINATION bin)
+    endforeach()
+    message(STATUS "GStreamer DLLs will be installed from ${GSTREAMER_ROOT}/bin")
+
+    # Install GStreamer plugins
+    if(EXISTS "${GSTREAMER_ROOT}/lib/gstreamer-1.0")
+      install(DIRECTORY "${GSTREAMER_ROOT}/lib/gstreamer-1.0" DESTINATION lib)
+      message(STATUS "GStreamer plugins will be installed from ${GSTREAMER_ROOT}/lib/gstreamer-1.0")
+    endif()
   endif()
 endif()
 

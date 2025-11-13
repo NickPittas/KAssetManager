@@ -14,6 +14,7 @@
 #include <QCache>
 
 #include "media/ffmpeg_player.h"
+#include "media/gstreamer_player.h"
 
 /**
  * LivePreviewManager streams preview frames for stills, video clips, and image sequences
@@ -153,7 +154,8 @@ private:
     
     // Unified FFmpeg player for video and image sequence playback
     std::unique_ptr<FFmpegPlayer> m_ffmpegPlayer;
-    
+
     // Track current file path for signal forwarding
     QString m_currentFilePath;
+
 };

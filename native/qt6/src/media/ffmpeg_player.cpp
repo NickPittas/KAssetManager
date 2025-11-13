@@ -992,3 +992,177 @@ void FFmpegPlayer::startPrefetch()
         prefetchSequenceFrames(0);
     }
 }
+
+QImage FFmpegPlayer::extractThumbnail(const QString& filePath, const QSize& targetSize, qint64 positionMs)
+{
+#if defined(HAVE_FFMPEG) && HAVE_FFMPEG
+    // Fast single-frame extraction optimized for thumbnails
+    // No state management, no hardware acceleration overhead
+
+    AVFormatContext* formatCtx = nullptr;
+    AVCodecContext* codecCtx = nullptr;
+    AVFrame* frame = nullptr;
+    AVPacket* packet = nullptr;
+    SwsContext* swsCtx = nullptr;
+    QImage result;
+
+    // Open video file
+    int ret = avformat_open_input(&formatCtx, filePath.toUtf8().constData(), nullptr, nullptr);
+    if (ret < 0) {
+        qWarning() << "[FFmpegPlayer] extractThumbnail: Failed to open file:" << filePath;
+        return QImage();
+    }
+
+    // Retrieve stream information
+    ret = avformat_find_stream_info(formatCtx, nullptr);
+    if (ret < 0) {
+        qWarning() << "[FFmpegPlayer] extractThumbnail: Failed to find stream info:" << filePath;
+        avformat_close_input(&formatCtx);
+        return QImage();
+    }
+
+    // Find video stream
+    int videoStreamIndex = av_find_best_stream(formatCtx, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
+    if (videoStreamIndex < 0) {
+        qWarning() << "[FFmpegPlayer] extractThumbnail: No video stream found:" << filePath;
+        avformat_close_input(&formatCtx);
+        return QImage();
+    }
+
+    AVStream* videoStream = formatCtx->streams[videoStreamIndex];
+
+    // Find decoder
+    const AVCodec* codec = avcodec_find_decoder(videoStream->codecpar->codec_id);
+    if (!codec) {
+        qWarning() << "[FFmpegPlayer] extractThumbnail: Codec not found:" << filePath;
+        avformat_close_input(&formatCtx);
+        return QImage();
+    }
+
+    // Allocate codec context
+    codecCtx = avcodec_alloc_context3(codec);
+    if (!codecCtx) {
+        qWarning() << "[FFmpegPlayer] extractThumbnail: Failed to allocate codec context:" << filePath;
+        avformat_close_input(&formatCtx);
+        return QImage();
+    }
+
+    // Copy codec parameters
+    ret = avcodec_parameters_to_context(codecCtx, videoStream->codecpar);
+    if (ret < 0) {
+        qWarning() << "[FFmpegPlayer] extractThumbnail: Failed to copy codec parameters:" << filePath;
+        avcodec_free_context(&codecCtx);
+        avformat_close_input(&formatCtx);
+        return QImage();
+    }
+
+    // Open codec
+    ret = avcodec_open2(codecCtx, codec, nullptr);
+    if (ret < 0) {
+        qWarning() << "[FFmpegPlayer] extractThumbnail: Failed to open codec:" << filePath;
+        avcodec_free_context(&codecCtx);
+        avformat_close_input(&formatCtx);
+        return QImage();
+    }
+
+    // Allocate frame and packet
+    frame = av_frame_alloc();
+    packet = av_packet_alloc();
+    if (!frame || !packet) {
+        qWarning() << "[FFmpegPlayer] extractThumbnail: Failed to allocate frame/packet:" << filePath;
+        if (frame) av_frame_free(&frame);
+        if (packet) av_packet_free(&packet);
+        avcodec_free_context(&codecCtx);
+        avformat_close_input(&formatCtx);
+        return QImage();
+    }
+
+    // Seek to position if specified
+    if (positionMs > 0) {
+        int64_t timestamp = (positionMs * videoStream->time_base.den) / (1000 * videoStream->time_base.num);
+        ret = av_seek_frame(formatCtx, videoStreamIndex, timestamp, AVSEEK_FLAG_BACKWARD);
+        if (ret < 0) {
+            qDebug() << "[FFmpegPlayer] extractThumbnail: Seek failed, using first frame:" << filePath;
+        }
+        avcodec_flush_buffers(codecCtx);
+    }
+
+    // Read and decode one frame
+    bool frameDecoded = false;
+    while (av_read_frame(formatCtx, packet) >= 0) {
+        if (packet->stream_index == videoStreamIndex) {
+            ret = avcodec_send_packet(codecCtx, packet);
+            if (ret < 0) {
+                av_packet_unref(packet);
+                continue;
+            }
+
+            ret = avcodec_receive_frame(codecCtx, frame);
+            if (ret == 0) {
+                frameDecoded = true;
+                av_packet_unref(packet);
+                break;
+            }
+        }
+        av_packet_unref(packet);
+    }
+
+    if (!frameDecoded) {
+        qWarning() << "[FFmpegPlayer] extractThumbnail: Failed to decode frame:" << filePath;
+        av_packet_free(&packet);
+        av_frame_free(&frame);
+        avcodec_free_context(&codecCtx);
+        avformat_close_input(&formatCtx);
+        return QImage();
+    }
+
+    // Convert frame to RGB format
+    const int width = frame->width;
+    const int height = frame->height;
+
+    swsCtx = sws_getContext(
+        width, height, static_cast<AVPixelFormat>(frame->format),
+        width, height, AV_PIX_FMT_RGB24,
+        SWS_BILINEAR, nullptr, nullptr, nullptr
+    );
+
+    if (!swsCtx) {
+        qWarning() << "[FFmpegPlayer] extractThumbnail: Failed to create scaling context:" << filePath;
+        av_packet_free(&packet);
+        av_frame_free(&frame);
+        avcodec_free_context(&codecCtx);
+        avformat_close_input(&formatCtx);
+        return QImage();
+    }
+
+    // Allocate RGB buffer
+    QImage image(width, height, QImage::Format_RGB888);
+    uint8_t* dstData[1] = { image.bits() };
+    int dstLinesize[1] = { static_cast<int>(image.bytesPerLine()) };
+
+    // Convert frame to RGB
+    sws_scale(swsCtx, frame->data, frame->linesize, 0, height, dstData, dstLinesize);
+
+    result = image.copy();
+
+    // Scale to target size if specified
+    if (targetSize.isValid() && !result.isNull()) {
+        result = result.scaled(targetSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    }
+
+    // Cleanup
+    sws_freeContext(swsCtx);
+    av_packet_free(&packet);
+    av_frame_free(&frame);
+    avcodec_free_context(&codecCtx);
+    avformat_close_input(&formatCtx);
+
+    qDebug() << "[FFmpegPlayer] extractThumbnail: Success for" << filePath << "size:" << width << "x" << height;
+    return result;
+#else
+    Q_UNUSED(filePath);
+    Q_UNUSED(targetSize);
+    Q_UNUSED(positionMs);
+    return QImage();
+#endif
+}
