@@ -42,6 +42,8 @@
 #include <QDir>
 #include <QProcess>
 #include <QItemSelectionModel>
+#include <QSignalBlocker>
+
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QMimeData>
@@ -725,26 +727,66 @@ protected:
 };
 
 
-// Icon provider for File Manager using live previews
+// Icon providers for File Manager
+
+// Lightweight icon provider for File Manager folder tree: static drive/folder icons only
+class FmTreeIconProvider : public QFileIconProvider {
+public:
+    FmTreeIconProvider() : QFileIconProvider() {}
+
+    QIcon icon(IconType type) const override {
+        switch (type) {
+        case QFileIconProvider::Folder:
+            return QApplication::style()->standardIcon(QStyle::SP_DirIcon);
+        case QFileIconProvider::Drive:
+            return QApplication::style()->standardIcon(QStyle::SP_DriveHDIcon);
+        case QFileIconProvider::Computer:
+            return QApplication::style()->standardIcon(QStyle::SP_ComputerIcon);
+        default:
+            return QApplication::style()->standardIcon(QStyle::SP_FileIcon);
+        }
+    }
+
+    QIcon icon(const QFileInfo &info) const override {
+        if (info.isDir()) {
+            if (info.isRoot()) {
+                return QApplication::style()->standardIcon(QStyle::SP_DriveHDIcon);
+            }
+            return QApplication::style()->standardIcon(QStyle::SP_DirIcon);
+        }
+        return QApplication::style()->standardIcon(QStyle::SP_FileIcon);
+    }
+};
+
+static QIcon getFileTypeIcon(const QString &ext);
+
+// Icon provider for File Manager file views using live previews, but avoiding slow OS shell icons
 class FmIconProvider : public QFileIconProvider {
 public:
     FmIconProvider() : QFileIconProvider() {}
     QIcon icon(const QFileInfo &info) const override {
-        if (info.isDir()) {
-            return QFileIconProvider::icon(info);
-        }
         const QString path = info.absoluteFilePath();
         const QString suffix = info.suffix().toLower();
-        if (!isPreviewableSuffix(suffix)) {
-            return QFileIconProvider::icon(info);
+
+        // Always keep folders lightweight and immediate
+        if (info.isDir()) {
+            return QApplication::style()->standardIcon(QStyle::SP_DirIcon);
         }
+
+        // For non-previewable files, use our extension-based file type icon
+        if (!isPreviewableSuffix(suffix)) {
+            return getFileTypeIcon(suffix);
+        }
+
         const QSize targetSize(64, 64);
         auto handle = LivePreviewManager::instance().cachedFrame(path, targetSize);
         if (handle.isValid()) {
             return QIcon(handle.pixmap);
         }
+
+        // Request preview asynchronously; fall back to file type icon until ready
         LivePreviewManager::instance().requestFrame(path, targetSize);
-        return QFileIconProvider::icon(info);
+        return getFileTypeIcon(suffix);
     }
 };
 
@@ -880,9 +922,6 @@ public:
         return QSize(m_thumbnailSize, height);
     }
 };
-
-// Helper function to get file type icon based on extension (forward declaration needed by FmItemDelegate)
-static QIcon getFileTypeIcon(const QString &ext);
 
 // Minimalist delegate for File Manager grid: live preview + filename
 class FmItemDelegate : public QStyledItemDelegate
@@ -1091,16 +1130,16 @@ protected:
                 const qreal x = bounds.left() + (bounds.width() - scaled.width()) / 2.0;
                 const qreal y = bounds.top() + (bounds.height() - scaled.height()) / 2.0;
                 painter.drawPixmap(QPointF(x, y), scaled);
-                
+
                 // Draw vertical scrubbing line on top of the frame
                 const qreal lineX = x + scaled.width() * m_progress;
                 const qreal lineTop = y;
                 const qreal lineBottom = y + scaled.height();
-                
+
                 // Draw the main line (bright blue)
                 painter.setPen(QPen(QColor(88, 166, 255, 255), 2.0));
                 painter.drawLine(QPointF(lineX, lineTop), QPointF(lineX, lineBottom));
-                
+
                 // Draw a subtle shadow line for better visibility
                 painter.setPen(QPen(QColor(0, 0, 0, 120), 1.0));
                 painter.drawLine(QPointF(lineX + 1, lineTop), QPointF(lineX + 1, lineBottom));
@@ -2604,7 +2643,7 @@ void MainWindow::setupUi()
     // Load initial data
     folderModel->reload();
     tagsModel->reload();
-    
+
     // Expand root folder AFTER model is loaded with actual data
     folderTreeView->expandToDepth(0);
 
@@ -2687,6 +2726,7 @@ void MainWindow::setupFileManagerUi()
 
     fmTreeModel = new QFileSystemModel(left);
     fmTreeModel->setFilter(QDir::AllDirs | QDir::NoDotAndDotDot | QDir::Drives);
+    fmTreeModel->setIconProvider(new FmTreeIconProvider());
 
     fmLeftSplitter = new QSplitter(Qt::Vertical, left);
 
@@ -2736,8 +2776,6 @@ void MainWindow::setupFileManagerUi()
         "QHeaderView::section { background-color: #1a1a1a; color: #ffffff; border: none; padding: 4px; }"
     );
     // set root to the "Computer" level
-    // Navigate on single click; keep double-click for expand/collapse
-    connect(fmTree, &QTreeView::clicked, this, &MainWindow::onFmTreeActivated);
     connect(fmTree, &QTreeView::customContextMenuRequested, this, &MainWindow::onFmTreeContextMenu);
     // Enable drag and drop on folder tree
     fmTree->setDragEnabled(true);
@@ -3519,9 +3557,12 @@ void MainWindow::setupFileManagerUi()
     // Initialize navigation button states
     fmUpdateNavigationButtons();
 
-    // React to tree single-click to change right view root
+    // React to tree single-click (selection change) to change right view root
     // (activated via Enter/double-click remains for expansion)
-    connect(fmTree, &QTreeView::clicked, this, &MainWindow::onFmTreeActivated);
+    if (fmTree && fmTree->selectionModel()) {
+        connect(fmTree->selectionModel(), &QItemSelectionModel::currentChanged,
+                this, &MainWindow::onFmTreeCurrentChanged);
+    }
 
     // Install page layout
     QVBoxLayout *pageLayout = new QVBoxLayout(fileManagerPage);
@@ -3668,12 +3709,22 @@ void MainWindow::setupFileManagerUi()
     LogManager::instance().addLog("[TRACE] setupFileManagerUi exit", "DEBUG");
 }
 
+void MainWindow::onFmTreeCurrentChanged(const QModelIndex &current, const QModelIndex &previous)
+{
+    Q_UNUSED(previous);
+    if (!current.isValid()) return;
+    onFmTreeActivated(current);
+}
+
+
 void MainWindow::onFmTreeActivated(const QModelIndex &index)
 {
     QString path = fmTreeModel->filePath(index);
     if (path.isEmpty()) return;
 
+    fmSuppressTreeSync = true;
     fmNavigateToPath(path, true);
+    fmSuppressTreeSync = false;
 }
 
 // Forward declarations for file-type helpers used by File Manager handlers
@@ -8480,7 +8531,7 @@ void MainWindow::onEverythingImportRequested(const QStringList& paths)
 // File Manager Navigation Implementation
 void MainWindow::fmNavigateToPath(const QString& path, bool addToHistory)
 {
-    if (path.isEmpty() || !QFileInfo::exists(path)) return;
+    if (path.isEmpty()) return;
 
     // Add current path to history before navigating (if requested)
     if (addToHistory && fmDirModel) {
@@ -8530,10 +8581,14 @@ void MainWindow::fmNavigateToPath(const QString& path, bool addToHistory)
 
 void MainWindow::fmScrollTreeToPath(const QString& path)
 {
+    if (fmSuppressTreeSync) return;
     if (!fmTree || !fmTreeModel || path.isEmpty()) return;
 
     QModelIndex treeIdx = fmTreeModel->index(path);
     if (treeIdx.isValid()) {
+        QItemSelectionModel *sel = fmTree->selectionModel();
+        QSignalBlocker blocker(sel);
+
         // Expand all parent folders
         QModelIndex p = treeIdx.parent();
         while (p.isValid()) {

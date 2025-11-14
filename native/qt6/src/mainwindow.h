@@ -110,6 +110,7 @@ private slots:
     void performStartupHealthCheck();
 
     // File Manager slots
+    void onFmTreeCurrentChanged(const QModelIndex &current, const QModelIndex &previous);
     void onFmTreeActivated(const QModelIndex &index);
     void onFmTreeContextMenu(const QPoint &pos);
     void onFmItemDoubleClicked(const QModelIndex &index);
@@ -311,6 +312,7 @@ private:
     QFileSystemModel *fmTreeModel;
     // Right pane
     QFileSystemModel *fmDirModel;
+    bool fmSuppressTreeSync = false;
     QWidget *fmToolbar;
     QToolButton *fmBackButton;
     QToolButton *fmUpButton;
