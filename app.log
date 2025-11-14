@@ -1,0 +1,2171 @@
+
+--- session start ---
+[22:15:53.946] [INFO] [MAIN] Message handler configured; app dir=Z:/portable/bin
+[22:15:53.947] [INFO] Application started
+[22:15:53.947] [INFO] [MAIN] Before DB init
+[22:15:54.106] [INFO] [MAIN] DB init ok at: C:/Users/npitt/AppData/Roaming/KAsset/KAsset Manager Qt/kasset.db
+[22:15:54.107] [INFO] [MAIN] Creating MainWindow
+[22:15:54.118] [INFO] [MAINWINDOW] ctor begin
+[22:15:55.347] [DEBUG] [TRACE] setupUi enter
+[22:15:55.517] [DEBUG] Folders reload complete
+[22:15:55.518] [DEBUG] [TRACE] folder model created
+[22:15:55.519] [DEBUG] [TRACE] folder model set on tree
+[22:15:55.578] [DEBUG] [TRACE] assetGridView + model wired
+[22:15:55.585] [DEBUG] [TRACE] assetScrubController ready
+[22:15:55.703] [DEBUG] [TRACE] fmScrubController ready
+[22:15:55.703] [DEBUG] [TRACE] fmListView created
+[22:15:55.704] [DEBUG] [TRACE] fmListView wired
+[22:15:55.705] [DEBUG] [TRACE] fmViewStack initialised
+[22:15:55.705] [DEBUG] [TRACE] fmRightSplitter created
+[22:15:55.705] [DEBUG] [TRACE] fm view container ready
+[22:15:55.706] [DEBUG] [TRACE] fm preview header ready
+[22:15:55.788] [DEBUG] [TRACE] setupFileManagerUi exit
+[22:15:55.796] [DEBUG] [TRACE] logDock created
+[22:15:55.803] [DEBUG] [TRACE] logDock initialised
+[22:15:55.803] [DEBUG] [TRACE] logDock visibility hook set
+[22:15:55.803] [DEBUG] [TRACE] restore settings begin
+[22:15:55.803] [DEBUG] [TRACE] restore window geometry/state done
+[22:15:55.803] [DEBUG] [TRACE] restore mainSplitter state done
+[22:15:55.805] [DEBUG] [TRACE] restore rightSplitter state done
+[22:15:55.805] [DEBUG] [TRACE] restore view mode flag: 0
+[22:15:55.806] [DEBUG] [TRACE] restored version table columns
+[22:15:55.810] [DEBUG] [TRACE] applied view mode toggle
+[22:15:55.811] [DEBUG] [TRACE] restore asset manager view
+[22:15:55.811] [DEBUG] [TRACE] restore asset table columns
+[22:15:55.811] [DEBUG] [TRACE] window state restored
+[22:15:55.812] [DEBUG] Folders reload complete
+[22:15:55.813] [DEBUG] [TRACE] mainwindow ctor finished
+[22:15:55.815] [INFO] [MAIN] MainWindow constructed
+[22:15:55.940] [INFO] [MAIN] MainWindow shown
+[22:15:55.943] [INFO] [GStreamerPlayer] GStreamer initialized successfully
+[22:15:55.944] [INFO] [GStreamerPlayer] GStreamer version: GStreamer 1.26.8
+[22:15:55.944] [INFO] [GStreamerPlayer] Available sinks: d3d11= true d3d= true gl= true
+[22:15:55.945] [INFO] [LivePreview] Renderer backend: OIIO+Qt (no tlRender)
+[22:15:55.945] [INFO] [LivePreview] LivePreviewManager initialized with GStreamer backend
+[22:15:55.946] [INFO] [LivePreview] Cache size set to 256 entries
+[22:15:55.946] [DEBUG] VirtualFolderTreeModel::reload()
+[22:15:55.948] [DEBUG] [INIT] Tag buttons and mode added
+[22:15:55.969] [WARN] QWidget::paintEngine: Should no longer be called
+[22:15:56.013] [DEBUG] VirtualFolderTreeModel::reload()
+[22:15:56.014] [DEBUG] [INIT] tagsListView viewport event filter installed (late)
+[22:15:56.015] [INFO] [MAIN] Event loop entered
+[22:15:56.141] [INFO] [LivePreview] Sequence detection ENABLED
+[22:15:56.143] [INFO] [LivePreview] Sequence detection ENABLED
+[22:15:56.199] [DEBUG] [NAV] Folder change applied to id= 1 , working set (MB)= 138
+[22:15:56.268] [DEBUG] DB query (assets by folder 1) started
+[22:15:56.268] [DEBUG] DB query complete: 0 rows
+[22:15:56.268] [DEBUG] AssetsModel reload: 0 assets in 1 ms
+[22:15:56.269] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 01 .mp4" seqDetection= true
+[22:15:56.269] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 02 .mp4" seqDetection= true
+[22:15:56.269] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 03 .mp4" seqDetection= true
+[22:15:56.270] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 04 .mp4" seqDetection= true
+[22:15:56.270] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 05 .mp4" seqDetection= true
+[22:15:56.270] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 06 .mp4" seqDetection= true
+[22:15:56.270] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 07 .mp4" seqDetection= true
+[22:15:56.270] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 08 .mp4" seqDetection= true
+[22:15:56.271] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 09 .mp4" seqDetection= true
+[22:15:56.271] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 10 .mp4" seqDetection= true
+[22:15:56.271] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 01 .mp4" seqDetection= true
+[22:15:56.271] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 06 .mp4" seqDetection= true
+[22:15:56.273] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 02 .mp4" seqDetection= true
+[22:15:56.273] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 03 .mp4" seqDetection= true
+[22:15:56.273] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 07 .mp4" seqDetection= true
+[22:15:56.273] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 05 .mp4" seqDetection= true
+[22:15:56.274] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 09 .mp4" seqDetection= true
+[22:15:56.274] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 04 .mp4" seqDetection= true
+[22:15:56.274] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 10 .mp4" seqDetection= true
+[22:15:56.274] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 08 .mp4" seqDetection= true
+[22:15:56.299] [DEBUG] [ContextPreserver] Loaded context for folder 1 - scroll: 0 grid: false search: ""
+[22:15:57.132] [DEBUG] [NAV] Post-change working set (MB)= 302
+[22:15:57.809] [DEBUG] [PreviewOverlay] GStreamerPlayer initialized with hardware-accelerated playback
+[22:15:57.810] [WARN] QWidget::paintEngine: Should no longer be called
+[22:15:57.810] [WARN] QWidget::paintEngine: Should no longer be called
+[22:15:57.811] [DEBUG] [GStreamerPlayer] Video widget configured for embedding, WId: 1182056
+[22:15:57.811] [DEBUG] [SequenceFrameCache] Available RAM: 106053 MB
+[22:15:57.811] [DEBUG] [SequenceFrameCache] Calculated optimal cache size: 500 frames ( 15000 MB) using 70 % of available RAM
+[22:15:57.811] [DEBUG] [SequenceFrameCache] ========================================
+[22:15:57.813] [DEBUG] [SequenceFrameCache] INITIALIZATION:
+[22:15:57.813] [DEBUG] [SequenceFrameCache]   Max cache size: 500 frames
+[22:15:57.813] [DEBUG] [SequenceFrameCache]   Max cost: 25600000 KB ( 25000 MB)
+[22:15:57.813] [DEBUG] [SequenceFrameCache]   Worker threads: 32
+[22:15:57.813] [DEBUG] [SequenceFrameCache]   Auto-size: YES
+[22:15:57.813] [DEBUG] [SequenceFrameCache]   RAM percentage: 70 %
+[22:15:57.814] [DEBUG] [SequenceFrameCache] ========================================
+[22:15:57.814] [DEBUG] [PreviewOverlay] Frame cache initialized with QRecursiveMutex (deadlock fix)
+[22:15:57.814] [DEBUG] [PreviewOverlay] Stopping playback
+[22:15:57.815] [WARN] QWidget::paintEngine: Should no longer be called
+[22:15:57.815] [DEBUG] [GStreamerPlayer] Video widget configured for embedding, WId: 1182056
+[22:15:57.815] [INFO] [GStreamerPlayer] Loading media: "file:///Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 01 .mp4"
+[22:15:57.815] [ERROR] [GStreamerPlayer] ########## CREATING NEW PIPELINE ##########
+[22:15:57.816] [ERROR] [GStreamerPlayer] ########## SETUPPIPELINE CALLED ##########
+[22:15:57.816] [ERROR] [GStreamerPlayer] ========== VIDEO SINK DIAGNOSTICS ==========
+[22:15:57.816] [ERROR] [GStreamerPlayer] Video sink element name: videosink
+[22:15:57.817] [ERROR] [GStreamerPlayer] Video sink factory name: d3d11videosink
+[22:15:57.817] [ERROR] [GStreamerPlayer] force-aspect-ratio property: SUPPORTED, value: TRUE
+[22:15:57.817] [ERROR] [GStreamerPlayer] ===========================================
+[22:15:57.817] [INFO] [GStreamerPlayer] ========== VIDEO SINK HIERARCHY ==========
+[22:15:57.818] [INFO] [GStreamerPlayer] Top-level video sink: videosink
+[22:15:57.818] [INFO] [GStreamerPlayer] Is bin: NO
+[22:15:57.818] [INFO] [GStreamerPlayer] Using top-level sink directly (not a bin)
+[22:15:57.819] [INFO] [GStreamerPlayer] Final actual sink: videosink
+[22:15:57.819] [INFO] [GStreamerPlayer] ================================================
+[22:15:57.819] [INFO] [GStreamerPlayer] Set window handle: 1182056 on element: videosink
+[22:15:57.819] [INFO] [GStreamerPlayer] ========== RENDER RECTANGLE DIAGNOSTICS ==========
+[22:15:57.820] [INFO] [GStreamerPlayer] Widget logical size: 1400 x 740
+[22:15:57.820] [INFO] [GStreamerPlayer] Device pixel ratio (DPR): 2.25
+[22:15:57.820] [INFO] [GStreamerPlayer] Physical pixel size: 3150 x 1665
+[22:15:57.821] [INFO] [GStreamerPlayer] Widget geometry: QRect(0,0 1400x740)
+[22:15:57.821] [INFO] [GStreamerPlayer] Widget window ID: 1182056
+[22:15:57.821] [INFO] [GStreamerPlayer] Widget is visible: true
+[22:15:57.821] [INFO] [GStreamerPlayer] Widget native parent chain: QWidget(0x21cabe38790)
+[22:15:57.821] [INFO] [GStreamerPlayer] Screen name: "Q70A"
+[22:15:57.821] [INFO] [GStreamerPlayer] Screen geometry: QRect(0,0 1707x960)
+[22:15:57.823] [INFO] [GStreamerPlayer] Screen available geometry: QRect(0,0 1707x912)
+[22:15:57.823] [INFO] [GStreamerPlayer] Screen physical DPI: 35.8459
+[22:15:57.823] [INFO] [GStreamerPlayer] Screen logical DPI: 96
+[22:15:57.823] [INFO] [GStreamerPlayer] Screen device pixel ratio: 2.25
+[22:15:57.824] [INFO] [GStreamerPlayer] ====================================================
+[22:15:57.824] [DEBUG] [PreviewOverlay] GStreamer state changed to: 2
+[22:15:57.824] [INFO] [GStreamerPlayer] Pipeline created, prerolling asynchronously...
+[22:15:57.825] [DEBUG] [PreviewOverlay] GStreamer state changed to: 1
+[22:15:57.825] [DEBUG] [GStreamerPlayer] Playback started
+[22:15:57.825] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 06 .mp4" : 15015 ms
+[22:15:57.825] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 06 .mp4" : 15015 ms
+[22:15:57.825] [DEBUG] [LivePreview] Scrubbing to position: 0 ->  0 ms (duration: 15015 ms)
+[22:15:57.851] [DEBUG] [GStreamerPlayer] State changed from NULL to READY
+[22:15:57.853] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 02 .mp4" : 30071 ms
+[22:15:57.853] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 02 .mp4" : 30071 ms
+[22:15:57.853] [DEBUG] [LivePreview] Scrubbing to position: 0 ->  0 ms (duration: 30071 ms)
+[22:15:57.853] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 03 .mp4" : 14973 ms
+[22:15:57.853] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 03 .mp4" : 14973 ms
+[22:15:57.853] [DEBUG] [LivePreview] Scrubbing to position: 0 ->  0 ms (duration: 14973 ms)
+[22:15:57.853] [INFO] [DatabaseHealth] Startup check: "Database has never been optimized. VACUUM recommended."
+[22:15:57.869] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 10 .mp4" : 30071 ms
+[22:15:57.870] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 10 .mp4" : 30071 ms
+[22:15:57.870] [DEBUG] [LivePreview] Scrubbing to position: 0 ->  0 ms (duration: 30071 ms)
+[22:15:57.879] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 07 .mp4" : 15056 ms
+[22:15:57.880] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 07 .mp4" : 15056 ms
+[22:15:57.880] [DEBUG] [LivePreview] Scrubbing to position: 0 ->  0 ms (duration: 15056 ms)
+[22:15:57.883] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 01 .mp4" : 15056 ms
+[22:15:57.884] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 01 .mp4" : 15056 ms
+[22:15:57.885] [DEBUG] [LivePreview] Scrubbing to position: 0 ->  0 ms (duration: 15056 ms)
+[22:15:57.889] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 04 .mp4" : 25316 ms
+[22:15:57.890] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 04 .mp4" : 25316 ms
+[22:15:57.890] [DEBUG] [LivePreview] Scrubbing to position: 0 ->  0 ms (duration: 25316 ms)
+[22:15:57.893] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 07 .mp4" : 15056 ms
+[22:15:57.893] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 07 .mp4" : 15056 ms
+[22:15:57.893] [DEBUG] [LivePreview] Scrubbing to position: 0 ->  0 ms (duration: 15056 ms)
+[22:15:57.907] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 03 .mp4" : 14973 ms
+[22:15:57.907] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 03 .mp4" : 14973 ms
+[22:15:57.909] [DEBUG] [LivePreview] Scrubbing to position: 0 ->  0 ms (duration: 14973 ms)
+[22:15:57.916] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 02 .mp4" : 30071 ms
+[22:15:57.916] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 02 .mp4" : 30071 ms
+[22:15:57.917] [DEBUG] [LivePreview] Scrubbing to position: 0 ->  0 ms (duration: 30071 ms)
+[22:15:57.939] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 04 .mp4" : 25316 ms
+[22:15:57.939] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 04 .mp4" : 25316 ms
+[22:15:57.940] [DEBUG] [LivePreview] Scrubbing to position: 0 ->  0 ms (duration: 25316 ms)
+[22:15:57.961] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 10 .mp4" : 30071 ms
+[22:15:57.963] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 10 .mp4" : 30071 ms
+[22:15:57.963] [DEBUG] [LivePreview] Scrubbing to position: 0 ->  0 ms (duration: 30071 ms)
+[22:15:57.967] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 01 .mp4" : 15056 ms
+[22:15:57.967] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 01 .mp4" : 15056 ms
+[22:15:57.968] [DEBUG] [LivePreview] Scrubbing to position: 0 ->  0 ms (duration: 15056 ms)
+[22:15:57.973] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 08 .mp4" : 30030 ms
+[22:15:57.974] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 08 .mp4" : 30030 ms
+[22:15:57.975] [DEBUG] [LivePreview] Scrubbing to position: 0 ->  0 ms (duration: 30030 ms)
+[22:15:57.990] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 09 .mp4" : 30030 ms
+[22:15:57.990] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 09 .mp4" : 30030 ms
+[22:15:57.991] [DEBUG] [LivePreview] Scrubbing to position: 0 ->  0 ms (duration: 30030 ms)
+[22:15:58.008] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 09 .mp4" : 30030 ms
+[22:15:58.009] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 09 .mp4" : 30030 ms
+[22:15:58.009] [DEBUG] [LivePreview] Scrubbing to position: 0 ->  0 ms (duration: 30030 ms)
+[22:15:58.021] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 06 .mp4" : 15015 ms
+[22:15:58.022] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 06 .mp4" : 15015 ms
+[22:15:58.022] [DEBUG] [LivePreview] Scrubbing to position: 0 ->  0 ms (duration: 15015 ms)
+[22:15:58.108] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 08 .mp4" : 30030 ms
+[22:15:58.108] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 08 .mp4" : 30030 ms
+[22:15:58.109] [DEBUG] [LivePreview] Scrubbing to position: 0 ->  0 ms (duration: 30030 ms)
+[22:15:58.163] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 05 .mp4" : 30071 ms
+[22:15:58.163] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 05 .mp4" : 30071 ms
+[22:15:58.163] [DEBUG] [LivePreview] Scrubbing to position: 0 ->  0 ms (duration: 30071 ms)
+[22:15:58.416] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 04 .mp4" size: 4096 x 2160
+[22:15:58.419] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 10 .mp4" size: 4096 x 2160
+[22:15:58.447] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 02 .mp4" size: 4096 x 2160
+[22:15:58.449] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 07 .mp4" size: 4096 x 2160
+[22:15:58.449] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 03 .mp4" size: 4096 x 2160
+[22:15:58.450] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 09 .mp4" size: 4096 x 2160
+[22:15:58.451] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 01 .mp4" size: 4096 x 2160
+[22:15:58.454] [DEBUG] [GStreamerPlayer] State changed from READY to PAUSED
+[22:15:58.455] [DEBUG] [GStreamerPlayer] Async operation done (preroll/seek completed)
+[22:15:58.456] [DEBUG] [PreviewOverlay] GStreamer media info: Duration: 15056 ms FPS: 23.976 Resolution: 4096 x 2160 Codec: "" Has Audio: false
+[22:15:58.456] [INFO] [GStreamerPlayer] ========== VIDEO STREAM INFO ==========
+[22:15:58.457] [INFO] [GStreamerPlayer] Video resolution: 4096 x 2160
+[22:15:58.457] [INFO] [GStreamerPlayer] Frame rate: 23.976 fps
+[22:15:58.458] [INFO] [GStreamerPlayer] Duration: 15056 ms
+[22:15:58.459] [INFO] [GStreamerPlayer] Has audio: false
+[22:15:58.459] [INFO] [GStreamerPlayer] ==========================================
+[22:15:58.459] [INFO] [GStreamerPlayer] Calling updateRenderRectangle() after preroll...
+[22:15:58.460] [DEBUG] [GStreamerPlayer] ========== UPDATE RENDER RECTANGLE ==========
+[22:15:58.460] [DEBUG] [GStreamerPlayer] Widget logical size: 1400 x 740
+[22:15:58.461] [DEBUG] [GStreamerPlayer] Device pixel ratio: 2.25
+[22:15:58.461] [DEBUG] [GStreamerPlayer] Physical pixel size: 3150 x 1665
+[22:15:58.461] [DEBUG] [GStreamerPlayer] Overlay element: videosink
+[22:15:58.461] [DEBUG] [GStreamerPlayer] =============================================
+[22:15:58.461] [DEBUG] [GStreamerPlayer] State changed from PAUSED to PLAYING
+[22:15:58.463] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 06 .mp4" size: 4096 x 2160
+[22:15:58.463] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 02 .mp4" size: 4096 x 2160
+[22:15:58.463] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 05 .mp4" : 30071 ms
+[22:15:58.464] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 05 .mp4" : 30071 ms
+[22:15:58.464] [DEBUG] [LivePreview] Scrubbing to position: 0 ->  0 ms (duration: 30071 ms)
+[22:15:58.533] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 09 .mp4" size: 4096 x 2160
+[22:15:58.534] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 08 .mp4" size: 4096 x 2160
+[22:15:58.614] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 07 .mp4" size: 4096 x 2160
+[22:15:58.642] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 05 .mp4" size: 4096 x 2160
+[22:15:58.655] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 10 .mp4" size: 4096 x 2160
+[22:15:58.682] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 01 .mp4" size: 4096 x 2160
+[22:15:58.705] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 04 .mp4" size: 4096 x 2160
+[22:15:58.742] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 06 .mp4" size: 4096 x 2160
+[22:15:58.754] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 03 .mp4" size: 4096 x 2160
+[22:15:58.754] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 08 .mp4" size: 4096 x 2160
+[22:15:58.896] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 05 .mp4" size: 4096 x 2160
+[22:16:00.580] [DEBUG] [PreviewOverlay] GStreamer state changed to: 2
+[22:16:00.582] [DEBUG] [GStreamerPlayer] Playback paused
+[22:16:00.587] [DEBUG] [GStreamerPlayer] State changed from PLAYING to PAUSED
+[22:16:00.588] [DEBUG] [GStreamerPlayer] Async operation done (preroll/seek completed)
+[22:16:00.588] [DEBUG] [PreviewOverlay] GStreamer media info: Duration: 15056 ms FPS: 23.976 Resolution: 4096 x 2160 Codec: "" Has Audio: false
+[22:16:00.589] [INFO] [GStreamerPlayer] ========== VIDEO STREAM INFO ==========
+[22:16:00.589] [INFO] [GStreamerPlayer] Video resolution: 4096 x 2160
+[22:16:00.590] [INFO] [GStreamerPlayer] Frame rate: 23.976 fps
+[22:16:00.590] [INFO] [GStreamerPlayer] Duration: 15056 ms
+[22:16:00.591] [INFO] [GStreamerPlayer] Has audio: false
+[22:16:00.591] [INFO] [GStreamerPlayer] ==========================================
+[22:16:00.591] [INFO] [GStreamerPlayer] Calling updateRenderRectangle() after preroll...
+[22:16:00.591] [DEBUG] [GStreamerPlayer] ========== UPDATE RENDER RECTANGLE ==========
+[22:16:00.591] [DEBUG] [GStreamerPlayer] Widget logical size: 1400 x 740
+[22:16:00.593] [DEBUG] [GStreamerPlayer] Device pixel ratio: 2.25
+[22:16:00.593] [DEBUG] [GStreamerPlayer] Physical pixel size: 3150 x 1665
+[22:16:00.593] [DEBUG] [GStreamerPlayer] Overlay element: videosink
+[22:16:00.593] [DEBUG] [GStreamerPlayer] =============================================
+[22:16:00.685] [DEBUG] [GStreamerPlayer] Seeked to: 7240 ms
+[22:16:00.687] [DEBUG] [PreviewOverlay] GStreamer state changed to: 1
+[22:16:00.687] [DEBUG] [GStreamerPlayer] Playback started
+[22:16:00.688] [DEBUG] [GStreamerPlayer] State changed from PAUSED to PAUSED
+[22:16:00.847] [DEBUG] [GStreamerPlayer] State changed from PAUSED to PAUSED
+[22:16:00.847] [DEBUG] [GStreamerPlayer] Async operation done (preroll/seek completed)
+[22:16:00.848] [DEBUG] [PreviewOverlay] GStreamer media info: Duration: 15056 ms FPS: 23.976 Resolution: 4096 x 2160 Codec: "" Has Audio: false
+[22:16:00.848] [INFO] [GStreamerPlayer] ========== VIDEO STREAM INFO ==========
+[22:16:00.848] [INFO] [GStreamerPlayer] Video resolution: 4096 x 2160
+[22:16:00.848] [INFO] [GStreamerPlayer] Frame rate: 23.976 fps
+[22:16:00.850] [INFO] [GStreamerPlayer] Duration: 15056 ms
+[22:16:00.850] [INFO] [GStreamerPlayer] Has audio: false
+[22:16:00.851] [INFO] [GStreamerPlayer] ==========================================
+[22:16:00.851] [INFO] [GStreamerPlayer] Calling updateRenderRectangle() after preroll...
+[22:16:00.851] [DEBUG] [GStreamerPlayer] ========== UPDATE RENDER RECTANGLE ==========
+[22:16:00.852] [DEBUG] [GStreamerPlayer] Widget logical size: 1400 x 740
+[22:16:00.852] [DEBUG] [GStreamerPlayer] Device pixel ratio: 2.25
+[22:16:00.852] [DEBUG] [GStreamerPlayer] Physical pixel size: 3150 x 1665
+[22:16:00.852] [DEBUG] [GStreamerPlayer] Overlay element: videosink
+[22:16:00.853] [DEBUG] [GStreamerPlayer] =============================================
+[22:16:00.853] [DEBUG] [GStreamerPlayer] State changed from PAUSED to PLAYING
+[22:16:01.111] [DEBUG] [PreviewOverlay] GStreamer state changed to: 2
+[22:16:01.113] [DEBUG] [GStreamerPlayer] Playback paused
+[22:16:01.117] [DEBUG] [GStreamerPlayer] State changed from PLAYING to PAUSED
+[22:16:01.117] [DEBUG] [GStreamerPlayer] Async operation done (preroll/seek completed)
+[22:16:01.119] [DEBUG] [PreviewOverlay] GStreamer media info: Duration: 15056 ms FPS: 23.976 Resolution: 4096 x 2160 Codec: "" Has Audio: false
+[22:16:01.120] [INFO] [GStreamerPlayer] ========== VIDEO STREAM INFO ==========
+[22:16:01.121] [INFO] [GStreamerPlayer] Video resolution: 4096 x 2160
+[22:16:01.121] [INFO] [GStreamerPlayer] Frame rate: 23.976 fps
+[22:16:01.121] [INFO] [GStreamerPlayer] Duration: 15056 ms
+[22:16:01.121] [INFO] [GStreamerPlayer] Has audio: false
+[22:16:01.123] [INFO] [GStreamerPlayer] ==========================================
+[22:16:01.123] [INFO] [GStreamerPlayer] Calling updateRenderRectangle() after preroll...
+[22:16:01.123] [DEBUG] [GStreamerPlayer] ========== UPDATE RENDER RECTANGLE ==========
+[22:16:01.123] [DEBUG] [GStreamerPlayer] Widget logical size: 1400 x 740
+[22:16:01.124] [DEBUG] [GStreamerPlayer] Device pixel ratio: 2.25
+[22:16:01.124] [DEBUG] [GStreamerPlayer] Physical pixel size: 3150 x 1665
+[22:16:01.124] [DEBUG] [GStreamerPlayer] Overlay element: videosink
+[22:16:01.125] [DEBUG] [GStreamerPlayer] =============================================
+[22:16:01.225] [DEBUG] [GStreamerPlayer] Seeked to: 9135 ms
+[22:16:01.225] [DEBUG] [PreviewOverlay] GStreamer state changed to: 1
+[22:16:01.227] [DEBUG] [GStreamerPlayer] Playback started
+[22:16:01.229] [DEBUG] [GStreamerPlayer] State changed from PAUSED to PAUSED
+[22:16:01.378] [DEBUG] [GStreamerPlayer] State changed from PAUSED to PAUSED
+[22:16:01.379] [DEBUG] [GStreamerPlayer] Async operation done (preroll/seek completed)
+[22:16:01.379] [DEBUG] [PreviewOverlay] GStreamer media info: Duration: 15056 ms FPS: 23.976 Resolution: 4096 x 2160 Codec: "" Has Audio: false
+[22:16:01.380] [INFO] [GStreamerPlayer] ========== VIDEO STREAM INFO ==========
+[22:16:01.381] [INFO] [GStreamerPlayer] Video resolution: 4096 x 2160
+[22:16:01.381] [INFO] [GStreamerPlayer] Frame rate: 23.976 fps
+[22:16:01.381] [INFO] [GStreamerPlayer] Duration: 15056 ms
+[22:16:01.383] [INFO] [GStreamerPlayer] Has audio: false
+[22:16:01.383] [INFO] [GStreamerPlayer] ==========================================
+[22:16:01.383] [INFO] [GStreamerPlayer] Calling updateRenderRectangle() after preroll...
+[22:16:01.384] [DEBUG] [GStreamerPlayer] ========== UPDATE RENDER RECTANGLE ==========
+[22:16:01.384] [DEBUG] [GStreamerPlayer] Widget logical size: 1400 x 740
+[22:16:01.385] [DEBUG] [GStreamerPlayer] Device pixel ratio: 2.25
+[22:16:01.385] [DEBUG] [GStreamerPlayer] Physical pixel size: 3150 x 1665
+[22:16:01.386] [DEBUG] [GStreamerPlayer] Overlay element: videosink
+[22:16:01.386] [DEBUG] [GStreamerPlayer] =============================================
+[22:16:01.386] [DEBUG] [GStreamerPlayer] State changed from PAUSED to PLAYING
+[22:16:07.325] [INFO] [GStreamerPlayer] End of stream
+[22:16:07.326] [DEBUG] [PreviewOverlay] GStreamer state changed to: 2
+[22:16:07.327] [DEBUG] [PreviewOverlay] GStreamer end of stream reached
+[22:16:07.328] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:07.328] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:07.329] [WARN] [GStreamerPlayer] Seek failed to: 0 ms
+[22:16:08.284] [DEBUG] [PreviewOverlay] Stopping playback
+[22:16:08.285] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:08.286] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:08.286] [DEBUG] [PreviewOverlay] Stopping playback
+[22:16:08.287] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:08.287] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:08.358] [DEBUG] [PreviewOverlay::~PreviewOverlay] Destructor starting
+[22:16:08.359] [DEBUG] [PreviewOverlay] Stopping playback
+[22:16:08.360] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:08.360] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:08.361] [DEBUG] [PreviewOverlay::~PreviewOverlay] Deleting frame cache
+[22:16:08.361] [DEBUG] [SequenceFrameCache::~SequenceFrameCache] Destructor starting
+[22:16:08.362] [DEBUG] [SequenceFrameCache::~SequenceFrameCache] Destructor complete
+[22:16:08.362] [DEBUG] [PreviewOverlay::~PreviewOverlay] Destructor complete
+[22:16:09.354] [DEBUG] [PreviewOverlay] GStreamerPlayer initialized with hardware-accelerated playback
+[22:16:09.355] [WARN] QWidget::paintEngine: Should no longer be called
+[22:16:09.356] [WARN] QWidget::paintEngine: Should no longer be called
+[22:16:09.356] [DEBUG] [GStreamerPlayer] Video widget configured for embedding, WId: 2031688
+[22:16:09.357] [DEBUG] [SequenceFrameCache] Available RAM: 106218 MB
+[22:16:09.357] [DEBUG] [SequenceFrameCache] Calculated optimal cache size: 500 frames ( 15000 MB) using 70 % of available RAM
+[22:16:09.358] [DEBUG] [SequenceFrameCache] ========================================
+[22:16:09.358] [DEBUG] [SequenceFrameCache] INITIALIZATION:
+[22:16:09.358] [DEBUG] [SequenceFrameCache]   Max cache size: 500 frames
+[22:16:09.358] [DEBUG] [SequenceFrameCache]   Max cost: 25600000 KB ( 25000 MB)
+[22:16:09.359] [DEBUG] [SequenceFrameCache]   Worker threads: 32
+[22:16:09.359] [DEBUG] [SequenceFrameCache]   Auto-size: YES
+[22:16:09.359] [DEBUG] [SequenceFrameCache]   RAM percentage: 70 %
+[22:16:09.360] [DEBUG] [SequenceFrameCache] ========================================
+[22:16:09.360] [DEBUG] [PreviewOverlay] Frame cache initialized with QRecursiveMutex (deadlock fix)
+[22:16:09.361] [DEBUG] [PreviewOverlay] Stopping playback
+[22:16:09.361] [WARN] QWidget::paintEngine: Should no longer be called
+[22:16:09.361] [DEBUG] [GStreamerPlayer] Video widget configured for embedding, WId: 2031688
+[22:16:09.362] [INFO] [GStreamerPlayer] Loading media: "file:///Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 01 .mp4"
+[22:16:09.362] [ERROR] [GStreamerPlayer] ########## CREATING NEW PIPELINE ##########
+[22:16:09.363] [ERROR] [GStreamerPlayer] ########## SETUPPIPELINE CALLED ##########
+[22:16:09.364] [ERROR] [GStreamerPlayer] ========== VIDEO SINK DIAGNOSTICS ==========
+[22:16:09.364] [ERROR] [GStreamerPlayer] Video sink element name: videosink
+[22:16:09.365] [ERROR] [GStreamerPlayer] Video sink factory name: d3d11videosink
+[22:16:09.365] [ERROR] [GStreamerPlayer] force-aspect-ratio property: SUPPORTED, value: TRUE
+[22:16:09.365] [ERROR] [GStreamerPlayer] ===========================================
+[22:16:09.366] [INFO] [GStreamerPlayer] ========== VIDEO SINK HIERARCHY ==========
+[22:16:09.366] [INFO] [GStreamerPlayer] Top-level video sink: videosink
+[22:16:09.366] [INFO] [GStreamerPlayer] Is bin: NO
+[22:16:09.367] [INFO] [GStreamerPlayer] Using top-level sink directly (not a bin)
+[22:16:09.367] [INFO] [GStreamerPlayer] Final actual sink: videosink
+[22:16:09.367] [INFO] [GStreamerPlayer] ================================================
+[22:16:09.368] [INFO] [GStreamerPlayer] Set window handle: 2031688 on element: videosink
+[22:16:09.368] [INFO] [GStreamerPlayer] ========== RENDER RECTANGLE DIAGNOSTICS ==========
+[22:16:09.368] [INFO] [GStreamerPlayer] Widget logical size: 1400 x 740
+[22:16:09.369] [INFO] [GStreamerPlayer] Device pixel ratio (DPR): 2.25
+[22:16:09.369] [INFO] [GStreamerPlayer] Physical pixel size: 3150 x 1665
+[22:16:09.369] [INFO] [GStreamerPlayer] Widget geometry: QRect(0,0 1400x740)
+[22:16:09.370] [INFO] [GStreamerPlayer] Widget window ID: 2031688
+[22:16:09.370] [INFO] [GStreamerPlayer] Widget is visible: true
+[22:16:09.370] [INFO] [GStreamerPlayer] Widget native parent chain: QWidget(0x21c86166510)
+[22:16:09.371] [INFO] [GStreamerPlayer] Screen name: "Q70A"
+[22:16:09.371] [INFO] [GStreamerPlayer] Screen geometry: QRect(0,0 1707x960)
+[22:16:09.372] [INFO] [GStreamerPlayer] Screen available geometry: QRect(0,0 1707x912)
+[22:16:09.372] [INFO] [GStreamerPlayer] Screen physical DPI: 35.8459
+[22:16:09.373] [INFO] [GStreamerPlayer] Screen logical DPI: 96
+[22:16:09.373] [INFO] [GStreamerPlayer] Screen device pixel ratio: 2.25
+[22:16:09.373] [INFO] [GStreamerPlayer] ====================================================
+[22:16:09.374] [DEBUG] [PreviewOverlay] GStreamer state changed to: 2
+[22:16:09.374] [INFO] [GStreamerPlayer] Pipeline created, prerolling asynchronously...
+[22:16:09.375] [DEBUG] [PreviewOverlay] GStreamer state changed to: 1
+[22:16:09.375] [DEBUG] [GStreamerPlayer] Playback started
+[22:16:09.405] [DEBUG] [GStreamerPlayer] State changed from NULL to READY
+[22:16:09.424] [DEBUG] [GStreamerPlayer] State changed from READY to PAUSED
+[22:16:09.425] [DEBUG] [GStreamerPlayer] Async operation done (preroll/seek completed)
+[22:16:09.425] [DEBUG] [PreviewOverlay] GStreamer media info: Duration: 15056 ms FPS: 23.976 Resolution: 4096 x 2160 Codec: "" Has Audio: false
+[22:16:09.427] [INFO] [GStreamerPlayer] ========== VIDEO STREAM INFO ==========
+[22:16:09.427] [INFO] [GStreamerPlayer] Video resolution: 4096 x 2160
+[22:16:09.427] [INFO] [GStreamerPlayer] Frame rate: 23.976 fps
+[22:16:09.429] [INFO] [GStreamerPlayer] Duration: 15056 ms
+[22:16:09.429] [INFO] [GStreamerPlayer] Has audio: false
+[22:16:09.430] [INFO] [GStreamerPlayer] ==========================================
+[22:16:09.430] [INFO] [GStreamerPlayer] Calling updateRenderRectangle() after preroll...
+[22:16:09.430] [DEBUG] [GStreamerPlayer] ========== UPDATE RENDER RECTANGLE ==========
+[22:16:09.431] [DEBUG] [GStreamerPlayer] Widget logical size: 1400 x 740
+[22:16:09.431] [DEBUG] [GStreamerPlayer] Device pixel ratio: 2.25
+[22:16:09.431] [DEBUG] [GStreamerPlayer] Physical pixel size: 3150 x 1665
+[22:16:09.431] [DEBUG] [GStreamerPlayer] Overlay element: videosink
+[22:16:09.432] [DEBUG] [GStreamerPlayer] =============================================
+[22:16:09.433] [DEBUG] [GStreamerPlayer] State changed from PAUSED to PLAYING
+[22:16:10.291] [DEBUG] [PreviewOverlay] Stopping playback
+[22:16:10.292] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:10.294] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:10.295] [DEBUG] [PreviewOverlay] Stopping playback
+[22:16:10.296] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:10.296] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:10.296] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:10.296] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:10.296] [WARN] QWidget::paintEngine: Should no longer be called
+[22:16:10.296] [DEBUG] [GStreamerPlayer] Video widget configured for embedding, WId: 2031688
+[22:16:10.297] [INFO] [GStreamerPlayer] ========== VIDEO SINK HIERARCHY ==========
+[22:16:10.297] [INFO] [GStreamerPlayer] Top-level video sink: videosink
+[22:16:10.297] [INFO] [GStreamerPlayer] Is bin: NO
+[22:16:10.298] [INFO] [GStreamerPlayer] Using top-level sink directly (not a bin)
+[22:16:10.298] [INFO] [GStreamerPlayer] Final actual sink: videosink
+[22:16:10.298] [INFO] [GStreamerPlayer] ================================================
+[22:16:10.298] [INFO] [GStreamerPlayer] Set window handle: 2031688 on element: videosink
+[22:16:10.299] [INFO] [GStreamerPlayer] ========== RENDER RECTANGLE DIAGNOSTICS ==========
+[22:16:10.299] [INFO] [GStreamerPlayer] Widget logical size: 1400 x 740
+[22:16:10.301] [INFO] [GStreamerPlayer] Device pixel ratio (DPR): 2.25
+[22:16:10.301] [INFO] [GStreamerPlayer] Physical pixel size: 3150 x 1665
+[22:16:10.301] [INFO] [GStreamerPlayer] Widget geometry: QRect(0,0 1400x740)
+[22:16:10.302] [INFO] [GStreamerPlayer] Widget window ID: 2031688
+[22:16:10.302] [INFO] [GStreamerPlayer] Widget is visible: true
+[22:16:10.302] [INFO] [GStreamerPlayer] Widget native parent chain: QWidget(0x21c86166510)
+[22:16:10.303] [INFO] [GStreamerPlayer] Screen name: "Q70A"
+[22:16:10.304] [INFO] [GStreamerPlayer] Screen geometry: QRect(0,0 1707x960)
+[22:16:10.304] [INFO] [GStreamerPlayer] Screen available geometry: QRect(0,0 1707x912)
+[22:16:10.305] [INFO] [GStreamerPlayer] Screen physical DPI: 35.8459
+[22:16:10.306] [INFO] [GStreamerPlayer] Screen logical DPI: 96
+[22:16:10.306] [INFO] [GStreamerPlayer] Screen device pixel ratio: 2.25
+[22:16:10.306] [INFO] [GStreamerPlayer] ====================================================
+[22:16:10.306] [INFO] [GStreamerPlayer] Loading media: "file:///Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 02 .mp4"
+[22:16:10.307] [ERROR] [GStreamerPlayer] ########## REUSING PIPELINE ##########
+[22:16:10.307] [INFO] [GStreamerPlayer] Reusing existing pipeline with new URI (async preroll)
+[22:16:10.307] [DEBUG] [PreviewOverlay] GStreamer state changed to: 1
+[22:16:10.308] [DEBUG] [GStreamerPlayer] Playback started
+[22:16:10.310] [DEBUG] [GStreamerPlayer] State changed from NULL to READY
+[22:16:10.335] [DEBUG] [GStreamerPlayer] State changed from READY to PAUSED
+[22:16:10.336] [DEBUG] [GStreamerPlayer] Async operation done (preroll/seek completed)
+[22:16:10.336] [DEBUG] [PreviewOverlay] GStreamer media info: Duration: 30071 ms FPS: 23.976 Resolution: 4096 x 2160 Codec: "" Has Audio: false
+[22:16:10.337] [INFO] [GStreamerPlayer] ========== VIDEO STREAM INFO ==========
+[22:16:10.337] [INFO] [GStreamerPlayer] Video resolution: 4096 x 2160
+[22:16:10.338] [INFO] [GStreamerPlayer] Frame rate: 23.976 fps
+[22:16:10.338] [INFO] [GStreamerPlayer] Duration: 30071 ms
+[22:16:10.339] [INFO] [GStreamerPlayer] Has audio: false
+[22:16:10.339] [INFO] [GStreamerPlayer] ==========================================
+[22:16:10.339] [INFO] [GStreamerPlayer] Calling updateRenderRectangle() after preroll...
+[22:16:10.340] [DEBUG] [GStreamerPlayer] ========== UPDATE RENDER RECTANGLE ==========
+[22:16:10.340] [DEBUG] [GStreamerPlayer] Widget logical size: 1400 x 740
+[22:16:10.340] [DEBUG] [GStreamerPlayer] Device pixel ratio: 2.25
+[22:16:10.340] [DEBUG] [GStreamerPlayer] Physical pixel size: 3150 x 1665
+[22:16:10.341] [DEBUG] [GStreamerPlayer] Overlay element: videosink
+[22:16:10.341] [DEBUG] [GStreamerPlayer] =============================================
+[22:16:10.341] [DEBUG] [GStreamerPlayer] State changed from PAUSED to PLAYING
+[22:16:10.711] [DEBUG] [PreviewOverlay] Stopping playback
+[22:16:10.712] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:10.712] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:10.714] [DEBUG] [PreviewOverlay] Stopping playback
+[22:16:10.715] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:10.715] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:10.715] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:10.716] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:10.716] [WARN] QWidget::paintEngine: Should no longer be called
+[22:16:10.716] [DEBUG] [GStreamerPlayer] Video widget configured for embedding, WId: 2031688
+[22:16:10.716] [INFO] [GStreamerPlayer] ========== VIDEO SINK HIERARCHY ==========
+[22:16:10.717] [INFO] [GStreamerPlayer] Top-level video sink: videosink
+[22:16:10.718] [INFO] [GStreamerPlayer] Is bin: NO
+[22:16:10.718] [INFO] [GStreamerPlayer] Using top-level sink directly (not a bin)
+[22:16:10.719] [INFO] [GStreamerPlayer] Final actual sink: videosink
+[22:16:10.719] [INFO] [GStreamerPlayer] ================================================
+[22:16:10.719] [INFO] [GStreamerPlayer] Set window handle: 2031688 on element: videosink
+[22:16:10.720] [INFO] [GStreamerPlayer] ========== RENDER RECTANGLE DIAGNOSTICS ==========
+[22:16:10.720] [INFO] [GStreamerPlayer] Widget logical size: 1400 x 740
+[22:16:10.720] [INFO] [GStreamerPlayer] Device pixel ratio (DPR): 2.25
+[22:16:10.721] [INFO] [GStreamerPlayer] Physical pixel size: 3150 x 1665
+[22:16:10.721] [INFO] [GStreamerPlayer] Widget geometry: QRect(0,0 1400x740)
+[22:16:10.722] [INFO] [GStreamerPlayer] Widget window ID: 2031688
+[22:16:10.722] [INFO] [GStreamerPlayer] Widget is visible: true
+[22:16:10.722] [INFO] [GStreamerPlayer] Widget native parent chain: QWidget(0x21c86166510)
+[22:16:10.723] [INFO] [GStreamerPlayer] Screen name: "Q70A"
+[22:16:10.724] [INFO] [GStreamerPlayer] Screen geometry: QRect(0,0 1707x960)
+[22:16:10.724] [INFO] [GStreamerPlayer] Screen available geometry: QRect(0,0 1707x912)
+[22:16:10.724] [INFO] [GStreamerPlayer] Screen physical DPI: 35.8459
+[22:16:10.725] [INFO] [GStreamerPlayer] Screen logical DPI: 96
+[22:16:10.725] [INFO] [GStreamerPlayer] Screen device pixel ratio: 2.25
+[22:16:10.725] [INFO] [GStreamerPlayer] ====================================================
+[22:16:10.726] [INFO] [GStreamerPlayer] Loading media: "file:///Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 03 .mp4"
+[22:16:10.726] [ERROR] [GStreamerPlayer] ########## REUSING PIPELINE ##########
+[22:16:10.726] [INFO] [GStreamerPlayer] Reusing existing pipeline with new URI (async preroll)
+[22:16:10.727] [DEBUG] [PreviewOverlay] GStreamer state changed to: 1
+[22:16:10.727] [DEBUG] [GStreamerPlayer] Playback started
+[22:16:10.730] [DEBUG] [GStreamerPlayer] State changed from NULL to READY
+[22:16:10.748] [DEBUG] [GStreamerPlayer] State changed from READY to PAUSED
+[22:16:10.749] [DEBUG] [GStreamerPlayer] Async operation done (preroll/seek completed)
+[22:16:10.749] [DEBUG] [PreviewOverlay] GStreamer media info: Duration: 14973 ms FPS: 23.976 Resolution: 4096 x 2160 Codec: "" Has Audio: false
+[22:16:10.750] [INFO] [GStreamerPlayer] ========== VIDEO STREAM INFO ==========
+[22:16:10.750] [INFO] [GStreamerPlayer] Video resolution: 4096 x 2160
+[22:16:10.751] [INFO] [GStreamerPlayer] Frame rate: 23.976 fps
+[22:16:10.751] [INFO] [GStreamerPlayer] Duration: 14973 ms
+[22:16:10.752] [INFO] [GStreamerPlayer] Has audio: false
+[22:16:10.752] [INFO] [GStreamerPlayer] ==========================================
+[22:16:10.752] [INFO] [GStreamerPlayer] Calling updateRenderRectangle() after preroll...
+[22:16:10.753] [DEBUG] [GStreamerPlayer] ========== UPDATE RENDER RECTANGLE ==========
+[22:16:10.753] [DEBUG] [GStreamerPlayer] Widget logical size: 1400 x 740
+[22:16:10.754] [DEBUG] [GStreamerPlayer] Device pixel ratio: 2.25
+[22:16:10.754] [DEBUG] [GStreamerPlayer] Physical pixel size: 3150 x 1665
+[22:16:10.754] [DEBUG] [GStreamerPlayer] Overlay element: videosink
+[22:16:10.754] [DEBUG] [GStreamerPlayer] =============================================
+[22:16:10.755] [DEBUG] [GStreamerPlayer] State changed from PAUSED to PLAYING
+[22:16:11.046] [DEBUG] [PreviewOverlay] Stopping playback
+[22:16:11.047] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:11.048] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:11.050] [DEBUG] [PreviewOverlay] Stopping playback
+[22:16:11.051] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:11.051] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:11.051] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:11.052] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:11.052] [WARN] QWidget::paintEngine: Should no longer be called
+[22:16:11.052] [DEBUG] [GStreamerPlayer] Video widget configured for embedding, WId: 2031688
+[22:16:11.052] [INFO] [GStreamerPlayer] ========== VIDEO SINK HIERARCHY ==========
+[22:16:11.053] [INFO] [GStreamerPlayer] Top-level video sink: videosink
+[22:16:11.053] [INFO] [GStreamerPlayer] Is bin: NO
+[22:16:11.053] [INFO] [GStreamerPlayer] Using top-level sink directly (not a bin)
+[22:16:11.054] [INFO] [GStreamerPlayer] Final actual sink: videosink
+[22:16:11.054] [INFO] [GStreamerPlayer] ================================================
+[22:16:11.055] [INFO] [GStreamerPlayer] Set window handle: 2031688 on element: videosink
+[22:16:11.055] [INFO] [GStreamerPlayer] ========== RENDER RECTANGLE DIAGNOSTICS ==========
+[22:16:11.056] [INFO] [GStreamerPlayer] Widget logical size: 1400 x 740
+[22:16:11.056] [INFO] [GStreamerPlayer] Device pixel ratio (DPR): 2.25
+[22:16:11.056] [INFO] [GStreamerPlayer] Physical pixel size: 3150 x 1665
+[22:16:11.057] [INFO] [GStreamerPlayer] Widget geometry: QRect(0,0 1400x740)
+[22:16:11.058] [INFO] [GStreamerPlayer] Widget window ID: 2031688
+[22:16:11.058] [INFO] [GStreamerPlayer] Widget is visible: true
+[22:16:11.059] [INFO] [GStreamerPlayer] Widget native parent chain: QWidget(0x21c86166510)
+[22:16:11.059] [INFO] [GStreamerPlayer] Screen name: "Q70A"
+[22:16:11.060] [INFO] [GStreamerPlayer] Screen geometry: QRect(0,0 1707x960)
+[22:16:11.060] [INFO] [GStreamerPlayer] Screen available geometry: QRect(0,0 1707x912)
+[22:16:11.061] [INFO] [GStreamerPlayer] Screen physical DPI: 35.8459
+[22:16:11.061] [INFO] [GStreamerPlayer] Screen logical DPI: 96
+[22:16:11.062] [INFO] [GStreamerPlayer] Screen device pixel ratio: 2.25
+[22:16:11.062] [INFO] [GStreamerPlayer] ====================================================
+[22:16:11.062] [INFO] [GStreamerPlayer] Loading media: "file:///Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 04 .mp4"
+[22:16:11.062] [ERROR] [GStreamerPlayer] ########## REUSING PIPELINE ##########
+[22:16:11.063] [INFO] [GStreamerPlayer] Reusing existing pipeline with new URI (async preroll)
+[22:16:11.064] [DEBUG] [PreviewOverlay] GStreamer state changed to: 1
+[22:16:11.064] [DEBUG] [GStreamerPlayer] Playback started
+[22:16:11.066] [DEBUG] [GStreamerPlayer] State changed from NULL to READY
+[22:16:11.086] [DEBUG] [GStreamerPlayer] State changed from READY to PAUSED
+[22:16:11.087] [DEBUG] [GStreamerPlayer] Async operation done (preroll/seek completed)
+[22:16:11.088] [DEBUG] [PreviewOverlay] GStreamer media info: Duration: 25316 ms FPS: 23.976 Resolution: 4096 x 2160 Codec: "" Has Audio: false
+[22:16:11.088] [INFO] [GStreamerPlayer] ========== VIDEO STREAM INFO ==========
+[22:16:11.090] [INFO] [GStreamerPlayer] Video resolution: 4096 x 2160
+[22:16:11.090] [INFO] [GStreamerPlayer] Frame rate: 23.976 fps
+[22:16:11.090] [INFO] [GStreamerPlayer] Duration: 25316 ms
+[22:16:11.090] [INFO] [GStreamerPlayer] Has audio: false
+[22:16:11.091] [INFO] [GStreamerPlayer] ==========================================
+[22:16:11.092] [INFO] [GStreamerPlayer] Calling updateRenderRectangle() after preroll...
+[22:16:11.092] [DEBUG] [GStreamerPlayer] ========== UPDATE RENDER RECTANGLE ==========
+[22:16:11.092] [DEBUG] [GStreamerPlayer] Widget logical size: 1400 x 740
+[22:16:11.092] [DEBUG] [GStreamerPlayer] Device pixel ratio: 2.25
+[22:16:11.093] [DEBUG] [GStreamerPlayer] Physical pixel size: 3150 x 1665
+[22:16:11.093] [DEBUG] [GStreamerPlayer] Overlay element: videosink
+[22:16:11.093] [DEBUG] [GStreamerPlayer] =============================================
+[22:16:11.093] [DEBUG] [GStreamerPlayer] State changed from PAUSED to PLAYING
+[22:16:11.297] [DEBUG] [PreviewOverlay] Stopping playback
+[22:16:11.298] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:11.300] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:11.300] [DEBUG] [PreviewOverlay] Stopping playback
+[22:16:11.301] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:11.302] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:11.302] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:11.303] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:11.304] [WARN] QWidget::paintEngine: Should no longer be called
+[22:16:11.304] [DEBUG] [GStreamerPlayer] Video widget configured for embedding, WId: 2031688
+[22:16:11.305] [INFO] [GStreamerPlayer] ========== VIDEO SINK HIERARCHY ==========
+[22:16:11.305] [INFO] [GStreamerPlayer] Top-level video sink: videosink
+[22:16:11.305] [INFO] [GStreamerPlayer] Is bin: NO
+[22:16:11.306] [INFO] [GStreamerPlayer] Using top-level sink directly (not a bin)
+[22:16:11.306] [INFO] [GStreamerPlayer] Final actual sink: videosink
+[22:16:11.307] [INFO] [GStreamerPlayer] ================================================
+[22:16:11.308] [INFO] [GStreamerPlayer] Set window handle: 2031688 on element: videosink
+[22:16:11.308] [INFO] [GStreamerPlayer] ========== RENDER RECTANGLE DIAGNOSTICS ==========
+[22:16:11.309] [INFO] [GStreamerPlayer] Widget logical size: 1400 x 740
+[22:16:11.309] [INFO] [GStreamerPlayer] Device pixel ratio (DPR): 2.25
+[22:16:11.310] [INFO] [GStreamerPlayer] Physical pixel size: 3150 x 1665
+[22:16:11.310] [INFO] [GStreamerPlayer] Widget geometry: QRect(0,0 1400x740)
+[22:16:11.311] [INFO] [GStreamerPlayer] Widget window ID: 2031688
+[22:16:11.311] [INFO] [GStreamerPlayer] Widget is visible: true
+[22:16:11.312] [INFO] [GStreamerPlayer] Widget native parent chain: QWidget(0x21c86166510)
+[22:16:11.312] [INFO] [GStreamerPlayer] Screen name: "Q70A"
+[22:16:11.312] [INFO] [GStreamerPlayer] Screen geometry: QRect(0,0 1707x960)
+[22:16:11.312] [INFO] [GStreamerPlayer] Screen available geometry: QRect(0,0 1707x912)
+[22:16:11.313] [INFO] [GStreamerPlayer] Screen physical DPI: 35.8459
+[22:16:11.314] [INFO] [GStreamerPlayer] Screen logical DPI: 96
+[22:16:11.314] [INFO] [GStreamerPlayer] Screen device pixel ratio: 2.25
+[22:16:11.314] [INFO] [GStreamerPlayer] ====================================================
+[22:16:11.315] [INFO] [GStreamerPlayer] Loading media: "file:///Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 05 .mp4"
+[22:16:11.315] [ERROR] [GStreamerPlayer] ########## REUSING PIPELINE ##########
+[22:16:11.315] [INFO] [GStreamerPlayer] Reusing existing pipeline with new URI (async preroll)
+[22:16:11.316] [DEBUG] [PreviewOverlay] GStreamer state changed to: 1
+[22:16:11.316] [DEBUG] [GStreamerPlayer] Playback started
+[22:16:11.318] [DEBUG] [GStreamerPlayer] State changed from NULL to READY
+[22:16:11.335] [DEBUG] [GStreamerPlayer] State changed from READY to PAUSED
+[22:16:11.335] [DEBUG] [GStreamerPlayer] Async operation done (preroll/seek completed)
+[22:16:11.336] [DEBUG] [PreviewOverlay] GStreamer media info: Duration: 30071 ms FPS: 23.976 Resolution: 4096 x 2160 Codec: "" Has Audio: false
+[22:16:11.336] [INFO] [GStreamerPlayer] ========== VIDEO STREAM INFO ==========
+[22:16:11.337] [INFO] [GStreamerPlayer] Video resolution: 4096 x 2160
+[22:16:11.338] [INFO] [GStreamerPlayer] Frame rate: 23.976 fps
+[22:16:11.338] [INFO] [GStreamerPlayer] Duration: 30071 ms
+[22:16:11.339] [INFO] [GStreamerPlayer] Has audio: false
+[22:16:11.339] [INFO] [GStreamerPlayer] ==========================================
+[22:16:11.340] [INFO] [GStreamerPlayer] Calling updateRenderRectangle() after preroll...
+[22:16:11.340] [DEBUG] [GStreamerPlayer] ========== UPDATE RENDER RECTANGLE ==========
+[22:16:11.340] [DEBUG] [GStreamerPlayer] Widget logical size: 1400 x 740
+[22:16:11.341] [DEBUG] [GStreamerPlayer] Device pixel ratio: 2.25
+[22:16:11.341] [DEBUG] [GStreamerPlayer] Physical pixel size: 3150 x 1665
+[22:16:11.341] [DEBUG] [GStreamerPlayer] Overlay element: videosink
+[22:16:11.342] [DEBUG] [GStreamerPlayer] =============================================
+[22:16:11.342] [DEBUG] [GStreamerPlayer] State changed from PAUSED to PLAYING
+[22:16:11.516] [DEBUG] [PreviewOverlay] Stopping playback
+[22:16:11.517] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:11.518] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:11.519] [DEBUG] [PreviewOverlay] Stopping playback
+[22:16:11.520] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:11.520] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:11.521] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:11.521] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:11.521] [WARN] QWidget::paintEngine: Should no longer be called
+[22:16:11.522] [DEBUG] [GStreamerPlayer] Video widget configured for embedding, WId: 2031688
+[22:16:11.522] [INFO] [GStreamerPlayer] ========== VIDEO SINK HIERARCHY ==========
+[22:16:11.523] [INFO] [GStreamerPlayer] Top-level video sink: videosink
+[22:16:11.523] [INFO] [GStreamerPlayer] Is bin: NO
+[22:16:11.524] [INFO] [GStreamerPlayer] Using top-level sink directly (not a bin)
+[22:16:11.525] [INFO] [GStreamerPlayer] Final actual sink: videosink
+[22:16:11.525] [INFO] [GStreamerPlayer] ================================================
+[22:16:11.525] [INFO] [GStreamerPlayer] Set window handle: 2031688 on element: videosink
+[22:16:11.526] [INFO] [GStreamerPlayer] ========== RENDER RECTANGLE DIAGNOSTICS ==========
+[22:16:11.526] [INFO] [GStreamerPlayer] Widget logical size: 1400 x 740
+[22:16:11.526] [INFO] [GStreamerPlayer] Device pixel ratio (DPR): 2.25
+[22:16:11.527] [INFO] [GStreamerPlayer] Physical pixel size: 3150 x 1665
+[22:16:11.527] [INFO] [GStreamerPlayer] Widget geometry: QRect(0,0 1400x740)
+[22:16:11.528] [INFO] [GStreamerPlayer] Widget window ID: 2031688
+[22:16:11.529] [INFO] [GStreamerPlayer] Widget is visible: true
+[22:16:11.529] [INFO] [GStreamerPlayer] Widget native parent chain: QWidget(0x21c86166510)
+[22:16:11.530] [INFO] [GStreamerPlayer] Screen name: "Q70A"
+[22:16:11.530] [INFO] [GStreamerPlayer] Screen geometry: QRect(0,0 1707x960)
+[22:16:11.530] [INFO] [GStreamerPlayer] Screen available geometry: QRect(0,0 1707x912)
+[22:16:11.531] [INFO] [GStreamerPlayer] Screen physical DPI: 35.8459
+[22:16:11.531] [INFO] [GStreamerPlayer] Screen logical DPI: 96
+[22:16:11.532] [INFO] [GStreamerPlayer] Screen device pixel ratio: 2.25
+[22:16:11.532] [INFO] [GStreamerPlayer] ====================================================
+[22:16:11.532] [INFO] [GStreamerPlayer] Loading media: "file:///Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 06 .mp4"
+[22:16:11.532] [ERROR] [GStreamerPlayer] ########## REUSING PIPELINE ##########
+[22:16:11.533] [INFO] [GStreamerPlayer] Reusing existing pipeline with new URI (async preroll)
+[22:16:11.534] [DEBUG] [PreviewOverlay] GStreamer state changed to: 1
+[22:16:11.534] [DEBUG] [GStreamerPlayer] Playback started
+[22:16:11.539] [DEBUG] [GStreamerPlayer] State changed from NULL to READY
+[22:16:11.556] [DEBUG] [GStreamerPlayer] State changed from READY to PAUSED
+[22:16:11.557] [DEBUG] [GStreamerPlayer] Async operation done (preroll/seek completed)
+[22:16:11.557] [DEBUG] [PreviewOverlay] GStreamer media info: Duration: 15015 ms FPS: 23.976 Resolution: 4096 x 2160 Codec: "" Has Audio: false
+[22:16:11.557] [INFO] [GStreamerPlayer] ========== VIDEO STREAM INFO ==========
+[22:16:11.558] [INFO] [GStreamerPlayer] Video resolution: 4096 x 2160
+[22:16:11.558] [INFO] [GStreamerPlayer] Frame rate: 23.976 fps
+[22:16:11.559] [INFO] [GStreamerPlayer] Duration: 15015 ms
+[22:16:11.559] [INFO] [GStreamerPlayer] Has audio: false
+[22:16:11.560] [INFO] [GStreamerPlayer] ==========================================
+[22:16:11.561] [INFO] [GStreamerPlayer] Calling updateRenderRectangle() after preroll...
+[22:16:11.561] [DEBUG] [GStreamerPlayer] ========== UPDATE RENDER RECTANGLE ==========
+[22:16:11.561] [DEBUG] [GStreamerPlayer] Widget logical size: 1400 x 740
+[22:16:11.562] [DEBUG] [GStreamerPlayer] Device pixel ratio: 2.25
+[22:16:11.562] [DEBUG] [GStreamerPlayer] Physical pixel size: 3150 x 1665
+[22:16:11.562] [DEBUG] [GStreamerPlayer] Overlay element: videosink
+[22:16:11.562] [DEBUG] [GStreamerPlayer] =============================================
+[22:16:11.562] [DEBUG] [GStreamerPlayer] State changed from PAUSED to PLAYING
+[22:16:12.009] [DEBUG] [PreviewOverlay] Stopping playback
+[22:16:12.010] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:12.011] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:12.011] [DEBUG] [PreviewOverlay] Stopping playback
+[22:16:12.013] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:12.013] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:12.013] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:12.014] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:12.014] [WARN] QWidget::paintEngine: Should no longer be called
+[22:16:12.015] [DEBUG] [GStreamerPlayer] Video widget configured for embedding, WId: 2031688
+[22:16:12.015] [INFO] [GStreamerPlayer] ========== VIDEO SINK HIERARCHY ==========
+[22:16:12.016] [INFO] [GStreamerPlayer] Top-level video sink: videosink
+[22:16:12.017] [INFO] [GStreamerPlayer] Is bin: NO
+[22:16:12.017] [INFO] [GStreamerPlayer] Using top-level sink directly (not a bin)
+[22:16:12.017] [INFO] [GStreamerPlayer] Final actual sink: videosink
+[22:16:12.017] [INFO] [GStreamerPlayer] ================================================
+[22:16:12.018] [INFO] [GStreamerPlayer] Set window handle: 2031688 on element: videosink
+[22:16:12.018] [INFO] [GStreamerPlayer] ========== RENDER RECTANGLE DIAGNOSTICS ==========
+[22:16:12.018] [INFO] [GStreamerPlayer] Widget logical size: 1400 x 740
+[22:16:12.019] [INFO] [GStreamerPlayer] Device pixel ratio (DPR): 2.25
+[22:16:12.019] [INFO] [GStreamerPlayer] Physical pixel size: 3150 x 1665
+[22:16:12.020] [INFO] [GStreamerPlayer] Widget geometry: QRect(0,0 1400x740)
+[22:16:12.020] [INFO] [GStreamerPlayer] Widget window ID: 2031688
+[22:16:12.021] [INFO] [GStreamerPlayer] Widget is visible: true
+[22:16:12.021] [INFO] [GStreamerPlayer] Widget native parent chain: QWidget(0x21c86166510)
+[22:16:12.021] [INFO] [GStreamerPlayer] Screen name: "Q70A"
+[22:16:12.023] [INFO] [GStreamerPlayer] Screen geometry: QRect(0,0 1707x960)
+[22:16:12.023] [INFO] [GStreamerPlayer] Screen available geometry: QRect(0,0 1707x912)
+[22:16:12.024] [INFO] [GStreamerPlayer] Screen physical DPI: 35.8459
+[22:16:12.024] [INFO] [GStreamerPlayer] Screen logical DPI: 96
+[22:16:12.025] [INFO] [GStreamerPlayer] Screen device pixel ratio: 2.25
+[22:16:12.025] [INFO] [GStreamerPlayer] ====================================================
+[22:16:12.025] [INFO] [GStreamerPlayer] Loading media: "file:///Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 07 .mp4"
+[22:16:12.026] [ERROR] [GStreamerPlayer] ########## REUSING PIPELINE ##########
+[22:16:12.026] [INFO] [GStreamerPlayer] Reusing existing pipeline with new URI (async preroll)
+[22:16:12.026] [DEBUG] [PreviewOverlay] GStreamer state changed to: 1
+[22:16:12.027] [DEBUG] [GStreamerPlayer] Playback started
+[22:16:12.029] [DEBUG] [GStreamerPlayer] State changed from NULL to READY
+[22:16:12.045] [DEBUG] [GStreamerPlayer] State changed from READY to PAUSED
+[22:16:12.046] [DEBUG] [GStreamerPlayer] Async operation done (preroll/seek completed)
+[22:16:12.046] [DEBUG] [PreviewOverlay] GStreamer media info: Duration: 15056 ms FPS: 23.976 Resolution: 4096 x 2160 Codec: "" Has Audio: false
+[22:16:12.047] [INFO] [GStreamerPlayer] ========== VIDEO STREAM INFO ==========
+[22:16:12.048] [INFO] [GStreamerPlayer] Video resolution: 4096 x 2160
+[22:16:12.048] [INFO] [GStreamerPlayer] Frame rate: 23.976 fps
+[22:16:12.049] [INFO] [GStreamerPlayer] Duration: 15056 ms
+[22:16:12.049] [INFO] [GStreamerPlayer] Has audio: false
+[22:16:12.050] [INFO] [GStreamerPlayer] ==========================================
+[22:16:12.050] [INFO] [GStreamerPlayer] Calling updateRenderRectangle() after preroll...
+[22:16:12.050] [DEBUG] [GStreamerPlayer] ========== UPDATE RENDER RECTANGLE ==========
+[22:16:12.051] [DEBUG] [GStreamerPlayer] Widget logical size: 1400 x 740
+[22:16:12.051] [DEBUG] [GStreamerPlayer] Device pixel ratio: 2.25
+[22:16:12.052] [DEBUG] [GStreamerPlayer] Physical pixel size: 3150 x 1665
+[22:16:12.052] [DEBUG] [GStreamerPlayer] Overlay element: videosink
+[22:16:12.052] [DEBUG] [GStreamerPlayer] =============================================
+[22:16:12.053] [DEBUG] [GStreamerPlayer] State changed from PAUSED to PLAYING
+[22:16:12.218] [DEBUG] [PreviewOverlay] Stopping playback
+[22:16:12.219] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:12.220] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:12.221] [DEBUG] [PreviewOverlay] Stopping playback
+[22:16:12.223] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:12.224] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:12.224] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:12.225] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:12.225] [WARN] QWidget::paintEngine: Should no longer be called
+[22:16:12.226] [DEBUG] [GStreamerPlayer] Video widget configured for embedding, WId: 2031688
+[22:16:12.226] [INFO] [GStreamerPlayer] ========== VIDEO SINK HIERARCHY ==========
+[22:16:12.226] [INFO] [GStreamerPlayer] Top-level video sink: videosink
+[22:16:12.228] [INFO] [GStreamerPlayer] Is bin: NO
+[22:16:12.228] [INFO] [GStreamerPlayer] Using top-level sink directly (not a bin)
+[22:16:12.229] [INFO] [GStreamerPlayer] Final actual sink: videosink
+[22:16:12.229] [INFO] [GStreamerPlayer] ================================================
+[22:16:12.229] [INFO] [GStreamerPlayer] Set window handle: 2031688 on element: videosink
+[22:16:12.230] [INFO] [GStreamerPlayer] ========== RENDER RECTANGLE DIAGNOSTICS ==========
+[22:16:12.230] [INFO] [GStreamerPlayer] Widget logical size: 1400 x 740
+[22:16:12.230] [INFO] [GStreamerPlayer] Device pixel ratio (DPR): 2.25
+[22:16:12.231] [INFO] [GStreamerPlayer] Physical pixel size: 3150 x 1665
+[22:16:12.232] [INFO] [GStreamerPlayer] Widget geometry: QRect(0,0 1400x740)
+[22:16:12.232] [INFO] [GStreamerPlayer] Widget window ID: 2031688
+[22:16:12.232] [INFO] [GStreamerPlayer] Widget is visible: true
+[22:16:12.232] [INFO] [GStreamerPlayer] Widget native parent chain: QWidget(0x21c86166510)
+[22:16:12.233] [INFO] [GStreamerPlayer] Screen name: "Q70A"
+[22:16:12.234] [INFO] [GStreamerPlayer] Screen geometry: QRect(0,0 1707x960)
+[22:16:12.235] [INFO] [GStreamerPlayer] Screen available geometry: QRect(0,0 1707x912)
+[22:16:12.235] [INFO] [GStreamerPlayer] Screen physical DPI: 35.8459
+[22:16:12.235] [INFO] [GStreamerPlayer] Screen logical DPI: 96
+[22:16:12.236] [INFO] [GStreamerPlayer] Screen device pixel ratio: 2.25
+[22:16:12.236] [INFO] [GStreamerPlayer] ====================================================
+[22:16:12.237] [INFO] [GStreamerPlayer] Loading media: "file:///Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 08 .mp4"
+[22:16:12.237] [ERROR] [GStreamerPlayer] ########## REUSING PIPELINE ##########
+[22:16:12.237] [INFO] [GStreamerPlayer] Reusing existing pipeline with new URI (async preroll)
+[22:16:12.238] [DEBUG] [PreviewOverlay] GStreamer state changed to: 1
+[22:16:12.238] [DEBUG] [GStreamerPlayer] Playback started
+[22:16:12.240] [DEBUG] [GStreamerPlayer] State changed from NULL to READY
+[22:16:12.255] [DEBUG] [GStreamerPlayer] State changed from READY to PAUSED
+[22:16:12.256] [DEBUG] [GStreamerPlayer] Async operation done (preroll/seek completed)
+[22:16:12.256] [DEBUG] [PreviewOverlay] GStreamer media info: Duration: 30030 ms FPS: 23.976 Resolution: 4096 x 2160 Codec: "" Has Audio: false
+[22:16:12.257] [INFO] [GStreamerPlayer] ========== VIDEO STREAM INFO ==========
+[22:16:12.257] [INFO] [GStreamerPlayer] Video resolution: 4096 x 2160
+[22:16:12.258] [INFO] [GStreamerPlayer] Frame rate: 23.976 fps
+[22:16:12.259] [INFO] [GStreamerPlayer] Duration: 30030 ms
+[22:16:12.259] [INFO] [GStreamerPlayer] Has audio: false
+[22:16:12.259] [INFO] [GStreamerPlayer] ==========================================
+[22:16:12.260] [INFO] [GStreamerPlayer] Calling updateRenderRectangle() after preroll...
+[22:16:12.260] [DEBUG] [GStreamerPlayer] ========== UPDATE RENDER RECTANGLE ==========
+[22:16:12.260] [DEBUG] [GStreamerPlayer] Widget logical size: 1400 x 740
+[22:16:12.260] [DEBUG] [GStreamerPlayer] Device pixel ratio: 2.25
+[22:16:12.261] [DEBUG] [GStreamerPlayer] Physical pixel size: 3150 x 1665
+[22:16:12.262] [DEBUG] [GStreamerPlayer] Overlay element: videosink
+[22:16:12.262] [DEBUG] [GStreamerPlayer] =============================================
+[22:16:12.262] [DEBUG] [GStreamerPlayer] State changed from PAUSED to PLAYING
+[22:16:12.638] [DEBUG] [PreviewOverlay] Stopping playback
+[22:16:12.639] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:12.640] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:12.641] [DEBUG] [PreviewOverlay] Stopping playback
+[22:16:12.642] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:12.642] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:12.643] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:12.643] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:12.644] [WARN] QWidget::paintEngine: Should no longer be called
+[22:16:12.644] [DEBUG] [GStreamerPlayer] Video widget configured for embedding, WId: 2031688
+[22:16:12.645] [INFO] [GStreamerPlayer] ========== VIDEO SINK HIERARCHY ==========
+[22:16:12.645] [INFO] [GStreamerPlayer] Top-level video sink: videosink
+[22:16:12.646] [INFO] [GStreamerPlayer] Is bin: NO
+[22:16:12.646] [INFO] [GStreamerPlayer] Using top-level sink directly (not a bin)
+[22:16:12.647] [INFO] [GStreamerPlayer] Final actual sink: videosink
+[22:16:12.647] [INFO] [GStreamerPlayer] ================================================
+[22:16:12.647] [INFO] [GStreamerPlayer] Set window handle: 2031688 on element: videosink
+[22:16:12.647] [INFO] [GStreamerPlayer] ========== RENDER RECTANGLE DIAGNOSTICS ==========
+[22:16:12.648] [INFO] [GStreamerPlayer] Widget logical size: 1400 x 740
+[22:16:12.648] [INFO] [GStreamerPlayer] Device pixel ratio (DPR): 2.25
+[22:16:12.649] [INFO] [GStreamerPlayer] Physical pixel size: 3150 x 1665
+[22:16:12.649] [INFO] [GStreamerPlayer] Widget geometry: QRect(0,0 1400x740)
+[22:16:12.649] [INFO] [GStreamerPlayer] Widget window ID: 2031688
+[22:16:12.649] [INFO] [GStreamerPlayer] Widget is visible: true
+[22:16:12.649] [INFO] [GStreamerPlayer] Widget native parent chain: QWidget(0x21c86166510)
+[22:16:12.651] [INFO] [GStreamerPlayer] Screen name: "Q70A"
+[22:16:12.652] [INFO] [GStreamerPlayer] Screen geometry: QRect(0,0 1707x960)
+[22:16:12.652] [INFO] [GStreamerPlayer] Screen available geometry: QRect(0,0 1707x912)
+[22:16:12.652] [INFO] [GStreamerPlayer] Screen physical DPI: 35.8459
+[22:16:12.653] [INFO] [GStreamerPlayer] Screen logical DPI: 96
+[22:16:12.653] [INFO] [GStreamerPlayer] Screen device pixel ratio: 2.25
+[22:16:12.654] [INFO] [GStreamerPlayer] ====================================================
+[22:16:12.654] [INFO] [GStreamerPlayer] Loading media: "file:///Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 09 .mp4"
+[22:16:12.655] [ERROR] [GStreamerPlayer] ########## REUSING PIPELINE ##########
+[22:16:12.655] [INFO] [GStreamerPlayer] Reusing existing pipeline with new URI (async preroll)
+[22:16:12.655] [DEBUG] [PreviewOverlay] GStreamer state changed to: 1
+[22:16:12.656] [DEBUG] [GStreamerPlayer] Playback started
+[22:16:12.658] [DEBUG] [GStreamerPlayer] State changed from NULL to READY
+[22:16:12.675] [DEBUG] [GStreamerPlayer] State changed from READY to PAUSED
+[22:16:12.676] [DEBUG] [GStreamerPlayer] Async operation done (preroll/seek completed)
+[22:16:12.676] [DEBUG] [PreviewOverlay] GStreamer media info: Duration: 30030 ms FPS: 23.976 Resolution: 4096 x 2160 Codec: "" Has Audio: false
+[22:16:12.676] [INFO] [GStreamerPlayer] ========== VIDEO STREAM INFO ==========
+[22:16:12.677] [INFO] [GStreamerPlayer] Video resolution: 4096 x 2160
+[22:16:12.677] [INFO] [GStreamerPlayer] Frame rate: 23.976 fps
+[22:16:12.677] [INFO] [GStreamerPlayer] Duration: 30030 ms
+[22:16:12.679] [INFO] [GStreamerPlayer] Has audio: false
+[22:16:12.679] [INFO] [GStreamerPlayer] ==========================================
+[22:16:12.680] [INFO] [GStreamerPlayer] Calling updateRenderRectangle() after preroll...
+[22:16:12.680] [DEBUG] [GStreamerPlayer] ========== UPDATE RENDER RECTANGLE ==========
+[22:16:12.681] [DEBUG] [GStreamerPlayer] Widget logical size: 1400 x 740
+[22:16:12.681] [DEBUG] [GStreamerPlayer] Device pixel ratio: 2.25
+[22:16:12.682] [DEBUG] [GStreamerPlayer] Physical pixel size: 3150 x 1665
+[22:16:12.682] [DEBUG] [GStreamerPlayer] Overlay element: videosink
+[22:16:12.682] [DEBUG] [GStreamerPlayer] =============================================
+[22:16:12.682] [DEBUG] [GStreamerPlayer] State changed from PAUSED to PLAYING
+[22:16:12.938] [DEBUG] [PreviewOverlay] Stopping playback
+[22:16:12.939] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:12.940] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:12.942] [DEBUG] [PreviewOverlay] Stopping playback
+[22:16:12.942] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:12.942] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:12.943] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:12.944] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:12.944] [WARN] QWidget::paintEngine: Should no longer be called
+[22:16:12.945] [DEBUG] [GStreamerPlayer] Video widget configured for embedding, WId: 2031688
+[22:16:12.945] [INFO] [GStreamerPlayer] ========== VIDEO SINK HIERARCHY ==========
+[22:16:12.946] [INFO] [GStreamerPlayer] Top-level video sink: videosink
+[22:16:12.946] [INFO] [GStreamerPlayer] Is bin: NO
+[22:16:12.946] [INFO] [GStreamerPlayer] Using top-level sink directly (not a bin)
+[22:16:12.947] [INFO] [GStreamerPlayer] Final actual sink: videosink
+[22:16:12.948] [INFO] [GStreamerPlayer] ================================================
+[22:16:12.948] [INFO] [GStreamerPlayer] Set window handle: 2031688 on element: videosink
+[22:16:12.949] [INFO] [GStreamerPlayer] ========== RENDER RECTANGLE DIAGNOSTICS ==========
+[22:16:12.949] [INFO] [GStreamerPlayer] Widget logical size: 1400 x 740
+[22:16:12.949] [INFO] [GStreamerPlayer] Device pixel ratio (DPR): 2.25
+[22:16:12.950] [INFO] [GStreamerPlayer] Physical pixel size: 3150 x 1665
+[22:16:12.950] [INFO] [GStreamerPlayer] Widget geometry: QRect(0,0 1400x740)
+[22:16:12.950] [INFO] [GStreamerPlayer] Widget window ID: 2031688
+[22:16:12.950] [INFO] [GStreamerPlayer] Widget is visible: true
+[22:16:12.951] [INFO] [GStreamerPlayer] Widget native parent chain: QWidget(0x21c86166510)
+[22:16:12.952] [INFO] [GStreamerPlayer] Screen name: "Q70A"
+[22:16:12.952] [INFO] [GStreamerPlayer] Screen geometry: QRect(0,0 1707x960)
+[22:16:12.952] [INFO] [GStreamerPlayer] Screen available geometry: QRect(0,0 1707x912)
+[22:16:12.952] [INFO] [GStreamerPlayer] Screen physical DPI: 35.8459
+[22:16:12.953] [INFO] [GStreamerPlayer] Screen logical DPI: 96
+[22:16:12.954] [INFO] [GStreamerPlayer] Screen device pixel ratio: 2.25
+[22:16:12.954] [INFO] [GStreamerPlayer] ====================================================
+[22:16:12.954] [INFO] [GStreamerPlayer] Loading media: "file:///Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 10 .mp4"
+[22:16:12.954] [ERROR] [GStreamerPlayer] ########## REUSING PIPELINE ##########
+[22:16:12.955] [INFO] [GStreamerPlayer] Reusing existing pipeline with new URI (async preroll)
+[22:16:12.955] [DEBUG] [PreviewOverlay] GStreamer state changed to: 1
+[22:16:12.956] [DEBUG] [GStreamerPlayer] Playback started
+[22:16:12.958] [DEBUG] [GStreamerPlayer] State changed from NULL to READY
+[22:16:12.975] [DEBUG] [GStreamerPlayer] State changed from READY to PAUSED
+[22:16:12.976] [DEBUG] [GStreamerPlayer] Async operation done (preroll/seek completed)
+[22:16:12.977] [DEBUG] [PreviewOverlay] GStreamer media info: Duration: 30071 ms FPS: 23.976 Resolution: 4096 x 2160 Codec: "" Has Audio: false
+[22:16:12.977] [INFO] [GStreamerPlayer] ========== VIDEO STREAM INFO ==========
+[22:16:12.977] [INFO] [GStreamerPlayer] Video resolution: 4096 x 2160
+[22:16:12.978] [INFO] [GStreamerPlayer] Frame rate: 23.976 fps
+[22:16:12.978] [INFO] [GStreamerPlayer] Duration: 30071 ms
+[22:16:12.979] [INFO] [GStreamerPlayer] Has audio: false
+[22:16:12.979] [INFO] [GStreamerPlayer] ==========================================
+[22:16:12.979] [INFO] [GStreamerPlayer] Calling updateRenderRectangle() after preroll...
+[22:16:12.980] [DEBUG] [GStreamerPlayer] ========== UPDATE RENDER RECTANGLE ==========
+[22:16:12.980] [DEBUG] [GStreamerPlayer] Widget logical size: 1400 x 740
+[22:16:12.980] [DEBUG] [GStreamerPlayer] Device pixel ratio: 2.25
+[22:16:12.980] [DEBUG] [GStreamerPlayer] Physical pixel size: 3150 x 1665
+[22:16:12.982] [DEBUG] [GStreamerPlayer] Overlay element: videosink
+[22:16:12.982] [DEBUG] [GStreamerPlayer] =============================================
+[22:16:12.982] [DEBUG] [GStreamerPlayer] State changed from PAUSED to PLAYING
+[22:16:14.195] [DEBUG] [PreviewOverlay] Stopping playback
+[22:16:14.196] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:14.196] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:14.197] [DEBUG] [PreviewOverlay] Stopping playback
+[22:16:14.197] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:14.198] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:14.247] [DEBUG] [PreviewOverlay::~PreviewOverlay] Destructor starting
+[22:16:14.248] [DEBUG] [PreviewOverlay] Stopping playback
+[22:16:14.249] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:14.249] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:14.250] [DEBUG] [PreviewOverlay::~PreviewOverlay] Deleting frame cache
+[22:16:14.250] [DEBUG] [SequenceFrameCache::~SequenceFrameCache] Destructor starting
+[22:16:14.251] [DEBUG] [SequenceFrameCache::~SequenceFrameCache] Destructor complete
+[22:16:14.251] [DEBUG] [PreviewOverlay::~PreviewOverlay] Destructor complete
+[22:16:18.705] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 01.mp4" seqDetection= true
+[22:16:18.706] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 02.mp4" seqDetection= true
+[22:16:18.706] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 03.mp4" seqDetection= true
+[22:16:18.706] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 04.mp4" seqDetection= true
+[22:16:18.707] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 05.mp4" seqDetection= true
+[22:16:18.707] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 06.mp4" seqDetection= true
+[22:16:18.708] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 07.mp4" seqDetection= true
+[22:16:18.708] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 08.mp4" seqDetection= true
+[22:16:18.709] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 09.mp4" seqDetection= true
+[22:16:18.709] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 10.mp4" seqDetection= true
+[22:16:18.709] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 01.mp4" seqDetection= true
+[22:16:18.710] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 02.mp4" seqDetection= true
+[22:16:18.710] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 03.mp4" seqDetection= true
+[22:16:18.710] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 04.mp4" seqDetection= true
+[22:16:18.711] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 05.mp4" seqDetection= true
+[22:16:18.711] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 06.mp4" seqDetection= true
+[22:16:18.711] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 07.mp4" seqDetection= true
+[22:16:18.711] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 08.mp4" seqDetection= true
+[22:16:18.712] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 09.mp4" seqDetection= true
+[22:16:18.712] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 10.mp4" seqDetection= true
+[22:16:18.712] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 01.mp4" seqDetection= true
+[22:16:18.712] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 02.mp4" seqDetection= true
+[22:16:18.712] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 01.mp4" : 30071 ms
+[22:16:18.713] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 01.mp4" : 30071 ms
+[22:16:18.714] [DEBUG] [LivePreview] Scrubbing to position: 0 ->  0 ms (duration: 30071 ms)
+[22:16:18.714] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 06.mp4" seqDetection= true
+[22:16:18.714] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 07.mp4" seqDetection= true
+[22:16:18.714] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 03.mp4" seqDetection= true
+[22:16:18.716] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 08.mp4" seqDetection= true
+[22:16:18.716] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 01.mp4" seqDetection= true
+[22:16:18.716] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 02.mp4" seqDetection= true
+[22:16:18.717] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 06.mp4" seqDetection= true
+[22:16:18.717] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 07.mp4" seqDetection= true
+[22:16:18.718] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 03.mp4" seqDetection= true
+[22:16:18.718] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 08.mp4" seqDetection= true
+[22:16:18.760] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 01.mp4" : 30071 ms
+[22:16:18.761] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 01.mp4" : 30071 ms
+[22:16:18.761] [DEBUG] [LivePreview] Scrubbing to position: 0 ->  0 ms (duration: 30071 ms)
+[22:16:18.779] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 05.mp4" : 30071 ms
+[22:16:18.780] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 05.mp4" : 30071 ms
+[22:16:18.780] [DEBUG] [LivePreview] Scrubbing to position: 0 ->  0 ms (duration: 30071 ms)
+[22:16:19.049] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 01.mp4" : 30071 ms
+[22:16:19.050] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 01.mp4" : 30071 ms
+[22:16:19.051] [DEBUG] [LivePreview] Scrubbing to position: 0 ->  0 ms (duration: 30071 ms)
+[22:16:19.060] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 01.mp4" size: 3840 x 2160
+[22:16:19.147] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 02.mp4" : 30071 ms
+[22:16:19.149] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 02.mp4" : 30071 ms
+[22:16:19.150] [DEBUG] [LivePreview] Scrubbing to position: 0 ->  0 ms (duration: 30071 ms)
+[22:16:19.167] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 04.mp4" : 26234 ms
+[22:16:19.168] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 04.mp4" : 26234 ms
+[22:16:19.168] [DEBUG] [LivePreview] Scrubbing to position: 0 ->  0 ms (duration: 26234 ms)
+[22:16:19.172] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 10.mp4" : 30030 ms
+[22:16:19.173] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 10.mp4" : 30030 ms
+[22:16:19.174] [DEBUG] [LivePreview] Scrubbing to position: 0 ->  0 ms (duration: 30030 ms)
+[22:16:19.182] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 08.mp4" : 15056 ms
+[22:16:19.182] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 08.mp4" : 15056 ms
+[22:16:19.182] [DEBUG] [LivePreview] Scrubbing to position: 0 ->  0 ms (duration: 15056 ms)
+[22:16:19.231] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 02.mp4" : 25692 ms
+[22:16:19.233] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 02.mp4" : 25692 ms
+[22:16:19.234] [DEBUG] [LivePreview] Scrubbing to position: 0 ->  0 ms (duration: 25692 ms)
+[22:16:19.250] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 10.mp4" : 30030 ms
+[22:16:19.251] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 10.mp4" : 30030 ms
+[22:16:19.252] [DEBUG] [LivePreview] Scrubbing to position: 0 ->  0 ms (duration: 30030 ms)
+[22:16:19.268] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 08.mp4" : 15015 ms
+[22:16:19.270] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 08.mp4" : 15015 ms
+[22:16:19.271] [DEBUG] [LivePreview] Scrubbing to position: 0 ->  0 ms (duration: 15015 ms)
+[22:16:19.312] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 06.mp4" : 30030 ms
+[22:16:19.312] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 06.mp4" : 30030 ms
+[22:16:19.313] [DEBUG] [LivePreview] Scrubbing to position: 0 ->  0 ms (duration: 30030 ms)
+[22:16:19.335] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 06.mp4" : 30071 ms
+[22:16:19.336] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 06.mp4" : 30071 ms
+[22:16:19.337] [DEBUG] [LivePreview] Scrubbing to position: 0 ->  0 ms (duration: 30071 ms)
+[22:16:19.356] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 01.mp4" size: 3840 x 2160
+[22:16:19.357] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 04.mp4" seqDetection= true
+[22:16:19.372] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 09.mp4" : 30071 ms
+[22:16:19.373] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 09.mp4" : 30071 ms
+[22:16:19.374] [DEBUG] [LivePreview] Scrubbing to position: 0 ->  0 ms (duration: 30071 ms)
+[22:16:19.386] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 09.mp4" : 30071 ms
+[22:16:19.387] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 09.mp4" : 30071 ms
+[22:16:19.388] [DEBUG] [LivePreview] Scrubbing to position: 0 ->  0 ms (duration: 30071 ms)
+[22:16:19.429] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 03.mp4" : 30030 ms
+[22:16:19.430] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 03.mp4" : 30030 ms
+[22:16:19.431] [DEBUG] [LivePreview] Scrubbing to position: 0 ->  0 ms (duration: 30030 ms)
+[22:16:19.442] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 06.mp4" : 30071 ms
+[22:16:19.443] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 06.mp4" : 30071 ms
+[22:16:19.443] [DEBUG] [LivePreview] Scrubbing to position: 0 ->  0 ms (duration: 30071 ms)
+[22:16:19.445] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 04.mp4" : 30071 ms
+[22:16:19.446] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 04.mp4" : 30071 ms
+[22:16:19.446] [DEBUG] [LivePreview] Scrubbing to position: 0 ->  0 ms (duration: 30071 ms)
+[22:16:19.464] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 01.mp4" : 30071 ms
+[22:16:19.464] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 01.mp4" : 30071 ms
+[22:16:19.466] [DEBUG] [LivePreview] Scrubbing to position: 0 ->  0 ms (duration: 30071 ms)
+[22:16:19.467] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 08.mp4" : 15015 ms
+[22:16:19.467] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 08.mp4" : 15015 ms
+[22:16:19.468] [DEBUG] [LivePreview] Scrubbing to position: 0 ->  0 ms (duration: 15015 ms)
+[22:16:19.505] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 09.mp4" seqDetection= true
+[22:16:19.506] [DEBUG] [LivePreview] Scrubbing to position: 0 ->  0 ms (duration: 30071 ms)
+[22:16:19.521] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 02.mp4" : 25692 ms
+[22:16:19.521] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 02.mp4" : 25692 ms
+[22:16:19.522] [DEBUG] [LivePreview] Scrubbing to position: 0 ->  0 ms (duration: 25692 ms)
+[22:16:19.529] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 03.mp4" : 30071 ms
+[22:16:19.531] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 03.mp4" : 30071 ms
+[22:16:19.531] [DEBUG] [LivePreview] Scrubbing to position: 0 ->  0 ms (duration: 30071 ms)
+[22:16:19.532] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 06.mp4" : 30030 ms
+[22:16:19.534] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 06.mp4" : 30030 ms
+[22:16:19.535] [DEBUG] [LivePreview] Scrubbing to position: 0 ->  0 ms (duration: 30030 ms)
+[22:16:19.551] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 02.mp4" : 30071 ms
+[22:16:19.551] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 02.mp4" : 30071 ms
+[22:16:19.551] [DEBUG] [LivePreview] Scrubbing to position: 0 ->  0 ms (duration: 30071 ms)
+[22:16:19.578] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 03.mp4" : 30030 ms
+[22:16:19.578] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 03.mp4" : 30030 ms
+[22:16:19.579] [DEBUG] [LivePreview] Scrubbing to position: 0 ->  0 ms (duration: 30030 ms)
+[22:16:19.610] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 07.mp4" : 29988 ms
+[22:16:19.611] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 07.mp4" : 29988 ms
+[22:16:19.612] [DEBUG] [LivePreview] Scrubbing to position: 0 ->  0 ms (duration: 29988 ms)
+[22:16:19.615] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 07.mp4" : 30030 ms
+[22:16:19.615] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 07.mp4" : 30030 ms
+[22:16:19.616] [DEBUG] [LivePreview] Scrubbing to position: 0 ->  0 ms (duration: 30030 ms)
+[22:16:19.636] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 05.mp4" size: 2160 x 3840
+[22:16:19.697] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 01.mp4" size: 4096 x 2160
+[22:16:19.740] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 05.mp4" : 30030 ms
+[22:16:19.741] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 05.mp4" : 30030 ms
+[22:16:19.742] [DEBUG] [LivePreview] Scrubbing to position: 0 ->  0 ms (duration: 30030 ms)
+[22:16:19.752] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 07.mp4" : 29988 ms
+[22:16:19.753] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 07.mp4" : 29988 ms
+[22:16:19.754] [DEBUG] [LivePreview] Scrubbing to position: 0 ->  0 ms (duration: 29988 ms)
+[22:16:19.862] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 05.mp4" seqDetection= true
+[22:16:19.863] [DEBUG] [LivePreview] Scrubbing to position: 0 ->  0 ms (duration: 30071 ms)
+[22:16:19.878] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 02.mp4" size: 3840 x 2160
+[22:16:19.882] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 10.mp4" seqDetection= true
+[22:16:19.884] [DEBUG] [LivePreview] Scrubbing to position: 0 ->  0 ms (duration: 30030 ms)
+[22:16:19.899] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 04.mp4" size: 2160 x 4096
+[22:16:19.902] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 06.mp4" size: 2160 x 3840
+[22:16:19.964] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 10.mp4" size: 2160 x 4096
+[22:16:20.012] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 06.mp4" size: 2160 x 4096
+[22:16:20.034] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 08.mp4" : 15056 ms
+[22:16:20.036] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 08.mp4" : 15056 ms
+[22:16:20.036] [DEBUG] [LivePreview] Scrubbing to position: 0 ->  0 ms (duration: 15056 ms)
+[22:16:20.041] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 04.mp4" seqDetection= true
+[22:16:20.041] [DEBUG] [LivePreview] Scrubbing to position: 0 ->  0 ms (duration: 26234 ms)
+[22:16:20.056] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 08.mp4" size: 2160 x 4096
+[22:16:20.074] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 09.mp4" seqDetection= true
+[22:16:20.075] [DEBUG] [LivePreview] Scrubbing to position: 0 ->  0 ms (duration: 30071 ms)
+[22:16:20.128] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 08.mp4" size: 2160 x 3840
+[22:16:20.129] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 01.mp4" size: 4096 x 2160
+[22:16:20.136] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 05.mp4" seqDetection= true
+[22:16:20.153] [DEBUG] [LivePreview] Scrubbing to position: 0 ->  0 ms (duration: 30030 ms)
+[22:16:20.154] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 10.mp4" seqDetection= true
+[22:16:20.154] [DEBUG] [LivePreview] Scrubbing to position: 0 ->  0 ms (duration: 30030 ms)
+[22:16:20.154] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 02.mp4" size: 4096 x 2160
+[22:16:20.168] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 03.mp4" size: 2160 x 4096
+[22:16:20.168] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 04.mp4" : 30071 ms
+[22:16:20.169] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 04.mp4" : 30071 ms
+[22:16:20.169] [DEBUG] [LivePreview] Scrubbing to position: 0 ->  0 ms (duration: 30071 ms)
+[22:16:20.187] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 04.mp4" size: 3840 x 2160
+[22:16:20.220] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 08.mp4" size: 2160 x 3840
+[22:16:20.248] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 03.mp4" size: 3840 x 2160
+[22:16:20.272] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 09.mp4" size: 2160 x 4096
+[22:16:20.273] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 06.mp4" size: 2160 x 4096
+[22:16:20.293] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 09.mp4" size: 2160 x 3840
+[22:16:20.339] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 07.mp4" size: 2160 x 3840
+[22:16:20.340] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 03.mp4" size: 3840 x 2160
+[22:16:20.342] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 03.mp4" : 30071 ms
+[22:16:20.342] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 03.mp4" : 30071 ms
+[22:16:20.343] [DEBUG] [LivePreview] Scrubbing to position: 0 ->  0 ms (duration: 30071 ms)
+[22:16:20.388] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 06.mp4" size: 2160 x 3840
+[22:16:20.444] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 02.mp4" size: 3840 x 2160
+[22:16:20.486] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 09.mp4" size: 2160 x 3840
+[22:16:20.487] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 07.mp4" size: 2160 x 4096
+[22:16:20.487] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 07.mp4" : 30030 ms
+[22:16:20.489] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 07.mp4" : 30030 ms
+[22:16:20.489] [DEBUG] [LivePreview] Scrubbing to position: 0 ->  0 ms (duration: 30030 ms)
+[22:16:20.490] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 05.mp4" size: 2160 x 4096
+[22:16:20.512] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 05.mp4" size: 2160 x 3840
+[22:16:20.544] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 10.mp4" size: 2160 x 3840
+[22:16:20.574] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 10.mp4" size: 2160 x 3840
+[22:16:20.594] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 08.mp4" size: 2160 x 4096
+[22:16:20.636] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 02.mp4" size: 4096 x 2160
+[22:16:20.715] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 04.mp4" size: 3840 x 2160
+[22:16:20.716] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 10.mp4" size: 2160 x 4096
+[22:16:20.769] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 04.mp4" size: 2160 x 4096
+[22:16:20.780] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 05.mp4" size: 2160 x 4096
+[22:16:20.799] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 09.mp4" size: 2160 x 4096
+[22:16:20.800] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 07.mp4" size: 2160 x 4096
+[22:16:20.801] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 03.mp4" size: 2160 x 4096
+[22:16:20.930] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 07.mp4" size: 2160 x 3840
+[22:16:21.602] [DEBUG] [PreviewOverlay] GStreamerPlayer initialized with hardware-accelerated playback
+[22:16:21.603] [WARN] QWidget::paintEngine: Should no longer be called
+[22:16:21.604] [WARN] QWidget::paintEngine: Should no longer be called
+[22:16:21.604] [DEBUG] [GStreamerPlayer] Video widget configured for embedding, WId: 2557540
+[22:16:21.604] [DEBUG] [SequenceFrameCache] Available RAM: 106115 MB
+[22:16:21.605] [DEBUG] [SequenceFrameCache] Calculated optimal cache size: 500 frames ( 15000 MB) using 70 % of available RAM
+[22:16:21.605] [DEBUG] [SequenceFrameCache] ========================================
+[22:16:21.606] [DEBUG] [SequenceFrameCache] INITIALIZATION:
+[22:16:21.606] [DEBUG] [SequenceFrameCache]   Max cache size: 500 frames
+[22:16:21.607] [DEBUG] [SequenceFrameCache]   Max cost: 25600000 KB ( 25000 MB)
+[22:16:21.607] [DEBUG] [SequenceFrameCache]   Worker threads: 32
+[22:16:21.607] [DEBUG] [SequenceFrameCache]   Auto-size: YES
+[22:16:21.607] [DEBUG] [SequenceFrameCache]   RAM percentage: 70 %
+[22:16:21.608] [DEBUG] [SequenceFrameCache] ========================================
+[22:16:21.608] [DEBUG] [PreviewOverlay] Frame cache initialized with QRecursiveMutex (deadlock fix)
+[22:16:21.609] [DEBUG] [PreviewOverlay] Stopping playback
+[22:16:21.609] [WARN] QWidget::paintEngine: Should no longer be called
+[22:16:21.609] [DEBUG] [GStreamerPlayer] Video widget configured for embedding, WId: 2557540
+[22:16:21.609] [INFO] [GStreamerPlayer] Loading media: "file:///Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 01.mp4"
+[22:16:21.609] [ERROR] [GStreamerPlayer] ########## CREATING NEW PIPELINE ##########
+[22:16:21.610] [ERROR] [GStreamerPlayer] ########## SETUPPIPELINE CALLED ##########
+[22:16:21.610] [ERROR] [GStreamerPlayer] ========== VIDEO SINK DIAGNOSTICS ==========
+[22:16:21.610] [ERROR] [GStreamerPlayer] Video sink element name: videosink
+[22:16:21.610] [ERROR] [GStreamerPlayer] Video sink factory name: d3d11videosink
+[22:16:21.611] [ERROR] [GStreamerPlayer] force-aspect-ratio property: SUPPORTED, value: TRUE
+[22:16:21.611] [ERROR] [GStreamerPlayer] ===========================================
+[22:16:21.612] [INFO] [GStreamerPlayer] ========== VIDEO SINK HIERARCHY ==========
+[22:16:21.612] [INFO] [GStreamerPlayer] Top-level video sink: videosink
+[22:16:21.612] [INFO] [GStreamerPlayer] Is bin: NO
+[22:16:21.612] [INFO] [GStreamerPlayer] Using top-level sink directly (not a bin)
+[22:16:21.612] [INFO] [GStreamerPlayer] Final actual sink: videosink
+[22:16:21.612] [INFO] [GStreamerPlayer] ================================================
+[22:16:21.614] [INFO] [GStreamerPlayer] Set window handle: 2557540 on element: videosink
+[22:16:21.614] [INFO] [GStreamerPlayer] ========== RENDER RECTANGLE DIAGNOSTICS ==========
+[22:16:21.614] [INFO] [GStreamerPlayer] Widget logical size: 1400 x 740
+[22:16:21.614] [INFO] [GStreamerPlayer] Device pixel ratio (DPR): 2.25
+[22:16:21.614] [INFO] [GStreamerPlayer] Physical pixel size: 3150 x 1665
+[22:16:21.615] [INFO] [GStreamerPlayer] Widget geometry: QRect(0,0 1400x740)
+[22:16:21.615] [INFO] [GStreamerPlayer] Widget window ID: 2557540
+[22:16:21.616] [INFO] [GStreamerPlayer] Widget is visible: true
+[22:16:21.616] [INFO] [GStreamerPlayer] Widget native parent chain: QWidget(0x21cc2f3f4f0)
+[22:16:21.616] [INFO] [GStreamerPlayer] Screen name: "Q70A"
+[22:16:21.617] [INFO] [GStreamerPlayer] Screen geometry: QRect(0,0 1707x960)
+[22:16:21.617] [INFO] [GStreamerPlayer] Screen available geometry: QRect(0,0 1707x912)
+[22:16:21.617] [INFO] [GStreamerPlayer] Screen physical DPI: 35.8459
+[22:16:21.618] [INFO] [GStreamerPlayer] Screen logical DPI: 96
+[22:16:21.618] [INFO] [GStreamerPlayer] Screen device pixel ratio: 2.25
+[22:16:21.618] [INFO] [GStreamerPlayer] ====================================================
+[22:16:21.619] [DEBUG] [PreviewOverlay] GStreamer state changed to: 2
+[22:16:21.619] [INFO] [GStreamerPlayer] Pipeline created, prerolling asynchronously...
+[22:16:21.619] [DEBUG] [PreviewOverlay] GStreamer state changed to: 1
+[22:16:21.619] [DEBUG] [GStreamerPlayer] Playback started
+[22:16:21.641] [DEBUG] [GStreamerPlayer] State changed from NULL to READY
+[22:16:21.662] [DEBUG] [GStreamerPlayer] State changed from READY to PAUSED
+[22:16:21.662] [DEBUG] [GStreamerPlayer] Async operation done (preroll/seek completed)
+[22:16:21.664] [DEBUG] [PreviewOverlay] GStreamer media info: Duration: 30071 ms FPS: 23.976 Resolution: 3840 x 2160 Codec: "" Has Audio: false
+[22:16:21.665] [INFO] [GStreamerPlayer] ========== VIDEO STREAM INFO ==========
+[22:16:21.665] [INFO] [GStreamerPlayer] Video resolution: 3840 x 2160
+[22:16:21.665] [INFO] [GStreamerPlayer] Frame rate: 23.976 fps
+[22:16:21.667] [INFO] [GStreamerPlayer] Duration: 30071 ms
+[22:16:21.667] [INFO] [GStreamerPlayer] Has audio: false
+[22:16:21.668] [INFO] [GStreamerPlayer] ==========================================
+[22:16:21.668] [INFO] [GStreamerPlayer] Calling updateRenderRectangle() after preroll...
+[22:16:21.668] [DEBUG] [GStreamerPlayer] ========== UPDATE RENDER RECTANGLE ==========
+[22:16:21.669] [DEBUG] [GStreamerPlayer] Widget logical size: 1400 x 740
+[22:16:21.669] [DEBUG] [GStreamerPlayer] Device pixel ratio: 2.25
+[22:16:21.669] [DEBUG] [GStreamerPlayer] Physical pixel size: 3150 x 1665
+[22:16:21.669] [DEBUG] [GStreamerPlayer] Overlay element: videosink
+[22:16:21.669] [DEBUG] [GStreamerPlayer] =============================================
+[22:16:21.670] [DEBUG] [GStreamerPlayer] State changed from PAUSED to PLAYING
+[22:16:23.364] [DEBUG] [PreviewOverlay] Stopping playback
+[22:16:23.365] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:23.366] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:23.366] [DEBUG] [PreviewOverlay] Stopping playback
+[22:16:23.367] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:23.367] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:23.368] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:23.368] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:23.368] [WARN] QWidget::paintEngine: Should no longer be called
+[22:16:23.368] [DEBUG] [GStreamerPlayer] Video widget configured for embedding, WId: 2557540
+[22:16:23.370] [INFO] [GStreamerPlayer] ========== VIDEO SINK HIERARCHY ==========
+[22:16:23.370] [INFO] [GStreamerPlayer] Top-level video sink: videosink
+[22:16:23.370] [INFO] [GStreamerPlayer] Is bin: NO
+[22:16:23.371] [INFO] [GStreamerPlayer] Using top-level sink directly (not a bin)
+[22:16:23.371] [INFO] [GStreamerPlayer] Final actual sink: videosink
+[22:16:23.371] [INFO] [GStreamerPlayer] ================================================
+[22:16:23.372] [INFO] [GStreamerPlayer] Set window handle: 2557540 on element: videosink
+[22:16:23.372] [INFO] [GStreamerPlayer] ========== RENDER RECTANGLE DIAGNOSTICS ==========
+[22:16:23.373] [INFO] [GStreamerPlayer] Widget logical size: 1400 x 740
+[22:16:23.373] [INFO] [GStreamerPlayer] Device pixel ratio (DPR): 2.25
+[22:16:23.373] [INFO] [GStreamerPlayer] Physical pixel size: 3150 x 1665
+[22:16:23.373] [INFO] [GStreamerPlayer] Widget geometry: QRect(0,0 1400x740)
+[22:16:23.373] [INFO] [GStreamerPlayer] Widget window ID: 2557540
+[22:16:23.374] [INFO] [GStreamerPlayer] Widget is visible: true
+[22:16:23.374] [INFO] [GStreamerPlayer] Widget native parent chain: QWidget(0x21cc2f3f4f0)
+[22:16:23.375] [INFO] [GStreamerPlayer] Screen name: "Q70A"
+[22:16:23.375] [INFO] [GStreamerPlayer] Screen geometry: QRect(0,0 1707x960)
+[22:16:23.375] [INFO] [GStreamerPlayer] Screen available geometry: QRect(0,0 1707x912)
+[22:16:23.376] [INFO] [GStreamerPlayer] Screen physical DPI: 35.8459
+[22:16:23.376] [INFO] [GStreamerPlayer] Screen logical DPI: 96
+[22:16:23.377] [INFO] [GStreamerPlayer] Screen device pixel ratio: 2.25
+[22:16:23.377] [INFO] [GStreamerPlayer] ====================================================
+[22:16:23.377] [INFO] [GStreamerPlayer] Loading media: "file:///Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 02.mp4"
+[22:16:23.378] [ERROR] [GStreamerPlayer] ########## REUSING PIPELINE ##########
+[22:16:23.378] [INFO] [GStreamerPlayer] Reusing existing pipeline with new URI (async preroll)
+[22:16:23.378] [DEBUG] [PreviewOverlay] GStreamer state changed to: 1
+[22:16:23.379] [DEBUG] [GStreamerPlayer] Playback started
+[22:16:23.381] [DEBUG] [GStreamerPlayer] State changed from NULL to READY
+[22:16:23.403] [DEBUG] [GStreamerPlayer] State changed from READY to PAUSED
+[22:16:23.404] [DEBUG] [GStreamerPlayer] Async operation done (preroll/seek completed)
+[22:16:23.404] [DEBUG] [PreviewOverlay] GStreamer media info: Duration: 30071 ms FPS: 23.976 Resolution: 3840 x 2160 Codec: "" Has Audio: false
+[22:16:23.405] [INFO] [GStreamerPlayer] ========== VIDEO STREAM INFO ==========
+[22:16:23.406] [INFO] [GStreamerPlayer] Video resolution: 3840 x 2160
+[22:16:23.406] [INFO] [GStreamerPlayer] Frame rate: 23.976 fps
+[22:16:23.407] [INFO] [GStreamerPlayer] Duration: 30071 ms
+[22:16:23.407] [INFO] [GStreamerPlayer] Has audio: false
+[22:16:23.408] [INFO] [GStreamerPlayer] ==========================================
+[22:16:23.408] [INFO] [GStreamerPlayer] Calling updateRenderRectangle() after preroll...
+[22:16:23.408] [DEBUG] [GStreamerPlayer] ========== UPDATE RENDER RECTANGLE ==========
+[22:16:23.409] [DEBUG] [GStreamerPlayer] Widget logical size: 1400 x 740
+[22:16:23.409] [DEBUG] [GStreamerPlayer] Device pixel ratio: 2.25
+[22:16:23.410] [DEBUG] [GStreamerPlayer] Physical pixel size: 3150 x 1665
+[22:16:23.410] [DEBUG] [GStreamerPlayer] Overlay element: videosink
+[22:16:23.410] [DEBUG] [GStreamerPlayer] =============================================
+[22:16:23.410] [DEBUG] [GStreamerPlayer] State changed from PAUSED to PLAYING
+[22:16:23.937] [DEBUG] [PreviewOverlay] Stopping playback
+[22:16:23.938] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:23.938] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:23.940] [DEBUG] [PreviewOverlay] Stopping playback
+[22:16:23.940] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:23.941] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:23.941] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:23.942] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:23.942] [WARN] QWidget::paintEngine: Should no longer be called
+[22:16:23.943] [DEBUG] [GStreamerPlayer] Video widget configured for embedding, WId: 2557540
+[22:16:23.943] [INFO] [GStreamerPlayer] ========== VIDEO SINK HIERARCHY ==========
+[22:16:23.944] [INFO] [GStreamerPlayer] Top-level video sink: videosink
+[22:16:23.944] [INFO] [GStreamerPlayer] Is bin: NO
+[22:16:23.944] [INFO] [GStreamerPlayer] Using top-level sink directly (not a bin)
+[22:16:23.944] [INFO] [GStreamerPlayer] Final actual sink: videosink
+[22:16:23.945] [INFO] [GStreamerPlayer] ================================================
+[22:16:23.945] [INFO] [GStreamerPlayer] Set window handle: 2557540 on element: videosink
+[22:16:23.946] [INFO] [GStreamerPlayer] ========== RENDER RECTANGLE DIAGNOSTICS ==========
+[22:16:23.946] [INFO] [GStreamerPlayer] Widget logical size: 1400 x 740
+[22:16:23.947] [INFO] [GStreamerPlayer] Device pixel ratio (DPR): 2.25
+[22:16:23.947] [INFO] [GStreamerPlayer] Physical pixel size: 3150 x 1665
+[22:16:23.948] [INFO] [GStreamerPlayer] Widget geometry: QRect(0,0 1400x740)
+[22:16:23.949] [INFO] [GStreamerPlayer] Widget window ID: 2557540
+[22:16:23.949] [INFO] [GStreamerPlayer] Widget is visible: true
+[22:16:23.949] [INFO] [GStreamerPlayer] Widget native parent chain: QWidget(0x21cc2f3f4f0)
+[22:16:23.950] [INFO] [GStreamerPlayer] Screen name: "Q70A"
+[22:16:23.950] [INFO] [GStreamerPlayer] Screen geometry: QRect(0,0 1707x960)
+[22:16:23.951] [INFO] [GStreamerPlayer] Screen available geometry: QRect(0,0 1707x912)
+[22:16:23.951] [INFO] [GStreamerPlayer] Screen physical DPI: 35.8459
+[22:16:23.951] [INFO] [GStreamerPlayer] Screen logical DPI: 96
+[22:16:23.952] [INFO] [GStreamerPlayer] Screen device pixel ratio: 2.25
+[22:16:23.952] [INFO] [GStreamerPlayer] ====================================================
+[22:16:23.952] [INFO] [GStreamerPlayer] Loading media: "file:///Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 03.mp4"
+[22:16:23.954] [ERROR] [GStreamerPlayer] ########## REUSING PIPELINE ##########
+[22:16:23.954] [INFO] [GStreamerPlayer] Reusing existing pipeline with new URI (async preroll)
+[22:16:23.954] [DEBUG] [PreviewOverlay] GStreamer state changed to: 1
+[22:16:23.955] [DEBUG] [GStreamerPlayer] Playback started
+[22:16:23.957] [DEBUG] [GStreamerPlayer] State changed from NULL to READY
+[22:16:23.973] [DEBUG] [GStreamerPlayer] State changed from READY to PAUSED
+[22:16:23.973] [DEBUG] [GStreamerPlayer] Async operation done (preroll/seek completed)
+[22:16:23.974] [DEBUG] [PreviewOverlay] GStreamer media info: Duration: 30030 ms FPS: 23.976 Resolution: 3840 x 2160 Codec: "" Has Audio: false
+[22:16:23.975] [INFO] [GStreamerPlayer] ========== VIDEO STREAM INFO ==========
+[22:16:23.975] [INFO] [GStreamerPlayer] Video resolution: 3840 x 2160
+[22:16:23.975] [INFO] [GStreamerPlayer] Frame rate: 23.976 fps
+[22:16:23.976] [INFO] [GStreamerPlayer] Duration: 30030 ms
+[22:16:23.976] [INFO] [GStreamerPlayer] Has audio: false
+[22:16:23.976] [INFO] [GStreamerPlayer] ==========================================
+[22:16:23.977] [INFO] [GStreamerPlayer] Calling updateRenderRectangle() after preroll...
+[22:16:23.977] [DEBUG] [GStreamerPlayer] ========== UPDATE RENDER RECTANGLE ==========
+[22:16:23.977] [DEBUG] [GStreamerPlayer] Widget logical size: 1400 x 740
+[22:16:23.977] [DEBUG] [GStreamerPlayer] Device pixel ratio: 2.25
+[22:16:23.978] [DEBUG] [GStreamerPlayer] Physical pixel size: 3150 x 1665
+[22:16:23.978] [DEBUG] [GStreamerPlayer] Overlay element: videosink
+[22:16:23.978] [DEBUG] [GStreamerPlayer] =============================================
+[22:16:23.978] [DEBUG] [GStreamerPlayer] State changed from PAUSED to PLAYING
+[22:16:24.339] [DEBUG] [PreviewOverlay] Stopping playback
+[22:16:24.340] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:24.341] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:24.342] [DEBUG] [PreviewOverlay] Stopping playback
+[22:16:24.342] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:24.343] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:24.343] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:24.343] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:24.344] [WARN] QWidget::paintEngine: Should no longer be called
+[22:16:24.344] [DEBUG] [GStreamerPlayer] Video widget configured for embedding, WId: 2557540
+[22:16:24.344] [INFO] [GStreamerPlayer] ========== VIDEO SINK HIERARCHY ==========
+[22:16:24.345] [INFO] [GStreamerPlayer] Top-level video sink: videosink
+[22:16:24.345] [INFO] [GStreamerPlayer] Is bin: NO
+[22:16:24.346] [INFO] [GStreamerPlayer] Using top-level sink directly (not a bin)
+[22:16:24.346] [INFO] [GStreamerPlayer] Final actual sink: videosink
+[22:16:24.346] [INFO] [GStreamerPlayer] ================================================
+[22:16:24.347] [INFO] [GStreamerPlayer] Set window handle: 2557540 on element: videosink
+[22:16:24.347] [INFO] [GStreamerPlayer] ========== RENDER RECTANGLE DIAGNOSTICS ==========
+[22:16:24.348] [INFO] [GStreamerPlayer] Widget logical size: 1400 x 740
+[22:16:24.348] [INFO] [GStreamerPlayer] Device pixel ratio (DPR): 2.25
+[22:16:24.350] [INFO] [GStreamerPlayer] Physical pixel size: 3150 x 1665
+[22:16:24.350] [INFO] [GStreamerPlayer] Widget geometry: QRect(0,0 1400x740)
+[22:16:24.350] [INFO] [GStreamerPlayer] Widget window ID: 2557540
+[22:16:24.351] [INFO] [GStreamerPlayer] Widget is visible: true
+[22:16:24.351] [INFO] [GStreamerPlayer] Widget native parent chain: QWidget(0x21cc2f3f4f0)
+[22:16:24.352] [INFO] [GStreamerPlayer] Screen name: "Q70A"
+[22:16:24.352] [INFO] [GStreamerPlayer] Screen geometry: QRect(0,0 1707x960)
+[22:16:24.352] [INFO] [GStreamerPlayer] Screen available geometry: QRect(0,0 1707x912)
+[22:16:24.354] [INFO] [GStreamerPlayer] Screen physical DPI: 35.8459
+[22:16:24.354] [INFO] [GStreamerPlayer] Screen logical DPI: 96
+[22:16:24.354] [INFO] [GStreamerPlayer] Screen device pixel ratio: 2.25
+[22:16:24.354] [INFO] [GStreamerPlayer] ====================================================
+[22:16:24.356] [INFO] [GStreamerPlayer] Loading media: "file:///Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 04.mp4"
+[22:16:24.356] [ERROR] [GStreamerPlayer] ########## REUSING PIPELINE ##########
+[22:16:24.356] [INFO] [GStreamerPlayer] Reusing existing pipeline with new URI (async preroll)
+[22:16:24.357] [DEBUG] [PreviewOverlay] GStreamer state changed to: 1
+[22:16:24.357] [DEBUG] [GStreamerPlayer] Playback started
+[22:16:24.359] [DEBUG] [GStreamerPlayer] State changed from NULL to READY
+[22:16:24.383] [DEBUG] [GStreamerPlayer] State changed from READY to PAUSED
+[22:16:24.383] [DEBUG] [GStreamerPlayer] Async operation done (preroll/seek completed)
+[22:16:24.384] [DEBUG] [PreviewOverlay] GStreamer media info: Duration: 30071 ms FPS: 23.976 Resolution: 3840 x 2160 Codec: "" Has Audio: false
+[22:16:24.384] [INFO] [GStreamerPlayer] ========== VIDEO STREAM INFO ==========
+[22:16:24.384] [INFO] [GStreamerPlayer] Video resolution: 3840 x 2160
+[22:16:24.384] [INFO] [GStreamerPlayer] Frame rate: 23.976 fps
+[22:16:24.385] [INFO] [GStreamerPlayer] Duration: 30071 ms
+[22:16:24.385] [INFO] [GStreamerPlayer] Has audio: false
+[22:16:24.385] [INFO] [GStreamerPlayer] ==========================================
+[22:16:24.385] [INFO] [GStreamerPlayer] Calling updateRenderRectangle() after preroll...
+[22:16:24.386] [DEBUG] [GStreamerPlayer] ========== UPDATE RENDER RECTANGLE ==========
+[22:16:24.386] [DEBUG] [GStreamerPlayer] Widget logical size: 1400 x 740
+[22:16:24.386] [DEBUG] [GStreamerPlayer] Device pixel ratio: 2.25
+[22:16:24.386] [DEBUG] [GStreamerPlayer] Physical pixel size: 3150 x 1665
+[22:16:24.386] [DEBUG] [GStreamerPlayer] Overlay element: videosink
+[22:16:24.386] [DEBUG] [GStreamerPlayer] =============================================
+[22:16:24.387] [DEBUG] [GStreamerPlayer] State changed from PAUSED to PLAYING
+[22:16:24.704] [DEBUG] [PreviewOverlay] Stopping playback
+[22:16:24.704] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:24.704] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:24.706] [DEBUG] [PreviewOverlay] Stopping playback
+[22:16:24.707] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:24.707] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:24.708] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:24.708] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:24.709] [WARN] QWidget::paintEngine: Should no longer be called
+[22:16:24.710] [DEBUG] [GStreamerPlayer] Video widget configured for embedding, WId: 2557540
+[22:16:24.710] [INFO] [GStreamerPlayer] ========== VIDEO SINK HIERARCHY ==========
+[22:16:24.711] [INFO] [GStreamerPlayer] Top-level video sink: videosink
+[22:16:24.711] [INFO] [GStreamerPlayer] Is bin: NO
+[22:16:24.711] [INFO] [GStreamerPlayer] Using top-level sink directly (not a bin)
+[22:16:24.712] [INFO] [GStreamerPlayer] Final actual sink: videosink
+[22:16:24.712] [INFO] [GStreamerPlayer] ================================================
+[22:16:24.712] [INFO] [GStreamerPlayer] Set window handle: 2557540 on element: videosink
+[22:16:24.713] [INFO] [GStreamerPlayer] ========== RENDER RECTANGLE DIAGNOSTICS ==========
+[22:16:24.713] [INFO] [GStreamerPlayer] Widget logical size: 1400 x 740
+[22:16:24.713] [INFO] [GStreamerPlayer] Device pixel ratio (DPR): 2.25
+[22:16:24.714] [INFO] [GStreamerPlayer] Physical pixel size: 3150 x 1665
+[22:16:24.714] [INFO] [GStreamerPlayer] Widget geometry: QRect(0,0 1400x740)
+[22:16:24.714] [INFO] [GStreamerPlayer] Widget window ID: 2557540
+[22:16:24.714] [INFO] [GStreamerPlayer] Widget is visible: true
+[22:16:24.714] [INFO] [GStreamerPlayer] Widget native parent chain: QWidget(0x21cc2f3f4f0)
+[22:16:24.715] [INFO] [GStreamerPlayer] Screen name: "Q70A"
+[22:16:24.715] [INFO] [GStreamerPlayer] Screen geometry: QRect(0,0 1707x960)
+[22:16:24.715] [INFO] [GStreamerPlayer] Screen available geometry: QRect(0,0 1707x912)
+[22:16:24.716] [INFO] [GStreamerPlayer] Screen physical DPI: 35.8459
+[22:16:24.716] [INFO] [GStreamerPlayer] Screen logical DPI: 96
+[22:16:24.716] [INFO] [GStreamerPlayer] Screen device pixel ratio: 2.25
+[22:16:24.717] [INFO] [GStreamerPlayer] ====================================================
+[22:16:24.717] [INFO] [GStreamerPlayer] Loading media: "file:///Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 05.mp4"
+[22:16:24.718] [ERROR] [GStreamerPlayer] ########## REUSING PIPELINE ##########
+[22:16:24.718] [INFO] [GStreamerPlayer] Reusing existing pipeline with new URI (async preroll)
+[22:16:24.719] [DEBUG] [PreviewOverlay] GStreamer state changed to: 1
+[22:16:24.719] [DEBUG] [GStreamerPlayer] Playback started
+[22:16:24.722] [DEBUG] [GStreamerPlayer] State changed from NULL to READY
+[22:16:24.744] [DEBUG] [GStreamerPlayer] State changed from READY to PAUSED
+[22:16:24.745] [DEBUG] [GStreamerPlayer] Async operation done (preroll/seek completed)
+[22:16:24.746] [DEBUG] [PreviewOverlay] GStreamer media info: Duration: 30071 ms FPS: 23.976 Resolution: 2160 x 3840 Codec: "" Has Audio: false
+[22:16:24.746] [INFO] [GStreamerPlayer] ========== VIDEO STREAM INFO ==========
+[22:16:24.747] [INFO] [GStreamerPlayer] Video resolution: 2160 x 3840
+[22:16:24.747] [INFO] [GStreamerPlayer] Frame rate: 23.976 fps
+[22:16:24.747] [INFO] [GStreamerPlayer] Duration: 30071 ms
+[22:16:24.748] [INFO] [GStreamerPlayer] Has audio: false
+[22:16:24.749] [INFO] [GStreamerPlayer] ==========================================
+[22:16:24.749] [INFO] [GStreamerPlayer] Calling updateRenderRectangle() after preroll...
+[22:16:24.750] [DEBUG] [GStreamerPlayer] ========== UPDATE RENDER RECTANGLE ==========
+[22:16:24.750] [DEBUG] [GStreamerPlayer] Widget logical size: 1400 x 740
+[22:16:24.750] [DEBUG] [GStreamerPlayer] Device pixel ratio: 2.25
+[22:16:24.751] [DEBUG] [GStreamerPlayer] Physical pixel size: 3150 x 1665
+[22:16:24.751] [DEBUG] [GStreamerPlayer] Overlay element: videosink
+[22:16:24.751] [DEBUG] [GStreamerPlayer] =============================================
+[22:16:24.751] [DEBUG] [GStreamerPlayer] State changed from PAUSED to PLAYING
+[22:16:25.054] [DEBUG] [PreviewOverlay] Stopping playback
+[22:16:25.055] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:25.056] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:25.056] [DEBUG] [PreviewOverlay] Stopping playback
+[22:16:25.058] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:25.058] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:25.058] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:25.059] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:25.059] [WARN] QWidget::paintEngine: Should no longer be called
+[22:16:25.060] [DEBUG] [GStreamerPlayer] Video widget configured for embedding, WId: 2557540
+[22:16:25.060] [INFO] [GStreamerPlayer] ========== VIDEO SINK HIERARCHY ==========
+[22:16:25.061] [INFO] [GStreamerPlayer] Top-level video sink: videosink
+[22:16:25.061] [INFO] [GStreamerPlayer] Is bin: NO
+[22:16:25.062] [INFO] [GStreamerPlayer] Using top-level sink directly (not a bin)
+[22:16:25.062] [INFO] [GStreamerPlayer] Final actual sink: videosink
+[22:16:25.062] [INFO] [GStreamerPlayer] ================================================
+[22:16:25.064] [INFO] [GStreamerPlayer] Set window handle: 2557540 on element: videosink
+[22:16:25.064] [INFO] [GStreamerPlayer] ========== RENDER RECTANGLE DIAGNOSTICS ==========
+[22:16:25.064] [INFO] [GStreamerPlayer] Widget logical size: 1400 x 740
+[22:16:25.065] [INFO] [GStreamerPlayer] Device pixel ratio (DPR): 2.25
+[22:16:25.065] [INFO] [GStreamerPlayer] Physical pixel size: 3150 x 1665
+[22:16:25.065] [INFO] [GStreamerPlayer] Widget geometry: QRect(0,0 1400x740)
+[22:16:25.066] [INFO] [GStreamerPlayer] Widget window ID: 2557540
+[22:16:25.066] [INFO] [GStreamerPlayer] Widget is visible: true
+[22:16:25.067] [INFO] [GStreamerPlayer] Widget native parent chain: QWidget(0x21cc2f3f4f0)
+[22:16:25.067] [INFO] [GStreamerPlayer] Screen name: "Q70A"
+[22:16:25.067] [INFO] [GStreamerPlayer] Screen geometry: QRect(0,0 1707x960)
+[22:16:25.068] [INFO] [GStreamerPlayer] Screen available geometry: QRect(0,0 1707x912)
+[22:16:25.068] [INFO] [GStreamerPlayer] Screen physical DPI: 35.8459
+[22:16:25.069] [INFO] [GStreamerPlayer] Screen logical DPI: 96
+[22:16:25.069] [INFO] [GStreamerPlayer] Screen device pixel ratio: 2.25
+[22:16:25.069] [INFO] [GStreamerPlayer] ====================================================
+[22:16:25.070] [INFO] [GStreamerPlayer] Loading media: "file:///Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 06.mp4"
+[22:16:25.070] [ERROR] [GStreamerPlayer] ########## REUSING PIPELINE ##########
+[22:16:25.071] [INFO] [GStreamerPlayer] Reusing existing pipeline with new URI (async preroll)
+[22:16:25.072] [DEBUG] [PreviewOverlay] GStreamer state changed to: 1
+[22:16:25.072] [DEBUG] [GStreamerPlayer] Playback started
+[22:16:25.077] [DEBUG] [GStreamerPlayer] State changed from NULL to READY
+[22:16:25.092] [DEBUG] [GStreamerPlayer] State changed from READY to PAUSED
+[22:16:25.092] [DEBUG] [GStreamerPlayer] Async operation done (preroll/seek completed)
+[22:16:25.094] [DEBUG] [PreviewOverlay] GStreamer media info: Duration: 30030 ms FPS: 23.976 Resolution: 2160 x 3840 Codec: "" Has Audio: false
+[22:16:25.094] [INFO] [GStreamerPlayer] ========== VIDEO STREAM INFO ==========
+[22:16:25.094] [INFO] [GStreamerPlayer] Video resolution: 2160 x 3840
+[22:16:25.095] [INFO] [GStreamerPlayer] Frame rate: 23.976 fps
+[22:16:25.095] [INFO] [GStreamerPlayer] Duration: 30030 ms
+[22:16:25.095] [INFO] [GStreamerPlayer] Has audio: false
+[22:16:25.096] [INFO] [GStreamerPlayer] ==========================================
+[22:16:25.096] [INFO] [GStreamerPlayer] Calling updateRenderRectangle() after preroll...
+[22:16:25.096] [DEBUG] [GStreamerPlayer] ========== UPDATE RENDER RECTANGLE ==========
+[22:16:25.097] [DEBUG] [GStreamerPlayer] Widget logical size: 1400 x 740
+[22:16:25.097] [DEBUG] [GStreamerPlayer] Device pixel ratio: 2.25
+[22:16:25.097] [DEBUG] [GStreamerPlayer] Physical pixel size: 3150 x 1665
+[22:16:25.097] [DEBUG] [GStreamerPlayer] Overlay element: videosink
+[22:16:25.097] [DEBUG] [GStreamerPlayer] =============================================
+[22:16:25.098] [DEBUG] [GStreamerPlayer] State changed from PAUSED to PLAYING
+[22:16:25.378] [DEBUG] [PreviewOverlay] Stopping playback
+[22:16:25.379] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:25.380] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:25.380] [DEBUG] [PreviewOverlay] Stopping playback
+[22:16:25.382] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:25.382] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:25.382] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:25.383] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:25.383] [WARN] QWidget::paintEngine: Should no longer be called
+[22:16:25.384] [DEBUG] [GStreamerPlayer] Video widget configured for embedding, WId: 2557540
+[22:16:25.384] [INFO] [GStreamerPlayer] ========== VIDEO SINK HIERARCHY ==========
+[22:16:25.384] [INFO] [GStreamerPlayer] Top-level video sink: videosink
+[22:16:25.384] [INFO] [GStreamerPlayer] Is bin: NO
+[22:16:25.385] [INFO] [GStreamerPlayer] Using top-level sink directly (not a bin)
+[22:16:25.385] [INFO] [GStreamerPlayer] Final actual sink: videosink
+[22:16:25.385] [INFO] [GStreamerPlayer] ================================================
+[22:16:25.387] [INFO] [GStreamerPlayer] Set window handle: 2557540 on element: videosink
+[22:16:25.387] [INFO] [GStreamerPlayer] ========== RENDER RECTANGLE DIAGNOSTICS ==========
+[22:16:25.388] [INFO] [GStreamerPlayer] Widget logical size: 1400 x 740
+[22:16:25.388] [INFO] [GStreamerPlayer] Device pixel ratio (DPR): 2.25
+[22:16:25.389] [INFO] [GStreamerPlayer] Physical pixel size: 3150 x 1665
+[22:16:25.389] [INFO] [GStreamerPlayer] Widget geometry: QRect(0,0 1400x740)
+[22:16:25.390] [INFO] [GStreamerPlayer] Widget window ID: 2557540
+[22:16:25.390] [INFO] [GStreamerPlayer] Widget is visible: true
+[22:16:25.390] [INFO] [GStreamerPlayer] Widget native parent chain: QWidget(0x21cc2f3f4f0)
+[22:16:25.391] [INFO] [GStreamerPlayer] Screen name: "Q70A"
+[22:16:25.392] [INFO] [GStreamerPlayer] Screen geometry: QRect(0,0 1707x960)
+[22:16:25.392] [INFO] [GStreamerPlayer] Screen available geometry: QRect(0,0 1707x912)
+[22:16:25.393] [INFO] [GStreamerPlayer] Screen physical DPI: 35.8459
+[22:16:25.393] [INFO] [GStreamerPlayer] Screen logical DPI: 96
+[22:16:25.393] [INFO] [GStreamerPlayer] Screen device pixel ratio: 2.25
+[22:16:25.394] [INFO] [GStreamerPlayer] ====================================================
+[22:16:25.394] [INFO] [GStreamerPlayer] Loading media: "file:///Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 07.mp4"
+[22:16:25.394] [ERROR] [GStreamerPlayer] ########## REUSING PIPELINE ##########
+[22:16:25.394] [INFO] [GStreamerPlayer] Reusing existing pipeline with new URI (async preroll)
+[22:16:25.396] [DEBUG] [PreviewOverlay] GStreamer state changed to: 1
+[22:16:25.396] [DEBUG] [GStreamerPlayer] Playback started
+[22:16:25.399] [DEBUG] [GStreamerPlayer] State changed from NULL to READY
+[22:16:25.423] [DEBUG] [GStreamerPlayer] State changed from READY to PAUSED
+[22:16:25.425] [DEBUG] [GStreamerPlayer] Async operation done (preroll/seek completed)
+[22:16:25.425] [DEBUG] [PreviewOverlay] GStreamer media info: Duration: 30030 ms FPS: 23.976 Resolution: 2160 x 3840 Codec: "" Has Audio: false
+[22:16:25.425] [INFO] [GStreamerPlayer] ========== VIDEO STREAM INFO ==========
+[22:16:25.426] [INFO] [GStreamerPlayer] Video resolution: 2160 x 3840
+[22:16:25.426] [INFO] [GStreamerPlayer] Frame rate: 23.976 fps
+[22:16:25.427] [INFO] [GStreamerPlayer] Duration: 30030 ms
+[22:16:25.427] [INFO] [GStreamerPlayer] Has audio: false
+[22:16:25.428] [INFO] [GStreamerPlayer] ==========================================
+[22:16:25.429] [INFO] [GStreamerPlayer] Calling updateRenderRectangle() after preroll...
+[22:16:25.429] [DEBUG] [GStreamerPlayer] ========== UPDATE RENDER RECTANGLE ==========
+[22:16:25.429] [DEBUG] [GStreamerPlayer] Widget logical size: 1400 x 740
+[22:16:25.430] [DEBUG] [GStreamerPlayer] Device pixel ratio: 2.25
+[22:16:25.430] [DEBUG] [GStreamerPlayer] Physical pixel size: 3150 x 1665
+[22:16:25.430] [DEBUG] [GStreamerPlayer] Overlay element: videosink
+[22:16:25.431] [DEBUG] [GStreamerPlayer] =============================================
+[22:16:25.431] [DEBUG] [GStreamerPlayer] State changed from PAUSED to PLAYING
+[22:16:25.648] [DEBUG] [PreviewOverlay] Stopping playback
+[22:16:25.649] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:25.650] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:25.650] [DEBUG] [PreviewOverlay] Stopping playback
+[22:16:25.651] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:25.651] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:25.651] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:25.651] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:25.652] [WARN] QWidget::paintEngine: Should no longer be called
+[22:16:25.652] [DEBUG] [GStreamerPlayer] Video widget configured for embedding, WId: 2557540
+[22:16:25.652] [INFO] [GStreamerPlayer] ========== VIDEO SINK HIERARCHY ==========
+[22:16:25.654] [INFO] [GStreamerPlayer] Top-level video sink: videosink
+[22:16:25.654] [INFO] [GStreamerPlayer] Is bin: NO
+[22:16:25.654] [INFO] [GStreamerPlayer] Using top-level sink directly (not a bin)
+[22:16:25.654] [INFO] [GStreamerPlayer] Final actual sink: videosink
+[22:16:25.654] [INFO] [GStreamerPlayer] ================================================
+[22:16:25.655] [INFO] [GStreamerPlayer] Set window handle: 2557540 on element: videosink
+[22:16:25.655] [INFO] [GStreamerPlayer] ========== RENDER RECTANGLE DIAGNOSTICS ==========
+[22:16:25.656] [INFO] [GStreamerPlayer] Widget logical size: 1400 x 740
+[22:16:25.656] [INFO] [GStreamerPlayer] Device pixel ratio (DPR): 2.25
+[22:16:25.656] [INFO] [GStreamerPlayer] Physical pixel size: 3150 x 1665
+[22:16:25.657] [INFO] [GStreamerPlayer] Widget geometry: QRect(0,0 1400x740)
+[22:16:25.657] [INFO] [GStreamerPlayer] Widget window ID: 2557540
+[22:16:25.658] [INFO] [GStreamerPlayer] Widget is visible: true
+[22:16:25.658] [INFO] [GStreamerPlayer] Widget native parent chain: QWidget(0x21cc2f3f4f0)
+[22:16:25.658] [INFO] [GStreamerPlayer] Screen name: "Q70A"
+[22:16:25.658] [INFO] [GStreamerPlayer] Screen geometry: QRect(0,0 1707x960)
+[22:16:25.659] [INFO] [GStreamerPlayer] Screen available geometry: QRect(0,0 1707x912)
+[22:16:25.660] [INFO] [GStreamerPlayer] Screen physical DPI: 35.8459
+[22:16:25.660] [INFO] [GStreamerPlayer] Screen logical DPI: 96
+[22:16:25.661] [INFO] [GStreamerPlayer] Screen device pixel ratio: 2.25
+[22:16:25.662] [INFO] [GStreamerPlayer] ====================================================
+[22:16:25.662] [INFO] [GStreamerPlayer] Loading media: "file:///Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 08.mp4"
+[22:16:25.662] [ERROR] [GStreamerPlayer] ########## REUSING PIPELINE ##########
+[22:16:25.664] [INFO] [GStreamerPlayer] Reusing existing pipeline with new URI (async preroll)
+[22:16:25.664] [DEBUG] [PreviewOverlay] GStreamer state changed to: 1
+[22:16:25.664] [DEBUG] [GStreamerPlayer] Playback started
+[22:16:25.666] [DEBUG] [GStreamerPlayer] State changed from NULL to READY
+[22:16:25.683] [DEBUG] [GStreamerPlayer] State changed from READY to PAUSED
+[22:16:25.684] [DEBUG] [GStreamerPlayer] Async operation done (preroll/seek completed)
+[22:16:25.684] [DEBUG] [PreviewOverlay] GStreamer media info: Duration: 15015 ms FPS: 23.976 Resolution: 2160 x 3840 Codec: "" Has Audio: false
+[22:16:25.684] [INFO] [GStreamerPlayer] ========== VIDEO STREAM INFO ==========
+[22:16:25.685] [INFO] [GStreamerPlayer] Video resolution: 2160 x 3840
+[22:16:25.686] [INFO] [GStreamerPlayer] Frame rate: 23.976 fps
+[22:16:25.686] [INFO] [GStreamerPlayer] Duration: 15015 ms
+[22:16:25.686] [INFO] [GStreamerPlayer] Has audio: false
+[22:16:25.687] [INFO] [GStreamerPlayer] ==========================================
+[22:16:25.687] [INFO] [GStreamerPlayer] Calling updateRenderRectangle() after preroll...
+[22:16:25.687] [DEBUG] [GStreamerPlayer] ========== UPDATE RENDER RECTANGLE ==========
+[22:16:25.689] [DEBUG] [GStreamerPlayer] Widget logical size: 1400 x 740
+[22:16:25.689] [DEBUG] [GStreamerPlayer] Device pixel ratio: 2.25
+[22:16:25.689] [DEBUG] [GStreamerPlayer] Physical pixel size: 3150 x 1665
+[22:16:25.689] [DEBUG] [GStreamerPlayer] Overlay element: videosink
+[22:16:25.690] [DEBUG] [GStreamerPlayer] =============================================
+[22:16:25.690] [DEBUG] [GStreamerPlayer] State changed from PAUSED to PLAYING
+[22:16:25.954] [DEBUG] [PreviewOverlay] Stopping playback
+[22:16:25.955] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:25.956] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:25.956] [DEBUG] [PreviewOverlay] Stopping playback
+[22:16:25.957] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:25.957] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:25.957] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:25.958] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:25.958] [WARN] QWidget::paintEngine: Should no longer be called
+[22:16:25.958] [DEBUG] [GStreamerPlayer] Video widget configured for embedding, WId: 2557540
+[22:16:25.958] [INFO] [GStreamerPlayer] ========== VIDEO SINK HIERARCHY ==========
+[22:16:25.959] [INFO] [GStreamerPlayer] Top-level video sink: videosink
+[22:16:25.959] [INFO] [GStreamerPlayer] Is bin: NO
+[22:16:25.959] [INFO] [GStreamerPlayer] Using top-level sink directly (not a bin)
+[22:16:25.959] [INFO] [GStreamerPlayer] Final actual sink: videosink
+[22:16:25.960] [INFO] [GStreamerPlayer] ================================================
+[22:16:25.960] [INFO] [GStreamerPlayer] Set window handle: 2557540 on element: videosink
+[22:16:25.960] [INFO] [GStreamerPlayer] ========== RENDER RECTANGLE DIAGNOSTICS ==========
+[22:16:25.960] [INFO] [GStreamerPlayer] Widget logical size: 1400 x 740
+[22:16:25.960] [INFO] [GStreamerPlayer] Device pixel ratio (DPR): 2.25
+[22:16:25.962] [INFO] [GStreamerPlayer] Physical pixel size: 3150 x 1665
+[22:16:25.962] [INFO] [GStreamerPlayer] Widget geometry: QRect(0,0 1400x740)
+[22:16:25.962] [INFO] [GStreamerPlayer] Widget window ID: 2557540
+[22:16:25.963] [INFO] [GStreamerPlayer] Widget is visible: true
+[22:16:25.963] [INFO] [GStreamerPlayer] Widget native parent chain: QWidget(0x21cc2f3f4f0)
+[22:16:25.963] [INFO] [GStreamerPlayer] Screen name: "Q70A"
+[22:16:25.964] [INFO] [GStreamerPlayer] Screen geometry: QRect(0,0 1707x960)
+[22:16:25.965] [INFO] [GStreamerPlayer] Screen available geometry: QRect(0,0 1707x912)
+[22:16:25.965] [INFO] [GStreamerPlayer] Screen physical DPI: 35.8459
+[22:16:25.965] [INFO] [GStreamerPlayer] Screen logical DPI: 96
+[22:16:25.965] [INFO] [GStreamerPlayer] Screen device pixel ratio: 2.25
+[22:16:25.966] [INFO] [GStreamerPlayer] ====================================================
+[22:16:25.966] [INFO] [GStreamerPlayer] Loading media: "file:///Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 09.mp4"
+[22:16:25.966] [ERROR] [GStreamerPlayer] ########## REUSING PIPELINE ##########
+[22:16:25.967] [INFO] [GStreamerPlayer] Reusing existing pipeline with new URI (async preroll)
+[22:16:25.967] [DEBUG] [PreviewOverlay] GStreamer state changed to: 1
+[22:16:25.967] [DEBUG] [GStreamerPlayer] Playback started
+[22:16:25.970] [DEBUG] [GStreamerPlayer] State changed from NULL to READY
+[22:16:25.992] [DEBUG] [GStreamerPlayer] State changed from READY to PAUSED
+[22:16:25.994] [DEBUG] [GStreamerPlayer] Async operation done (preroll/seek completed)
+[22:16:25.994] [DEBUG] [PreviewOverlay] GStreamer media info: Duration: 30071 ms FPS: 23.976 Resolution: 2160 x 3840 Codec: "" Has Audio: false
+[22:16:25.995] [INFO] [GStreamerPlayer] ========== VIDEO STREAM INFO ==========
+[22:16:25.996] [INFO] [GStreamerPlayer] Video resolution: 2160 x 3840
+[22:16:25.996] [INFO] [GStreamerPlayer] Frame rate: 23.976 fps
+[22:16:25.997] [INFO] [GStreamerPlayer] Duration: 30071 ms
+[22:16:25.997] [INFO] [GStreamerPlayer] Has audio: false
+[22:16:25.998] [INFO] [GStreamerPlayer] ==========================================
+[22:16:25.998] [INFO] [GStreamerPlayer] Calling updateRenderRectangle() after preroll...
+[22:16:25.998] [DEBUG] [GStreamerPlayer] ========== UPDATE RENDER RECTANGLE ==========
+[22:16:26.000] [DEBUG] [GStreamerPlayer] Widget logical size: 1400 x 740
+[22:16:26.000] [DEBUG] [GStreamerPlayer] Device pixel ratio: 2.25
+[22:16:26.000] [DEBUG] [GStreamerPlayer] Physical pixel size: 3150 x 1665
+[22:16:26.001] [DEBUG] [GStreamerPlayer] Overlay element: videosink
+[22:16:26.001] [DEBUG] [GStreamerPlayer] =============================================
+[22:16:26.001] [DEBUG] [GStreamerPlayer] State changed from PAUSED to PLAYING
+[22:16:26.136] [DEBUG] [PreviewOverlay] Stopping playback
+[22:16:26.137] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:26.138] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:26.139] [DEBUG] [PreviewOverlay] Stopping playback
+[22:16:26.139] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:26.140] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:26.140] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:26.141] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:26.141] [WARN] QWidget::paintEngine: Should no longer be called
+[22:16:26.141] [DEBUG] [GStreamerPlayer] Video widget configured for embedding, WId: 2557540
+[22:16:26.142] [INFO] [GStreamerPlayer] ========== VIDEO SINK HIERARCHY ==========
+[22:16:26.142] [INFO] [GStreamerPlayer] Top-level video sink: videosink
+[22:16:26.143] [INFO] [GStreamerPlayer] Is bin: NO
+[22:16:26.144] [INFO] [GStreamerPlayer] Using top-level sink directly (not a bin)
+[22:16:26.144] [INFO] [GStreamerPlayer] Final actual sink: videosink
+[22:16:26.145] [INFO] [GStreamerPlayer] ================================================
+[22:16:26.145] [INFO] [GStreamerPlayer] Set window handle: 2557540 on element: videosink
+[22:16:26.145] [INFO] [GStreamerPlayer] ========== RENDER RECTANGLE DIAGNOSTICS ==========
+[22:16:26.145] [INFO] [GStreamerPlayer] Widget logical size: 1400 x 740
+[22:16:26.145] [INFO] [GStreamerPlayer] Device pixel ratio (DPR): 2.25
+[22:16:26.146] [INFO] [GStreamerPlayer] Physical pixel size: 3150 x 1665
+[22:16:26.146] [INFO] [GStreamerPlayer] Widget geometry: QRect(0,0 1400x740)
+[22:16:26.146] [INFO] [GStreamerPlayer] Widget window ID: 2557540
+[22:16:26.146] [INFO] [GStreamerPlayer] Widget is visible: true
+[22:16:26.147] [INFO] [GStreamerPlayer] Widget native parent chain: QWidget(0x21cc2f3f4f0)
+[22:16:26.147] [INFO] [GStreamerPlayer] Screen name: "Q70A"
+[22:16:26.147] [INFO] [GStreamerPlayer] Screen geometry: QRect(0,0 1707x960)
+[22:16:26.148] [INFO] [GStreamerPlayer] Screen available geometry: QRect(0,0 1707x912)
+[22:16:26.148] [INFO] [GStreamerPlayer] Screen physical DPI: 35.8459
+[22:16:26.148] [INFO] [GStreamerPlayer] Screen logical DPI: 96
+[22:16:26.149] [INFO] [GStreamerPlayer] Screen device pixel ratio: 2.25
+[22:16:26.149] [INFO] [GStreamerPlayer] ====================================================
+[22:16:26.149] [INFO] [GStreamerPlayer] Loading media: "file:///Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 120fps 10.mp4"
+[22:16:26.151] [ERROR] [GStreamerPlayer] ########## REUSING PIPELINE ##########
+[22:16:26.151] [INFO] [GStreamerPlayer] Reusing existing pipeline with new URI (async preroll)
+[22:16:26.151] [DEBUG] [PreviewOverlay] GStreamer state changed to: 1
+[22:16:26.151] [DEBUG] [GStreamerPlayer] Playback started
+[22:16:26.153] [DEBUG] [GStreamerPlayer] State changed from NULL to READY
+[22:16:26.172] [DEBUG] [GStreamerPlayer] State changed from READY to PAUSED
+[22:16:26.172] [DEBUG] [GStreamerPlayer] Async operation done (preroll/seek completed)
+[22:16:26.174] [DEBUG] [PreviewOverlay] GStreamer media info: Duration: 30030 ms FPS: 23.976 Resolution: 2160 x 3840 Codec: "" Has Audio: false
+[22:16:26.174] [INFO] [GStreamerPlayer] ========== VIDEO STREAM INFO ==========
+[22:16:26.175] [INFO] [GStreamerPlayer] Video resolution: 2160 x 3840
+[22:16:26.175] [INFO] [GStreamerPlayer] Frame rate: 23.976 fps
+[22:16:26.176] [INFO] [GStreamerPlayer] Duration: 30030 ms
+[22:16:26.176] [INFO] [GStreamerPlayer] Has audio: false
+[22:16:26.177] [INFO] [GStreamerPlayer] ==========================================
+[22:16:26.177] [INFO] [GStreamerPlayer] Calling updateRenderRectangle() after preroll...
+[22:16:26.177] [DEBUG] [GStreamerPlayer] ========== UPDATE RENDER RECTANGLE ==========
+[22:16:26.177] [DEBUG] [GStreamerPlayer] Widget logical size: 1400 x 740
+[22:16:26.178] [DEBUG] [GStreamerPlayer] Device pixel ratio: 2.25
+[22:16:26.178] [DEBUG] [GStreamerPlayer] Physical pixel size: 3150 x 1665
+[22:16:26.178] [DEBUG] [GStreamerPlayer] Overlay element: videosink
+[22:16:26.178] [DEBUG] [GStreamerPlayer] =============================================
+[22:16:26.179] [DEBUG] [GStreamerPlayer] State changed from PAUSED to PLAYING
+[22:16:26.305] [DEBUG] [PreviewOverlay] Stopping playback
+[22:16:26.306] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:26.307] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:26.308] [DEBUG] [PreviewOverlay] Stopping playback
+[22:16:26.308] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:26.309] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:26.309] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:26.309] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:26.310] [WARN] QWidget::paintEngine: Should no longer be called
+[22:16:26.310] [DEBUG] [GStreamerPlayer] Video widget configured for embedding, WId: 2557540
+[22:16:26.311] [INFO] [GStreamerPlayer] ========== VIDEO SINK HIERARCHY ==========
+[22:16:26.311] [INFO] [GStreamerPlayer] Top-level video sink: videosink
+[22:16:26.311] [INFO] [GStreamerPlayer] Is bin: NO
+[22:16:26.312] [INFO] [GStreamerPlayer] Using top-level sink directly (not a bin)
+[22:16:26.312] [INFO] [GStreamerPlayer] Final actual sink: videosink
+[22:16:26.313] [INFO] [GStreamerPlayer] ================================================
+[22:16:26.314] [INFO] [GStreamerPlayer] Set window handle: 2557540 on element: videosink
+[22:16:26.314] [INFO] [GStreamerPlayer] ========== RENDER RECTANGLE DIAGNOSTICS ==========
+[22:16:26.314] [INFO] [GStreamerPlayer] Widget logical size: 1400 x 740
+[22:16:26.315] [INFO] [GStreamerPlayer] Device pixel ratio (DPR): 2.25
+[22:16:26.315] [INFO] [GStreamerPlayer] Physical pixel size: 3150 x 1665
+[22:16:26.315] [INFO] [GStreamerPlayer] Widget geometry: QRect(0,0 1400x740)
+[22:16:26.316] [INFO] [GStreamerPlayer] Widget window ID: 2557540
+[22:16:26.316] [INFO] [GStreamerPlayer] Widget is visible: true
+[22:16:26.317] [INFO] [GStreamerPlayer] Widget native parent chain: QWidget(0x21cc2f3f4f0)
+[22:16:26.317] [INFO] [GStreamerPlayer] Screen name: "Q70A"
+[22:16:26.317] [INFO] [GStreamerPlayer] Screen geometry: QRect(0,0 1707x960)
+[22:16:26.317] [INFO] [GStreamerPlayer] Screen available geometry: QRect(0,0 1707x912)
+[22:16:26.319] [INFO] [GStreamerPlayer] Screen physical DPI: 35.8459
+[22:16:26.319] [INFO] [GStreamerPlayer] Screen logical DPI: 96
+[22:16:26.320] [INFO] [GStreamerPlayer] Screen device pixel ratio: 2.25
+[22:16:26.320] [INFO] [GStreamerPlayer] ====================================================
+[22:16:26.321] [INFO] [GStreamerPlayer] Loading media: "file:///Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 01.mp4"
+[22:16:26.321] [ERROR] [GStreamerPlayer] ########## REUSING PIPELINE ##########
+[22:16:26.322] [INFO] [GStreamerPlayer] Reusing existing pipeline with new URI (async preroll)
+[22:16:26.322] [DEBUG] [PreviewOverlay] GStreamer state changed to: 1
+[22:16:26.322] [DEBUG] [GStreamerPlayer] Playback started
+[22:16:26.345] [DEBUG] [GStreamerPlayer] State changed from NULL to READY
+[22:16:26.352] [DEBUG] [GStreamerPlayer] State changed from READY to PAUSED
+[22:16:26.354] [DEBUG] [GStreamerPlayer] Async operation done (preroll/seek completed)
+[22:16:26.354] [DEBUG] [PreviewOverlay] GStreamer media info: Duration: 30071 ms FPS: 23.976 Resolution: 4096 x 2160 Codec: "" Has Audio: false
+[22:16:26.355] [INFO] [GStreamerPlayer] ========== VIDEO STREAM INFO ==========
+[22:16:26.355] [INFO] [GStreamerPlayer] Video resolution: 4096 x 2160
+[22:16:26.356] [INFO] [GStreamerPlayer] Frame rate: 23.976 fps
+[22:16:26.356] [INFO] [GStreamerPlayer] Duration: 30071 ms
+[22:16:26.357] [INFO] [GStreamerPlayer] Has audio: false
+[22:16:26.357] [INFO] [GStreamerPlayer] ==========================================
+[22:16:26.357] [INFO] [GStreamerPlayer] Calling updateRenderRectangle() after preroll...
+[22:16:26.358] [DEBUG] [GStreamerPlayer] ========== UPDATE RENDER RECTANGLE ==========
+[22:16:26.358] [DEBUG] [GStreamerPlayer] Widget logical size: 1400 x 740
+[22:16:26.358] [DEBUG] [GStreamerPlayer] Device pixel ratio: 2.25
+[22:16:26.359] [DEBUG] [GStreamerPlayer] Physical pixel size: 3150 x 1665
+[22:16:26.359] [DEBUG] [GStreamerPlayer] Overlay element: videosink
+[22:16:26.369] [DEBUG] [GStreamerPlayer] =============================================
+[22:16:26.370] [DEBUG] [GStreamerPlayer] State changed from PAUSED to PLAYING
+[22:16:26.472] [DEBUG] [PreviewOverlay] Stopping playback
+[22:16:26.472] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:26.473] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:26.474] [DEBUG] [PreviewOverlay] Stopping playback
+[22:16:26.475] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:26.475] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:26.475] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:26.475] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:26.476] [WARN] QWidget::paintEngine: Should no longer be called
+[22:16:26.476] [DEBUG] [GStreamerPlayer] Video widget configured for embedding, WId: 2557540
+[22:16:26.477] [INFO] [GStreamerPlayer] ========== VIDEO SINK HIERARCHY ==========
+[22:16:26.477] [INFO] [GStreamerPlayer] Top-level video sink: videosink
+[22:16:26.477] [INFO] [GStreamerPlayer] Is bin: NO
+[22:16:26.478] [INFO] [GStreamerPlayer] Using top-level sink directly (not a bin)
+[22:16:26.478] [INFO] [GStreamerPlayer] Final actual sink: videosink
+[22:16:26.478] [INFO] [GStreamerPlayer] ================================================
+[22:16:26.478] [INFO] [GStreamerPlayer] Set window handle: 2557540 on element: videosink
+[22:16:26.480] [INFO] [GStreamerPlayer] ========== RENDER RECTANGLE DIAGNOSTICS ==========
+[22:16:26.480] [INFO] [GStreamerPlayer] Widget logical size: 1400 x 740
+[22:16:26.480] [INFO] [GStreamerPlayer] Device pixel ratio (DPR): 2.25
+[22:16:26.480] [INFO] [GStreamerPlayer] Physical pixel size: 3150 x 1665
+[22:16:26.481] [INFO] [GStreamerPlayer] Widget geometry: QRect(0,0 1400x740)
+[22:16:26.481] [INFO] [GStreamerPlayer] Widget window ID: 2557540
+[22:16:26.482] [INFO] [GStreamerPlayer] Widget is visible: true
+[22:16:26.482] [INFO] [GStreamerPlayer] Widget native parent chain: QWidget(0x21cc2f3f4f0)
+[22:16:26.482] [INFO] [GStreamerPlayer] Screen name: "Q70A"
+[22:16:26.483] [INFO] [GStreamerPlayer] Screen geometry: QRect(0,0 1707x960)
+[22:16:26.483] [INFO] [GStreamerPlayer] Screen available geometry: QRect(0,0 1707x912)
+[22:16:26.484] [INFO] [GStreamerPlayer] Screen physical DPI: 35.8459
+[22:16:26.484] [INFO] [GStreamerPlayer] Screen logical DPI: 96
+[22:16:26.485] [INFO] [GStreamerPlayer] Screen device pixel ratio: 2.25
+[22:16:26.485] [INFO] [GStreamerPlayer] ====================================================
+[22:16:26.486] [INFO] [GStreamerPlayer] Loading media: "file:///Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 02.mp4"
+[22:16:26.486] [ERROR] [GStreamerPlayer] ########## REUSING PIPELINE ##########
+[22:16:26.487] [INFO] [GStreamerPlayer] Reusing existing pipeline with new URI (async preroll)
+[22:16:26.487] [DEBUG] [PreviewOverlay] GStreamer state changed to: 1
+[22:16:26.487] [DEBUG] [GStreamerPlayer] Playback started
+[22:16:26.490] [DEBUG] [GStreamerPlayer] State changed from NULL to READY
+[22:16:26.514] [DEBUG] [GStreamerPlayer] State changed from READY to PAUSED
+[22:16:26.514] [DEBUG] [GStreamerPlayer] Async operation done (preroll/seek completed)
+[22:16:26.514] [DEBUG] [PreviewOverlay] GStreamer media info: Duration: 25692 ms FPS: 23.976 Resolution: 4096 x 2160 Codec: "" Has Audio: false
+[22:16:26.515] [INFO] [GStreamerPlayer] ========== VIDEO STREAM INFO ==========
+[22:16:26.515] [INFO] [GStreamerPlayer] Video resolution: 4096 x 2160
+[22:16:26.516] [INFO] [GStreamerPlayer] Frame rate: 23.976 fps
+[22:16:26.517] [INFO] [GStreamerPlayer] Duration: 25692 ms
+[22:16:26.517] [INFO] [GStreamerPlayer] Has audio: false
+[22:16:26.517] [INFO] [GStreamerPlayer] ==========================================
+[22:16:26.518] [INFO] [GStreamerPlayer] Calling updateRenderRectangle() after preroll...
+[22:16:26.519] [DEBUG] [GStreamerPlayer] ========== UPDATE RENDER RECTANGLE ==========
+[22:16:26.519] [DEBUG] [GStreamerPlayer] Widget logical size: 1400 x 740
+[22:16:26.520] [DEBUG] [GStreamerPlayer] Device pixel ratio: 2.25
+[22:16:26.520] [DEBUG] [GStreamerPlayer] Physical pixel size: 3150 x 1665
+[22:16:26.520] [DEBUG] [GStreamerPlayer] Overlay element: videosink
+[22:16:26.520] [DEBUG] [GStreamerPlayer] =============================================
+[22:16:26.521] [DEBUG] [GStreamerPlayer] State changed from PAUSED to PLAYING
+[22:16:26.625] [DEBUG] [PreviewOverlay] Stopping playback
+[22:16:26.625] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:26.625] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:26.627] [DEBUG] [PreviewOverlay] Stopping playback
+[22:16:26.627] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:26.627] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:26.627] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:26.628] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:26.628] [WARN] QWidget::paintEngine: Should no longer be called
+[22:16:26.628] [DEBUG] [GStreamerPlayer] Video widget configured for embedding, WId: 2557540
+[22:16:26.628] [INFO] [GStreamerPlayer] ========== VIDEO SINK HIERARCHY ==========
+[22:16:26.628] [INFO] [GStreamerPlayer] Top-level video sink: videosink
+[22:16:26.629] [INFO] [GStreamerPlayer] Is bin: NO
+[22:16:26.629] [INFO] [GStreamerPlayer] Using top-level sink directly (not a bin)
+[22:16:26.629] [INFO] [GStreamerPlayer] Final actual sink: videosink
+[22:16:26.629] [INFO] [GStreamerPlayer] ================================================
+[22:16:26.630] [INFO] [GStreamerPlayer] Set window handle: 2557540 on element: videosink
+[22:16:26.630] [INFO] [GStreamerPlayer] ========== RENDER RECTANGLE DIAGNOSTICS ==========
+[22:16:26.630] [INFO] [GStreamerPlayer] Widget logical size: 1400 x 740
+[22:16:26.630] [INFO] [GStreamerPlayer] Device pixel ratio (DPR): 2.25
+[22:16:26.630] [INFO] [GStreamerPlayer] Physical pixel size: 3150 x 1665
+[22:16:26.631] [INFO] [GStreamerPlayer] Widget geometry: QRect(0,0 1400x740)
+[22:16:26.631] [INFO] [GStreamerPlayer] Widget window ID: 2557540
+[22:16:26.631] [INFO] [GStreamerPlayer] Widget is visible: true
+[22:16:26.631] [INFO] [GStreamerPlayer] Widget native parent chain: QWidget(0x21cc2f3f4f0)
+[22:16:26.631] [INFO] [GStreamerPlayer] Screen name: "Q70A"
+[22:16:26.632] [INFO] [GStreamerPlayer] Screen geometry: QRect(0,0 1707x960)
+[22:16:26.632] [INFO] [GStreamerPlayer] Screen available geometry: QRect(0,0 1707x912)
+[22:16:26.632] [INFO] [GStreamerPlayer] Screen physical DPI: 35.8459
+[22:16:26.632] [INFO] [GStreamerPlayer] Screen logical DPI: 96
+[22:16:26.632] [INFO] [GStreamerPlayer] Screen device pixel ratio: 2.25
+[22:16:26.632] [INFO] [GStreamerPlayer] ====================================================
+[22:16:26.634] [INFO] [GStreamerPlayer] Loading media: "file:///Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 03.mp4"
+[22:16:26.634] [ERROR] [GStreamerPlayer] ########## REUSING PIPELINE ##########
+[22:16:26.634] [INFO] [GStreamerPlayer] Reusing existing pipeline with new URI (async preroll)
+[22:16:26.635] [DEBUG] [PreviewOverlay] GStreamer state changed to: 1
+[22:16:26.635] [DEBUG] [GStreamerPlayer] Playback started
+[22:16:26.636] [DEBUG] [GStreamerPlayer] State changed from NULL to READY
+[22:16:26.662] [DEBUG] [GStreamerPlayer] State changed from READY to PAUSED
+[22:16:26.662] [DEBUG] [GStreamerPlayer] Async operation done (preroll/seek completed)
+[22:16:26.664] [DEBUG] [PreviewOverlay] GStreamer media info: Duration: 30071 ms FPS: 23.976 Resolution: 2160 x 4096 Codec: "" Has Audio: false
+[22:16:26.664] [INFO] [GStreamerPlayer] ========== VIDEO STREAM INFO ==========
+[22:16:26.664] [INFO] [GStreamerPlayer] Video resolution: 2160 x 4096
+[22:16:26.666] [INFO] [GStreamerPlayer] Frame rate: 23.976 fps
+[22:16:26.666] [INFO] [GStreamerPlayer] Duration: 30071 ms
+[22:16:26.667] [INFO] [GStreamerPlayer] Has audio: false
+[22:16:26.667] [INFO] [GStreamerPlayer] ==========================================
+[22:16:26.668] [INFO] [GStreamerPlayer] Calling updateRenderRectangle() after preroll...
+[22:16:26.668] [DEBUG] [GStreamerPlayer] ========== UPDATE RENDER RECTANGLE ==========
+[22:16:26.668] [DEBUG] [GStreamerPlayer] Widget logical size: 1400 x 740
+[22:16:26.669] [DEBUG] [GStreamerPlayer] Device pixel ratio: 2.25
+[22:16:26.669] [DEBUG] [GStreamerPlayer] Physical pixel size: 3150 x 1665
+[22:16:26.669] [DEBUG] [GStreamerPlayer] Overlay element: videosink
+[22:16:26.670] [DEBUG] [GStreamerPlayer] =============================================
+[22:16:26.670] [DEBUG] [GStreamerPlayer] State changed from PAUSED to PLAYING
+[22:16:26.787] [DEBUG] [PreviewOverlay] Stopping playback
+[22:16:26.788] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:26.789] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:26.789] [DEBUG] [PreviewOverlay] Stopping playback
+[22:16:26.790] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:26.790] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:26.791] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:26.791] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:26.791] [WARN] QWidget::paintEngine: Should no longer be called
+[22:16:26.792] [DEBUG] [GStreamerPlayer] Video widget configured for embedding, WId: 2557540
+[22:16:26.792] [INFO] [GStreamerPlayer] ========== VIDEO SINK HIERARCHY ==========
+[22:16:26.793] [INFO] [GStreamerPlayer] Top-level video sink: videosink
+[22:16:26.793] [INFO] [GStreamerPlayer] Is bin: NO
+[22:16:26.794] [INFO] [GStreamerPlayer] Using top-level sink directly (not a bin)
+[22:16:26.795] [INFO] [GStreamerPlayer] Final actual sink: videosink
+[22:16:26.795] [INFO] [GStreamerPlayer] ================================================
+[22:16:26.796] [INFO] [GStreamerPlayer] Set window handle: 2557540 on element: videosink
+[22:16:26.796] [INFO] [GStreamerPlayer] ========== RENDER RECTANGLE DIAGNOSTICS ==========
+[22:16:26.797] [INFO] [GStreamerPlayer] Widget logical size: 1400 x 740
+[22:16:26.797] [INFO] [GStreamerPlayer] Device pixel ratio (DPR): 2.25
+[22:16:26.798] [INFO] [GStreamerPlayer] Physical pixel size: 3150 x 1665
+[22:16:26.799] [INFO] [GStreamerPlayer] Widget geometry: QRect(0,0 1400x740)
+[22:16:26.799] [INFO] [GStreamerPlayer] Widget window ID: 2557540
+[22:16:26.799] [INFO] [GStreamerPlayer] Widget is visible: true
+[22:16:26.800] [INFO] [GStreamerPlayer] Widget native parent chain: QWidget(0x21cc2f3f4f0)
+[22:16:26.800] [INFO] [GStreamerPlayer] Screen name: "Q70A"
+[22:16:26.800] [INFO] [GStreamerPlayer] Screen geometry: QRect(0,0 1707x960)
+[22:16:26.800] [INFO] [GStreamerPlayer] Screen available geometry: QRect(0,0 1707x912)
+[22:16:26.801] [INFO] [GStreamerPlayer] Screen physical DPI: 35.8459
+[22:16:26.801] [INFO] [GStreamerPlayer] Screen logical DPI: 96
+[22:16:26.801] [INFO] [GStreamerPlayer] Screen device pixel ratio: 2.25
+[22:16:26.802] [INFO] [GStreamerPlayer] ====================================================
+[22:16:26.802] [INFO] [GStreamerPlayer] Loading media: "file:///Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 04.mp4"
+[22:16:26.802] [ERROR] [GStreamerPlayer] ########## REUSING PIPELINE ##########
+[22:16:26.803] [INFO] [GStreamerPlayer] Reusing existing pipeline with new URI (async preroll)
+[22:16:26.803] [DEBUG] [PreviewOverlay] GStreamer state changed to: 1
+[22:16:26.803] [DEBUG] [GStreamerPlayer] Playback started
+[22:16:26.806] [DEBUG] [GStreamerPlayer] State changed from NULL to READY
+[22:16:26.822] [DEBUG] [GStreamerPlayer] State changed from READY to PAUSED
+[22:16:26.824] [DEBUG] [GStreamerPlayer] Async operation done (preroll/seek completed)
+[22:16:26.824] [DEBUG] [PreviewOverlay] GStreamer media info: Duration: 26234 ms FPS: 23.976 Resolution: 2160 x 4096 Codec: "" Has Audio: false
+[22:16:26.824] [INFO] [GStreamerPlayer] ========== VIDEO STREAM INFO ==========
+[22:16:26.824] [INFO] [GStreamerPlayer] Video resolution: 2160 x 4096
+[22:16:26.825] [INFO] [GStreamerPlayer] Frame rate: 23.976 fps
+[22:16:26.826] [INFO] [GStreamerPlayer] Duration: 26234 ms
+[22:16:26.826] [INFO] [GStreamerPlayer] Has audio: false
+[22:16:26.826] [INFO] [GStreamerPlayer] ==========================================
+[22:16:26.827] [INFO] [GStreamerPlayer] Calling updateRenderRectangle() after preroll...
+[22:16:26.827] [DEBUG] [GStreamerPlayer] ========== UPDATE RENDER RECTANGLE ==========
+[22:16:26.827] [DEBUG] [GStreamerPlayer] Widget logical size: 1400 x 740
+[22:16:26.828] [DEBUG] [GStreamerPlayer] Device pixel ratio: 2.25
+[22:16:26.828] [DEBUG] [GStreamerPlayer] Physical pixel size: 3150 x 1665
+[22:16:26.828] [DEBUG] [GStreamerPlayer] Overlay element: videosink
+[22:16:26.829] [DEBUG] [GStreamerPlayer] =============================================
+[22:16:26.829] [DEBUG] [GStreamerPlayer] State changed from PAUSED to PLAYING
+[22:16:26.952] [DEBUG] [PreviewOverlay] Stopping playback
+[22:16:26.954] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:26.954] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:26.955] [DEBUG] [PreviewOverlay] Stopping playback
+[22:16:26.955] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:26.956] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:26.957] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:26.957] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:26.957] [WARN] QWidget::paintEngine: Should no longer be called
+[22:16:26.958] [DEBUG] [GStreamerPlayer] Video widget configured for embedding, WId: 2557540
+[22:16:26.958] [INFO] [GStreamerPlayer] ========== VIDEO SINK HIERARCHY ==========
+[22:16:26.960] [INFO] [GStreamerPlayer] Top-level video sink: videosink
+[22:16:26.960] [INFO] [GStreamerPlayer] Is bin: NO
+[22:16:26.960] [INFO] [GStreamerPlayer] Using top-level sink directly (not a bin)
+[22:16:26.961] [INFO] [GStreamerPlayer] Final actual sink: videosink
+[22:16:26.961] [INFO] [GStreamerPlayer] ================================================
+[22:16:26.961] [INFO] [GStreamerPlayer] Set window handle: 2557540 on element: videosink
+[22:16:26.961] [INFO] [GStreamerPlayer] ========== RENDER RECTANGLE DIAGNOSTICS ==========
+[22:16:26.962] [INFO] [GStreamerPlayer] Widget logical size: 1400 x 740
+[22:16:26.962] [INFO] [GStreamerPlayer] Device pixel ratio (DPR): 2.25
+[22:16:26.962] [INFO] [GStreamerPlayer] Physical pixel size: 3150 x 1665
+[22:16:26.963] [INFO] [GStreamerPlayer] Widget geometry: QRect(0,0 1400x740)
+[22:16:26.963] [INFO] [GStreamerPlayer] Widget window ID: 2557540
+[22:16:26.963] [INFO] [GStreamerPlayer] Widget is visible: true
+[22:16:26.964] [INFO] [GStreamerPlayer] Widget native parent chain: QWidget(0x21cc2f3f4f0)
+[22:16:26.964] [INFO] [GStreamerPlayer] Screen name: "Q70A"
+[22:16:26.964] [INFO] [GStreamerPlayer] Screen geometry: QRect(0,0 1707x960)
+[22:16:26.964] [INFO] [GStreamerPlayer] Screen available geometry: QRect(0,0 1707x912)
+[22:16:26.964] [INFO] [GStreamerPlayer] Screen physical DPI: 35.8459
+[22:16:26.966] [INFO] [GStreamerPlayer] Screen logical DPI: 96
+[22:16:26.966] [INFO] [GStreamerPlayer] Screen device pixel ratio: 2.25
+[22:16:26.967] [INFO] [GStreamerPlayer] ====================================================
+[22:16:26.967] [INFO] [GStreamerPlayer] Loading media: "file:///Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 05.mp4"
+[22:16:26.967] [ERROR] [GStreamerPlayer] ########## REUSING PIPELINE ##########
+[22:16:26.967] [INFO] [GStreamerPlayer] Reusing existing pipeline with new URI (async preroll)
+[22:16:26.968] [DEBUG] [PreviewOverlay] GStreamer state changed to: 1
+[22:16:26.968] [DEBUG] [GStreamerPlayer] Playback started
+[22:16:26.970] [DEBUG] [GStreamerPlayer] State changed from NULL to READY
+[22:16:26.992] [DEBUG] [GStreamerPlayer] State changed from READY to PAUSED
+[22:16:26.994] [DEBUG] [GStreamerPlayer] Async operation done (preroll/seek completed)
+[22:16:26.994] [DEBUG] [PreviewOverlay] GStreamer media info: Duration: 30030 ms FPS: 23.976 Resolution: 2160 x 4096 Codec: "" Has Audio: false
+[22:16:26.994] [INFO] [GStreamerPlayer] ========== VIDEO STREAM INFO ==========
+[22:16:26.995] [INFO] [GStreamerPlayer] Video resolution: 2160 x 4096
+[22:16:26.995] [INFO] [GStreamerPlayer] Frame rate: 23.976 fps
+[22:16:26.995] [INFO] [GStreamerPlayer] Duration: 30030 ms
+[22:16:26.996] [INFO] [GStreamerPlayer] Has audio: false
+[22:16:26.996] [INFO] [GStreamerPlayer] ==========================================
+[22:16:26.996] [INFO] [GStreamerPlayer] Calling updateRenderRectangle() after preroll...
+[22:16:26.997] [DEBUG] [GStreamerPlayer] ========== UPDATE RENDER RECTANGLE ==========
+[22:16:26.997] [DEBUG] [GStreamerPlayer] Widget logical size: 1400 x 740
+[22:16:26.997] [DEBUG] [GStreamerPlayer] Device pixel ratio: 2.25
+[22:16:26.997] [DEBUG] [GStreamerPlayer] Physical pixel size: 3150 x 1665
+[22:16:26.998] [DEBUG] [GStreamerPlayer] Overlay element: videosink
+[22:16:26.998] [DEBUG] [GStreamerPlayer] =============================================
+[22:16:26.999] [DEBUG] [GStreamerPlayer] State changed from PAUSED to PLAYING
+[22:16:27.100] [DEBUG] [PreviewOverlay] Stopping playback
+[22:16:27.101] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:27.102] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:27.103] [DEBUG] [PreviewOverlay] Stopping playback
+[22:16:27.104] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:27.104] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:27.105] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:27.105] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:27.105] [WARN] QWidget::paintEngine: Should no longer be called
+[22:16:27.106] [DEBUG] [GStreamerPlayer] Video widget configured for embedding, WId: 2557540
+[22:16:27.106] [INFO] [GStreamerPlayer] ========== VIDEO SINK HIERARCHY ==========
+[22:16:27.107] [INFO] [GStreamerPlayer] Top-level video sink: videosink
+[22:16:27.107] [INFO] [GStreamerPlayer] Is bin: NO
+[22:16:27.108] [INFO] [GStreamerPlayer] Using top-level sink directly (not a bin)
+[22:16:27.108] [INFO] [GStreamerPlayer] Final actual sink: videosink
+[22:16:27.108] [INFO] [GStreamerPlayer] ================================================
+[22:16:27.109] [INFO] [GStreamerPlayer] Set window handle: 2557540 on element: videosink
+[22:16:27.109] [INFO] [GStreamerPlayer] ========== RENDER RECTANGLE DIAGNOSTICS ==========
+[22:16:27.110] [INFO] [GStreamerPlayer] Widget logical size: 1400 x 740
+[22:16:27.110] [INFO] [GStreamerPlayer] Device pixel ratio (DPR): 2.25
+[22:16:27.110] [INFO] [GStreamerPlayer] Physical pixel size: 3150 x 1665
+[22:16:27.110] [INFO] [GStreamerPlayer] Widget geometry: QRect(0,0 1400x740)
+[22:16:27.111] [INFO] [GStreamerPlayer] Widget window ID: 2557540
+[22:16:27.111] [INFO] [GStreamerPlayer] Widget is visible: true
+[22:16:27.112] [INFO] [GStreamerPlayer] Widget native parent chain: QWidget(0x21cc2f3f4f0)
+[22:16:27.112] [INFO] [GStreamerPlayer] Screen name: "Q70A"
+[22:16:27.113] [INFO] [GStreamerPlayer] Screen geometry: QRect(0,0 1707x960)
+[22:16:27.113] [INFO] [GStreamerPlayer] Screen available geometry: QRect(0,0 1707x912)
+[22:16:27.113] [INFO] [GStreamerPlayer] Screen physical DPI: 35.8459
+[22:16:27.114] [INFO] [GStreamerPlayer] Screen logical DPI: 96
+[22:16:27.114] [INFO] [GStreamerPlayer] Screen device pixel ratio: 2.25
+[22:16:27.115] [INFO] [GStreamerPlayer] ====================================================
+[22:16:27.115] [INFO] [GStreamerPlayer] Loading media: "file:///Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 06.mp4"
+[22:16:27.115] [ERROR] [GStreamerPlayer] ########## REUSING PIPELINE ##########
+[22:16:27.115] [INFO] [GStreamerPlayer] Reusing existing pipeline with new URI (async preroll)
+[22:16:27.117] [DEBUG] [PreviewOverlay] GStreamer state changed to: 1
+[22:16:27.117] [DEBUG] [GStreamerPlayer] Playback started
+[22:16:27.121] [DEBUG] [GStreamerPlayer] State changed from NULL to READY
+[22:16:27.135] [DEBUG] [GStreamerPlayer] State changed from READY to PAUSED
+[22:16:27.136] [DEBUG] [GStreamerPlayer] Async operation done (preroll/seek completed)
+[22:16:27.137] [DEBUG] [PreviewOverlay] GStreamer media info: Duration: 30071 ms FPS: 23.976 Resolution: 2160 x 4096 Codec: "" Has Audio: false
+[22:16:27.137] [INFO] [GStreamerPlayer] ========== VIDEO STREAM INFO ==========
+[22:16:27.138] [INFO] [GStreamerPlayer] Video resolution: 2160 x 4096
+[22:16:27.138] [INFO] [GStreamerPlayer] Frame rate: 23.976 fps
+[22:16:27.139] [INFO] [GStreamerPlayer] Duration: 30071 ms
+[22:16:27.139] [INFO] [GStreamerPlayer] Has audio: false
+[22:16:27.140] [INFO] [GStreamerPlayer] ==========================================
+[22:16:27.140] [INFO] [GStreamerPlayer] Calling updateRenderRectangle() after preroll...
+[22:16:27.140] [DEBUG] [GStreamerPlayer] ========== UPDATE RENDER RECTANGLE ==========
+[22:16:27.141] [DEBUG] [GStreamerPlayer] Widget logical size: 1400 x 740
+[22:16:27.141] [DEBUG] [GStreamerPlayer] Device pixel ratio: 2.25
+[22:16:27.141] [DEBUG] [GStreamerPlayer] Physical pixel size: 3150 x 1665
+[22:16:27.142] [DEBUG] [GStreamerPlayer] Overlay element: videosink
+[22:16:27.142] [DEBUG] [GStreamerPlayer] =============================================
+[22:16:27.142] [DEBUG] [GStreamerPlayer] State changed from PAUSED to PLAYING
+[22:16:27.275] [DEBUG] [PreviewOverlay] Stopping playback
+[22:16:27.276] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:27.276] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:27.277] [DEBUG] [PreviewOverlay] Stopping playback
+[22:16:27.278] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:27.278] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:27.279] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:27.279] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:27.280] [WARN] QWidget::paintEngine: Should no longer be called
+[22:16:27.281] [DEBUG] [GStreamerPlayer] Video widget configured for embedding, WId: 2557540
+[22:16:27.281] [INFO] [GStreamerPlayer] ========== VIDEO SINK HIERARCHY ==========
+[22:16:27.282] [INFO] [GStreamerPlayer] Top-level video sink: videosink
+[22:16:27.282] [INFO] [GStreamerPlayer] Is bin: NO
+[22:16:27.283] [INFO] [GStreamerPlayer] Using top-level sink directly (not a bin)
+[22:16:27.283] [INFO] [GStreamerPlayer] Final actual sink: videosink
+[22:16:27.283] [INFO] [GStreamerPlayer] ================================================
+[22:16:27.284] [INFO] [GStreamerPlayer] Set window handle: 2557540 on element: videosink
+[22:16:27.284] [INFO] [GStreamerPlayer] ========== RENDER RECTANGLE DIAGNOSTICS ==========
+[22:16:27.284] [INFO] [GStreamerPlayer] Widget logical size: 1400 x 740
+[22:16:27.284] [INFO] [GStreamerPlayer] Device pixel ratio (DPR): 2.25
+[22:16:27.285] [INFO] [GStreamerPlayer] Physical pixel size: 3150 x 1665
+[22:16:27.285] [INFO] [GStreamerPlayer] Widget geometry: QRect(0,0 1400x740)
+[22:16:27.286] [INFO] [GStreamerPlayer] Widget window ID: 2557540
+[22:16:27.286] [INFO] [GStreamerPlayer] Widget is visible: true
+[22:16:27.287] [INFO] [GStreamerPlayer] Widget native parent chain: QWidget(0x21cc2f3f4f0)
+[22:16:27.287] [INFO] [GStreamerPlayer] Screen name: "Q70A"
+[22:16:27.287] [INFO] [GStreamerPlayer] Screen geometry: QRect(0,0 1707x960)
+[22:16:27.288] [INFO] [GStreamerPlayer] Screen available geometry: QRect(0,0 1707x912)
+[22:16:27.288] [INFO] [GStreamerPlayer] Screen physical DPI: 35.8459
+[22:16:27.289] [INFO] [GStreamerPlayer] Screen logical DPI: 96
+[22:16:27.289] [INFO] [GStreamerPlayer] Screen device pixel ratio: 2.25
+[22:16:27.290] [INFO] [GStreamerPlayer] ====================================================
+[22:16:27.290] [INFO] [GStreamerPlayer] Loading media: "file:///Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 07.mp4"
+[22:16:27.290] [ERROR] [GStreamerPlayer] ########## REUSING PIPELINE ##########
+[22:16:27.291] [INFO] [GStreamerPlayer] Reusing existing pipeline with new URI (async preroll)
+[22:16:27.291] [DEBUG] [PreviewOverlay] GStreamer state changed to: 1
+[22:16:27.292] [DEBUG] [GStreamerPlayer] Playback started
+[22:16:27.294] [DEBUG] [GStreamerPlayer] State changed from NULL to READY
+[22:16:27.313] [DEBUG] [GStreamerPlayer] State changed from READY to PAUSED
+[22:16:27.314] [DEBUG] [GStreamerPlayer] Async operation done (preroll/seek completed)
+[22:16:27.314] [DEBUG] [PreviewOverlay] GStreamer media info: Duration: 29988 ms FPS: 23.976 Resolution: 2160 x 4096 Codec: "" Has Audio: false
+[22:16:27.314] [INFO] [GStreamerPlayer] ========== VIDEO STREAM INFO ==========
+[22:16:27.314] [INFO] [GStreamerPlayer] Video resolution: 2160 x 4096
+[22:16:27.316] [INFO] [GStreamerPlayer] Frame rate: 23.976 fps
+[22:16:27.316] [INFO] [GStreamerPlayer] Duration: 29988 ms
+[22:16:27.316] [INFO] [GStreamerPlayer] Has audio: false
+[22:16:27.317] [INFO] [GStreamerPlayer] ==========================================
+[22:16:27.317] [INFO] [GStreamerPlayer] Calling updateRenderRectangle() after preroll...
+[22:16:27.318] [DEBUG] [GStreamerPlayer] ========== UPDATE RENDER RECTANGLE ==========
+[22:16:27.318] [DEBUG] [GStreamerPlayer] Widget logical size: 1400 x 740
+[22:16:27.318] [DEBUG] [GStreamerPlayer] Device pixel ratio: 2.25
+[22:16:27.319] [DEBUG] [GStreamerPlayer] Physical pixel size: 3150 x 1665
+[22:16:27.319] [DEBUG] [GStreamerPlayer] Overlay element: videosink
+[22:16:27.320] [DEBUG] [GStreamerPlayer] =============================================
+[22:16:27.320] [DEBUG] [GStreamerPlayer] State changed from PAUSED to PLAYING
+[22:16:27.423] [DEBUG] [PreviewOverlay] Stopping playback
+[22:16:27.423] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:27.424] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:27.425] [DEBUG] [PreviewOverlay] Stopping playback
+[22:16:27.425] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:27.426] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:27.427] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:27.427] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:27.427] [WARN] QWidget::paintEngine: Should no longer be called
+[22:16:27.428] [DEBUG] [GStreamerPlayer] Video widget configured for embedding, WId: 2557540
+[22:16:27.428] [INFO] [GStreamerPlayer] ========== VIDEO SINK HIERARCHY ==========
+[22:16:27.429] [INFO] [GStreamerPlayer] Top-level video sink: videosink
+[22:16:27.429] [INFO] [GStreamerPlayer] Is bin: NO
+[22:16:27.429] [INFO] [GStreamerPlayer] Using top-level sink directly (not a bin)
+[22:16:27.430] [INFO] [GStreamerPlayer] Final actual sink: videosink
+[22:16:27.430] [INFO] [GStreamerPlayer] ================================================
+[22:16:27.430] [INFO] [GStreamerPlayer] Set window handle: 2557540 on element: videosink
+[22:16:27.431] [INFO] [GStreamerPlayer] ========== RENDER RECTANGLE DIAGNOSTICS ==========
+[22:16:27.431] [INFO] [GStreamerPlayer] Widget logical size: 1400 x 740
+[22:16:27.431] [INFO] [GStreamerPlayer] Device pixel ratio (DPR): 2.25
+[22:16:27.432] [INFO] [GStreamerPlayer] Physical pixel size: 3150 x 1665
+[22:16:27.432] [INFO] [GStreamerPlayer] Widget geometry: QRect(0,0 1400x740)
+[22:16:27.433] [INFO] [GStreamerPlayer] Widget window ID: 2557540
+[22:16:27.433] [INFO] [GStreamerPlayer] Widget is visible: true
+[22:16:27.433] [INFO] [GStreamerPlayer] Widget native parent chain: QWidget(0x21cc2f3f4f0)
+[22:16:27.434] [INFO] [GStreamerPlayer] Screen name: "Q70A"
+[22:16:27.435] [INFO] [GStreamerPlayer] Screen geometry: QRect(0,0 1707x960)
+[22:16:27.435] [INFO] [GStreamerPlayer] Screen available geometry: QRect(0,0 1707x912)
+[22:16:27.435] [INFO] [GStreamerPlayer] Screen physical DPI: 35.8459
+[22:16:27.435] [INFO] [GStreamerPlayer] Screen logical DPI: 96
+[22:16:27.436] [INFO] [GStreamerPlayer] Screen device pixel ratio: 2.25
+[22:16:27.436] [INFO] [GStreamerPlayer] ====================================================
+[22:16:27.437] [INFO] [GStreamerPlayer] Loading media: "file:///Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 08.mp4"
+[22:16:27.437] [ERROR] [GStreamerPlayer] ########## REUSING PIPELINE ##########
+[22:16:27.438] [INFO] [GStreamerPlayer] Reusing existing pipeline with new URI (async preroll)
+[22:16:27.438] [DEBUG] [PreviewOverlay] GStreamer state changed to: 1
+[22:16:27.439] [DEBUG] [GStreamerPlayer] Playback started
+[22:16:27.441] [DEBUG] [GStreamerPlayer] State changed from NULL to READY
+[22:16:27.462] [DEBUG] [GStreamerPlayer] State changed from READY to PAUSED
+[22:16:27.463] [DEBUG] [GStreamerPlayer] Async operation done (preroll/seek completed)
+[22:16:27.464] [DEBUG] [PreviewOverlay] GStreamer media info: Duration: 15056 ms FPS: 23.976 Resolution: 2160 x 4096 Codec: "" Has Audio: false
+[22:16:27.464] [INFO] [GStreamerPlayer] ========== VIDEO STREAM INFO ==========
+[22:16:27.464] [INFO] [GStreamerPlayer] Video resolution: 2160 x 4096
+[22:16:27.465] [INFO] [GStreamerPlayer] Frame rate: 23.976 fps
+[22:16:27.465] [INFO] [GStreamerPlayer] Duration: 15056 ms
+[22:16:27.465] [INFO] [GStreamerPlayer] Has audio: false
+[22:16:27.466] [INFO] [GStreamerPlayer] ==========================================
+[22:16:27.466] [INFO] [GStreamerPlayer] Calling updateRenderRectangle() after preroll...
+[22:16:27.466] [DEBUG] [GStreamerPlayer] ========== UPDATE RENDER RECTANGLE ==========
+[22:16:27.466] [DEBUG] [GStreamerPlayer] Widget logical size: 1400 x 740
+[22:16:27.467] [DEBUG] [GStreamerPlayer] Device pixel ratio: 2.25
+[22:16:27.467] [DEBUG] [GStreamerPlayer] Physical pixel size: 3150 x 1665
+[22:16:27.467] [DEBUG] [GStreamerPlayer] Overlay element: videosink
+[22:16:27.467] [DEBUG] [GStreamerPlayer] =============================================
+[22:16:27.468] [DEBUG] [GStreamerPlayer] State changed from PAUSED to PLAYING
+[22:16:27.581] [DEBUG] [PreviewOverlay] Stopping playback
+[22:16:27.582] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:27.582] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:27.583] [DEBUG] [PreviewOverlay] Stopping playback
+[22:16:27.583] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:27.584] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:27.584] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:27.584] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:27.585] [WARN] QWidget::paintEngine: Should no longer be called
+[22:16:27.585] [DEBUG] [GStreamerPlayer] Video widget configured for embedding, WId: 2557540
+[22:16:27.586] [INFO] [GStreamerPlayer] ========== VIDEO SINK HIERARCHY ==========
+[22:16:27.586] [INFO] [GStreamerPlayer] Top-level video sink: videosink
+[22:16:27.586] [INFO] [GStreamerPlayer] Is bin: NO
+[22:16:27.587] [INFO] [GStreamerPlayer] Using top-level sink directly (not a bin)
+[22:16:27.587] [INFO] [GStreamerPlayer] Final actual sink: videosink
+[22:16:27.588] [INFO] [GStreamerPlayer] ================================================
+[22:16:27.588] [INFO] [GStreamerPlayer] Set window handle: 2557540 on element: videosink
+[22:16:27.588] [INFO] [GStreamerPlayer] ========== RENDER RECTANGLE DIAGNOSTICS ==========
+[22:16:27.589] [INFO] [GStreamerPlayer] Widget logical size: 1400 x 740
+[22:16:27.590] [INFO] [GStreamerPlayer] Device pixel ratio (DPR): 2.25
+[22:16:27.590] [INFO] [GStreamerPlayer] Physical pixel size: 3150 x 1665
+[22:16:27.590] [INFO] [GStreamerPlayer] Widget geometry: QRect(0,0 1400x740)
+[22:16:27.591] [INFO] [GStreamerPlayer] Widget window ID: 2557540
+[22:16:27.591] [INFO] [GStreamerPlayer] Widget is visible: true
+[22:16:27.591] [INFO] [GStreamerPlayer] Widget native parent chain: QWidget(0x21cc2f3f4f0)
+[22:16:27.591] [INFO] [GStreamerPlayer] Screen name: "Q70A"
+[22:16:27.592] [INFO] [GStreamerPlayer] Screen geometry: QRect(0,0 1707x960)
+[22:16:27.592] [INFO] [GStreamerPlayer] Screen available geometry: QRect(0,0 1707x912)
+[22:16:27.593] [INFO] [GStreamerPlayer] Screen physical DPI: 35.8459
+[22:16:27.593] [INFO] [GStreamerPlayer] Screen logical DPI: 96
+[22:16:27.593] [INFO] [GStreamerPlayer] Screen device pixel ratio: 2.25
+[22:16:27.594] [INFO] [GStreamerPlayer] ====================================================
+[22:16:27.594] [INFO] [GStreamerPlayer] Loading media: "file:///Z:/ActionVFX/Fire/Burn/Ceiling/Fire Ceiling 60fps 09.mp4"
+[22:16:27.595] [ERROR] [GStreamerPlayer] ########## REUSING PIPELINE ##########
+[22:16:27.595] [INFO] [GStreamerPlayer] Reusing existing pipeline with new URI (async preroll)
+[22:16:27.596] [DEBUG] [PreviewOverlay] GStreamer state changed to: 1
+[22:16:27.596] [DEBUG] [GStreamerPlayer] Playback started
+[22:16:27.598] [DEBUG] [GStreamerPlayer] State changed from NULL to READY
+[22:16:27.613] [DEBUG] [GStreamerPlayer] State changed from READY to PAUSED
+[22:16:27.614] [DEBUG] [GStreamerPlayer] Async operation done (preroll/seek completed)
+[22:16:27.614] [DEBUG] [PreviewOverlay] GStreamer media info: Duration: 30071 ms FPS: 23.976 Resolution: 2160 x 4096 Codec: "" Has Audio: false
+[22:16:27.614] [INFO] [GStreamerPlayer] ========== VIDEO STREAM INFO ==========
+[22:16:27.616] [INFO] [GStreamerPlayer] Video resolution: 2160 x 4096
+[22:16:27.616] [INFO] [GStreamerPlayer] Frame rate: 23.976 fps
+[22:16:27.616] [INFO] [GStreamerPlayer] Duration: 30071 ms
+[22:16:27.616] [INFO] [GStreamerPlayer] Has audio: false
+[22:16:27.617] [INFO] [GStreamerPlayer] ==========================================
+[22:16:27.617] [INFO] [GStreamerPlayer] Calling updateRenderRectangle() after preroll...
+[22:16:27.618] [DEBUG] [GStreamerPlayer] ========== UPDATE RENDER RECTANGLE ==========
+[22:16:27.618] [DEBUG] [GStreamerPlayer] Widget logical size: 1400 x 740
+[22:16:27.618] [DEBUG] [GStreamerPlayer] Device pixel ratio: 2.25
+[22:16:27.619] [DEBUG] [GStreamerPlayer] Physical pixel size: 3150 x 1665
+[22:16:27.619] [DEBUG] [GStreamerPlayer] Overlay element: videosink
+[22:16:27.619] [DEBUG] [GStreamerPlayer] =============================================
+[22:16:27.620] [DEBUG] [GStreamerPlayer] State changed from PAUSED to PLAYING
+[22:16:28.201] [DEBUG] [PreviewOverlay] Stopping playback
+[22:16:28.202] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:28.203] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:28.204] [DEBUG] [PreviewOverlay] Stopping playback
+[22:16:28.204] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:28.205] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:28.253] [DEBUG] [PreviewOverlay::~PreviewOverlay] Destructor starting
+[22:16:28.255] [DEBUG] [PreviewOverlay] Stopping playback
+[22:16:28.255] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[22:16:28.255] [DEBUG] [GStreamerPlayer] Playback stopped
+[22:16:28.256] [DEBUG] [PreviewOverlay::~PreviewOverlay] Deleting frame cache
+[22:16:28.256] [DEBUG] [SequenceFrameCache::~SequenceFrameCache] Destructor starting
+[22:16:28.257] [DEBUG] [SequenceFrameCache::~SequenceFrameCache] Destructor complete
+[22:16:28.257] [DEBUG] [PreviewOverlay::~PreviewOverlay] Destructor complete
+[22:16:30.309] [DEBUG] [ContextPreserver] Saved context for folder 1
+[22:16:30.310] [WARN] QMainWindow::saveState(): 'objectName' not set for QDockWidget 0x21c8f46a190 'Application Log;
+[22:16:30.311] [INFO] [MAIN] aboutToQuit
+[22:16:30.312] [INFO] [MAIN] Event loop exited with code 0

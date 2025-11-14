@@ -1,0 +1,227 @@
+[21:41:35.491] [INFO] [MAIN] Message handler configured; app dir=Z:/portable/bin
+[21:41:35.491] [INFO] Application started
+[21:41:35.491] [INFO] [MAIN] Before DB init
+[21:41:35.657] [INFO] [MAIN] DB init ok at: C:/Users/npitt/AppData/Roaming/KAsset/KAsset Manager Qt/kasset.db
+[21:41:35.657] [INFO] [MAIN] Creating MainWindow
+[21:41:35.669] [INFO] [MAINWINDOW] ctor begin
+[21:41:36.897] [DEBUG] [TRACE] setupUi enter
+[21:41:37.087] [DEBUG] Folders reload complete
+[21:41:37.087] [DEBUG] [TRACE] folder model created
+[21:41:37.090] [DEBUG] [TRACE] folder model set on tree
+[21:41:37.149] [DEBUG] [TRACE] assetGridView + model wired
+[21:41:37.157] [DEBUG] [TRACE] assetScrubController ready
+[21:41:37.274] [DEBUG] [TRACE] fmScrubController ready
+[21:41:37.275] [DEBUG] [TRACE] fmListView created
+[21:41:37.276] [DEBUG] [TRACE] fmListView wired
+[21:41:37.276] [DEBUG] [TRACE] fmViewStack initialised
+[21:41:37.276] [DEBUG] [TRACE] fmRightSplitter created
+[21:41:37.277] [DEBUG] [TRACE] fm view container ready
+[21:41:37.277] [DEBUG] [TRACE] fm preview header ready
+[21:41:37.342] [DEBUG] [TRACE] setupFileManagerUi exit
+[21:41:37.350] [DEBUG] [TRACE] logDock created
+[21:41:37.355] [DEBUG] [TRACE] logDock initialised
+[21:41:37.355] [DEBUG] [TRACE] logDock visibility hook set
+[21:41:37.357] [DEBUG] [TRACE] restore settings begin
+[21:41:37.357] [DEBUG] [TRACE] restore window geometry/state done
+[21:41:37.357] [DEBUG] [TRACE] restore mainSplitter state done
+[21:41:37.357] [DEBUG] [TRACE] restore rightSplitter state done
+[21:41:37.357] [DEBUG] [TRACE] restore view mode flag: 1
+[21:41:37.359] [DEBUG] [TRACE] restored version table columns
+[21:41:37.359] [DEBUG] [TRACE] applied view mode toggle
+[21:41:37.359] [DEBUG] [TRACE] restore asset manager view
+[21:41:37.359] [DEBUG] [TRACE] restore asset table columns
+[21:41:37.360] [DEBUG] [TRACE] window state restored
+[21:41:37.361] [DEBUG] Folders reload complete
+[21:41:37.362] [DEBUG] [TRACE] mainwindow ctor finished
+[21:41:37.363] [INFO] [MAIN] MainWindow constructed
+[21:41:37.481] [INFO] [MAIN] MainWindow shown
+[21:41:37.483] [INFO] [GStreamerPlayer] GStreamer initialized successfully
+[21:41:37.484] [INFO] [GStreamerPlayer] GStreamer version: GStreamer 1.26.8
+[21:41:37.493] [INFO] [GStreamerPlayer] Available sinks: d3d11= true d3d= true gl= true
+[21:41:37.494] [INFO] [LivePreview] Renderer backend: OIIO+Qt (no tlRender)
+[21:41:37.494] [INFO] [FFmpegPlayer] Initializing unified FFmpeg playback backend
+[21:41:37.495] [INFO] [FFmpegPlayer] FFmpeg version "61.19.100" "-Ddebug=true -Doptimization=2 -Dpkgconfig.relocatable=true -Db_vscrt=md -Davdevice=disabled -Dprograms=disabled -Dflac_encoder=disabled -Dprotocols=disabled -Ddevices=disabled -Dnetwork=disabled -Dhwaccels=disabled -Ddxva2=disabled -Dvdpau=disabled -Dfilters=disabled -Dpsnr_filter=enabled -Dssim_filter=enabled -Dscale_filter=enabled -Dyadif_filter=enabled -Dd3d11va=disabled -Daudiotoolbox=disabled -Dvideotoolbox=disabled -Dvaapi=disabled -Dcrystalhd=disabled -Dmediacodec=disabled -Dmediafoundation=disabled -Dnvenc=disabled -Dmmal=disabled -Domx=disabled -Domx_rpi=disabled -Dcuda=disabled -Dcuvid=disabled -Dlibmfx=disabled -Dlibnpp=disabled -Diconv=disabled -Djni=disabled -Dv4l2_m2m=disabled -Dvulkan=disabled -Dtests=disabled -Dnonfree=disabled -Dversion3=disabled -Dprefix=C:/projects/repos/cerbero.git/1.26/build/dist/msvc_x86_64 -Dlibdir=lib -Dbackend=ninja -Ddefault_library=both -Dwrap_mode=nodownload --native-file=C:/projects/repos/cerbero.git/1.26/build/sources/msvc_x86_64/ffmpeg-7.1/b/meson-native-file.txt"
+[21:41:37.495] [INFO] [FFmpegPlayer] Supported hardware accelerations: ""
+[21:41:37.495] [INFO] [FFmpegPlayer] Initialization complete: Hardware acceleration: enabled Cache size: 100 frames Memory limit: 512 MB
+[21:41:37.495] [INFO] [LivePreview] Unified FFmpegPlayer initialized with hardware acceleration
+[21:41:37.497] [INFO] [LivePreview] Cache size set to 256 entries
+[21:41:37.497] [DEBUG] VirtualFolderTreeModel::reload()
+[21:41:37.498] [DEBUG] [INIT] Tag buttons and mode added
+[21:41:37.518] [WARN] QWidget::paintEngine: Should no longer be called
+[21:41:37.571] [DEBUG] VirtualFolderTreeModel::reload()
+[21:41:37.572] [DEBUG] [ContextPreserver] Restored last active folder: 2
+[21:41:37.572] [DEBUG] [INIT] tagsListView viewport event filter installed (late)
+[21:41:37.574] [INFO] [MAIN] Event loop entered
+[21:41:37.636] [INFO] [LivePreview] Sequence detection ENABLED
+[21:41:37.637] [INFO] [LivePreview] Sequence detection ENABLED
+[21:41:37.693] [DEBUG] [NAV] Folder change applied to id= 1 , working set (MB)= 126
+[21:41:37.695] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 01 .mp4" seqDetection= true
+[21:41:37.695] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 02 .mp4" seqDetection= true
+[21:41:37.697] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 03 .mp4" seqDetection= true
+[21:41:37.698] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 04 .mp4" seqDetection= true
+[21:41:37.699] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 05 .mp4" seqDetection= true
+[21:41:37.699] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 06 .mp4" seqDetection= true
+[21:41:37.699] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 07 .mp4" seqDetection= true
+[21:41:37.700] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 08 .mp4" seqDetection= true
+[21:41:37.702] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 09 .mp4" seqDetection= true
+[21:41:37.703] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 10 .mp4" seqDetection= true
+[21:41:37.715] [DEBUG] [ContextPreserver] Loaded context for folder 1 - scroll: 0 grid: false search: ""
+[21:41:37.748] [DEBUG] DB query (assets by folder 1) started
+[21:41:37.748] [DEBUG] DB query complete: 0 rows
+[21:41:37.749] [DEBUG] AssetsModel reload: 0 assets in 1 ms
+[21:41:38.626] [DEBUG] [NAV] Post-change working set (MB)= 321
+[21:41:38.936] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 05 .mp4" : 30071 ms
+[21:41:38.938] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 05 .mp4" : 30071 ms
+[21:41:38.939] [DEBUG] [LivePreview] Scrubbing to position: 0 -> 0 ms (duration: 30071 ms)
+[21:41:38.962] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 06 .mp4" : 15015 ms
+[21:41:38.963] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 06 .mp4" : 15015 ms
+[21:41:38.963] [DEBUG] [LivePreview] Scrubbing to position: 0 -> 0 ms (duration: 15015 ms)
+[21:41:38.967] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 03 .mp4" : 14973 ms
+[21:41:38.967] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 03 .mp4" : 14973 ms
+[21:41:38.969] [DEBUG] [LivePreview] Scrubbing to position: 0 -> 0 ms (duration: 14973 ms)
+[21:41:39.021] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 02 .mp4" : 30071 ms
+[21:41:39.022] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 02 .mp4" : 30071 ms
+[21:41:39.023] [DEBUG] [LivePreview] Scrubbing to position: 0 -> 0 ms (duration: 30071 ms)
+[21:41:39.023] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 09 .mp4" : 30030 ms
+[21:41:39.024] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 09 .mp4" : 30030 ms
+[21:41:39.025] [DEBUG] [LivePreview] Scrubbing to position: 0 -> 0 ms (duration: 30030 ms)
+[21:41:39.025] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 08 .mp4" : 30030 ms
+[21:41:39.026] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 08 .mp4" : 30030 ms
+[21:41:39.026] [DEBUG] [LivePreview] Scrubbing to position: 0 -> 0 ms (duration: 30030 ms)
+[21:41:39.026] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 04 .mp4" : 25316 ms
+[21:41:39.027] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 04 .mp4" : 25316 ms
+[21:41:39.027] [DEBUG] [LivePreview] Scrubbing to position: 0 -> 0 ms (duration: 25316 ms)
+[21:41:39.033] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 10 .mp4" : 30071 ms
+[21:41:39.034] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 10 .mp4" : 30071 ms
+[21:41:39.035] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 07 .mp4" : 15056 ms
+[21:41:39.035] [DEBUG] [LivePreview] Scrubbing to position: 0 -> 0 ms (duration: 30071 ms)
+[21:41:39.036] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 07 .mp4" : 15056 ms
+[21:41:39.036] [DEBUG] [LivePreview] Scrubbing to position: 0 -> 0 ms (duration: 15056 ms)
+[21:41:39.037] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 01 .mp4" : 15056 ms
+[21:41:39.037] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 01 .mp4" : 15056 ms
+[21:41:39.037] [DEBUG] [LivePreview] Scrubbing to position: 0 -> 0 ms (duration: 15056 ms)
+[21:41:39.258] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 05 .mp4" size: 4096 x 2160
+[21:41:39.259] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 03 .mp4" size: 4096 x 2160
+[21:41:39.262] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 06 .mp4" size: 4096 x 2160
+[21:41:39.263] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 02 .mp4" size: 4096 x 2160
+[21:41:39.304] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 08 .mp4" size: 4096 x 2160
+[21:41:39.358] [INFO] [DatabaseHealth] Startup check: "Database has never been optimized. VACUUM recommended."
+[21:41:39.378] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 07 .mp4" size: 4096 x 2160
+[21:41:39.389] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 10 .mp4" size: 4096 x 2160
+[21:41:39.420] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 09 .mp4" size: 4096 x 2160
+[21:41:39.421] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 04 .mp4" size: 4096 x 2160
+[21:41:39.458] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Fire/Burn/Car/Side/Fire Car Side 60fps 01 .mp4" size: 4096 x 2160
+[21:41:48.299] [DEBUG] [NAV] Folder change applied to id= 2 , working set (MB)= 386
+[21:41:48.341] [DEBUG] [ContextPreserver] Loaded context for folder 2 - scroll: 0 grid: true search: ""
+[21:41:48.399] [DEBUG] DB query (assets by folder 2) started
+[21:41:48.444] [DEBUG] DB query complete: 35 rows
+[21:41:48.445] [DEBUG] AssetsModel reload: 35 assets in 46 ms
+[21:41:48.453] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Atmosphere Pack/Atmosphere-019.mov" seqDetection= true
+[21:41:48.454] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Atmosphere Pack/Atmosphere-023.mov" seqDetection= true
+[21:41:48.455] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Atmosphere Pack/Atmosphere-027.mov" seqDetection= true
+[21:41:48.456] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Atmosphere Pack/Atmosphere-020.mov" seqDetection= true
+[21:41:48.457] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Atmosphere Pack/Atmosphere-024.mov" seqDetection= true
+[21:41:48.457] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Atmosphere Pack/Atmosphere-028.mov" seqDetection= true
+[21:41:48.458] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Atmosphere Pack/Atmosphere-021.mov" seqDetection= true
+[21:41:48.458] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Atmosphere Pack/Atmosphere-025.mov" seqDetection= true
+[21:41:48.458] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Atmosphere Pack/Atmosphere-033.mov" seqDetection= true
+[21:41:48.459] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Atmosphere Pack/Atmosphere-022.mov" seqDetection= true
+[21:41:48.459] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Atmosphere Pack/Atmosphere-026.mov" seqDetection= true
+[21:41:48.460] [DEBUG] [LivePreview] Loading as INDIVIDUAL: "Z:/ActionVFX/Atmosphere Pack/Atmosphere-034.mov" seqDetection= true
+[21:41:49.254] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Atmosphere Pack/Atmosphere-023.mov" : 10051 ms
+[21:41:49.256] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Atmosphere Pack/Atmosphere-023.mov" : 10051 ms
+[21:41:49.257] [DEBUG] [LivePreview] Scrubbing to position: 0 -> 0 ms (duration: 10051 ms)
+[21:41:49.268] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Atmosphere Pack/Atmosphere-024.mov" : 15056 ms
+[21:41:49.270] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Atmosphere Pack/Atmosphere-024.mov" : 15056 ms
+[21:41:49.271] [DEBUG] [LivePreview] Scrubbing to position: 0 -> 0 ms (duration: 15056 ms)
+[21:41:49.272] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Atmosphere Pack/Atmosphere-022.mov" : 12053 ms
+[21:41:49.273] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Atmosphere Pack/Atmosphere-022.mov" : 12053 ms
+[21:41:49.275] [DEBUG] [LivePreview] Scrubbing to position: 0 -> 0 ms (duration: 12053 ms)
+[21:41:49.278] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Atmosphere Pack/Atmosphere-027.mov" : 15056 ms
+[21:41:49.280] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Atmosphere Pack/Atmosphere-027.mov" : 15056 ms
+[21:41:49.281] [DEBUG] [LivePreview] Scrubbing to position: 0 -> 0 ms (duration: 15056 ms)
+[21:41:49.288] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Atmosphere Pack/Atmosphere-020.mov" : 12053 ms
+[21:41:49.289] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Atmosphere Pack/Atmosphere-020.mov" : 12053 ms
+[21:41:49.290] [DEBUG] [LivePreview] Scrubbing to position: 0 -> 0 ms (duration: 12053 ms)
+[21:41:49.293] [DEBUG] [NAV] Post-change working set (MB)= 2459
+[21:41:49.300] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Atmosphere Pack/Atmosphere-026.mov" : 10051 ms
+[21:41:49.303] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Atmosphere Pack/Atmosphere-026.mov" : 10051 ms
+[21:41:49.304] [DEBUG] [LivePreview] Scrubbing to position: 0 -> 0 ms (duration: 10051 ms)
+[21:41:49.343] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Atmosphere Pack/Atmosphere-019.mov" : 11052 ms
+[21:41:49.345] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Atmosphere Pack/Atmosphere-019.mov" : 11052 ms
+[21:41:49.346] [DEBUG] [LivePreview] Scrubbing to position: 0 -> 0 ms (duration: 11052 ms)
+[21:41:49.348] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Atmosphere Pack/Atmosphere-021.mov" : 12053 ms
+[21:41:49.349] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Atmosphere Pack/Atmosphere-021.mov" : 12053 ms
+[21:41:49.350] [DEBUG] [LivePreview] Scrubbing to position: 0 -> 0 ms (duration: 12053 ms)
+[21:41:49.365] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Atmosphere Pack/Atmosphere-025.mov" : 12053 ms
+[21:41:49.368] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Atmosphere Pack/Atmosphere-025.mov" : 12053 ms
+[21:41:49.369] [DEBUG] [LivePreview] Scrubbing to position: 0 -> 0 ms (duration: 12053 ms)
+[21:41:49.381] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Atmosphere Pack/Atmosphere-028.mov" : 10051 ms
+[21:41:49.383] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Atmosphere Pack/Atmosphere-028.mov" : 10051 ms
+[21:41:49.384] [DEBUG] [LivePreview] Scrubbing to position: 0 -> 0 ms (duration: 10051 ms)
+[21:41:50.708] [DEBUG] [MainWindow::showPreview] Called with index: 0
+[21:41:50.711] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Atmosphere Pack/Atmosphere-033.mov" : 15015 ms
+[21:41:50.712] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Atmosphere Pack/Atmosphere-033.mov" : 15015 ms
+[21:41:50.713] [DEBUG] [LivePreview] Scrubbing to position: 0 -> 0 ms (duration: 15015 ms)
+[21:41:50.714] [DEBUG] [PreviewOverlay] GStreamerPlayer initialized with hardware-accelerated playback
+[21:41:50.715] [WARN] QWidget::paintEngine: Should no longer be called
+[21:41:50.717] [WARN] QWidget::paintEngine: Should no longer be called
+[21:41:50.717] [DEBUG] [GStreamerPlayer] Video widget configured for embedding, WId: 5704280
+[21:41:50.718] [DEBUG] [SequenceFrameCache] Available RAM: 99278 MB
+[21:41:50.719] [DEBUG] [SequenceFrameCache] Calculated optimal cache size: 500 frames ( 15000 MB) using 70 % of available RAM
+[21:41:50.720] [DEBUG] [SequenceFrameCache] ========================================
+[21:41:50.721] [DEBUG] [SequenceFrameCache] INITIALIZATION:
+[21:41:50.722] [DEBUG] [SequenceFrameCache] Max cache size: 500 frames
+[21:41:50.722] [DEBUG] [SequenceFrameCache] Max cost: 25600000 KB ( 25000 MB)
+[21:41:50.722] [DEBUG] [SequenceFrameCache] Worker threads: 32
+[21:41:50.724] [DEBUG] [SequenceFrameCache] Auto-size: YES
+[21:41:50.724] [DEBUG] [SequenceFrameCache] RAM percentage: 70 %
+[21:41:50.725] [DEBUG] [SequenceFrameCache] ========================================
+[21:41:50.726] [DEBUG] [PreviewOverlay] Frame cache initialized with QRecursiveMutex (deadlock fix)
+[21:41:50.727] [DEBUG] [PreviewOverlay] Stopping playback
+[21:41:50.728] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Atmosphere Pack/Atmosphere-022.mov" size: 4096 x 2304
+[21:41:50.728] [WARN] QWidget::paintEngine: Should no longer be called
+[21:41:50.729] [DEBUG] [GStreamerPlayer] Video widget configured for embedding, WId: 5704280
+[21:41:50.729] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Atmosphere Pack/Atmosphere-023.mov" size: 4096 x 2304
+[21:41:50.730] [INFO] [GStreamerPlayer] Loading media: "file:///Z:/ActionVFX/Atmosphere Pack/Atmosphere-019.mov"
+[21:41:50.730] [DEBUG] [GStreamerPlayer] queryDuration: Duration for "Z:/ActionVFX/Atmosphere Pack/Atmosphere-034.mov" : 15015 ms
+[21:41:50.732] [DEBUG] [LivePreview] Cached duration for "Z:/ActionVFX/Atmosphere Pack/Atmosphere-034.mov" : 15015 ms
+[21:41:50.732] [DEBUG] [LivePreview] Scrubbing to position: 0 -> 0 ms (duration: 15015 ms)
+[21:41:50.732] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Atmosphere Pack/Atmosphere-027.mov" size: 4096 x 2304
+[21:41:50.733] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Atmosphere Pack/Atmosphere-026.mov" size: 4096 x 2304
+[21:41:50.733] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Atmosphere Pack/Atmosphere-024.mov" size: 4096 x 2304
+[21:41:50.734] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Atmosphere Pack/Atmosphere-020.mov" size: 4096 x 2304
+[21:41:50.734] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Atmosphere Pack/Atmosphere-025.mov" size: 4096 x 2304
+[21:41:50.735] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Atmosphere Pack/Atmosphere-021.mov" size: 4096 x 2304
+[21:41:50.735] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Atmosphere Pack/Atmosphere-019.mov" size: 4096 x 2304
+[21:41:50.736] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Atmosphere Pack/Atmosphere-028.mov" size: 4096 x 2304
+[21:41:50.736] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Atmosphere Pack/Atmosphere-033.mov" size: 4096 x 2160
+[21:41:50.737] [DEBUG] [GStreamerPlayer] extractThumbnail: Success for "Z:/ActionVFX/Atmosphere Pack/Atmosphere-034.mov" size: 4096 x 2160
+[21:41:50.738] [INFO] [GStreamerPlayer] Using video sink: videosink
+[21:41:50.738] [INFO] [GStreamerPlayer] Set window handle: 5704280 on element: videosink
+[21:41:50.739] [DEBUG] [PreviewOverlay] GStreamer state changed to: 2
+[21:41:50.740] [INFO] [GStreamerPlayer] Pipeline created, prerolling asynchronously...
+[21:41:50.740] [DEBUG] [PreviewOverlay] GStreamer state changed to: 1
+[21:41:50.740] [DEBUG] [GStreamerPlayer] Playback started
+[21:41:50.754] [DEBUG] [GStreamerPlayer] State changed from NULL to READY
+[21:41:50.815] [DEBUG] [GStreamerPlayer] State changed from READY to PAUSED
+[21:41:50.817] [DEBUG] [GStreamerPlayer] Async operation done (preroll/seek completed)
+[21:41:50.817] [DEBUG] [PreviewOverlay] GStreamer media info: Duration: 11052 ms FPS: 23.976 Resolution: 4096 x 2304 Codec: "" Has Audio: false
+[21:41:50.820] [INFO] [GStreamerPlayer] Pipeline ready: 4096 x 2304 @ 23.976 fps duration: 11052 ms audio: false
+[21:41:50.820] [DEBUG] [GStreamerPlayer] State changed from PAUSED to PLAYING
+[21:41:52.319] [DEBUG] [PreviewOverlay] Stopping playback
+[21:41:52.320] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[21:41:52.321] [DEBUG] [GStreamerPlayer] Playback stopped
+[21:41:52.322] [DEBUG] [PreviewOverlay] Stopping playback
+[21:41:52.322] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[21:41:52.323] [DEBUG] [GStreamerPlayer] Playback stopped
+[21:41:52.396] [DEBUG] [PreviewOverlay::~PreviewOverlay] Destructor starting
+[21:41:52.397] [DEBUG] [PreviewOverlay] Stopping playback
+[21:41:52.398] [DEBUG] [PreviewOverlay] GStreamer state changed to: 0
+[21:41:52.399] [DEBUG] [GStreamerPlayer] Playback stopped
+[21:41:52.399] [DEBUG] [PreviewOverlay::~PreviewOverlay] Deleting frame cache
+[21:41:52.400] [DEBUG] [SequenceFrameCache::~SequenceFrameCache] Destructor starting
+[21:41:52.401] [DEBUG] [SequenceFrameCache::~SequenceFrameCache] Destructor complete
+[21:41:52.401] [DEBUG] [PreviewOverlay::~PreviewOverlay] Destructor complete
+[21:41:53.201] [WARN] QWidgetWindow(0x1a2cca77380, name="QDockWidgetClassWindow") must be a top level window.
+[21:41:54.936] [WARN] QWidgetWindow(0x1a2cca77380, name="QDockWidgetClassWindow") must be a top level window.

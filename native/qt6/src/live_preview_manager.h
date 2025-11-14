@@ -13,7 +13,6 @@
 
 #include <QCache>
 
-#include "media/ffmpeg_player.h"
 #include "media/gstreamer_player.h"
 
 /**

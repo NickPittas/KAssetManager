@@ -11,6 +11,7 @@
 #include <QUrl>
 #include <QMutexLocker>
 #include <QApplication>
+#include <QScreen>
 
 #ifdef HAVE_GSTREAMER
 #include <gst/gst.h>
@@ -232,7 +233,6 @@ void GStreamerPlayer::setupPipeline(const QString& uri)
             g_object_set(videoSink, "force-aspect-ratio", TRUE, nullptr);
 
             g_object_set(m_pipeline, "video-sink", videoSink, nullptr);
-            qInfo() << "[GStreamerPlayer] Using video sink:" << GST_ELEMENT_NAME(videoSink);
         } else {
             qWarning() << "[GStreamerPlayer] Failed to create video sink";
         }
@@ -345,6 +345,7 @@ void GStreamerPlayer::setWindowHandle()
 
         while (gst_iterator_next(it, &item) == GST_ITERATOR_OK) {
             GstElement* element = GST_ELEMENT(g_value_get_object(&item));
+
             if (GST_IS_VIDEO_OVERLAY(element)) {
                 actualSink = element;
                 gst_object_ref(actualSink);
@@ -381,11 +382,6 @@ void GStreamerPlayer::setWindowHandle()
         qreal dpr = m_videoWidget->devicePixelRatio();
         int physicalWidth = static_cast<int>(m_videoWidget->width() * dpr);
         int physicalHeight = static_cast<int>(m_videoWidget->height() * dpr);
-
-        qInfo() << "[GStreamerPlayer] Setting initial render rectangle:"
-                << "logical size:" << m_videoWidget->width() << "x" << m_videoWidget->height()
-                << "DPR:" << dpr
-                << "physical size:" << physicalWidth << "x" << physicalHeight;
 
         gst_video_overlay_set_render_rectangle(GST_VIDEO_OVERLAY(actualSink),
                                                 0, 0,
@@ -452,11 +448,6 @@ void GStreamerPlayer::updateRenderRectangle()
         qreal dpr = m_videoWidget->devicePixelRatio();
         int physicalWidth = static_cast<int>(m_videoWidget->width() * dpr);
         int physicalHeight = static_cast<int>(m_videoWidget->height() * dpr);
-
-        qDebug() << "[GStreamerPlayer] Updating render rectangle:"
-                 << "logical size:" << m_videoWidget->width() << "x" << m_videoWidget->height()
-                 << "DPR:" << dpr
-                 << "physical size:" << physicalWidth << "x" << physicalHeight;
 
         gst_video_overlay_set_render_rectangle(GST_VIDEO_OVERLAY(actualSink),
                                                 0, 0,
@@ -752,11 +743,6 @@ void GStreamerPlayer::onBusMessage()
                 qDebug() << "[GStreamerPlayer] Async operation done (preroll/seek completed)";
                 // Update media info now that preroll is complete
                 updateMediaInfo();
-                qInfo() << "[GStreamerPlayer] Pipeline ready:"
-                        << m_mediaInfo.width << "x" << m_mediaInfo.height
-                        << "@" << m_mediaInfo.fps << "fps"
-                        << "duration:" << m_mediaInfo.durationMs << "ms"
-                        << "audio:" << m_mediaInfo.hasAudio;
 
                 // CRITICAL: Update render rectangle after preroll completes
                 // This ensures video is properly sized on HiDPI displays
