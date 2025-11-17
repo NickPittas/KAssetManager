@@ -222,6 +222,22 @@ int VirtualFolderTreeModel::getProjectFolderId(int virtualFolderId) const
     return n ? n->projectFolderId : 0;
 }
 
+QString VirtualFolderTreeModel::getFullPath(int folderId) const
+{
+    if (folderId <= 0) return QString();
+
+    QStringList pathParts;
+    const VFNode* current = nodeForId(folderId);
+
+    while (current) {
+        pathParts.prepend(current->name);
+        if (current->id == m_rootId) break;
+        current = nodeForId(current->parentId);
+    }
+
+    return pathParts.join("/");
+}
+
 QModelIndex VirtualFolderTreeModel::findIndexById(int folderId) const
 {
     if (folderId <= 0) return QModelIndex();
@@ -229,7 +245,12 @@ QModelIndex VirtualFolderTreeModel::findIndexById(int folderId) const
     const VFNode* node = nodeForId(folderId);
     if (!node) return QModelIndex();
 
-    // Build path from root to this node
+    // If this is the root folder, return the top-level index (row 0, no parent)
+    if (folderId == m_rootId) {
+        return index(0, 0, QModelIndex());
+    }
+
+    // Build path from root to this node (not including root itself)
     QVector<int> path;
     const VFNode* current = node;
     while (current && current->id != m_rootId) {
@@ -237,10 +258,12 @@ QModelIndex VirtualFolderTreeModel::findIndexById(int folderId) const
         current = nodeForId(current->parentId);
     }
 
-    // Navigate from root to build QModelIndex
-    QModelIndex idx;
+    // Start from the root index (row 0, no parent)
+    QModelIndex idx = index(0, 0, QModelIndex());
+
+    // Navigate from root's children to build QModelIndex
     for (int nodeId : path) {
-        const VFNode* parent = idx.isValid() ? nodeForId(idx.data(IdRole).toInt()) : nodeForId(m_rootId);
+        const VFNode* parent = nodeForId(idx.data(IdRole).toInt());
         if (!parent) return QModelIndex();
 
         int row = parent->children.indexOf(nodeId);

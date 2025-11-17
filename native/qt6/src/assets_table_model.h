@@ -18,7 +18,7 @@ public:
         ColumnCount
     };
 
-    explicit AssetsTableModel(AssetsModel* sourceModel, QObject* parent = nullptr)
+    explicit AssetsTableModel(QAbstractItemModel* sourceModel, QObject* parent = nullptr)
         : QAbstractTableModel(parent), m_sourceModel(sourceModel)
     {
         connect(m_sourceModel, &QAbstractItemModel::modelReset, this, [this]() {
@@ -163,7 +163,7 @@ public:
         emit layoutChanged();
     }
 
-    AssetsModel* sourceModel() const { return m_sourceModel; }
+    QAbstractItemModel* sourceModel() const { return m_sourceModel; }
 
 private:
     QString formatFileSize(qint64 bytes) const
@@ -178,7 +178,7 @@ private:
             return QString("%1 GB").arg(bytes / (1024.0 * 1024.0 * 1024.0), 0, 'f', 2);
     }
 
-    AssetsModel* m_sourceModel;
+    QAbstractItemModel* m_sourceModel;
     int m_sortColumn = 0;
     Qt::SortOrder m_sortOrder = Qt::AscendingOrder;
 };

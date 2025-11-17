@@ -47,6 +47,9 @@ public:
     // Find QModelIndex for a given folder ID
     QModelIndex findIndexById(int folderId) const;
 
+    // Get full path for a folder (e.g., "Root/Folder1/Folder2")
+    QString getFullPath(int folderId) const;
+
 public slots:
     void reload();
 

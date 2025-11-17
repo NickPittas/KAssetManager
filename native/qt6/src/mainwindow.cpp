@@ -635,6 +635,220 @@ private:
     Qt::SortOrder m_sortOrder = Qt::AscendingOrder;
 };
 
+// Asset Manager sequence grouping proxy: expands sequences into individual frames when grouping is OFF
+class AssetSequenceGroupingProxyModel : public QAbstractProxyModel {
+public:
+    explicit AssetSequenceGroupingProxyModel(QObject* parent = nullptr)
+        : QAbstractProxyModel(parent), m_groupingEnabled(true) {}
+
+    void setGroupingEnabled(bool enabled) {
+        if (m_groupingEnabled == enabled) return;
+        qDebug() << "[AssetSequenceGroupingProxyModel] setGroupingEnabled:" << enabled;
+        beginResetModel();
+        m_groupingEnabled = enabled;
+        rebuildMapping();
+        qDebug() << "[AssetSequenceGroupingProxyModel] After rebuild, proxy row count:" << m_proxyToSource.size();
+        endResetModel();
+    }
+
+    bool groupingEnabled() const { return m_groupingEnabled; }
+
+    void setSourceModel(QAbstractItemModel *sourceModel) override {
+        if (this->sourceModel()) {
+            disconnect(this->sourceModel(), nullptr, this, nullptr);
+        }
+        QAbstractProxyModel::setSourceModel(sourceModel);
+        if (sourceModel) {
+            connect(sourceModel, &QAbstractItemModel::modelAboutToBeReset, this, [this]() {
+                beginResetModel();
+            });
+            connect(sourceModel, &QAbstractItemModel::modelReset, this, [this]() {
+                rebuildMapping();
+                endResetModel();
+            });
+            connect(sourceModel, &QAbstractItemModel::dataChanged, this, [this](const QModelIndex &topLeft, const QModelIndex &bottomRight) {
+                // When source data changes, we need to rebuild and emit dataChanged for affected proxy rows
+                rebuildMapping();
+                // Emit dataChanged for all proxy rows (simplified approach)
+                if (rowCount() > 0) {
+                    emit dataChanged(index(0, 0), index(rowCount() - 1, 0));
+                }
+            });
+        }
+        rebuildMapping();
+    }
+
+    QModelIndex mapToSource(const QModelIndex &proxyIndex) const override {
+        if (!proxyIndex.isValid() || !sourceModel()) return QModelIndex();
+        int proxyRow = proxyIndex.row();
+        if (proxyRow < 0 || proxyRow >= m_proxyToSource.size()) return QModelIndex();
+        const SourceMapping &mapping = m_proxyToSource[proxyRow];
+        return sourceModel()->index(mapping.sourceRow, 0);
+    }
+
+    QModelIndex mapFromSource(const QModelIndex &sourceIndex) const override {
+        if (!sourceIndex.isValid() || !sourceModel()) return QModelIndex();
+        int sourceRow = sourceIndex.row();
+        // Find first proxy row that maps to this source row
+        for (int i = 0; i < m_proxyToSource.size(); ++i) {
+            if (m_proxyToSource[i].sourceRow == sourceRow) {
+                // Return the first proxy row for this source row
+                // When grouped: frameIndex is -1 (single row)
+                // When ungrouped: frameIndex is 0 for first frame, 1 for second, etc.
+                // We want the first one in either case
+                if (m_groupingEnabled || m_proxyToSource[i].frameIndex == 0) {
+                    return index(i, 0);
+                }
+            }
+        }
+        return QModelIndex();
+    }
+
+    QModelIndex index(int row, int column, const QModelIndex &parent = QModelIndex()) const override {
+        if (parent.isValid() || column != 0 || row < 0 || row >= m_proxyToSource.size()) {
+            return QModelIndex();
+        }
+        return createIndex(row, column);
+    }
+
+    QModelIndex parent(const QModelIndex &) const override {
+        return QModelIndex(); // Flat list
+    }
+
+    int rowCount(const QModelIndex &parent = QModelIndex()) const override {
+        if (parent.isValid() || !sourceModel()) return 0;
+        return m_proxyToSource.size();
+    }
+
+    int columnCount(const QModelIndex &parent = QModelIndex()) const override {
+        if (parent.isValid() || !sourceModel()) return 0;
+        return 1;
+    }
+
+    QVariant data(const QModelIndex &proxyIndex, int role) const override {
+        if (!proxyIndex.isValid() || !sourceModel()) return QVariant();
+
+        int proxyRow = proxyIndex.row();
+        if (proxyRow < 0 || proxyRow >= m_proxyToSource.size()) return QVariant();
+
+        const SourceMapping &mapping = m_proxyToSource[proxyRow];
+        QModelIndex sourceIdx = sourceModel()->index(mapping.sourceRow, 0);
+
+        // If grouping is enabled or this is not a sequence, pass through source data
+        if (m_groupingEnabled || mapping.frameIndex < 0) {
+            return sourceModel()->data(sourceIdx, role);
+        }
+
+        // Grouping is disabled and this is an expanded frame
+        // Override certain roles to show individual frame info
+        if (role == Qt::DisplayRole || role == AssetsModel::FileNameRole) {
+            // Show individual frame filename
+            return mapping.frameName;
+        } else if (role == AssetsModel::FilePathRole) {
+            // Show individual frame path
+            return mapping.framePath;
+        } else if (role == AssetsModel::IsSequenceRole) {
+            // Individual frames are not sequences
+            return false;
+        } else {
+            // Pass through other roles from source (ID, rating, tags, etc.)
+            return sourceModel()->data(sourceIdx, role);
+        }
+    }
+
+private:
+    struct SourceMapping {
+        int sourceRow = -1;
+        int frameIndex = -1; // -1 for non-sequence or grouped sequence, >= 0 for expanded frame
+        QString frameName;
+        QString framePath;
+    };
+
+    void rebuildMapping() {
+        m_proxyToSource.clear();
+        if (!sourceModel()) return;
+
+        int sourceRows = sourceModel()->rowCount();
+        qDebug() << "[AssetSequenceGroupingProxyModel] rebuildMapping: sourceRows=" << sourceRows << "groupingEnabled=" << m_groupingEnabled;
+        for (int srcRow = 0; srcRow < sourceRows; ++srcRow) {
+            QModelIndex srcIdx = sourceModel()->index(srcRow, 0);
+            bool isSeq = srcIdx.data(AssetsModel::IsSequenceRole).toBool();
+
+            if (!isSeq || m_groupingEnabled) {
+                // Not a sequence, or grouping is enabled: show as single row
+                SourceMapping mapping;
+                mapping.sourceRow = srcRow;
+                mapping.frameIndex = -1;
+                m_proxyToSource.append(mapping);
+            } else {
+                qDebug() << "[AssetSequenceGroupingProxyModel] Expanding sequence at srcRow" << srcRow;
+                // Sequence with grouping disabled: expand into individual frames
+                QString pattern = srcIdx.data(AssetsModel::SequencePatternRole).toString();
+                int startFrame = srcIdx.data(AssetsModel::SequenceStartFrameRole).toInt();
+                int endFrame = srcIdx.data(AssetsModel::SequenceEndFrameRole).toInt();
+                QString firstPath = srcIdx.data(AssetsModel::FilePathRole).toString();
+
+                if (firstPath.isEmpty() || startFrame > endFrame) {
+                    // Invalid sequence, show as single row
+                    SourceMapping mapping;
+                    mapping.sourceRow = srcRow;
+                    mapping.frameIndex = -1;
+                    m_proxyToSource.append(mapping);
+                    continue;
+                }
+
+                // Parse the first frame path to extract base and suffix
+                QFileInfo fi(firstPath);
+                QString name = fi.fileName();
+                QString dir = fi.absolutePath();
+
+                // Find digit position and padding
+                int digitPos = -1;
+                int digitPad = 0;
+                for (int i = name.size() - 1; i >= 0; --i) {
+                    if (name[i].isDigit()) {
+                        int j = i;
+                        while (j >= 0 && name[j].isDigit()) --j;
+                        digitPos = j + 1;
+                        digitPad = i - j;
+                        break;
+                    }
+                }
+
+                if (digitPos < 0 || digitPad <= 0) {
+                    // Can't parse, show as single row
+                    SourceMapping mapping;
+                    mapping.sourceRow = srcRow;
+                    mapping.frameIndex = -1;
+                    m_proxyToSource.append(mapping);
+                    continue;
+                }
+
+                QString base = name.left(digitPos);
+                QString suffix = name.mid(digitPos + digitPad);
+
+                // Create one proxy row per frame
+                qDebug() << "[AssetSequenceGroupingProxyModel] Creating" << (endFrame - startFrame + 1) << "proxy rows for frames" << startFrame << "to" << endFrame;
+                for (int frame = startFrame; frame <= endFrame; ++frame) {
+                    QString frameNumStr = QString("%1").arg(frame, digitPad, 10, QLatin1Char('0'));
+                    QString frameName = base + frameNumStr + suffix;
+                    QString framePath = QDir(dir).filePath(frameName);
+
+                    SourceMapping mapping;
+                    mapping.sourceRow = srcRow;
+                    mapping.frameIndex = frame - startFrame;
+                    mapping.frameName = frameName;
+                    mapping.framePath = framePath;
+                    m_proxyToSource.append(mapping);
+                }
+            }
+        }
+    }
+
+    bool m_groupingEnabled;
+    QVector<SourceMapping> m_proxyToSource;
+};
+
 #include "media/gstreamer_player.h"
 #include <QScrollArea>
 #include <QFrame>
@@ -1952,6 +2166,10 @@ void MainWindow::setupUi()
     folderTreeView->setModel(folderModel);
     LogManager::instance().addLog("[TRACE] folder model set on tree", "DEBUG");
 
+    // Connect model reset signals to preserve tree state across reloads
+    connect(folderModel, &QAbstractItemModel::modelAboutToBeReset, this, &MainWindow::onAssetFoldersModelAboutToReset);
+    connect(folderModel, &QAbstractItemModel::modelReset, this, &MainWindow::onAssetFoldersModelReset);
+
     folderTreeView->setHeaderHidden(true);
     folderTreeView->setContextMenuPolicy(Qt::CustomContextMenu);
 
@@ -2006,6 +2224,34 @@ void MainWindow::setupUi()
     toolbarLayout->setContentsMargins(8, 4, 8, 4);
     toolbarLayout->setSpacing(6);
 
+    // Navigation buttons (Back and Up) at the left
+    amBackButton = new QToolButton(toolbar);
+    amBackButton->setIcon(icoBack());
+    amBackButton->setToolTip("Back");
+    amBackButton->setAutoRaise(true);
+    amBackButton->setIconSize(QSize(20, 20));
+    amBackButton->setEnabled(false);
+    connect(amBackButton, &QToolButton::clicked, this, &MainWindow::onAssetNavigateBack);
+    toolbarLayout->addWidget(amBackButton);
+
+    amUpButton = new QToolButton(toolbar);
+    amUpButton->setIcon(icoUp());
+    amUpButton->setToolTip("Up");
+    amUpButton->setAutoRaise(true);
+    amUpButton->setIconSize(QSize(20, 20));
+    amUpButton->setEnabled(false);
+    connect(amUpButton, &QToolButton::clicked, this, &MainWindow::onAssetNavigateUp);
+    toolbarLayout->addWidget(amUpButton);
+
+    // New Folder button
+    amNewFolderButton = new QToolButton(toolbar);
+    amNewFolderButton->setIcon(icoFolderNew());
+    amNewFolderButton->setToolTip("New Folder");
+    amNewFolderButton->setAutoRaise(true);
+    amNewFolderButton->setIconSize(QSize(20, 20));
+    connect(amNewFolderButton, &QToolButton::clicked, this, &MainWindow::onAssetNewFolder);
+    toolbarLayout->addWidget(amNewFolderButton);
+
     // View mode toggle button
     isGridMode = true;
     viewModeButton = new QToolButton(toolbar);
@@ -2039,12 +2285,27 @@ void MainWindow::setupUi()
     QLabel* sizeValueLabel = new QLabel("180px", toolbar);
     sizeValueLabel->setStyleSheet("color: #999; font-size: 11px; min-width: 45px;");
     connect(thumbnailSizeSlider, &QSlider::valueChanged, [sizeValueLabel](int value) {
-
         sizeValueLabel->setText(QString("%1px").arg(value));
     });
     toolbarLayout->addWidget(sizeValueLabel);
 
     toolbarLayout->addStretch();
+
+    // Group image sequences toggle
+    amGroupSequencesButton = new QToolButton(toolbar);
+    amGroupSequencesButton->setIcon(icoGroup());
+    amGroupSequencesButton->setToolTip("Group image sequences into single entries");
+    amGroupSequencesButton->setCheckable(true);
+    amGroupSequencesButton->setAutoRaise(true);
+    amGroupSequencesButton->setIconSize(QSize(20, 20));
+    amGroupSequencesButton->setStyleSheet(
+        "QToolButton { background-color: transparent; border: none; border-radius: 4px; padding: 4px; }"
+        "QToolButton:checked { background-color: #58a6ff; }"
+        "QToolButton:hover { background-color: #2a2a2a; }"
+        "QToolButton:checked:hover { background-color: #4a8fd9; }"
+    );
+    connect(amGroupSequencesButton, &QToolButton::toggled, this, &MainWindow::onAssetGroupSequencesToggled);
+    toolbarLayout->addWidget(amGroupSequencesButton);
 
     // Lock checkbox for project folders
     lockCheckBox = new QCheckBox("🔒 Lock Assets", toolbar);
@@ -2059,9 +2320,6 @@ void MainWindow::setupUi()
     connect(lockCheckBox, &QCheckBox::toggled, this, &MainWindow::onLockToggled);
     toolbarLayout->addWidget(lockCheckBox);
 
-    // Refresh button
-    refreshButton = new QPushButton(toolbar);
-    refreshButton->setIcon(icoRefresh());
     // Live preview prefetch button (with menu)
     thumbGenButton = new QToolButton(toolbar);
     thumbGenButton->setIcon(icoRefresh());
@@ -2082,6 +2340,9 @@ void MainWindow::setupUi()
     thumbGenButton->setPopupMode(QToolButton::MenuButtonPopup);
     toolbarLayout->addWidget(thumbGenButton);
 
+    // Refresh button
+    refreshButton = new QPushButton(toolbar);
+    refreshButton->setIcon(icoRefresh());
     refreshButton->setToolTip("Refresh assets from project folders");
     refreshButton->setFixedSize(28, 28);
     refreshButton->setFlat(true);
@@ -2109,7 +2370,11 @@ void MainWindow::setupUi()
     assetGridView = new AssetGridView(viewStack);
     assetsModel = new AssetsModel(viewStack);
 
-    assetGridView->setModel(assetsModel);
+    // Create proxy model for sequence grouping/ungrouping
+    amProxyModel = new AssetSequenceGroupingProxyModel(viewStack);
+    amProxyModel->setSourceModel(assetsModel);
+
+    assetGridView->setModel(amProxyModel);
     LogManager::instance().addLog("[TRACE] assetGridView + model wired", "DEBUG");
     assetGridView->setViewMode(QListView::IconMode);
     assetGridView->setResizeMode(QListView::Adjust);
@@ -2127,7 +2392,8 @@ void MainWindow::setupUi()
 
     // Asset table view for list mode
     assetTableView = new QTableView(viewStack);
-    AssetsTableModel* tableModel = new AssetsTableModel(assetsModel, viewStack);
+    // Use the proxy model for table view as well to support grouping/ungrouping
+    AssetsTableModel* tableModel = new AssetsTableModel(amProxyModel, viewStack);
     assetTableView->setModel(tableModel);
     assetTableView->setSelectionBehavior(QAbstractItemView::SelectRows);
     assetTableView->setSelectionMode(QAbstractItemView::ExtendedSelection);
@@ -2631,7 +2897,9 @@ void MainWindow::setupUi()
     tagsModel->reload();
 
     // Expand root folder AFTER model is loaded with actual data
-    folderTreeView->expandToDepth(0);
+    if (folderTreeView) {
+        folderTreeView->expandToDepth(0);
+    }
 
     // Restore last active tab
     int lastTab = ContextPreserver::instance().loadLastActiveTab();
@@ -2643,22 +2911,45 @@ void MainWindow::setupUi()
     int lastFolderId = ContextPreserver::instance().loadLastActiveFolder();
     bool folderRestored = false;
 
-    if (lastFolderId > 0) {
-        // Try to find and select the last active folder
-        QModelIndex lastFolderIndex = folderModel->findIndexById(lastFolderId);
-        if (lastFolderIndex.isValid()) {
-            folderTreeView->setCurrentIndex(lastFolderIndex);
-            onFolderSelected(lastFolderIndex);
-            folderRestored = true;
-            qDebug() << "[ContextPreserver] Restored last active folder:" << lastFolderId;
-        }
+    if (lastFolderId > 0 && assetsModel) {
+        // Use unified navigation helper so view mode, filters and scroll are restored
+        navigateToFolder(lastFolderId, false);
+        folderRestored = true;
+        qDebug() << "[ContextPreserver] Restored last active folder:" << lastFolderId;
     }
 
     // Fallback to first folder if restoration failed
-    if (!folderRestored && folderModel->rowCount(QModelIndex()) > 0) {
+    if (!folderRestored && folderModel->rowCount(QModelIndex()) > 0 && assetsModel) {
         QModelIndex firstFolder = folderModel->index(0, 0, QModelIndex());
-        folderTreeView->setCurrentIndex(firstFolder);
-        onFolderSelected(firstFolder);
+        if (firstFolder.isValid()) {
+            int firstFolderId = firstFolder.data(VirtualFolderTreeModel::IdRole).toInt();
+            if (firstFolderId > 0) {
+                navigateToFolder(firstFolderId, false);
+            }
+        }
+    }
+
+    // Restore Asset Manager folder tree expansion and scroll position
+    {
+        QSettings treeSettings("AugmentCode", "KAssetManager");
+        treeSettings.beginGroup("AssetManager/Tree");
+        const QVariantList expanded = treeSettings.value("ExpandedFolders").toList();
+        const int savedScroll = treeSettings.value("ScrollPosition", -1).toInt();
+        treeSettings.endGroup();
+
+        expandedFolderIds.clear();
+        for (const QVariant &v : expanded) {
+            int id = v.toInt();
+            if (id > 0) {
+                expandedFolderIds.insert(id);
+            }
+        }
+
+        restoreFolderExpansionState();
+
+        if (savedScroll >= 0 && folderTreeView && folderTreeView->verticalScrollBar()) {
+            folderTreeView->verticalScrollBar()->setValue(savedScroll);
+        }
     }
 
     LogManager::instance().addLog("[TRACE] mainwindow ctor finished", "DEBUG");
@@ -2854,6 +3145,12 @@ void MainWindow::setupFileManagerUi()
     fmGroupSequencesCheckBox->setCheckable(true);
     fmGroupSequencesCheckBox->setAutoRaise(true);
     fmGroupSequencesCheckBox->setIconSize(QSize(28,28));
+    fmGroupSequencesCheckBox->setStyleSheet(
+        "QToolButton { background-color: transparent; border: none; border-radius: 4px; padding: 4px; }"
+        "QToolButton:checked { background-color: #58a6ff; }"
+        "QToolButton:hover { background-color: #2a2a2a; }"
+        "QToolButton:checked:hover { background-color: #4a8fd9; }"
+    );
     connect(fmGroupSequencesCheckBox, &QToolButton::toggled, this, &MainWindow::onFmGroupSequencesToggled);
     tb->addWidget(fmGroupSequencesCheckBox);
 
@@ -3624,14 +3921,13 @@ void MainWindow::setupFileManagerUi()
             if (fmPreviewToggleButton) fmPreviewToggleButton->setChecked(vis);
             if (fmPreviewInfoSplitter) fmPreviewInfoSplitter->setVisible(vis);
         }
-        // Group sequences toggle
+        // Group sequences toggle for File Manager
         fmGroupSequences = s.value("FileManager/GroupSequences", true).toBool();
-        if (fmGroupSequencesCheckBox) fmGroupSequencesCheckBox->setChecked(fmGroupSequences);
-        if (fmProxyModel) fmProxyModel->setGroupingEnabled(fmGroupSequences);
-        // Initialize LivePreviewManager sequence detection state
-        LivePreviewManager::instance().setSequenceDetectionEnabled(fmGroupSequences);
-        // Initialize scrub controller state
-        if (fmScrubController) fmScrubController->setSequenceGroupingEnabled(fmGroupSequences);
+        setSequenceGroupingEnabled(fmGroupSequences);
+
+        // Group sequences toggle for Asset Manager (separate setting)
+        bool amGroupSequences = s.value("AssetManager/GroupSequences", true).toBool();
+        setAssetManagerSequenceGroupingEnabled(amGroupSequences);
 
         // Hide folders toggle
         fmHideFolders = s.value("FileManager/HideFolders", false).toBool();
@@ -4053,6 +4349,8 @@ void MainWindow::onFmNewFolder()
 void MainWindow::onFmAddToFavorites()
 {
     QStringList sel = getSelectedFileManagerPaths(fmDirModel, fmGridView, fmListView, fmViewStack);
+    sel << getSelectedFmTreePaths();
+    sel.removeDuplicates();
     if (sel.isEmpty()) return;
     bool changed = false;
     for (const QString &p : sel) {
@@ -4248,6 +4546,8 @@ void MainWindow::onFmTreeContextMenu(const QPoint &pos)
     QString path = fmTreeModel->filePath(idx);
     if (path.isEmpty()) return;
 
+    QStringList selectedPaths = getSelectedFmTreePaths();
+
     QMenu menu;
     QAction *refreshA = menu.addAction("Refresh");
     menu.addSeparator();
@@ -4260,10 +4560,25 @@ void MainWindow::onFmTreeContextMenu(const QPoint &pos)
     QAction *permDelA = menu.addAction("Permanent Delete (Shift+Delete)");
     QAction *newFolderA = menu.addAction("New Folder");
     QAction *createFolderWithSelA = menu.addAction("Create Folder with Selected Files");
+    menu.addSeparator();
+    QAction *addLibA = menu.addAction("Add to Asset Library");
+    QAction *favA = menu.addAction("Add to Favorites");
+    menu.addSeparator();
+    QAction *openInExplorerA = menu.addAction("Open in Explorer");
+    QAction *propertiesA = menu.addAction("Properties");
 
     // Enable states
     const bool hasClipboard = !fmClipboard.isEmpty();
+    const bool hasSelection = !selectedPaths.isEmpty();
     pasteA->setEnabled(hasClipboard);
+    copyA->setEnabled(hasSelection);
+    cutA->setEnabled(hasSelection);
+    delA->setEnabled(hasSelection);
+    permDelA->setEnabled(hasSelection);
+    addLibA->setEnabled(hasSelection);
+    favA->setEnabled(hasSelection);
+    openInExplorerA->setEnabled(hasSelection && selectedPaths.size() == 1);
+    propertiesA->setEnabled(hasSelection && selectedPaths.size() == 1);
 
     QAction *chosen = menu.exec(fmTree->viewport()->mapToGlobal(pos));
     if (!chosen) return;
@@ -4325,6 +4640,24 @@ void MainWindow::onFmTreeContextMenu(const QPoint &pos)
         FileOpsQueue::instance().enqueueMove(files, folderPath);
         if (!fileOpsDialog) fileOpsDialog = new FileOpsProgressDialog(this);
         fileOpsDialog->show(); fileOpsDialog->raise(); fileOpsDialog->activateWindow();
+    } else if (chosen == addLibA) {
+        onAddTreeSelectionToAssetLibrary();
+    } else if (chosen == favA) {
+        onFmAddToFavorites();
+    } else if (chosen == openInExplorerA && hasSelection && selectedPaths.size() == 1) {
+        const QString p = selectedPaths.first();
+        QProcess::startDetached("explorer.exe", QStringList() << "/select," << QDir::toNativeSeparators(p));
+    } else if (chosen == propertiesA && hasSelection && selectedPaths.size() == 1) {
+        const QString p = selectedPaths.first();
+#ifdef Q_OS_WIN
+        std::wstring wpath = p.toStdWString();
+        SHELLEXECUTEINFOW sei = { sizeof(sei) };
+        sei.lpVerb = L"properties";
+        sei.lpFile = wpath.c_str();
+        sei.nShow = SW_SHOW;
+        sei.fMask = SEE_MASK_INVOKEIDLIST;
+        ShellExecuteExW(&sei);
+#endif
     }
 }
 
@@ -4505,6 +4838,21 @@ void MainWindow::onAddSelectionToAssetLibrary()
         }
     }
 
+    importToAssetLibrary(filePaths, folderPaths);
+}
+
+void MainWindow::onAddTreeSelectionToAssetLibrary()
+{
+    // Import the selected folders from the File Manager tree into the Asset Library.
+    const QStringList folderPaths = getSelectedFmTreePaths();
+    importToAssetLibrary(QStringList(), folderPaths);
+}
+
+void MainWindow::importToAssetLibrary(const QStringList& filePathsIn, const QStringList& folderPathsIn)
+{
+    QStringList filePaths = filePathsIn;
+    QStringList folderPaths = folderPathsIn;
+
     filePaths.removeDuplicates();
     folderPaths.removeDuplicates();
 
@@ -4552,100 +4900,28 @@ void MainWindow::onAddSelectionToAssetLibrary()
 
 void MainWindow::setupConnections()
 {
+    if (mainTabs) {
+        connect(mainTabs, &QTabWidget::currentChanged, this, &MainWindow::onTabChanged);
+    }
+
     // Debounced folder selection for Asset Manager
     folderSelectTimer.setSingleShot(true);
     connect(&folderSelectTimer, &QTimer::timeout, this, [this]{
         const int fid = pendingFolderId;
         if (fid <= 0) return;
-
-        // Save context for current folder before switching
-        if (currentAssetId > 0 || !selectedAssetIds.isEmpty()) {
-            int currentFolderId = assetsModel->folderId();
-            if (currentFolderId > 0) {
-                ContextPreserver::FolderContext ctx;
-                // Save scroll position
-                if (isGridMode && assetGridView) {
-                    ctx.scrollPosition = assetGridView->verticalScrollBar()->value();
-                } else if (!isGridMode && assetTableView) {
-                    ctx.scrollPosition = assetTableView->verticalScrollBar()->value();
-                }
-                ctx.isGridMode = isGridMode;
-                ctx.searchText = searchBox->text();
-                ctx.ratingFilter = ratingFilter->currentIndex() - 1; // -1 for "All"
-                ctx.selectedAssetIds = selectedAssetIds;
-                ctx.recursiveMode = recursiveCheckBox->isChecked();
-
-                // Save selected tags
-                QModelIndexList tagSelection = tagsListView->selectionModel()->selectedIndexes();
-                for (const QModelIndex& idx : tagSelection) {
-                    int tagId = idx.data(TagsModel::IdRole).toInt();
-                    if (tagId > 0) ctx.selectedTagIds.insert(tagId);
-                }
-
-                ContextPreserver::instance().saveFolderContext(currentFolderId, ctx);
-            }
-        }
-
-        // Stop any preview playback but do NOT cancel thumbnail generation; allow it to continue in background
-        if (previewOverlay) previewOverlay->stopPlayback();
-        // Apply folder change
-        assetsModel->setFolderId(fid);
-
-        // Try to restore context for new folder
-        if (ContextPreserver::instance().hasFolderContext(fid)) {
-            QTimer::singleShot(50, this, [this, fid](){
-                ContextPreserver::FolderContext ctx = ContextPreserver::instance().loadFolderContext(fid);
-
-                // Restore view mode
-                if (ctx.isGridMode != isGridMode) {
-                    onViewModeChanged();
-                }
-
-                // Restore filters
-                if (!ctx.searchText.isEmpty()) {
-                    searchBox->setText(ctx.searchText);
-                }
-                if (ctx.ratingFilter >= -1) {
-                    ratingFilter->setCurrentIndex(ctx.ratingFilter + 1);
-                }
-                recursiveCheckBox->setChecked(ctx.recursiveMode);
-
-                // Restore scroll position
-                if (ctx.scrollPosition > 0) {
-                    if (isGridMode && assetGridView) {
-                        assetGridView->verticalScrollBar()->setValue(ctx.scrollPosition);
-                    } else if (!isGridMode && assetTableView) {
-                        assetTableView->verticalScrollBar()->setValue(ctx.scrollPosition);
-                    }
-                }
-
-                // Note: Asset selection restoration would need to wait for model to load
-                // This is a future enhancement
-            });
-        } else {
-            // No saved context - ensure the asset views start at the top for every new folder
-            QTimer::singleShot(0, this, [this](){
-                if (assetGridView) assetGridView->scrollToTop();
-                if (assetTableView) assetTableView->scrollToTop();
-            });
-        }
-
-        // Log memory usage before/after applying folder change
-#ifdef Q_OS_WIN
-        qDebug() << "[NAV] Folder change applied to id=" << fid << ", working set (MB)=" << (qulonglong)currentWorkingSetMB();
-        QTimer::singleShot(1000, this, [](){ qDebug() << "[NAV] Post-change working set (MB)=" << (qulonglong)currentWorkingSetMB(); });
-#endif
-
-        clearSelection();
-        updateInfoPanel();
-
-        // Save as last active folder
-        ContextPreserver::instance().saveLastActiveFolder(fid);
+        navigateToFolder(fid, true);
     });
 
     connect(folderTreeView, &QTreeView::clicked, this, &MainWindow::onFolderSelected);
     connect(folderTreeView, &QTreeView::customContextMenuRequested, this, &MainWindow::onFolderContextMenu);
-
+    connect(folderTreeView, &QTreeView::collapsed, this, [this](const QModelIndex &idx){
+        if (!folderModel || !folderTreeView) return;
+        if (!idx.isValid()) return;
+        if (!idx.parent().isValid()) {
+            // Root nodes must always remain expanded
+            folderTreeView->setExpanded(idx, true);
+        }
+    });
 
     connect(assetGridView->selectionModel(), &QItemSelectionModel::selectionChanged, this, &MainWindow::onAssetSelectionChanged);
     connect(assetGridView, &QListView::doubleClicked, this, &MainWindow::onAssetDoubleClicked);
@@ -4669,7 +4945,6 @@ void MainWindow::setupConnections()
         tagsListView->viewport()->installEventFilter(this);
         qDebug() << "[INIT] tagsListView viewport event filter installed (late)";
     }
-
 
     // Connect search box for manual search (Enter key)
     connect(searchBox, &QLineEdit::returnPressed, this, [this]() {
@@ -4718,7 +4993,14 @@ void MainWindow::setupConnections()
             this, [this](int, bool success, const QString&){
                 if (success) QTimer::singleShot(100, this, &MainWindow::onFmRefresh);
             });
+}
 
+
+void MainWindow::onTabChanged(int index)
+{
+    Q_UNUSED(index);
+    // We already persist the last active tab from closeEvent; this slot is kept
+    // only to allow future per-tab hooks without resetting state on tab switch.
 }
 
 
@@ -4739,6 +5021,196 @@ void MainWindow::onFolderSelected(const QModelIndex &index)
     pendingFolderId = folderId;
     folderSelectTimer.start(150);
 }
+
+void MainWindow::onAssetNavigateBack()
+{
+    if (amNavigationIndex <= 0 || amNavigationHistory.isEmpty()) {
+        return;
+    }
+
+    amNavigationIndex--;
+    int folderId = amNavigationHistory[amNavigationIndex];
+
+    // Simply navigate to the folder - don't add to history since we're going back
+    navigateToFolder(folderId, false);
+}
+
+void MainWindow::onAssetNavigateUp()
+{
+    if (!assetsModel || !folderModel) {
+        return;
+    }
+
+    int currentFolderId = assetsModel->folderId();
+    if (currentFolderId <= 0) {
+        return;
+    }
+
+    // Check if we're already at root
+    int rootId = folderModel->rootId();
+    if (currentFolderId == rootId) {
+        return;
+    }
+
+    // Query the database to find the parent folder ID directly
+    QSqlQuery q(DB::instance().database());
+    q.prepare("SELECT parent_id FROM virtual_folders WHERE id = ?");
+    q.addBindValue(currentFolderId);
+    if (!q.exec() || !q.next()) {
+        return;
+    }
+
+    int parentFolderId = q.value(0).toInt();
+    if (parentFolderId <= 0) {
+        parentFolderId = rootId; // If parent_id is NULL or 0, parent is root
+    }
+
+    // Simply navigate to the parent folder
+    navigateToFolder(parentFolderId, true);
+}
+
+void MainWindow::onAssetNewFolder()
+{
+    if (!folderModel || !folderTreeView) return;
+
+    QModelIndex currentIndex = folderTreeView->currentIndex();
+    int parentFolderId = 0;
+    if (currentIndex.isValid()) {
+        parentFolderId = currentIndex.data(VirtualFolderTreeModel::IdRole).toInt();
+    }
+    if (parentFolderId <= 0) {
+        parentFolderId = folderModel->rootId();
+    }
+
+    bool ok = false;
+    QString name = QInputDialog::getText(this, "Create Subfolder",
+                                         "Enter subfolder name:",
+                                         QLineEdit::Normal, QString(), &ok);
+    name = name.trimmed();
+    if (!ok || name.isEmpty()) {
+        return;
+    }
+
+    int newId = DB::instance().createFolder(name, parentFolderId);
+    if (newId > 0) {
+        // Set pending selection so the new folder is selected after model reset
+        pendingSelectFolderIdAfterReload = newId;
+        folderModel->reload();
+        statusBar()->showMessage(QString("Created subfolder '%1'").arg(name), 3000);
+    } else {
+        QMessageBox::warning(this, "Error", "Failed to create subfolder");
+    }
+}
+
+void MainWindow::onAssetGroupSequencesToggled(bool checked)
+{
+    setAssetManagerSequenceGroupingEnabled(checked);
+}
+
+void MainWindow::onAssetFoldersModelAboutToReset()
+{
+    if (!folderModel || !folderTreeView) return;
+
+    qDebug() << "[Asset Manager] Folder model about to reset - saving tree state";
+
+    // Save expansion state
+    saveFolderExpansionState();
+
+    // Save scroll position
+    QScrollBar *vbar = folderTreeView->verticalScrollBar();
+    if (vbar) {
+        savedTreeScrollPosition = vbar->value();
+    }
+
+    // Save current selection (may be multiple folders)
+    savedSelectedFolderIds.clear();
+    QModelIndexList selected = folderTreeView->selectionModel()->selectedIndexes();
+    for (const QModelIndex &idx : selected) {
+        if (idx.isValid()) {
+            int folderId = idx.data(VirtualFolderTreeModel::IdRole).toInt();
+            if (folderId > 0) {
+                savedSelectedFolderIds.append(folderId);
+            }
+        }
+    }
+
+    qDebug() << "[Asset Manager] Saved" << expandedFolderIds.size() << "expanded folders,"
+             << savedSelectedFolderIds.size() << "selected folders, scroll position" << savedTreeScrollPosition;
+}
+
+void MainWindow::onAssetFoldersModelReset()
+{
+    if (!folderModel || !folderTreeView) return;
+
+    qDebug() << "[Asset Manager] Folder model reset - restoring tree state";
+
+    // Restore expansion state
+    restoreFolderExpansionState();
+
+    // Restore selection
+    QItemSelectionModel *selModel = folderTreeView->selectionModel();
+    if (selModel) {
+        selModel->clearSelection();
+
+        // Priority 1: If we have a pending folder ID from an operation (e.g., just created), select that
+        if (pendingSelectFolderIdAfterReload > 0) {
+            QModelIndex idx = folderModel->findIndexById(pendingSelectFolderIdAfterReload);
+            if (idx.isValid()) {
+                // Expand ancestors to make it visible
+                QModelIndex parent = idx.parent();
+                while (parent.isValid()) {
+                    folderTreeView->setExpanded(parent, true);
+                    parent = parent.parent();
+                }
+                selModel->setCurrentIndex(idx, QItemSelectionModel::Select);
+                folderTreeView->scrollTo(idx, QAbstractItemView::PositionAtCenter);
+                qDebug() << "[Asset Manager] Selected pending folder ID" << pendingSelectFolderIdAfterReload;
+            }
+            pendingSelectFolderIdAfterReload = -1; // Clear pending
+        }
+        // Priority 2: Restore previously selected folders
+        else if (!savedSelectedFolderIds.isEmpty()) {
+            bool anyRestored = false;
+            for (int folderId : savedSelectedFolderIds) {
+                QModelIndex idx = folderModel->findIndexById(folderId);
+                if (idx.isValid()) {
+                    // Expand ancestors
+                    QModelIndex parent = idx.parent();
+                    while (parent.isValid()) {
+                        folderTreeView->setExpanded(parent, true);
+                        parent = parent.parent();
+                    }
+                    selModel->select(idx, QItemSelectionModel::Select);
+                    if (!anyRestored) {
+                        selModel->setCurrentIndex(idx, QItemSelectionModel::Current);
+                        folderTreeView->scrollTo(idx, QAbstractItemView::PositionAtCenter);
+                        anyRestored = true;
+                    }
+                }
+            }
+            if (anyRestored) {
+                qDebug() << "[Asset Manager] Restored selection for" << savedSelectedFolderIds.size() << "folders";
+            } else {
+                // Fallback to root if none of the saved folders exist anymore
+                QModelIndex rootIdx = folderModel->index(0, 0, QModelIndex());
+                if (rootIdx.isValid()) {
+                    selModel->setCurrentIndex(rootIdx, QItemSelectionModel::Select);
+                    qDebug() << "[Asset Manager] Fallback to root (saved folders no longer exist)";
+                }
+            }
+        }
+    }
+
+    // Restore scroll position (do this after selection to avoid fighting with scrollTo)
+    QTimer::singleShot(50, this, [this]() {
+        QScrollBar *vbar = folderTreeView->verticalScrollBar();
+        if (vbar && savedTreeScrollPosition >= 0) {
+            vbar->setValue(savedTreeScrollPosition);
+            qDebug() << "[Asset Manager] Restored scroll position to" << savedTreeScrollPosition;
+        }
+    });
+}
+
 
 void MainWindow::onAssetSelectionChanged()
 {
@@ -4803,6 +5275,9 @@ void MainWindow::onAssetContextMenu(const QPoint &pos)
         QAction *rating2 = setRatingMenu->addAction("★★☆☆☆");
         rating2->setData(2);
         QAction *rating3 = setRatingMenu->addAction("★★★☆☆");
+
+
+
         rating3->setData(3);
         QAction *rating4 = setRatingMenu->addAction("★★★★☆");
         rating4->setData(4);
@@ -4985,6 +5460,8 @@ void MainWindow::onFolderContextMenu(const QPoint &pos)
         if (ok && !name.isEmpty()) {
             int newId = DB::instance().createFolder(name, folderId);
             if (newId > 0) {
+                // Set pending selection so the new folder is selected after model reset
+                pendingSelectFolderIdAfterReload = newId;
                 folderModel->reload();
                 statusBar()->showMessage(QString("Created subfolder '%1'").arg(name), 3000);
             } else {
@@ -5001,6 +5478,7 @@ void MainWindow::onFolderContextMenu(const QPoint &pos)
             // If it's a project folder, use the project folder rename method
             if (isProjectFolder) {
                 if (DB::instance().renameProjectFolder(projectFolderId, newName)) {
+                    // Keep the same folder selected after rename (savedSelectedFolderIds will handle this)
                     folderModel->reload();
                     statusBar()->showMessage(QString("Renamed project folder to '%1'").arg(newName), 3000);
                 } else {
@@ -5008,6 +5486,7 @@ void MainWindow::onFolderContextMenu(const QPoint &pos)
                 }
             } else {
                 if (DB::instance().renameFolder(folderId, newName)) {
+                    // Keep the same folder selected after rename (savedSelectedFolderIds will handle this)
                     folderModel->reload();
                     statusBar()->showMessage(QString("Renamed folder to '%1'").arg(newName), 3000);
                 } else {
@@ -5084,6 +5563,157 @@ void MainWindow::onFolderContextMenu(const QPoint &pos)
         }
     }
 }
+
+void MainWindow::navigateToFolder(int folderId, bool addToHistory)
+{
+    if (folderId <= 0) return;
+
+    // Save context for current folder before switching
+    if (currentAssetId > 0 || !selectedAssetIds.isEmpty()) {
+        int currentFolderId = assetsModel ? assetsModel->folderId() : -1;
+        if (currentFolderId > 0) {
+            ContextPreserver::FolderContext ctx;
+            // Save scroll position
+            if (isGridMode && assetGridView) {
+                ctx.scrollPosition = assetGridView->verticalScrollBar()->value();
+            } else if (!isGridMode && assetTableView) {
+                ctx.scrollPosition = assetTableView->verticalScrollBar()->value();
+            }
+            ctx.isGridMode = isGridMode;
+            if (searchBox) ctx.searchText = searchBox->text();
+            if (ratingFilter) ctx.ratingFilter = ratingFilter->currentIndex() - 1; // -1 for "All"
+            ctx.selectedAssetIds = selectedAssetIds;
+            if (recursiveCheckBox) ctx.recursiveMode = recursiveCheckBox->isChecked();
+
+            // Save selected tags
+            if (tagsListView && tagsListView->selectionModel()) {
+                QModelIndexList tagSelection = tagsListView->selectionModel()->selectedIndexes();
+                for (const QModelIndex& idx : tagSelection) {
+                    int tagId = idx.data(TagsModel::IdRole).toInt();
+                    if (tagId > 0) ctx.selectedTagIds.insert(tagId);
+                }
+            }
+
+            ContextPreserver::instance().saveFolderContext(currentFolderId, ctx);
+        }
+    }
+
+    // Stop any preview playback but do NOT cancel thumbnail generation; allow it to continue in background
+    if (previewOverlay) previewOverlay->stopPlayback();
+
+    // Update navigation history
+    if (addToHistory) {
+        // Remove any forward history if we're not at the end
+        while (amNavigationIndex < amNavigationHistory.size() - 1) {
+            amNavigationHistory.removeLast();
+        }
+        // Add the new folder to history
+        amNavigationHistory.append(folderId);
+        amNavigationIndex = amNavigationHistory.size() - 1;
+    }
+
+    // Apply folder change
+    if (assetsModel) {
+        assetsModel->setFolderId(folderId);
+    }
+
+    // Try to restore context for new folder
+    if (ContextPreserver::instance().hasFolderContext(folderId)) {
+        QTimer::singleShot(50, this, [this, folderId](){
+            ContextPreserver::FolderContext ctx = ContextPreserver::instance().loadFolderContext(folderId);
+
+            // Restore view mode
+            if (ctx.isGridMode != isGridMode) {
+                onViewModeChanged();
+            }
+
+            // Restore filters
+            if (searchBox && !ctx.searchText.isEmpty()) {
+                searchBox->setText(ctx.searchText);
+            }
+            if (ratingFilter && ctx.ratingFilter >= -1) {
+                ratingFilter->setCurrentIndex(ctx.ratingFilter + 1);
+            }
+            if (recursiveCheckBox) {
+                recursiveCheckBox->setChecked(ctx.recursiveMode);
+            }
+
+            // Restore scroll position
+            if (ctx.scrollPosition > 0) {
+                if (isGridMode && assetGridView) {
+                    assetGridView->verticalScrollBar()->setValue(ctx.scrollPosition);
+                } else if (!isGridMode && assetTableView) {
+                    assetTableView->verticalScrollBar()->setValue(ctx.scrollPosition);
+                }
+            }
+
+            // Note: Asset selection restoration would need to wait for model to load
+            // This is a future enhancement
+        });
+    } else {
+        // No saved context - ensure the asset views start at the top for every new folder
+        QTimer::singleShot(0, this, [this](){
+            if (assetGridView) assetGridView->scrollToTop();
+            if (assetTableView) assetTableView->scrollToTop();
+        });
+    }
+
+#ifdef Q_OS_WIN
+    // Log memory usage before/after applying folder change
+    qDebug() << "[NAV] Folder change applied to id=" << folderId << ", working set (MB)=" << (qulonglong)currentWorkingSetMB();
+    QTimer::singleShot(1000, this, [](){ qDebug() << "[NAV] Post-change working set (MB)=" << (qulonglong)currentWorkingSetMB(); });
+#endif
+
+    clearSelection();
+    updateInfoPanel();
+
+    // Save as last active folder
+    ContextPreserver::instance().saveLastActiveFolder(folderId);
+
+    amUpdateNavigationButtons();
+
+    // Sync tree selection to show current folder
+    if (folderModel && folderTreeView && folderTreeView->selectionModel()) {
+        // Find the index for this folder
+        QModelIndex idx = folderModel->findIndexById(folderId);
+
+        if (idx.isValid()) {
+            // Expand all ancestors to make the folder visible
+            QModelIndex parent = idx.parent();
+            while (parent.isValid()) {
+                folderTreeView->setExpanded(parent, true);
+                parent = parent.parent();
+            }
+
+            // Set the selection - this moves the highlight
+            // Note: onFolderSelected is connected to 'clicked' signal, not selection changes,
+            // so this won't trigger recursive navigation
+            folderTreeView->selectionModel()->setCurrentIndex(idx, QItemSelectionModel::ClearAndSelect);
+            folderTreeView->scrollTo(idx, QAbstractItemView::PositionAtCenter);
+        }
+    }
+}
+
+void MainWindow::amUpdateNavigationButtons()
+{
+    if (amBackButton) {
+        amBackButton->setEnabled(amNavigationIndex > 0 && !amNavigationHistory.isEmpty());
+    }
+
+    if (amUpButton) {
+        bool canGoUp = false;
+        if (assetsModel && folderModel) {
+            int currentFolderId = assetsModel->folderId();
+            int rootId = folderModel->rootId();
+            // Can go up if we're not at root
+            if (currentFolderId > 0 && currentFolderId != rootId) {
+                canGoUp = true;
+            }
+        }
+        amUpButton->setEnabled(canGoUp);
+    }
+}
+
 
 void MainWindow::onEmptySpaceContextMenu(const QPoint &pos)
 {
@@ -6790,6 +7420,10 @@ void MainWindow::saveFolderExpansionState()
 {
     expandedFolderIds.clear();
 
+    if (!folderModel || !folderTreeView) {
+        return;
+    }
+
     // Recursively save expanded state
     std::function<void(const QModelIndex&)> saveExpanded = [&](const QModelIndex& parent) {
         int rowCount = folderModel->rowCount(parent);
@@ -6812,6 +7446,13 @@ void MainWindow::saveFolderExpansionState()
 
 void MainWindow::restoreFolderExpansionState()
 {
+    if (!folderModel || !folderTreeView) {
+        return;
+    }
+
+    // Always ensure roots are expanded
+    folderTreeView->expandToDepth(0);
+
     // Recursively restore expanded state
     std::function<void(const QModelIndex&)> restoreExpanded = [&](const QModelIndex& parent) {
         int rowCount = folderModel->rowCount(parent);
@@ -8286,6 +8927,27 @@ void MainWindow::closeEvent(QCloseEvent* event)
         ContextPreserver::instance().saveLastActiveTab(mainTabs->currentIndex());
     }
 
+    // Persist Asset Manager folder tree expansion and scroll position
+    saveFolderExpansionState();
+    {
+        QSettings treeSettings("AugmentCode", "KAssetManager");
+        treeSettings.beginGroup("AssetManager/Tree");
+
+        QVariantList expandedList;
+        for (int id : expandedFolderIds) {
+            expandedList << id;
+        }
+        treeSettings.setValue("ExpandedFolders", expandedList);
+
+        int scrollPos = -1;
+        if (folderTreeView && folderTreeView->verticalScrollBar()) {
+            scrollPos = folderTreeView->verticalScrollBar()->value();
+        }
+        treeSettings.setValue("ScrollPosition", scrollPos);
+
+        treeSettings.endGroup();
+    }
+
     QSettings s("AugmentCode", "KAssetManager");
     // Window
     s.setValue("Window/Geometry", saveGeometry());
@@ -8366,25 +9028,42 @@ void MainWindow::applyFmShortcuts()
     s.endGroup();
 }
 
-void MainWindow::onFmGroupSequencesToggled(bool checked)
+
+void MainWindow::setSequenceGroupingEnabled(bool enabled)
 {
-    fmGroupSequences = checked;
-    if (fmProxyModel) fmProxyModel->setGroupingEnabled(checked);
-    // Update LivePreviewManager to enable/disable sequence detection
-    LivePreviewManager::instance().setSequenceDetectionEnabled(checked);
-    // Update scrub controller to know about grouping state (for selective scrubbing)
-    if (fmScrubController) fmScrubController->setSequenceGroupingEnabled(checked);
+    fmGroupSequences = enabled;
+
+    // File Manager: proxy grouping
+    if (fmProxyModel) {
+        fmProxyModel->setGroupingEnabled(enabled);
+    }
+
+    // Global sequence detection state for previews
+    LivePreviewManager::instance().setSequenceDetectionEnabled(enabled);
+
+    // Update scrub controllers to know about grouping state (for selective scrubbing)
+    if (fmScrubController) {
+        fmScrubController->setSequenceGroupingEnabled(enabled);
+    }
+    if (assetScrubController) {
+        assetScrubController->setSequenceGroupingEnabled(enabled);
+    }
+
     // Clear the cache to force regeneration of thumbnails with new settings
     LivePreviewManager::instance().clear();
-    // Rebuild for current root
+
+    // Rebuild File Manager for current root
     if (fmDirModel && fmProxyModel) {
-        QString rootPath = fmDirModel->rootPath();
-        if (!rootPath.isEmpty()) fmProxyModel->rebuildForRoot(rootPath);
+        const QString rootPath = fmDirModel->rootPath();
+        if (!rootPath.isEmpty()) {
+            fmProxyModel->rebuildForRoot(rootPath);
+        }
     }
-    // Force complete repaint of grid view to regenerate thumbnails
+
+    // Force complete repaint of File Manager grid view to regenerate thumbnails
     if (fmGridView) {
         fmGridView->viewport()->update();
-        // Also schedule a delayed update to catch async thumbnail loads
+        // Also schedule delayed updates to catch async thumbnail loads
         QTimer::singleShot(100, fmGridView->viewport(), [this]() {
             if (fmGridView) fmGridView->viewport()->update();
         });
@@ -8392,8 +9071,53 @@ void MainWindow::onFmGroupSequencesToggled(bool checked)
             if (fmGridView) fmGridView->viewport()->update();
         });
     }
+
+    // Update File Manager toolbar button (without re-emitting signal)
+    if (fmGroupSequencesCheckBox) {
+        QSignalBlocker blockFm(fmGroupSequencesCheckBox);
+        fmGroupSequencesCheckBox->setChecked(enabled);
+    }
+
+    // Persist File Manager group sequences setting
     QSettings s("AugmentCode", "KAssetManager");
-    s.setValue("FileManager/GroupSequences", checked);
+    s.setValue("FileManager/GroupSequences", enabled);
+}
+
+void MainWindow::setAssetManagerSequenceGroupingEnabled(bool enabled)
+{
+    // Asset Manager: proxy grouping (affects both grid and table views)
+    if (amProxyModel) {
+        amProxyModel->setGroupingEnabled(enabled);
+    }
+
+    // Update Asset Manager toolbar button (without re-emitting signal)
+    if (amGroupSequencesButton) {
+        QSignalBlocker blockAm(amGroupSequencesButton);
+        amGroupSequencesButton->setChecked(enabled);
+    }
+
+    // Force repaint of Asset Manager views
+    if (assetGridView) {
+        assetGridView->viewport()->update();
+        QTimer::singleShot(100, assetGridView->viewport(), [this]() {
+            if (assetGridView) assetGridView->viewport()->update();
+        });
+    }
+    if (assetTableView) {
+        assetTableView->viewport()->update();
+        QTimer::singleShot(100, assetTableView->viewport(), [this]() {
+            if (assetTableView) assetTableView->viewport()->update();
+        });
+    }
+
+    // Persist Asset Manager group sequences setting (separate from File Manager)
+    QSettings s("AugmentCode", "KAssetManager");
+    s.setValue("AssetManager/GroupSequences", enabled);
+}
+
+void MainWindow::onFmGroupSequencesToggled(bool checked)
+{
+    setSequenceGroupingEnabled(checked);
 }
 
 void MainWindow::onFmHideFoldersToggled(bool checked)

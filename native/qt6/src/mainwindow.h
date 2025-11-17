@@ -109,6 +109,19 @@ private slots:
     void showDatabaseHealthDialog();
     void performStartupHealthCheck();
 
+    // Main tabs
+    void onTabChanged(int index);
+
+    // Asset Manager navigation toolbar
+    void onAssetNavigateBack();
+    void onAssetNavigateUp();
+    void onAssetNewFolder();
+    void onAssetGroupSequencesToggled(bool checked);
+
+    // Asset Manager folder model lifecycle hooks
+    void onAssetFoldersModelAboutToReset();
+    void onAssetFoldersModelReset();
+
     // File Manager slots
     void onFmTreeCurrentChanged(const QModelIndex &current, const QModelIndex &previous);
     void onFmTreeActivated(const QModelIndex &index);
@@ -117,6 +130,7 @@ private slots:
     void onFmViewModeToggled();
     void onFmThumbnailSizeChanged(int size);
     void onAddSelectionToAssetLibrary();
+    void onAddTreeSelectionToAssetLibrary();
     void onFmAddToFavorites();
     void onFmRemoveFavorite();
     void onFmFavoriteActivated(QListWidgetItem* item);
@@ -154,10 +168,15 @@ private slots:
 private:
     QString fmPathForIndex(const QModelIndex& idx) const;
     void releaseAnyPreviewLocksForPaths(const QStringList& paths);
+    void importToAssetLibrary(const QStringList& filePaths, const QStringList& folderPaths);
     void updateFmInfoPanel();
     void fmNavigateToPath(const QString& path, bool addToHistory = true);
     void fmUpdateNavigationButtons();
     void fmScrollTreeToPath(const QString& path);
+    void amUpdateNavigationButtons();
+    void navigateToFolder(int folderId, bool addToHistory = true);
+    void setSequenceGroupingEnabled(bool enabled);
+    void setAssetManagerSequenceGroupingEnabled(bool enabled);
 
 
 protected:
@@ -191,6 +210,11 @@ private:
     void restoreFolderExpansionState();
     QSet<int> expandedFolderIds;
 
+    // Saved state for folder tree during model reset
+    int savedTreeScrollPosition = 0;
+    QList<int> savedSelectedFolderIds;
+    int pendingSelectFolderIdAfterReload = -1;
+
     // Sequence helper
     QStringList reconstructSequenceFramePaths(const QString& firstFramePath, int startFrame, int endFrame);
 
@@ -198,6 +222,7 @@ private:
     QTabWidget *mainTabs;
     QWidget *assetManagerPage;
     QWidget *fileManagerPage;
+
 
     // UI Components
     QSplitter *mainSplitter;
@@ -212,6 +237,7 @@ private:
     QListView *assetGridView;
     class QTableView *assetTableView;
     AssetsModel *assetsModel;
+    class AssetSequenceGroupingProxyModel *amProxyModel = nullptr;
 
     // Right panel: Filters + Info
     QWidget *rightPanel;
@@ -238,6 +264,14 @@ private:
     bool isGridMode;
     class QCheckBox *lockCheckBox;
     class QCheckBox *recursiveCheckBox;
+    // Asset Manager navigation toolbar controls
+    QToolButton *amBackButton = nullptr;
+    QToolButton *amUpButton = nullptr;
+    QToolButton *amNewFolderButton = nullptr;
+    QToolButton *amGroupSequencesButton = nullptr;
+    QList<int> amNavigationHistory;
+    int amNavigationIndex = -1;
+
     class QCheckBox *searchEntireDbCheckBox;
     QPushButton *refreshButton;
 
