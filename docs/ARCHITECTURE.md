@@ -11,6 +11,7 @@ This document summarizes core runtime subsystems and cross‑cutting concerns: t
 - Background work
   - LivePreviewManager
     - Decoding and thumbnail generation run off the UI thread via QtConcurrent::run().
+    - Video and image-sequence playback/preview use GStreamer as the sole backend; OpenImageIO is used for advanced still formats. FFmpeg is only used by the Convert dialog, not for live playback.
     - Results are delivered back to the UI using queued connections.
     - Uses QCache with LRU semantics and a small metadata cache for image sequences.
   - Media conversion
@@ -24,6 +25,8 @@ Guidelines
 - Any new long‑running or blocking work must be scheduled on a worker thread (QtConcurrent/QThreadPool) and communicate back via signals/slots (queued connections).
 - Keep QSqlDatabase usage confined to the thread that opened the connection. Do not pass QSqlQuery/QSqlDatabase across threads.
 - File operations for the File Manager must use OS handlers (Explorer/Shell) and the existing FileOpsQueue.
+- File Manager tree expansion is folder-only: do not trigger file enumeration, shell icon lookups, or metadata/preview work when a node is just expanded.
+- In File Manager, LivePreviewManager and metadata readers should be invoked only on explicit selection (and only when the corresponding Preview/Info panes are visible), not on general view scrolling.
 
 ### Logging
 

@@ -1,10 +1,10 @@
 # KAssetManager - Intelligent Features Guide
 
-**Version:** 1.0.5
-**Last Updated:** 2025-11-05
+**Version:** 1.2.0
+**Last Updated:** 2025-11-14
 **Status:** Production Ready
 
-This guide covers the installation, configuration, and usage of the intelligent features implemented in KAssetManager v1.0.5.
+This guide covers the installation, configuration, and usage of the intelligent features introduced in KAssetManager v1.0.5 and available in v1.2.0.
 
 ---
 
@@ -22,7 +22,7 @@ This guide covers the installation, configuration, and usage of the intelligent 
 
 ## Overview
 
-KAssetManager v1.0.5 introduces five intelligent features designed to enhance workflow efficiency, data integrity, and user experience:
+KAssetManager v1.0.5 introduced five intelligent features designed to enhance workflow efficiency, data integrity, and user experience; these features remain available in v1.2.0:
 
 | Feature | Description | Availability |
 |---------|-------------|--------------|

@@ -22,10 +22,11 @@ docs/
   - ENABLE_ASAN=ON, ENABLE_UBSAN=ON (Clang/GCC)
   - ENABLE_CLANG_TIDY=ON
   - ENABLE_COVERAGE=ON (GCC/Clang)
-- Optional dependencies:
-  - FFmpeg via FFMPEG_ROOT or vcpkg (headers/libs)
-  - OpenImageIO via vcpkg (HAVE_OPENIMAGEIO automatically defined when found)
-  - ImageMagick portable via IMAGEMAGICK_ROOT (only used at runtime for conversions)
+- Optional / external dependencies:
+  - GStreamer runtime from third_party/gstreamer (required for video and image-sequence playback; bundled by the Windows build scripts).
+  - FFmpeg via FFMPEG_ROOT or vcpkg (headers/libs; used only by the Convert dialog/tools, not for live playback).
+  - OpenImageIO via vcpkg (HAVE_OPENIMAGEIO automatically defined when found).
+  - ImageMagick portable via IMAGEMAGICK_ROOT (only used at runtime for conversions).
 
 ### Testing
 - Unit tests use QtTest. Build with -DBUILD_TESTS=ON
@@ -58,10 +59,10 @@ docs/
 - Avoid QApplication::processEvents(); communicate with signals/slots (queued connections)
 
 ### Live preview and conversions
-- FFmpeg and (optionally) OpenImageIO power preview and advanced formats
-- RAII wrappers ensure FFmpeg resources are released on all paths
-- Image conversions use ImageMagick; video conversions use FFmpeg
-- Conversion Pause/Resume is disabled by design
+- GStreamer and (optionally) OpenImageIO power live preview and advanced formats; FFmpeg is no longer used for playback.
+- RAII wrappers ensure FFmpeg resources used by the Convert dialog are released on all paths.
+- Image conversions use ImageMagick; video conversions use FFmpeg via the Convert dialog/tools.
+- Conversion Pause/Resume is disabled by design.
 
 ### Security & hardening (summary)
 See CODEBASE_REVIEW_REPORT.md for the detailed audit. Implemented highlights:

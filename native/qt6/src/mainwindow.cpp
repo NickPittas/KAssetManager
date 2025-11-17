@@ -760,35 +760,21 @@ public:
 
 static QIcon getFileTypeIcon(const QString &ext);
 
-// Icon provider for File Manager file views using live previews, but avoiding slow OS shell icons
+// Icon provider for File Manager file views using lightweight, static icons
 class FmIconProvider : public QFileIconProvider {
 public:
     FmIconProvider() : QFileIconProvider() {}
     QIcon icon(const QFileInfo &info) const override {
-        const QString path = info.absoluteFilePath();
-        const QString suffix = info.suffix().toLower();
-
         // Always keep folders lightweight and immediate
         if (info.isDir()) {
             return QApplication::style()->standardIcon(QStyle::SP_DirIcon);
         }
 
-        // For non-previewable files, use our extension-based file type icon
-        if (!isPreviewableSuffix(suffix)) {
-            return getFileTypeIcon(suffix);
-        }
-
-        const QSize targetSize(64, 64);
-        auto handle = LivePreviewManager::instance().cachedFrame(path, targetSize);
-        if (handle.isValid()) {
-            return QIcon(handle.pixmap);
-        }
-
-        // Request preview asynchronously; fall back to file type icon until ready
-        LivePreviewManager::instance().requestFrame(path, targetSize);
+        const QString suffix = info.suffix().toLower();
         return getFileTypeIcon(suffix);
     }
 };
+
 
 // Custom delegate for asset grid view with live previews
 class AssetItemDelegate : public QStyledItemDelegate
@@ -2948,6 +2934,12 @@ void MainWindow::setupFileManagerUi()
     fmGridView->setDragDropMode(QAbstractItemView::DragDrop);
     fmGridView->setDefaultDropAction(Qt::CopyAction);
     if (fmGridView->viewport()) fmGridView->viewport()->installEventFilter(this);
+    if (fmGridView->verticalScrollBar())
+        connect(fmGridView->verticalScrollBar(), &QScrollBar::valueChanged,
+                this, &MainWindow::scheduleVisibleThumbProgressUpdate);
+    if (fmGridView->horizontalScrollBar())
+        connect(fmGridView->horizontalScrollBar(), &QScrollBar::valueChanged,
+                this, &MainWindow::scheduleVisibleThumbProgressUpdate);
     connect(fmGridView, &QListView::doubleClicked, this, &MainWindow::onFmItemDoubleClicked);
     fmViewStack->addWidget(fmGridView); // 0
 
@@ -4691,6 +4683,22 @@ void MainWindow::setupConnections()
     connect(assetTableView->verticalScrollBar(), &QScrollBar::valueChanged, this, &MainWindow::scheduleVisibleThumbProgressUpdate);
     connect(assetTableView->horizontalScrollBar(), &QScrollBar::valueChanged, this, &MainWindow::scheduleVisibleThumbProgressUpdate);
     connect(viewStack, &QStackedWidget::currentChanged, this, &MainWindow::scheduleVisibleThumbProgressUpdate);
+    if (fmGridView && fmGridView->verticalScrollBar()) {
+        connect(fmGridView->verticalScrollBar(), &QScrollBar::valueChanged,
+                this, &MainWindow::scheduleVisibleThumbProgressUpdate);
+    }
+    if (fmGridView && fmGridView->horizontalScrollBar()) {
+        connect(fmGridView->horizontalScrollBar(), &QScrollBar::valueChanged,
+                this, &MainWindow::scheduleVisibleThumbProgressUpdate);
+    }
+    if (fmListView && fmListView->verticalScrollBar()) {
+        connect(fmListView->verticalScrollBar(), &QScrollBar::valueChanged,
+                this, &MainWindow::scheduleVisibleThumbProgressUpdate);
+    }
+    if (fmListView && fmListView->horizontalScrollBar()) {
+        connect(fmListView->horizontalScrollBar(), &QScrollBar::valueChanged,
+                this, &MainWindow::scheduleVisibleThumbProgressUpdate);
+    }
     connect(&ProgressManager::instance(), &ProgressManager::isActiveChanged, this, [this]() {
 
         if (ProgressManager::instance().isActive()) {
@@ -6083,9 +6091,14 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
     if (m_initializing) {
         return false; // do not intercept; let normal processing continue
     }
-    // Update visible-only progress when asset viewports resize
-    if ((watched == assetGridView->viewport() || watched == assetTableView->viewport()) && event->type() == QEvent::Resize) {
-        scheduleVisibleThumbProgressUpdate();
+    // Update visible-only progress when asset or File Manager viewports resize
+    if ((assetGridView && watched == assetGridView->viewport()) ||
+        (assetTableView && watched == assetTableView->viewport()) ||
+        (fmGridView && watched == fmGridView->viewport()) ||
+        (fmListView && watched == fmListView->viewport())) {
+        if (event->type() == QEvent::Resize) {
+            scheduleVisibleThumbProgressUpdate();
+        }
     }
 
     // Handle Space key on asset views to toggle preview (open/close)
@@ -6984,6 +6997,8 @@ void MainWindow::updateVisibleThumbProgress()
     int visibleTotal = 0;
     int readyCount = 0;
     bool anyViewConsidered = false;
+    bool assetViewConsidered = false;
+    bool fileManagerViewConsidered = false;
 
     if (!thumbnailProgressLabel || !thumbnailProgressBar) {
         if (thumbnailProgressLabel) thumbnailProgressLabel->setVisible(false);
@@ -6999,6 +7014,7 @@ void MainWindow::updateVisibleThumbProgress()
         const int totalRows = assetsModel->rowCount(QModelIndex());
         if (totalRows <= 0) return;
         anyViewConsidered = true;
+        assetViewConsidered = true;
         const int thumbSide = view->iconSize().isValid() ? view->iconSize().width() : 180;
         const QSize targetSize(thumbSide, thumbSide);
         LivePreviewManager &previewMgr = LivePreviewManager::instance();
@@ -7027,10 +7043,12 @@ void MainWindow::updateVisibleThumbProgress()
         if (!model) return;
         const QRect viewportRect = view->viewport()->rect();
         const int rows = model->rowCount();
+        if (rows <= 0) return;
         const int thumbSide = view->iconSize().isValid() ? view->iconSize().width() : 120;
         const QSize targetSize(thumbSide, thumbSide);
         LivePreviewManager &previewMgr = LivePreviewManager::instance();
         anyViewConsidered = true;
+        fileManagerViewConsidered = true;
         for (int row = 0; row < rows; ++row) {
             const QModelIndex idx = model->index(row, 0);
             const QRect itemRect = view->visualRect(idx);
@@ -7047,8 +7065,6 @@ void MainWindow::updateVisibleThumbProgress()
             auto handle = previewMgr.cachedFrame(filePath, targetSize);
             if (handle.isValid()) {
                 ++readyCount;
-            } else {
-                previewMgr.requestFrame(filePath, targetSize);
             }
         }
     };
@@ -7059,6 +7075,7 @@ void MainWindow::updateVisibleThumbProgress()
         accumulateFromAssets(assetTableView);
     }
     accumulateFromFileManager(fmGridView);
+    accumulateFromFileManager(fmListView);
 
     if (!anyViewConsidered || visibleTotal == 0 || readyCount >= visibleTotal) {
         thumbnailProgressLabel->setVisible(false);
@@ -7066,7 +7083,16 @@ void MainWindow::updateVisibleThumbProgress()
         return;
     }
 
-    thumbnailProgressLabel->setText("Live previews (visible):");
+    QString labelText;
+    if (fileManagerViewConsidered && !assetViewConsidered) {
+        labelText = "File Manager previews (visible):";
+    } else if (assetViewConsidered && !fileManagerViewConsidered) {
+        labelText = "Asset previews (visible):";
+    } else {
+        labelText = "Live previews (visible):";
+    }
+
+    thumbnailProgressLabel->setText(labelText);
     thumbnailProgressLabel->setVisible(true);
     thumbnailProgressBar->setMaximum(visibleTotal);
     thumbnailProgressBar->setValue(readyCount);

@@ -6,9 +6,18 @@ The application depends on and/or bundles the following components.
 
 - Modules: Widgets, Multimedia, MultimediaWidgets, Sql, Concurrent, Svg, SvgWidgets (optionally Pdf/PdfWidgets)
 
+## GStreamer (playback)
+
+- Version: 1.x runtime (MSVC x64) as shipped under `third_party/gstreamer`
+- License: LGPL for core/base/good; additional plugins may carry their own licenses
+- Usage: Primary and only backend for all video and image-sequence playback (PreviewOverlay, File Manager preview panes, thumbnails)
+- Packaging: build script bundles the GStreamer runtime into dist/portable and installer packages
+
+
 ## FFmpeg
 
-- Version: 8.0 (full build from https://www.gyan.dev)
+- Version: 8.0 (full build from [Gyan](https://www.gyan.dev))
+- Usage: Only used by the Convert dialog/tools for format conversion; live playback is handled by GStreamer.
 - License: GPL v3
 - Location (if bundled): third_party/ffmpeg
 - Configure override: set FFMPEG_ROOT to your FFmpeg prefix (must contain include/, lib/, and bin/)
@@ -53,5 +62,5 @@ The application depends on and/or bundles the following components.
 
 - VCPKG_ROOT: vcpkg directory (e.g., C:\\vcpkg)
 - VCPKG_TARGET_TRIPLET: defaults to x64-windows
-- FFMPEG_ROOT: custom FFmpeg prefix (include/, lib/, bin/)
+- FFMPEG_ROOT: custom FFmpeg prefix (include/, lib/, bin/; used only by the Convert dialog/tools)
 - IMAGEMAGICK_ROOT (or MAGICK_ROOT): portable ImageMagick root folder

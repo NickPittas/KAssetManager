@@ -43,10 +43,11 @@ KAsset Manager is built with **Qt 6 Widgets** (C++20) for native Windows desktop
 
 ### Media Support
 
-- **Qt Multimedia** - Audio/video playback
-  - FFmpeg backend (bundled Qt 6.9.3 + custom full-shared build in `third_party/ffmpeg`)
-  - Hardware-accelerated decoding
-  - Format support: MP4, MOV, AVI, MP3, WAV
+- **GStreamer 1.x** - Primary backend for all video and image-sequence playback
+  - Custom GStreamer integration (see `gstreamer_player.*`) feeds LivePreviewManager and PreviewOverlay.
+  - Supports professional codecs and containers such as MP4, MOV (including ProRes 4444 and Animation), AVI, etc., subject to the bundled plugin set.
+- **Qt Multimedia / Audio** - Used only for lightweight audio-only playback where appropriate.
+- **FFmpeg (external)** - Used only by the Convert dialog/tools for format conversion (not for live playback).
 
 ### Image Support
 
@@ -189,7 +190,7 @@ CREATE INDEX idx_asset_versions_asset_id ON asset_versions(asset_id);
 #### LivePreviewManager (live_preview_manager.h/cpp)
 - Manages in-memory poster frames and hover scrubbing
 - Normalises requests (path, size, position)
-- Dispatches FFmpeg/OpenImageIO decode jobs on background threads
+- Dispatches GStreamer/OpenImageIO decode jobs on background threads
 - Emits `frameReady` / `frameFailed` signals consumed by grid delegates and the preview overlay
 - Maintains an LRU pixmap cache (~512 MB default)
 - Reconstructs image sequence frame lists for grouped entries
@@ -258,7 +259,7 @@ CREATE INDEX idx_asset_versions_asset_id ON asset_versions(asset_id);
 
 - LivePreviewManager decodes frames on demand and caches pixmaps in memory
 - Grid delegates clamp rendering to inset card bounds
-- Background jobs use FFmpeg (video) and OpenImageIO (image sequences)
+- Background jobs use GStreamer (video/image sequences) and OpenImageIO (advanced still formats).
 - Cache eviction is LRU-based and tunable via code constants
 
 ### Database Optimization
@@ -349,9 +350,10 @@ CREATE INDEX idx_asset_versions_asset_id ON asset_versions(asset_id);
 
 ### Runtime Dependencies
 
-- Qt 6.9.3 (Widgets, Multimedia, SQL)
+- Qt 6.9.3 (Widgets, SQL; Multimedia modules are not used for playback)
 - MinGW runtime DLLs
-- FFmpeg (bundled with Qt)
+- GStreamer 1.x runtime (bundled from `third_party/gstreamer`)
+- FFmpeg (from `third_party/ffmpeg`, used only by the Convert dialog/tools)
 - SQLite (bundled with Qt)
 
 ### Build Dependencies
@@ -374,14 +376,23 @@ CREATE INDEX idx_asset_versions_asset_id ON asset_versions(asset_id);
 
 ## Version History
 
-### v1.1.0 (Current)
+### v1.2.0 (Current)
+
+- File Manager network-drive performance improvements:
+  - Lightweight folder-tree icons and folder-only expansion (no file or thumbnail work until a folder is selected).
+  - Selection-only preview and metadata loading in File Manager; no background per-file scanning while you scroll.
+- Context-aware status bar progress:
+  - Status bar progress label distinguishes "File Manager previews (visible)" from "Asset previews (visible)" while thumbnails are being generated.
+- Playback backend updates:
+  - GStreamer is now the sole backend for video and image-sequence playback; FFmpeg is retained only for the Convert dialog/tools.
+
+### v1.1.0
 
 - Adaptive external drag-and-drop for image sequences
 - Explorer/Desktop: copies individual frame files (CF_HDROP)
 - Nuke/After Effects: folder drop imports a single sequence item
 - Consistent DnD behavior across File Manager and Asset Manager
 - Minor fixes in drag handlers (brace/structure)
-
 
 ### v1.0.5
 

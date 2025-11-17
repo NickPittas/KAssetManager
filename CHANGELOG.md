@@ -16,6 +16,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Undo/redo system
 - Crash reporting
 
+## [1.2.0] - 2025-11-14
+
+### Changed
+- File Manager folder tree expansion now uses lightweight static icons and only enumerates subfolders when expanding; no file scanning or shell icon lookups occur until a folder is actually selected.
+- File Manager no longer prefetches thumbnails or metadata while you scroll; per-file preview/metadata work now runs only for the currently selected item (and only when the preview and/or info panes are visible). List view columns still show basic file properties.
+- The status bar live-preview progress bar label now explicitly reflects the active context, showing "File Manager previews (visible):" or "Asset previews (visible):" while previews are being generated.
+
+### Fixed
+- Severe UI stalls when expanding or browsing large network folders caused by synchronous icon and metadata lookups on the UI thread.
+
+### Technical
+- Finalised migration of all video and image sequence playback (PreviewOverlay and File Manager) to the GStreamer backend; FFmpeg is retained only for the Convert dialog/format conversion tools.
+- Updated CMake project version, Windows resources, and NSIS installer metadata to 1.2.0; release artifacts now use the `KAssetManager-Setup-1.2.0.exe` naming.
+
 ## [1.1.0] - 2025-11-08
 
 ### Added
@@ -161,8 +175,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 | Version | Date | Description |
 |---------|------|-------------|
+| 1.2.0 | 2025-11-14 | File Manager network-drive performance, selection-only metadata/previews, contextual progress bar, GStreamer-only playback |
+| 1.1.0 | 2025-11-08 | Sequence-aware drag-and-drop (Explorer/Nuke/AE), file manager tree optimizations, preview pane fixes |
 | 0.2.0 | 2025-10-29 | Folder-preserving Add to Library; folders-first sorting; preview focus restore; tree sync; crash fix |
-
 | 0.1.0 | 2024-01-XX | Initial Qt Widgets release with full feature set |
 | 0.0.x | 2023-12-XX | QML prototype (deprecated) |
 

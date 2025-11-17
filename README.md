@@ -54,7 +54,7 @@ KAsset Manager is a native Windows desktop application built with Qt 6 that prov
 
 #### 🚀 **Performance**
 
-- **Live Preview Streaming** - FFmpeg/OpenImageIO decode with in-memory caching
+- **Live Preview Streaming** - GStreamer/OpenImageIO decode with in-memory caching
 - **Smart Caching** - LRU pixmap cache (~512MB) keeps recent frames warm
 - **Database Indexes** - Optimized queries for large libraries
 - **Lazy Loading** - Decode only when cards enter the viewport
@@ -62,7 +62,7 @@ KAsset Manager is a native Windows desktop application built with Qt 6 that prov
 #### 📊 **Professional Formats**
 
 - **Images**: PNG, JPG, JPEG, BMP, GIF, TIFF, TIF, EXR, HDR, PSD, IFF, RAW
-- **Videos**: MOV, MP4, AVI, MP5, MKV, WMV (via FFmpeg)
+- **Videos**: MOV, MP4, AVI, MP5, MKV, WMV (playback via GStreamer; conversion via FFmpeg)
 - **Audio**: MP3, WAV, OGG, FLAC
 - **Sequences**: Automatic detection of numbered image sequences
 - **External DnD aware:** Explorer/Desktop receives individual frame files; Nuke/After Effects receive folder paths (single sequence import)
@@ -149,7 +149,7 @@ SQLite database stored in persistent user data location (see [docs/INSTALL.md](d
 
 - Give the decoder a moment to cache the first frame (large EXR/ProRes files can take a second).
 - Check `debug.log` for `[LivePreview]` warnings about codecs or permissions.
-- Make sure the bundled FFmpeg DLLs were refreshed with `scripts/fetch-ffmpeg.ps1`.
+- Ensure the bundled GStreamer runtime is present in the portable/installer build (check that the expected GStreamer DLLs exist alongside the executable).
 
 **Import not working:**
 

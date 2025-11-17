@@ -21,7 +21,9 @@ This guide covers day-to-day usage of KAsset Manager. The UI is designed to feel
 ## Navigation and selection
 - Left pane selections only change what the right pane shows; the left tree does not open into the folder
 - Selecting a new folder resets the asset list/grid scroll position to the top
+- Expanding folders in the left tree only enumerates subfolders; it does not scan files or generate thumbnails until you select a folder.
 - Grid/List toggle switches between thumbnails and details
+- File Manager does not prefetch thumbnails or metadata while you scroll; previews and detailed metadata are loaded only for the currently selected item (and only when the Preview/Info panes are visible). List view columns continue to show basic file properties.
 - Keyboard: Arrow keys navigate assets; in preview/info modes use arrows for previous/next
 - Drag-and-drop between folders mirrors Explorer behavior; dropping on a specific subfolder is allowed (dropping onto empty space of the same folder is blocked)
 
