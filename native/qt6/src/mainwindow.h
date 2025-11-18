@@ -38,6 +38,7 @@ class GridScrubController;
 
 class ImportProgressDialog;
 class ProjectFolderWatcher;
+class EverythingFolderModel;
 
 class MainWindow : public QMainWindow
 {
@@ -167,6 +168,8 @@ private slots:
 
 private:
     QString fmPathForIndex(const QModelIndex& idx) const;
+    QModelIndex fmIndexForPath(const QString& path);
+    void fmRefreshTreeModel();
     void releaseAnyPreviewLocksForPaths(const QStringList& paths);
     void importToAssetLibrary(const QStringList& filePaths, const QStringList& folderPaths);
     void updateFmInfoPanel();
@@ -343,7 +346,8 @@ private:
     // Left pane
     QListWidget *fmFavoritesList;
     QTreeView *fmTree;
-    QFileSystemModel *fmTreeModel;
+    QFileSystemModel *fmTreeModel = nullptr;
+    EverythingFolderModel *fmEverythingTreeModel = nullptr;
     // Right pane
     QFileSystemModel *fmDirModel;
     bool fmSuppressTreeSync = false;

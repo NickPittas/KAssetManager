@@ -23,6 +23,8 @@
 #include "database_health_dialog.h"
 #include "bulk_rename_dialog.h"
 #include "everything_search_dialog.h"
+#include "everything_folder_model.h"
+#include "everything_search.h"
 
 #include "office_preview.h"
 
@@ -75,6 +77,8 @@ static size_t currentWorkingSetMB() {
 #include <QDrag>
 #include <QMouseEvent>
 #include <QFuture>
+#include <QFutureWatcher>
+#include <QtConcurrent/QtConcurrentRun>
 #include <functional>
 #include <algorithm>
 #include <QMenu>
@@ -432,7 +436,22 @@ public:
     };
 
     explicit SequenceGroupingProxyModel(QObject* parent=nullptr)
-        : QSortFilterProxyModel(parent) {}
+        : QSortFilterProxyModel(parent) {
+        connect(&m_buildWatcher, &QFutureWatcher<BuildResult>::finished, this, [this]() {
+            BuildResult result = m_buildWatcher.result();
+            if (result.dirPath == m_requestedDir) {
+                applyBuildResult(std::move(result));
+            }
+
+            if (!m_pendingDir.isEmpty()) {
+                const QString nextDir = m_pendingDir;
+                m_pendingDir.clear();
+                startBuild(nextDir);
+            } else {
+                m_activeDir.clear();
+            }
+        });
+    }
 
     void setGroupingEnabled(bool on) { if (m_enabled == on) return; m_enabled = on; invalidateFilter(); }
     bool groupingEnabled() const { return m_enabled; }
@@ -441,112 +460,23 @@ public:
     bool hideFolders() const { return m_hideFolders; }
 
     void rebuildForRoot(const QString& dirPath) {
-        m_hidden.clear(); m_infoByRepr.clear(); m_keyByRepr.clear();
-        if (!m_enabled || dirPath.isEmpty()) { invalidateFilter(); return; }
-        QDir d(dirPath);
-        // Only files are considered for sequences
-        const auto files = d.entryInfoList(QDir::Files | QDir::NoDotAndDotDot, QDir::Name);
-
-        // Map (dir|base|ext) -> representative file and count (to detect actual sequences)
-        QHash<QString, QFileInfo> headRepr;
-        QHash<QString, int> headCount;
-        for (const QFileInfo &fi : files) {
-            const QString name = fi.fileName();
-            auto m = SequenceDetector::mainPattern().match(name);
-            if (!m.hasMatch()) continue;
-            const QString base = m.captured(1);
-            const QString ext = m.captured(4).toLower();
-            if (!isImageFile(ext)) continue;
-            const QString key = fi.absolutePath() + "|" + base + "|" + ext;
-            headCount[key] += 1;
-            if (!headRepr.contains(key)) headRepr.insert(key, fi);
-        }
-
-        // For each head that appears more than once, compute start/end using O(log m) existence checks
-        for (auto it = headRepr.begin(); it != headRepr.end(); ++it) {
-            const QString key = it.key();
-            const int count = headCount.value(key, 0);
-            if (count <= 1) continue; // not a sequence
-
-            const QFileInfo repr = it.value();
-            const QString name = repr.fileName();
-            auto mm = SequenceDetector::mainPattern().match(name);
-            const int pad = mm.captured(3).length();
-
-            // Build pre/post around the digits to probe existence without listing files
-            const int digitsStart = mm.capturedStart(3);
-            const int digitsEnd = mm.capturedEnd(3);
-            const QString pre = name.left(digitsStart);
-            const QString post = name.mid(digitsEnd);
-            QDir dir = repr.dir();
-            auto existsFrame = [&](qint64 n)->bool{
-                if (n < 0) return false;
-                const QString digits = QString::number(n).rightJustified(pad, QLatin1Char('0'));
-                return QFileInfo(dir.filePath(pre + digits + post)).exists();
-            };
-
-            const qint64 curN = mm.captured(3).toLongLong();
-            // Find first in [0, curN]
-            qint64 low = -1, high = curN; // low: non-exist, high: exist
-            while (high - low > 1) {
-                qint64 mid = low + (high - low) / 2;
-                if (existsFrame(mid)) high = mid; else low = mid;
-            }
-            const qint64 first = high;
-
-            // Find last using halving from a huge bound then binary search
-            const qint64 START_HUGE = 10000000;
-            qint64 lastKnownExist = curN;
-            qint64 lastKnownNonExist = -1;
-            qint64 probe = START_HUGE;
-            while (probe > lastKnownExist) {
-                if (existsFrame(probe)) { lastKnownExist = probe; break; }
-                lastKnownNonExist = probe; probe /= 2;
-            }
-            if (lastKnownExist == curN) {
-                qint64 up = std::max<qint64>(curN + 1, 2 * curN);
-                for (int i = 0; i < 32; ++i) {
-                    if (!existsFrame(up)) { lastKnownNonExist = up; break; }
-                    if (up > 100000000) { lastKnownNonExist = up + 1; break; }
-                    up *= 2;
-                }
-                if (lastKnownNonExist < 0) lastKnownNonExist = curN + 1;
-            } else {
-                if (lastKnownNonExist < 0) lastKnownNonExist = lastKnownExist + 1;
-            }
-            qint64 lo = lastKnownExist, hi = lastKnownNonExist;
-            if (hi <= lo) hi = lo + 1;
-            while (hi - lo > 1) {
-                qint64 mid = lo + (hi - lo) / 2;
-                if (existsFrame(mid)) lo = mid; else hi = mid;
-            }
-            const qint64 last = lo;
-
-            Info info;
-            info.dir = repr.absolutePath();
-            info.base = mm.captured(1);
-            info.ext = mm.captured(4).toLower();
-            info.start = (int)first; info.end = (int)last; info.count = count; // count is list occurrences, fast estimate
-            info.reprPath = repr.absoluteFilePath();
-            m_infoByRepr.insert(info.reprPath, info);
-            m_keyByRepr.insert(info.reprPath, key);
-        }
-
-        // Hide non-representatives: single pass over listed files
-        for (const QFileInfo &fi : files) {
-            const QString name = fi.fileName();
-            auto m = SequenceDetector::mainPattern().match(name);
-            if (!m.hasMatch()) continue;
-            const QString base = m.captured(1);
-            const QString ext = m.captured(4).toLower();
-            if (!isImageFile(ext)) continue;
-            const QString key = fi.absolutePath() + "|" + base + "|" + ext;
-            const QString reprPath = headRepr.value(key).absoluteFilePath();
-            if (!reprPath.isEmpty() && fi.absoluteFilePath() != reprPath && headCount.value(key,0) > 1) {
-                m_hidden.insert(fi.absoluteFilePath());
-            }
-        }
+        m_requestedDir = dirPath;
+        m_hidden.clear();
+        m_infoByRepr.clear();
+        m_keyByRepr.clear();
         invalidateFilter();
+
+        if (!m_enabled || dirPath.isEmpty()) {
+            m_pendingDir.clear();
+            return;
+        }
+
+        if (m_buildWatcher.isRunning()) {
+            m_pendingDir = dirPath;
+            return;
+        }
+
+        startBuild(dirPath);
     }
 
     bool isRepresentativeProxyIndex(const QModelIndex& proxyIdx) const {
@@ -627,12 +557,144 @@ public:
     }
 
 private:
+    struct BuildResult {
+        QString dirPath;
+        QSet<QString> hidden;
+        QHash<QString, Info> infoByRepr;
+        QHash<QString, QString> keyByRepr;
+    };
+
     bool m_enabled = true;
     bool m_hideFolders = false;
     QSet<QString> m_hidden; // absolute file paths to hide
     QHash<QString, Info> m_infoByRepr; // reprPath -> info
     QHash<QString, QString> m_keyByRepr; // reprPath -> grouping key
     Qt::SortOrder m_sortOrder = Qt::AscendingOrder;
+    QFutureWatcher<BuildResult> m_buildWatcher;
+    QString m_requestedDir;
+    QString m_pendingDir;
+    QString m_activeDir;
+
+    void startBuild(const QString& dirPath) {
+        m_activeDir = dirPath;
+        QFuture<BuildResult> future = QtConcurrent::run([dirPath]() -> BuildResult {
+            return buildSequences(dirPath);
+        });
+        m_buildWatcher.setFuture(future);
+    }
+
+    void applyBuildResult(BuildResult&& result) {
+        m_hidden = std::move(result.hidden);
+        m_infoByRepr = std::move(result.infoByRepr);
+        m_keyByRepr = std::move(result.keyByRepr);
+        invalidateFilter();
+    }
+
+    static BuildResult buildSequences(const QString& dirPath) {
+        BuildResult out;
+        out.dirPath = dirPath;
+        if (dirPath.isEmpty()) return out;
+
+        QDir d(dirPath);
+        const auto files = d.entryInfoList(QDir::Files | QDir::NoDotAndDotDot, QDir::Name);
+
+        QHash<QString, QFileInfo> headRepr;
+        QHash<QString, int> headCount;
+        for (const QFileInfo &fi : files) {
+            const QString name = fi.fileName();
+            auto m = SequenceDetector::mainPattern().match(name);
+            if (!m.hasMatch()) continue;
+            const QString base = m.captured(1);
+            const QString ext = m.captured(4).toLower();
+            if (!isImageFile(ext)) continue;
+            const QString key = fi.absolutePath() + "|" + base + "|" + ext;
+            headCount[key] += 1;
+            if (!headRepr.contains(key)) headRepr.insert(key, fi);
+        }
+
+        for (auto it = headRepr.begin(); it != headRepr.end(); ++it) {
+            const QString key = it.key();
+            const int count = headCount.value(key, 0);
+            if (count <= 1) continue;
+
+            const QFileInfo repr = it.value();
+            const QString name = repr.fileName();
+            auto mm = SequenceDetector::mainPattern().match(name);
+            const int pad = mm.captured(3).length();
+
+            const int digitsStart = mm.capturedStart(3);
+            const int digitsEnd = mm.capturedEnd(3);
+            const QString pre = name.left(digitsStart);
+            const QString post = name.mid(digitsEnd);
+            QDir dir = repr.dir();
+            auto existsFrame = [&](qint64 n)->bool {
+                if (n < 0) return false;
+                const QString digits = QString::number(n).rightJustified(pad, QLatin1Char('0'));
+                return QFileInfo(dir.filePath(pre + digits + post)).exists();
+            };
+
+            const qint64 curN = mm.captured(3).toLongLong();
+            qint64 low = -1, high = curN;
+            while (high - low > 1) {
+                qint64 mid = low + (high - low) / 2;
+                if (existsFrame(mid)) high = mid; else low = mid;
+            }
+            const qint64 first = high;
+
+            const qint64 START_HUGE = 10000000;
+            qint64 lastKnownExist = curN;
+            qint64 lastKnownNonExist = -1;
+            qint64 probe = START_HUGE;
+            while (probe > lastKnownExist) {
+                if (existsFrame(probe)) { lastKnownExist = probe; break; }
+                lastKnownNonExist = probe; probe /= 2;
+            }
+            if (lastKnownExist == curN) {
+                qint64 up = std::max<qint64>(curN + 1, 2 * curN);
+                for (int i = 0; i < 32; ++i) {
+                    if (!existsFrame(up)) { lastKnownNonExist = up; break; }
+                    if (up > 100000000) { lastKnownNonExist = up + 1; break; }
+                    up *= 2;
+                }
+                if (lastKnownNonExist < 0) lastKnownNonExist = curN + 1;
+            } else {
+                if (lastKnownNonExist < 0) lastKnownNonExist = lastKnownExist + 1;
+            }
+            qint64 lo = lastKnownExist, hi = lastKnownNonExist;
+            if (hi <= lo) hi = lo + 1;
+            while (hi - lo > 1) {
+                qint64 mid = lo + (hi - lo) / 2;
+                if (existsFrame(mid)) lo = mid; else hi = mid;
+            }
+            const qint64 last = lo;
+
+            Info info;
+            info.dir = repr.absolutePath();
+            info.base = mm.captured(1);
+            info.ext = mm.captured(4).toLower();
+            info.start = (int)first;
+            info.end = (int)last;
+            info.count = count;
+            info.reprPath = repr.absoluteFilePath();
+            out.infoByRepr.insert(info.reprPath, info);
+            out.keyByRepr.insert(info.reprPath, key);
+        }
+
+        for (const QFileInfo &fi : files) {
+            const QString name = fi.fileName();
+            auto m = SequenceDetector::mainPattern().match(name);
+            if (!m.hasMatch()) continue;
+            const QString base = m.captured(1);
+            const QString ext = m.captured(4).toLower();
+            if (!isImageFile(ext)) continue;
+            const QString key = fi.absolutePath() + "|" + base + "|" + ext;
+            const QString reprPath = headRepr.value(key).absoluteFilePath();
+            if (!reprPath.isEmpty() && fi.absoluteFilePath() != reprPath && headCount.value(key,0) > 1) {
+                out.hidden.insert(fi.absoluteFilePath());
+            }
+        }
+        return out;
+    }
 };
 
 // Asset Manager sequence grouping proxy: expands sequences into individual frames when grouping is OFF
@@ -2817,8 +2879,11 @@ void MainWindow::setupUi()
 
     // Add Asset Manager page to tabs
     // File Manager page
+    LogManager::instance().addLog("[TRACE] Creating File Manager page...", "DEBUG");
     fileManagerPage = new QWidget(this);
+    LogManager::instance().addLog("[TRACE] Calling setupFileManagerUi()...", "DEBUG");
     setupFileManagerUi();
+    LogManager::instance().addLog("[TRACE] setupFileManagerUi() completed", "DEBUG");
     mainTabs->addTab(fileManagerPage, "File Manager");
 
     // Add Asset Manager page to tabs
@@ -2855,7 +2920,50 @@ void MainWindow::setupUi()
     {
         QSettings s("AugmentCode", "KAssetManager");
         LogManager::instance().addLog("[TRACE] restore settings begin", "DEBUG");
-        if (s.contains("Window/Geometry")) restoreGeometry(s.value("Window/Geometry").toByteArray());
+
+        // Restore geometry and validate it's visible on screen
+        bool geometryRestored = false;
+        if (s.contains("Window/Geometry")) {
+            geometryRestored = restoreGeometry(s.value("Window/Geometry").toByteArray());
+            LogManager::instance().addLog(QString("[TRACE] restoreGeometry returned: %1").arg(geometryRestored), "DEBUG");
+        }
+
+        // Validate window is visible on at least one screen
+        bool isVisible = false;
+        QRect windowRect = frameGeometry();
+        LogManager::instance().addLog(QString("[TRACE] Window geometry: x=%1 y=%2 w=%3 h=%4")
+            .arg(windowRect.x()).arg(windowRect.y()).arg(windowRect.width()).arg(windowRect.height()), "DEBUG");
+
+        for (QScreen *screen : QGuiApplication::screens()) {
+            QRect screenGeometry = screen->geometry();
+            LogManager::instance().addLog(QString("[TRACE] Screen '%1': x=%2 y=%3 w=%4 h=%5")
+                .arg(screen->name()).arg(screenGeometry.x()).arg(screenGeometry.y())
+                .arg(screenGeometry.width()).arg(screenGeometry.height()), "DEBUG");
+
+            if (screenGeometry.intersects(windowRect)) {
+                isVisible = true;
+                LogManager::instance().addLog(QString("[TRACE] Window is visible on screen '%1'").arg(screen->name()), "DEBUG");
+                break;
+            }
+        }
+
+        // If window is not visible on any screen, reset to default position
+        if (!isVisible || !geometryRestored) {
+            LogManager::instance().addLog("[WARN] Window geometry is off-screen or invalid, resetting to default", "WARN");
+            QScreen *primaryScreen = QGuiApplication::primaryScreen();
+            if (primaryScreen) {
+                QRect screenGeometry = primaryScreen->availableGeometry();
+                // Center window on primary screen with default size
+                int width = 1400;
+                int height = 900;
+                int x = screenGeometry.x() + (screenGeometry.width() - width) / 2;
+                int y = screenGeometry.y() + (screenGeometry.height() - height) / 2;
+                setGeometry(x, y, width, height);
+                LogManager::instance().addLog(QString("[TRACE] Reset window to: x=%1 y=%2 w=%3 h=%4")
+                    .arg(x).arg(y).arg(width).arg(height), "DEBUG");
+            }
+        }
+
         if (s.contains("Window/State")) restoreState(s.value("Window/State").toByteArray());
         LogManager::instance().addLog("[TRACE] restore window geometry/state done", "DEBUG");
         if (mainSplitter && s.contains("AssetManager/MainSplitter")) mainSplitter->restoreState(s.value("AssetManager/MainSplitter").toByteArray());
@@ -2952,6 +3060,23 @@ void MainWindow::setupUi()
         }
     }
 
+    // Set Everything model now that all UI is constructed
+    if (fmEverythingTreeModel && fmTree) {
+        LogManager::instance().addLog("[FileManager] Setting Everything model on tree", "INFO");
+        fmTree->setModel(fmEverythingTreeModel);
+        LogManager::instance().addLog("[FileManager] Everything model activated", "INFO");
+    }
+
+    // React to tree single-click (selection change) to change right view root
+    // IMPORTANT: This must be done AFTER setting the model, because setModel() creates a new selection model
+    if (fmTree && fmTree->selectionModel()) {
+        LogManager::instance().addLog("[FileManager] Connecting tree selection signal", "INFO");
+        connect(fmTree->selectionModel(), &QItemSelectionModel::currentChanged,
+                this, &MainWindow::onFmTreeCurrentChanged);
+    } else {
+        LogManager::instance().addLog("[FileManager] WARNING: fmTree or selectionModel is null!", "WARN");
+    }
+
     LogManager::instance().addLog("[TRACE] mainwindow ctor finished", "DEBUG");
 
     // Schedule database health check on startup (delayed to avoid blocking UI)
@@ -3001,20 +3126,35 @@ void MainWindow::setupFileManagerUi()
     leftLayout->setContentsMargins(0,0,0,0);
     leftLayout->setSpacing(0);
 
-    fmTreeModel = new QFileSystemModel(left);
-    fmTreeModel->setFilter(QDir::AllDirs | QDir::NoDotAndDotDot | QDir::Drives);
-    fmTreeModel->setIconProvider(new FmTreeIconProvider());
+    LogManager::instance().addLog("[FileManager] Initializing Everything SDK...", "INFO");
+    const bool everythingTreeReady = EverythingSearch::instance().initialize();
+    if (everythingTreeReady) {
+        // Create Everything model - will be set on tree after window is shown
+        fmEverythingTreeModel = new EverythingFolderModel(this);
+        LogManager::instance().addLog("[FileManager] Everything model created - will be set after window shown", "INFO");
+        // DON'T create QFileSystemModel - it's slow and we don't need it
+    } else {
+        LogManager::instance().addLog("[FileManager] Everything SDK not available - falling back to QFileSystemModel", "WARN");
+        fmTreeModel = new QFileSystemModel(left);
+        fmTreeModel->setFilter(QDir::AllDirs | QDir::NoDotAndDotDot | QDir::Drives);
+        fmTreeModel->setIconProvider(new FmTreeIconProvider());
+        fmTreeModel->setRootPath(""); // show drives at root
+    }
 
     fmLeftSplitter = new QSplitter(Qt::Vertical, left);
+    LogManager::instance().addLog("[TRACE] fmLeftSplitter created", "DEBUG");
 
     // Favorites container
+    LogManager::instance().addLog("[TRACE] creating favorites container", "DEBUG");
     QWidget *favContainer = new QWidget(fmLeftSplitter);
     QVBoxLayout *favLayout = new QVBoxLayout(favContainer);
     favLayout->setContentsMargins(0,0,0,0);
     favLayout->setSpacing(0);
+    LogManager::instance().addLog("[TRACE] favorites layout ready", "DEBUG");
     QLabel *favHeader = new QLabel("★ Favorites", favContainer);
     favHeader->setStyleSheet("color:#9aa0a6; font-weight:bold; padding:6px 4px;");
     favLayout->addWidget(favHeader);
+    LogManager::instance().addLog("[TRACE] favorites header added", "DEBUG");
 
     fmFavoritesList = new QListWidget(favContainer);
     fmFavoritesList->setStyleSheet("QListWidget{background:#0a0a0a; border:none; color:#fff;} QListWidget::item:selected{background:#2f3a4a;}");
@@ -3028,13 +3168,20 @@ void MainWindow::setupFileManagerUi()
         m.exec(gp);
     });
     favLayout->addWidget(fmFavoritesList);
+    LogManager::instance().addLog("[TRACE] favorites list widget added", "DEBUG");
+    LogManager::instance().addLog("[TRACE] invoking loadFmFavorites", "DEBUG");
     loadFmFavorites();
+    LogManager::instance().addLog("[TRACE] fmFavorites populated", "DEBUG");
 
     // Folder tree
-    fmTreeModel->setRootPath(""); // show drives at root
     fmTree = new QTreeView(fmLeftSplitter);
 
-    fmTree->setModel(fmTreeModel);
+    // Set model: use Everything if available, otherwise QFileSystemModel
+    if (fmEverythingTreeModel) {
+        // Model will be set after window is shown
+    } else if (fmTreeModel) {
+        fmTree->setModel(fmTreeModel);
+    }
     fmTree->setHeaderHidden(false);
     fmTree->header()->setStretchLastSection(true);
     fmTree->header()->setSectionResizeMode(QHeaderView::Interactive);
@@ -3060,11 +3207,17 @@ void MainWindow::setupFileManagerUi()
     fmTree->setDropIndicatorShown(true);
     fmTree->setDragDropMode(QAbstractItemView::DragDrop);
     fmTree->viewport()->installEventFilter(this);
+    LogManager::instance().addLog("[TRACE] drag/drop configured", "DEBUG");
 
-    fmTree->setRootIndex(fmTreeModel->index(fmTreeModel->rootPath()));
+    LogManager::instance().addLog("[TRACE] fmTree configured", "DEBUG");
+
+    if (fmTreeModel) {
+        fmTree->setRootIndex(fmTreeModel->index(fmTreeModel->rootPath()));
+    }
 
     // Add to left layout
     leftLayout->addWidget(fmLeftSplitter);
+    LogManager::instance().addLog("[TRACE] fmLeft layout ready", "DEBUG");
 
     // Right: toolbar + stacked views (grid/list)
     QWidget *right = new QWidget(fmSplitter);
@@ -3190,6 +3343,7 @@ void MainWindow::setupFileManagerUi()
     fmDirModel->setFilter(QDir::AllEntries | QDir::NoDotAndDotDot);
     fmDirModel->setRootPath("");
     fmDirModel->setIconProvider(new FmIconProvider());
+    LogManager::instance().addLog("[TRACE] fmDirModel created", "DEBUG");
 
     // Grid view
     // Sequence grouping proxy
@@ -3200,6 +3354,7 @@ void MainWindow::setupFileManagerUi()
     fmProxyModel->setSortRole(Qt::DisplayRole);
     fmProxyModel->setDynamicSortFilter(true);
     fmProxyModel->sort(0, Qt::AscendingOrder);
+    LogManager::instance().addLog("[TRACE] fmProxyModel ready", "DEBUG");
 
     // Grid view
     fmGridView = new FmGridViewEx(fmProxyModel, fmDirModel, fmViewStack);
@@ -3238,6 +3393,7 @@ void MainWindow::setupFileManagerUi()
         connect(fmGridView->horizontalScrollBar(), &QScrollBar::valueChanged,
                 this, &MainWindow::scheduleVisibleThumbProgressUpdate);
     connect(fmGridView, &QListView::doubleClicked, this, &MainWindow::onFmItemDoubleClicked);
+    LogManager::instance().addLog("[TRACE] fmGridView configured", "DEBUG");
     fmViewStack->addWidget(fmGridView); // 0
 
     fmScrubController = new GridScrubController(
@@ -3825,9 +3981,9 @@ void MainWindow::setupFileManagerUi()
     // Root: select first drive if exists
     QFileInfoList drives = QDir::drives();
     if (!drives.isEmpty()) {
-        QString path = drives.first().absoluteFilePath();
-        QModelIndex idx = fmTreeModel->index(path);
-        if (idx.isValid()) {
+        QString path = QDir::toNativeSeparators(drives.first().absoluteFilePath());
+        QModelIndex idx = fmIndexForPath(path);
+        if (idx.isValid() && fmTree) {
             fmTree->setCurrentIndex(idx);
                     fmDirModel->setRootPath(path);
             QModelIndex srcRoot = fmDirModel->index(path);
@@ -3845,13 +4001,6 @@ void MainWindow::setupFileManagerUi()
 
     // Initialize navigation button states
     fmUpdateNavigationButtons();
-
-    // React to tree single-click (selection change) to change right view root
-    // (activated via Enter/double-click remains for expansion)
-    if (fmTree && fmTree->selectionModel()) {
-        connect(fmTree->selectionModel(), &QItemSelectionModel::currentChanged,
-                this, &MainWindow::onFmTreeCurrentChanged);
-    }
 
     // Install page layout
     QVBoxLayout *pageLayout = new QVBoxLayout(fileManagerPage);
@@ -4000,15 +4149,23 @@ void MainWindow::setupFileManagerUi()
 void MainWindow::onFmTreeCurrentChanged(const QModelIndex &current, const QModelIndex &previous)
 {
     Q_UNUSED(previous);
-    if (!current.isValid()) return;
+    LogManager::instance().addLog("[FileManager] Tree selection changed", "INFO");
+    if (!current.isValid()) {
+        LogManager::instance().addLog("[FileManager] Invalid index in tree selection", "WARN");
+        return;
+    }
     onFmTreeActivated(current);
 }
 
 
 void MainWindow::onFmTreeActivated(const QModelIndex &index)
 {
-    QString path = fmTreeModel->filePath(index);
-    if (path.isEmpty()) return;
+    QString path = fmPathForIndex(index);
+    LogManager::instance().addLog(QString("[FileManager] Tree activated, path: %1").arg(path), "INFO");
+    if (path.isEmpty()) {
+        LogManager::instance().addLog("[FileManager] Empty path from tree index", "WARN");
+        return;
+    }
 
     fmSuppressTreeSync = true;
     fmNavigateToPath(path, true);
@@ -4245,9 +4402,7 @@ void MainWindow::onFmRefresh()
     if (currentPath.isEmpty()) {
         // If no specific path is set, refresh the entire model
         fmDirModel->setRootPath("");
-        if (fmTreeModel) {
-            fmTreeModel->setRootPath("");
-        }
+        fmRefreshTreeModel();
         statusBar()->showMessage("File Manager refreshed", 2000);
         return;
     }
@@ -4263,9 +4418,7 @@ void MainWindow::onFmRefresh()
     fmDirModel->setRootPath(currentPath);
 
     // Also refresh the tree model
-    if (fmTreeModel) {
-        fmTreeModel->setRootPath("");
-    }
+    fmRefreshTreeModel();
 
     // Rebuild proxy model if it exists
     if (fmProxyModel) {
@@ -4396,9 +4549,11 @@ void MainWindow::onFmFavoriteActivated(QListWidgetItem* item)
 
 void MainWindow::loadFmFavorites()
 {
+    LogManager::instance().addLog("[TRACE] loadFmFavorites begin", "DEBUG");
     fmFavorites.clear();
     QSettings s("AugmentCode", "KAssetManager");
     int size = s.beginReadArray("FileManager/Favorites");
+    LogManager::instance().addLog(QString("[TRACE] loadFmFavorites stored entries=%1").arg(size), "DEBUG");
     for (int i=0;i<size;++i) {
         s.setArrayIndex(i);
         QString p = s.value("path").toString();
@@ -4409,12 +4564,15 @@ void MainWindow::loadFmFavorites()
     if (fmFavoritesList) {
         fmFavoritesList->clear();
         for (const QString &p : fmFavorites) {
+            LogManager::instance().addLog(QString("[TRACE] favorite raw=%1").arg(p), "DEBUG");
             QListWidgetItem *it = new QListWidgetItem(QIcon::fromTheme("star"), QFileInfo(p).fileName());
             it->setToolTip(p);
             it->setData(Qt::UserRole, p);
             fmFavoritesList->addItem(it);
+            LogManager::instance().addLog(QString("[TRACE] favorite item added=%1").arg(p), "DEBUG");
         }
     }
+    LogManager::instance().addLog(QString("[TRACE] loadFmFavorites count=%1").arg(fmFavorites.size()), "DEBUG");
 }
 
 void MainWindow::saveFmFavorites()
@@ -4540,10 +4698,10 @@ void MainWindow::onFmShowContextMenu(const QPoint &pos)
 
 void MainWindow::onFmTreeContextMenu(const QPoint &pos)
 {
-    if (!fmTree || !fmTreeModel) return;
+    if (!fmTree) return;
     QModelIndex idx = fmTree->indexAt(pos);
     if (!idx.isValid()) return;
-    QString path = fmTreeModel->filePath(idx);
+    QString path = fmPathForIndex(idx);
     if (path.isEmpty()) return;
 
     QStringList selectedPaths = getSelectedFmTreePaths();
@@ -4664,12 +4822,12 @@ void MainWindow::onFmTreeContextMenu(const QPoint &pos)
 QStringList MainWindow::getSelectedFmTreePaths() const
 {
     QStringList out;
-    if (!fmTree || !fmTreeModel) return out;
+    if (!fmTree) return out;
     auto sel = fmTree->selectionModel();
     if (!sel) return out;
     const auto rows = sel->selectedRows();
     for (const QModelIndex &idx : rows) {
-        out << fmTreeModel->filePath(idx);
+        out << fmPathForIndex(idx);
     }
     out.removeDuplicates();
     return out;
@@ -7019,7 +7177,7 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
                     fmTree->selectionModel()->select(idx, QItemSelectionModel::ClearAndSelect);
                 }
                 // Prevent dropping into the same folder as the sources
-                QString destDir = (idx.isValid() && fmTreeModel) ? fmTreeModel->filePath(idx) : QString();
+                QString destDir = idx.isValid() ? fmPathForIndex(idx) : QString();
                 bool sameFolderOnly = false;
                 if (!destDir.isEmpty()) {
                     QStringList tmpSources;
@@ -7059,7 +7217,7 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
             QPoint pos = dropEvent->position().toPoint();
             QModelIndex idx = fmTree->indexAt(pos);
             if (!idx.isValid()) return false;
-            const QString destDir = fmTreeModel ? fmTreeModel->filePath(idx) : QString();
+            const QString destDir = fmPathForIndex(idx);
             if (destDir.isEmpty()) return false;
             QStringList sources;
             if (mimeData->hasFormat("application/x-kasset-sequence-urls")) {
@@ -9195,8 +9353,8 @@ void MainWindow::onEverythingSearchFileManager()
                 }
 
                 // Update tree selection
-                if (fmTreeModel && fmTree) {
-                    QModelIndex idx = fmTreeModel->index(dirPath);
+                if (fmTree) {
+                    QModelIndex idx = fmIndexForPath(dirPath);
                     if (idx.isValid()) fmTree->setCurrentIndex(idx);
                 }
 
@@ -9278,6 +9436,61 @@ void MainWindow::onEverythingImportRequested(const QStringList& paths)
     statusBar()->showMessage(QString("Imported %1 file(s)").arg(successCount), 5000);
 }
 
+QString MainWindow::fmPathForIndex(const QModelIndex& idx) const
+{
+    if (!idx.isValid()) {
+        return QString();
+    }
+
+    if (fmEverythingTreeModel && idx.model() == fmEverythingTreeModel) {
+        return fmEverythingTreeModel->pathForIndex(idx);
+    }
+    if (fmTreeModel && idx.model() == fmTreeModel) {
+        return fmTreeModel->filePath(idx);
+    }
+
+    if (fmEverythingTreeModel) {
+        return fmEverythingTreeModel->pathForIndex(idx);
+    }
+    if (fmTreeModel) {
+        return fmTreeModel->filePath(idx);
+    }
+    return QString();
+}
+
+QModelIndex MainWindow::fmIndexForPath(const QString& path)
+{
+    if (path.isEmpty()) {
+        return QModelIndex();
+    }
+    QString normalized = QDir::toNativeSeparators(path);
+    if (fmEverythingTreeModel) {
+        QModelIndex idx = fmEverythingTreeModel->indexForPath(normalized);
+        if (idx.isValid()) {
+            return idx;
+        }
+    }
+    if (fmTreeModel) {
+        return fmTreeModel->index(normalized);
+    }
+    return QModelIndex();
+}
+
+void MainWindow::fmRefreshTreeModel()
+{
+    if (fmEverythingTreeModel) {
+        const QString currentPath = fmDirModel ? fmDirModel->rootPath() : QString();
+        fmEverythingTreeModel->refresh();
+        if (!currentPath.isEmpty()) {
+            QTimer::singleShot(0, this, [this, currentPath]() {
+                fmScrollTreeToPath(currentPath);
+            });
+        }
+    } else if (fmTreeModel) {
+        fmTreeModel->setRootPath("");
+    }
+}
+
 // File Manager Navigation Implementation
 void MainWindow::fmNavigateToPath(const QString& path, bool addToHistory)
 {
@@ -9332,9 +9545,9 @@ void MainWindow::fmNavigateToPath(const QString& path, bool addToHistory)
 void MainWindow::fmScrollTreeToPath(const QString& path)
 {
     if (fmSuppressTreeSync) return;
-    if (!fmTree || !fmTreeModel || path.isEmpty()) return;
+    if (!fmTree || path.isEmpty()) return;
 
-    QModelIndex treeIdx = fmTreeModel->index(path);
+    QModelIndex treeIdx = fmIndexForPath(path);
     if (treeIdx.isValid()) {
         QItemSelectionModel *sel = fmTree->selectionModel();
         QSignalBlocker blocker(sel);
