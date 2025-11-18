@@ -14,7 +14,7 @@ if(NOT DEFINED CMAKE_TOOLCHAIN_FILE)
     endif()
 endif()
 
-project(KAssetManagerQt VERSION 1.2.1 LANGUAGES CXX)
+project(KAssetManagerQt VERSION 1.2.5 LANGUAGES CXX)
 # Optional static analysis / sanitizers
 option(ENABLE_ASAN "Enable AddressSanitizer (Clang/GCC only)" OFF)
 if(ENABLE_ASAN)
@@ -274,6 +274,12 @@ qt_add_executable(kassetmanagerqt WIN32
     src/media_convert_dialog.cpp
     src/media_converter_worker.h
     src/media_converter_worker.cpp
+    src/thumbnail_cache_manager.h
+    src/thumbnail_cache_manager.cpp
+    src/thumbnail_generator_dialog.h
+    src/thumbnail_generator_dialog.cpp
+    src/thumbnail_generator_worker.h
+    src/thumbnail_generator_worker.cpp
     src/media/gstreamer_player.h
     src/media/gstreamer_player.cpp
     ${APP_RESOURCES}

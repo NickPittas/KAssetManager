@@ -30,6 +30,9 @@
 
 
 #include "media_convert_dialog.h"
+#include "thumbnail_cache_manager.h"
+#include "thumbnail_generator_dialog.h"
+#include "thumbnail_generator_dialog.h"
 
 #include <QHeaderView>
 #include <QStyledItemDelegate>
@@ -1101,12 +1104,38 @@ private:
             QRect thumbRect(option.rect.x() + (option.rect.width()-thumbSide)/2, option.rect.y() + margin, thumbSide, thumbSide);
 
             const QString suffix = QFileInfo(filePath).suffix().toLower();
-            LivePreviewManager &previewMgr = LivePreviewManager::instance();
-            const QSize targetSize(thumbSide, thumbSide);
             const bool previewable = isPreviewableSuffix(suffix);
             bool drewPreview = false;
+            bool usedCachedThumbnail = false;
+
+            // First, try to load from persistent thumbnail cache
+            // IMPORTANT: Request thumbnails at the cache's native size (256x256), not the display size
             if (previewable) {
-                auto handle = previewMgr.cachedFrame(filePath, targetSize);
+                ThumbnailCacheManager& cacheManager = ThumbnailCacheManager::instance();
+                QSize cacheSize = cacheManager.getThumbnailSize(); // Get the cache's native size (256x256)
+                if (cacheManager.isCached(filePath, cacheSize, 0.0)) {
+                    QPixmap cachedThumb = cacheManager.getCachedThumbnail(filePath, cacheSize, 0.0);
+                    if (!cachedThumb.isNull()) {
+                        painter->save();
+                        QRect previewRect = insetPreviewRect(thumbRect);
+                        painter->setClipRect(previewRect);
+                        // Scale the cached thumbnail to fit the display size
+                        QPixmap scaled = cachedThumb.scaled(previewRect.size(), Qt::KeepAspectRatio, Qt::SmoothTransformation);
+                        int x = previewRect.x() + (previewRect.width() - scaled.width()) / 2;
+                        int y = previewRect.y() + (previewRect.height() - scaled.height()) / 2;
+                        painter->drawPixmap(x, y, scaled);
+                        painter->restore();
+                        drewPreview = true;
+                        usedCachedThumbnail = true;
+                    }
+                }
+            }
+
+            // Fall back to LivePreviewManager if no cached thumbnail
+            if (!drewPreview && previewable) {
+                LivePreviewManager &previewMgr = LivePreviewManager::instance();
+                QSize displaySize(thumbSide, thumbSide); // Use display size for LivePreviewManager
+                auto handle = previewMgr.cachedFrame(filePath, displaySize);
                 if (handle.isValid()) {
                     painter->save();
                     QRect previewRect = insetPreviewRect(thumbRect);
@@ -1118,7 +1147,7 @@ private:
                     painter->restore();
                     drewPreview = true;
                 } else {
-                    previewMgr.requestFrame(filePath, targetSize);
+                    previewMgr.requestFrame(filePath, displaySize);
                 }
             }
 
@@ -1133,6 +1162,23 @@ private:
                 painter->setFont(placeholder);
                 painter->setPen(QColor(180,180,180));
                 painter->drawText(thumbRect.adjusted(10,10,-10,-10), Qt::AlignCenter | Qt::TextWordWrap, label.left(6));
+            }
+
+            // Draw cached thumbnail indicator badge in bottom-left corner
+            if (drewPreview && usedCachedThumbnail) {
+                int badgeSize = 20;
+                QRect badgeRect(thumbRect.left() + 4, thumbRect.bottom() - badgeSize - 4, badgeSize, badgeSize);
+
+                // Draw semi-transparent blue background
+                painter->setBrush(QColor(88, 166, 255, 180)); // Blue
+                painter->setPen(Qt::NoPen);
+                painter->drawEllipse(badgeRect);
+
+                // Draw checkmark icon
+                painter->setPen(QPen(QColor(255, 255, 255), 2));
+                QFont badgeFont("Segoe UI", 10, QFont::Bold);
+                painter->setFont(badgeFont);
+                painter->drawText(badgeRect, Qt::AlignCenter, "✓");
             }
 
             // Draw warning badge for sequences with gaps
@@ -5607,6 +5653,11 @@ void MainWindow::onFolderContextMenu(const QPoint &pos)
         deleteAction = menu.addAction("Remove Project Folder");
     }
 
+    // Add thumbnail generation actions
+    menu.addSeparator();
+    QAction *generateThumbsAction = menu.addAction("Generate Thumbnails");
+    QAction *generateThumbsRecAction = menu.addAction("Generate Thumbnails (Recursive)");
+
     QAction *selected = menu.exec(folderTreeView->mapToGlobal(pos));
 
     if (selected == createAction) {
@@ -5719,6 +5770,16 @@ void MainWindow::onFolderContextMenu(const QPoint &pos)
                     QString("Failed to delete some folders. Deleted %1 of %2").arg(deletedCount).arg(selectedIndexes.size()));
             }
         }
+    } else if (selected == generateThumbsAction) {
+        // Generate thumbnails for this folder (non-recursive)
+        auto *dialog = new ThumbnailGeneratorDialog(folderId, false, this);
+        dialog->setAttribute(Qt::WA_DeleteOnClose);
+        dialog->show();
+    } else if (selected == generateThumbsRecAction) {
+        // Generate thumbnails for this folder (recursive)
+        auto *dialog = new ThumbnailGeneratorDialog(folderId, true, this);
+        dialog->setAttribute(Qt::WA_DeleteOnClose);
+        dialog->show();
     }
 }
 

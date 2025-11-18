@@ -105,6 +105,8 @@ add_executable(test_live_preview_manager
     test_live_preview_manager.cpp
     ../src/live_preview_manager.cpp
     ../src/live_preview_manager.h
+    ../src/thumbnail_cache_manager.cpp
+    ../src/thumbnail_cache_manager.h
     ../src/media/gstreamer_player.cpp
     ../src/media/gstreamer_player.h
     ../src/oiio_image_loader.cpp

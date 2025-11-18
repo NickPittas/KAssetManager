@@ -1,6 +1,7 @@
 #include "settings_dialog.h"
 #include "db.h"
 #include "live_preview_manager.h"
+#include "thumbnail_cache_manager.h"
 #include <QFileDialog>
 #include <QMessageBox>
 #include <QDir>
@@ -140,6 +141,106 @@ void SettingsDialog::setupCacheTab()
     cacheLayout->addWidget(clearCacheBtn);
 
     layout->addWidget(cacheGroup);
+
+    // Persistent Thumbnail Cache settings
+    QGroupBox* thumbCacheGroup = new QGroupBox("Persistent Thumbnail Cache", cacheTab);
+    thumbCacheGroup->setStyleSheet("QGroupBox { color: #ffffff; border: 1px solid #333; padding: 10px; margin-top: 10px; } QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; }");
+    QVBoxLayout* thumbCacheLayout = new QVBoxLayout(thumbCacheGroup);
+
+    // Cache info
+    ThumbnailCacheManager& thumbCache = ThumbnailCacheManager::instance();
+    qint64 cacheSize = thumbCache.getCacheSize();
+    int cachedFiles = thumbCache.getCachedFileCount();
+    QString cacheSizeStr = QString::number(cacheSize / (1024.0 * 1024.0), 'f', 2) + " MB";
+
+    QLabel* thumbCacheInfoLabel = new QLabel(QString("Cached files: %1 (%2)").arg(cachedFiles).arg(cacheSizeStr), thumbCacheGroup);
+    thumbCacheInfoLabel->setStyleSheet("color: #ffffff;");
+    thumbCacheLayout->addWidget(thumbCacheInfoLabel);
+
+    // Cache directory
+    QHBoxLayout* cacheDirLayout = new QHBoxLayout();
+    QLabel* cacheDirLabel = new QLabel("Cache directory:", thumbCacheGroup);
+    cacheDirLabel->setStyleSheet("color: #ffffff;");
+    cacheDirLayout->addWidget(cacheDirLabel);
+
+    QLineEdit* cacheDirEdit = new QLineEdit(thumbCache.getCacheDirectory(), thumbCacheGroup);
+    cacheDirEdit->setReadOnly(true);
+    cacheDirEdit->setStyleSheet("QLineEdit { background-color: #1e1e1e; color: #ffffff; border: 1px solid #333; padding: 4px; }");
+    cacheDirLayout->addWidget(cacheDirEdit);
+
+    QPushButton* browseCacheDirBtn = new QPushButton("Browse...", thumbCacheGroup);
+    browseCacheDirBtn->setStyleSheet("QPushButton { background-color: #21262d; color: #ffffff; border: 1px solid #333; padding: 6px 12px; } QPushButton:hover { background-color: #30363d; }");
+    connect(browseCacheDirBtn, &QPushButton::clicked, this, [this, cacheDirEdit]() {
+        QString dir = QFileDialog::getExistingDirectory(this, "Select Thumbnail Cache Directory", cacheDirEdit->text());
+        if (!dir.isEmpty()) {
+            cacheDirEdit->setText(dir);
+            ThumbnailCacheManager::instance().setCacheDirectory(dir);
+        }
+    });
+    cacheDirLayout->addWidget(browseCacheDirBtn);
+    thumbCacheLayout->addLayout(cacheDirLayout);
+
+    // Thumbnail size
+    QHBoxLayout* thumbSizeLayout = new QHBoxLayout();
+    QLabel* thumbSizeLabel = new QLabel("Generated thumbnail size:", thumbCacheGroup);
+    thumbSizeLabel->setStyleSheet("color: #ffffff;");
+    thumbSizeLayout->addWidget(thumbSizeLabel);
+
+    QSpinBox* thumbWidthSpin = new QSpinBox(thumbCacheGroup);
+    thumbWidthSpin->setMinimum(128);
+    thumbWidthSpin->setMaximum(1024);
+    thumbWidthSpin->setSingleStep(64);
+    thumbWidthSpin->setValue(thumbCache.getThumbnailSize().width());
+    thumbWidthSpin->setStyleSheet("QSpinBox { background-color: #1e1e1e; color: #ffffff; border: 1px solid #333; padding: 4px; }");
+    thumbSizeLayout->addWidget(thumbWidthSpin);
+
+    QLabel* xLabel = new QLabel("x", thumbCacheGroup);
+    xLabel->setStyleSheet("color: #ffffff;");
+    thumbSizeLayout->addWidget(xLabel);
+
+    QSpinBox* thumbHeightSpin = new QSpinBox(thumbCacheGroup);
+    thumbHeightSpin->setMinimum(128);
+    thumbHeightSpin->setMaximum(1024);
+    thumbHeightSpin->setSingleStep(64);
+    thumbHeightSpin->setValue(thumbCache.getThumbnailSize().height());
+    thumbHeightSpin->setStyleSheet("QSpinBox { background-color: #1e1e1e; color: #ffffff; border: 1px solid #333; padding: 4px; }");
+    thumbSizeLayout->addWidget(thumbHeightSpin);
+
+    QLabel* pxLabel = new QLabel("pixels", thumbCacheGroup);
+    pxLabel->setStyleSheet("color: #ffffff;");
+    thumbSizeLayout->addWidget(pxLabel);
+    thumbSizeLayout->addStretch();
+    thumbCacheLayout->addLayout(thumbSizeLayout);
+
+    // Save thumbnail size on change
+    connect(thumbWidthSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, [thumbHeightSpin](int w) {
+        ThumbnailCacheManager::instance().setThumbnailSize(QSize(w, thumbHeightSpin->value()));
+    });
+    connect(thumbHeightSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, [thumbWidthSpin](int h) {
+        ThumbnailCacheManager::instance().setThumbnailSize(QSize(thumbWidthSpin->value(), h));
+    });
+
+    // Clear cache button
+    QPushButton* clearThumbCacheBtn = new QPushButton("Clear Thumbnail Cache", thumbCacheGroup);
+    clearThumbCacheBtn->setStyleSheet(
+        "QPushButton { background-color: #d73a49; color: #ffffff; border: none; padding: 8px 16px; border-radius: 4px; }"
+        "QPushButton:hover { background-color: #b52a3a; }"
+    );
+    connect(clearThumbCacheBtn, &QPushButton::clicked, this, [this, thumbCacheInfoLabel]() {
+        QMessageBox::StandardButton reply = QMessageBox::question(
+            this, "Clear Thumbnail Cache",
+            "Are you sure you want to clear all cached thumbnails?\n\nThis will delete all generated thumbnails and they will need to be regenerated.",
+            QMessageBox::Yes | QMessageBox::No
+        );
+        if (reply == QMessageBox::Yes) {
+            ThumbnailCacheManager::instance().clearCache();
+            thumbCacheInfoLabel->setText("Cached files: 0 (0.00 MB)");
+            QMessageBox::information(this, "Cache Cleared", "Thumbnail cache has been cleared successfully.");
+        }
+    });
+    thumbCacheLayout->addWidget(clearThumbCacheBtn);
+
+    layout->addWidget(thumbCacheGroup);
 
     // Sequence Cache settings
     QGroupBox* seqCacheGroup = new QGroupBox("Image Sequence Cache", cacheTab);

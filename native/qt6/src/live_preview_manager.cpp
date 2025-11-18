@@ -3,6 +3,7 @@
 #include "oiio_image_loader.h"
 #include "utils.h"
 #include "media/gstreamer_player.h"
+#include "thumbnail_cache_manager.h"
 
 
 #include <QtConcurrent/QtConcurrentRun>
@@ -119,6 +120,17 @@ LivePreviewManager::LivePreviewManager(QObject* parent)
 
 LivePreviewManager::FrameHandle LivePreviewManager::cachedFrame(const QString& filePath, const QSize& targetSize, qreal position)
 {
+    // First check persistent cache
+    ThumbnailCacheManager& persistentCache = ThumbnailCacheManager::instance();
+    QPixmap persistentPixmap = persistentCache.getCachedThumbnail(filePath, targetSize, position);
+    if (!persistentPixmap.isNull()) {
+        // Store in memory cache for faster subsequent access
+        const QString key = makeCacheKey(filePath, targetSize, position);
+        storeFrame(key, persistentPixmap, position, targetSize);
+        return { persistentPixmap, position, targetSize };
+    }
+
+    // Then check memory cache
     const QString key = makeCacheKey(filePath, targetSize, position);
     QMutexLocker locker(&m_mutex);
     if (auto* entry = m_cache.object(key)) {
@@ -137,6 +149,17 @@ void LivePreviewManager::requestFrame(const QString& filePath, const QSize& targ
     const QString suffix = info.suffix().toLower();
     if (!isImageExtension(suffix) && !isHdrExtension(suffix) &&
         !isSequenceFriendlyExtension(suffix) && !isVideoExtension(suffix)) {
+        return;
+    }
+
+    // First check persistent cache
+    ThumbnailCacheManager& persistentCache = ThumbnailCacheManager::instance();
+    QPixmap persistentPixmap = persistentCache.getCachedThumbnail(filePath, targetSize, position);
+    if (!persistentPixmap.isNull()) {
+        // Store in memory cache and emit immediately
+        const QString key = makeCacheKey(filePath, targetSize, position);
+        storeFrame(key, persistentPixmap, position, targetSize);
+        emit frameReady(filePath, position, targetSize, persistentPixmap);
         return;
     }
 
