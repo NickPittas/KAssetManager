@@ -165,6 +165,7 @@ private slots:
     void onFmTogglePreview(); // toolbar toggle
     void onFmOpenOverlay();   // Space: toggle full-screen overlay
     void changeFmPreview(int delta); // Navigate in File Manager overlay
+    void applyTheme(); // Apply current theme to all UI elements
 
 private:
     QString fmPathForIndex(const QModelIndex& idx) const;
@@ -252,6 +253,7 @@ private:
 
     // Filters
     QLineEdit *searchBox;
+    QPushButton *filterSearchButton = nullptr;
     QComboBox *ratingFilter;
     QListView *tagsListView;
     TagsModel *tagsModel;
@@ -268,12 +270,17 @@ private:
     class QCheckBox *lockCheckBox;
     class QCheckBox *recursiveCheckBox;
     // Asset Manager navigation toolbar controls
+    QWidget *amToolbar = nullptr;
     QToolButton *amBackButton = nullptr;
     QToolButton *amUpButton = nullptr;
     QToolButton *amNewFolderButton = nullptr;
     QToolButton *amGroupSequencesButton = nullptr;
     QList<int> amNavigationHistory;
     int amNavigationIndex = -1;
+
+    // Asset Manager toolbar labels for theme updates
+    QLabel *amSizeLabel = nullptr;
+    QLabel *amSizeValueLabel = nullptr;
 
     class QCheckBox *searchEntireDbCheckBox;
     QPushButton *refreshButton;
@@ -357,6 +364,17 @@ private:
     QToolButton *fmViewModeButton;
     class QSlider *fmThumbnailSizeSlider;
     QToolButton *fmPreviewToggleButton;
+
+    // File Manager toolbar buttons for theme updates
+    QToolButton *fmNewFolderBtn = nullptr;
+    QToolButton *fmCopyBtn = nullptr;
+    QToolButton *fmCutBtn = nullptr;
+    QToolButton *fmPasteBtn = nullptr;
+    QToolButton *fmDeleteBtn = nullptr;
+    QToolButton *fmRenameBtn = nullptr;
+    QToolButton *fmAddToLibraryBtn = nullptr;
+    QToolButton *fmSearchButton = nullptr;
+    QLabel *fmSizeLabel = nullptr;
     class QStackedWidget *fmViewStack;
     class FmGridViewEx *fmGridView;
     class FmListViewEx *fmListView;

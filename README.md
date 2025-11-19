@@ -54,14 +54,14 @@ KAsset Manager is a native Windows desktop application built with Qt 6 that prov
 
 #### 🚀 **Performance**
 
-- **Live Preview Streaming** - GStreamer/OpenImageIO decode with in-memory caching
+- **Live Preview Streaming** - GStreamer for video/sequences, OpenImageIO for all still images with in-memory caching
 - **Smart Caching** - LRU pixmap cache (~512MB) keeps recent frames warm
 - **Database Indexes** - Optimized queries for large libraries
 - **Lazy Loading** - Decode only when cards enter the viewport
 
 #### 📊 **Professional Formats**
 
-- **Images**: PNG, JPG, JPEG, BMP, GIF, TIFF, TIF, EXR, HDR, PSD, IFF, RAW
+- **Images**: PNG, JPG, JPEG, BMP, GIF, TIFF, TIF, EXR, HDR, PFM, PSD, IFF, RAW (all formats handled by OpenImageIO for consistent quality and proper aspect ratio)
 - **Videos**: MOV, MP4, AVI, MP5, MKV, WMV (playback via GStreamer; conversion via FFmpeg)
 - **Audio**: MP3, WAV, OGG, FLAC
 - **Sequences**: Automatic detection of numbered image sequences

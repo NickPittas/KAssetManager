@@ -35,6 +35,7 @@ private:
     void setupViewTab();
     void setupShortcutsTab();
     void setupAboutTab();
+    void loadSettings();
 
     QTabWidget* tabWidget;
 

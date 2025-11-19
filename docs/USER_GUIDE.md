@@ -60,7 +60,7 @@ This guide covers day-to-day usage of KAsset Manager. The UI is designed to feel
 ## Conversion
 
 - Convert videos, image sequences, and single images via the Convert dialog
-- Video formats: MOV, MP4, AVI; Images: PNG/JPG/TIF; HDR/EXR/PSD via OpenImageIO when available
+- Video formats: MOV, MP4, AVI; Images: PNG/JPG/TIF; All image formats handled via OpenImageIO for consistent quality
 - ProRes 4444 and Animation MOV conversions preserve alpha (where input provides alpha)
 - PNG/TIF image sequence conversions preserve alpha
 - Pause/Resume is intentionally disabled for conversions by design
@@ -89,5 +89,7 @@ This guide covers day-to-day usage of KAsset Manager. The UI is designed to feel
 
 - Live preview delays on large files: Allow a moment for the first frame to decode; check logs
 - Import or conversion failures: Ensure files are readable and not locked; verify sufficient disk space
-- Advanced formats (EXR/PSD/HDR): Install OpenImageIO via vcpkg or use a package with OIIO included
+- Image display issues: All image formats use OpenImageIO for consistent quality; ensure OIIO is available via vcpkg or included in the package
+- Grayscale images: Now properly display in grayscale (not red-tinted) with correct channel replication
+- HDR/PFM thumbnails: Now generate properly in File Manager grid view
 

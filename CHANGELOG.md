@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **OpenImageIO Unified Image Loading**: All still image formats (PNG, JPG, BMP, GIF, TIFF, EXR, HDR, PFM, PSD, etc.) are now handled exclusively by OpenImageIO for consistent quality, proper aspect ratio handling, and unified behavior across all formats. This eliminates redundancy with Qt's image reader and provides superior color management.
+
+### Fixed
+- **Grayscale Image Display**: Fixed grayscale images displaying with red tint in thumbnails and preview panes. Now properly replicates grayscale channel to all RGB channels for correct monochrome display.
+- **HDR/PFM Thumbnail Generation**: Fixed HDR (.hdr) and PFM (.pfm) files not generating thumbnails in File Manager grid view. These formats are now properly recognized as previewable.
+
+### Technical
+- Modified `oiio_image_loader.cpp` to use OpenImageIO for all image formats instead of just "advanced" formats
+- Added explicit channel replication logic for grayscale (1-channel) to RGB (3-channel) conversion using `channelOrder = {0, 0, 0}`
+- Added "hdr" and "pfm" extensions to `isPreviewableSuffix()` in `mainwindow.cpp` to enable thumbnail generation
+- Updated all documentation to reflect OpenImageIO as the unified image loading backend
+
 ### Planned Features
 - Keyboard shortcuts for common operations
 - Batch export functionality

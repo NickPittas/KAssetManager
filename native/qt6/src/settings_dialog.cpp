@@ -2,6 +2,7 @@
 #include "db.h"
 #include "live_preview_manager.h"
 #include "thumbnail_cache_manager.h"
+#include "theme_manager.h"
 #include <QFileDialog>
 #include <QMessageBox>
 #include <QDir>
@@ -24,12 +25,7 @@ SettingsDialog::SettingsDialog(QWidget* parent)
     QVBoxLayout* mainLayout = new QVBoxLayout(this);
 
     tabWidget = new QTabWidget(this);
-    tabWidget->setStyleSheet(
-        "QTabWidget::pane { border: 1px solid #333; background-color: #1a1a1a; }"
-        "QTabBar::tab { background-color: #2a2a2a; color: #ffffff; padding: 8px 16px; border: 1px solid #333; }"
-        "QTabBar::tab:selected { background-color: #1a1a1a; border-bottom-color: #1a1a1a; }"
-        "QTabBar::tab:hover { background-color: #333; }"
-    );
+    tabWidget->setStyleSheet(ThemeManager::instance().tabWidgetStyleSheet());
 
     setupGeneralTab();
     setupCacheTab();
@@ -44,24 +40,18 @@ SettingsDialog::SettingsDialog(QWidget* parent)
     buttonLayout->addStretch();
 
     QPushButton* saveBtn = new QPushButton("Save", this);
-    saveBtn->setStyleSheet(
-        "QPushButton { background-color: #58a6ff; color: #ffffff; border: none; padding: 8px 24px; border-radius: 4px; }"
-        "QPushButton:hover { background-color: #4a8fd9; }"
-    );
+    saveBtn->setStyleSheet(ThemeManager::instance().accentButtonStyleSheet());
     connect(saveBtn, &QPushButton::clicked, this, &SettingsDialog::saveSettings);
     buttonLayout->addWidget(saveBtn);
 
     QPushButton* closeBtn = new QPushButton("Close", this);
-    closeBtn->setStyleSheet(
-        "QPushButton { background-color: #333; color: #ffffff; border: none; padding: 8px 24px; border-radius: 4px; }"
-        "QPushButton:hover { background-color: #444; }"
-    );
+    closeBtn->setStyleSheet(ThemeManager::instance().buttonStyleSheet());
     connect(closeBtn, &QPushButton::clicked, this, &QDialog::accept);
     buttonLayout->addWidget(closeBtn);
 
     mainLayout->addLayout(buttonLayout);
 
-    setStyleSheet("QDialog { background-color: #121212; color: #ffffff; }");
+    setStyleSheet(ThemeManager::instance().dialogStyleSheet());
 }
 
 void SettingsDialog::setupGeneralTab()
@@ -73,19 +63,21 @@ void SettingsDialog::setupGeneralTab()
 
     // Theme selection
     QGroupBox* themeGroup = new QGroupBox("Appearance", generalTab);
-    themeGroup->setStyleSheet("QGroupBox { color: #ffffff; border: 1px solid #333; padding: 10px; margin-top: 10px; } QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; }");
+    themeGroup->setStyleSheet(ThemeManager::instance().groupBoxStyleSheet());
     QVBoxLayout* themeLayout = new QVBoxLayout(themeGroup);
 
     QLabel* themeLabel = new QLabel("Theme:", themeGroup);
-    themeLabel->setStyleSheet("color: #ffffff;");
+    themeLabel->setStyleSheet(ThemeManager::instance().labelStyleSheet());
     themeLayout->addWidget(themeLabel);
 
     themeCombo = new QComboBox(themeGroup);
-    themeCombo->addItems({"Dark (Default)", "Light (Not Implemented)"});
-    themeCombo->setCurrentIndex(0);
-    themeCombo->setStyleSheet(
-        "QComboBox { background-color: #2a2a2a; color: #ffffff; border: 1px solid #333; padding: 6px; border-radius: 4px; }"
-    );
+    themeCombo->addItems({"Dark", "Light"});
+    themeCombo->setStyleSheet(ThemeManager::instance().comboBoxStyleSheet());
+
+    // Load current theme selection
+    int currentThemeIndex = (ThemeManager::instance().currentTheme() == ThemeManager::Light) ? 1 : 0;
+    themeCombo->setCurrentIndex(currentThemeIndex);
+
     themeLayout->addWidget(themeCombo);
 
     layout->addWidget(themeGroup);
@@ -617,9 +609,28 @@ void SettingsDialog::onImportDatabase()
     }
 }
 
+void SettingsDialog::loadSettings()
+{
+    QSettings s("AugmentCode", "KAssetManager");
+
+    // Load theme
+    if (themeCombo) {
+        int themeIndex = s.value("Appearance/Theme", 0).toInt();
+        themeCombo->setCurrentIndex(themeIndex);
+    }
+}
+
 void SettingsDialog::saveSettings()
 {
     QSettings s("AugmentCode", "KAssetManager");
+
+    // Save theme
+    if (themeCombo) {
+        int themeIndex = themeCombo->currentIndex();
+        ThemeManager::Theme theme = (themeIndex == 1) ? ThemeManager::Light : ThemeManager::Dark;
+        ThemeManager::instance().setTheme(theme);
+        ThemeManager::instance().saveTheme();
+    }
 
     // Save cache size setting
     if (maxCacheSizeSpin) {

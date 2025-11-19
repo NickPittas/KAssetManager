@@ -35,10 +35,12 @@ The application depends on and/or bundles the following components.
 - Packaging: build script auto-detects portable layouts and copies magick.exe and DLLs
 - Security note: Ghostscript delegates are not copied; if you use your own ImageMagick, review delegates.xml and policy.xml to disable untrusted PS/PDF inputs
 
-## OpenImageIO (advanced formats)
+## OpenImageIO (image loading)
 
 - Optional via vcpkg; enabled when found (CMake defines HAVE_OPENIMAGEIO)
-- Enables EXR/PSD/HDR and other professional formats
+- Handles all still image formats (PNG, JPG, BMP, GIF, TIFF, EXR, HDR, PSD, etc.) for consistent quality, proper aspect ratio handling, and unified behavior
+- Eliminates redundancy with Qt's image reader and provides superior color management
+- When unavailable, Qt's image reader is used as fallback for common formats
 
 ## Everything SDK (search integration)
 

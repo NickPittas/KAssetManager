@@ -282,6 +282,8 @@ qt_add_executable(kassetmanagerqt WIN32
     src/thumbnail_generator_worker.cpp
     src/media/gstreamer_player.h
     src/media/gstreamer_player.cpp
+    src/theme_manager.h
+    src/theme_manager.cpp
     ${APP_RESOURCES}
 )
 

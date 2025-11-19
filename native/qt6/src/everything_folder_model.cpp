@@ -14,6 +14,10 @@
 
 #include <algorithm>
 
+#ifdef Q_OS_WIN
+#include <windows.h>
+#endif
+
 namespace {
 constexpr int kMaxEverythingResults = 65535;
 }
@@ -304,10 +308,45 @@ void EverythingFolderModel::populateRoot()
         if (drivePath.isEmpty()) {
             continue;
         }
-        QString displayName = drivePath;
-        if (displayName.endsWith(QLatin1Char('\\'))) {
-            displayName.chop(1);
+
+        // Get drive letter (e.g., "C:")
+        QString driveLetter = drivePath;
+        if (driveLetter.endsWith(QLatin1Char('\\'))) {
+            driveLetter.chop(1);
         }
+
+        // Get volume name using Windows API
+        QString displayName = driveLetter;
+
+#ifdef Q_OS_WIN
+        wchar_t volumeName[MAX_PATH + 1] = {0};
+        wchar_t fileSystemName[MAX_PATH + 1] = {0};
+        DWORD serialNumber = 0;
+        DWORD maxComponentLen = 0;
+        DWORD fileSystemFlags = 0;
+
+        QString rootPath = drivePath;
+        if (!rootPath.endsWith(QLatin1Char('\\'))) {
+            rootPath += QLatin1Char('\\');
+        }
+
+        if (GetVolumeInformationW(
+            reinterpret_cast<const wchar_t*>(rootPath.utf16()),
+            volumeName,
+            MAX_PATH,
+            &serialNumber,
+            &maxComponentLen,
+            &fileSystemFlags,
+            fileSystemName,
+            MAX_PATH))
+        {
+            QString volName = QString::fromWCharArray(volumeName);
+            if (!volName.isEmpty()) {
+                displayName = QString("%1 (%2)").arg(driveLetter).arg(volName);
+            }
+        }
+#endif
+
         createNode(m_root, displayName, drivePath);
     }
 }

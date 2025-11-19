@@ -16,14 +16,21 @@ bool OIIOImageLoader::isOIIOSupported(const QString& filePath) {
     QFileInfo fi(filePath);
     QString ext = fi.suffix().toLower();
 
-    // Formats that OIIO handles better than Qt
+    // Use OIIO for all formats it supports to ensure consistent behavior
+    // This eliminates redundancy with Qt's image reader and provides better quality
     QStringList oiioFormats = {
-        "exr", "hdr", "pic",           // HDR formats
-        "psd", "psb",                  // Adobe formats
-        "tif", "tiff",                 // TIFF (for 16/32-bit)
-        "dpx", "cin",                  // Film formats
-        "iff", "sgi", "pic", "pnm",    // Other formats
-        "tga", "bmp", "ico"            // Basic formats OIIO can handle
+        // HDR formats (require tone mapping)
+        "exr", "hdr", "pfm", "pic",
+        // Adobe formats
+        "psd", "psb",
+        // TIFF (for 16/32-bit support)
+        "tif", "tiff",
+        // Film/professional formats
+        "dpx", "cin",
+        // Other professional formats
+        "iff", "sgi", "pnm",
+        // Common formats (OIIO provides consistent aspect ratio handling and color management)
+        "jpg", "jpeg", "png", "bmp", "tga", "ico", "gif"
     };
 
     return oiioFormats.contains(ext);
@@ -36,11 +43,14 @@ bool OIIOImageLoader::isOIIOSupported(const QString& filePath) {
 QImage OIIOImageLoader::loadImage(const QString& filePath, int maxWidth, int maxHeight, ColorSpace colorSpace) {
 #if defined(HAVE_OPENIMAGEIO) && HAVE_OPENIMAGEIO
     qDebug() << "[OIIOImageLoader] Loading image:" << filePath;
+    qDebug() << "[OIIOImageLoader] Target size:" << maxWidth << "x" << maxHeight;
 
     // Use ImageBuf to manage the input resource (RAII) and avoid manual ImageInput handling
     ImageBuf buf(filePath.toStdString());
     if (!buf.read(0, 0, true, TypeDesc::FLOAT)) {
-        qWarning() << "[OIIOImageLoader] Failed to read image data";
+        QString errorMsg = QString::fromStdString(buf.geterror());
+        qWarning() << "[OIIOImageLoader] Failed to read image data:" << errorMsg;
+        qWarning() << "[OIIOImageLoader] File:" << filePath;
         return QImage();
     }
 
@@ -83,36 +93,67 @@ QImage OIIOImageLoader::loadImage(const QString& filePath, int maxWidth, int max
     int targetChannels = (channels >= 4) ? 4 : 3;
     ImageBuf converted;
     if (channels != targetChannels) {
-        if (!ImageBufAlgo::channels(converted, buf, targetChannels, {}, {}, {}, true)) {
-            qWarning() << "[OIIOImageLoader] Failed to convert channels";
-            return QImage();
+        // For grayscale images (1 channel), replicate to RGB by specifying channel order
+        if (channels == 1 && targetChannels == 3) {
+            // Replicate channel 0 to R, G, and B
+            std::vector<int> channelOrder = {0, 0, 0};
+            if (!ImageBufAlgo::channels(converted, buf, targetChannels, channelOrder, {}, {}, true)) {
+                qWarning() << "[OIIOImageLoader] Failed to convert grayscale to RGB";
+                return QImage();
+            }
+        } else {
+            // Standard channel conversion
+            if (!ImageBufAlgo::channels(converted, buf, targetChannels, {}, {}, {}, true)) {
+                qWarning() << "[OIIOImageLoader] Failed to convert channels";
+                return QImage();
+            }
         }
         buf = std::move(converted);
     }
 
-    // Check if this is an HDR image (float format)
-    bool isHDR = (spec.format == TypeDesc::FLOAT || spec.format == TypeDesc::HALF ||
-                  spec.format == TypeDesc::DOUBLE);
+    // Check if this is truly an HDR image by file extension
+    // Don't just check format type, as OIIO may load regular images as float for processing
+    QFileInfo fileInfo(filePath);
+    QString ext = fileInfo.suffix().toLower();
+    QStringList hdrFormats = {"exr", "hdr", "pfm", "pic"};
+    bool isHDR = hdrFormats.contains(ext);
 
     if (isHDR) {
-        qDebug() << "[OIIOImageLoader] HDR image detected, applying tone mapping with color space";
+        QString colorSpaceName;
+        switch (colorSpace) {
+            case ColorSpace::Linear: colorSpaceName = "Linear"; break;
+            case ColorSpace::sRGB: colorSpaceName = "sRGB"; break;
+            case ColorSpace::Rec709: colorSpaceName = "Rec.709"; break;
+        }
+        qDebug() << "[OIIOImageLoader] HDR image detected, applying tone mapping with" << colorSpaceName << "color space";
 
         // Get float data
         std::vector<float> pixels(width * height * targetChannels);
         if (!buf.get_pixels(ROI(0, width, 0, height), TypeDesc::FLOAT, pixels.data())) {
-            qWarning() << "[OIIOImageLoader] Failed to get pixel data";
+            QString errorMsg = QString::fromStdString(buf.geterror());
+            qWarning() << "[OIIOImageLoader] Failed to get HDR pixel data:" << errorMsg;
             return QImage();
         }
 
+        qDebug() << "[OIIOImageLoader] Successfully extracted HDR pixel data, applying tone mapping...";
+
         // Apply tone mapping with color space transform
-        return toneMapHDR(pixels.data(), width, height, targetChannels, colorSpace);
+        QImage result = toneMapHDR(pixels.data(), width, height, targetChannels, colorSpace);
+        if (result.isNull()) {
+            qWarning() << "[OIIOImageLoader] Tone mapping failed to produce valid image";
+            return QImage();
+        }
+
+        qDebug() << "[OIIOImageLoader] HDR tone mapping complete, image size:" << result.width() << "x" << result.height();
+        return result;
     } else {
         // Convert to 8-bit directly
         qDebug() << "[OIIOImageLoader] LDR image, converting to 8-bit";
 
         std::vector<uint8_t> pixels(width * height * targetChannels);
         if (!buf.get_pixels(ROI(0, width, 0, height), TypeDesc::UINT8, pixels.data())) {
-            qWarning() << "[OIIOImageLoader] Failed to get pixel data";
+            QString errorMsg = QString::fromStdString(buf.geterror());
+            qWarning() << "[OIIOImageLoader] Failed to get LDR pixel data:" << errorMsg;
             return QImage();
         }
 
@@ -125,7 +166,7 @@ QImage OIIOImageLoader::loadImage(const QString& filePath, int maxWidth, int max
             memcpy(scanline, &pixels[y * width * targetChannels], width * targetChannels);
         }
 
-        qDebug() << "[OIIOImageLoader] Successfully loaded image";
+        qDebug() << "[OIIOImageLoader] Successfully loaded LDR image";
         return image;
     }
 #else
@@ -139,6 +180,11 @@ QImage OIIOImageLoader::loadImage(const QString& filePath, int maxWidth, int max
 
 QImage OIIOImageLoader::toneMapHDR(const float* data, int width, int height, int channels, ColorSpace colorSpace, float exposure) {
 #if defined(HAVE_OPENIMAGEIO) && HAVE_OPENIMAGEIO
+    if (!data || width <= 0 || height <= 0 || channels < 1) {
+        qWarning() << "[OIIOImageLoader] Invalid tone mapping parameters: width=" << width << "height=" << height << "channels=" << channels;
+        return QImage();
+    }
+
     QString colorSpaceName;
     switch (colorSpace) {
         case ColorSpace::Linear: colorSpaceName = "Linear"; break;
@@ -149,6 +195,11 @@ QImage OIIOImageLoader::toneMapHDR(const float* data, int width, int height, int
 
     QImage::Format format = (channels == 4) ? QImage::Format_RGBA8888 : QImage::Format_RGB888;
     QImage image(width, height, format);
+
+    if (image.isNull()) {
+        qWarning() << "[OIIOImageLoader] Failed to allocate QImage for tone mapping";
+        return QImage();
+    }
 
     float exposureScale = std::pow(2.0f, exposure);
 
@@ -161,7 +212,9 @@ QImage OIIOImageLoader::toneMapHDR(const float* data, int width, int height, int
 
             // Apply exposure and tone mapping to RGB channels
             for (int c = 0; c < 3; ++c) {
-                float value = data[srcIdx + c] * exposureScale;
+                // For grayscale images (1 channel), replicate the value to all RGB channels
+                int srcChannel = (channels == 1) ? 0 : c;
+                float value = data[srcIdx + srcChannel] * exposureScale;
 
                 // Apply tone mapping (Reinhard)
                 value = reinhardToneMap(value);
@@ -193,7 +246,7 @@ QImage OIIOImageLoader::toneMapHDR(const float* data, int width, int height, int
         }
     }
 
-    qDebug() << "[OIIOImageLoader] Tone mapping complete";
+    qDebug() << "[OIIOImageLoader] Tone mapping complete, result valid:" << !image.isNull();
     return image;
 #else
     Q_UNUSED(data);

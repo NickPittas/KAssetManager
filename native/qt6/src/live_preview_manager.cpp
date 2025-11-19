@@ -443,9 +443,8 @@ QImage LivePreviewManager::loadImageFrame(const Request& request, QString& error
     if (image.isNull()) {
         QImageReader reader(request.filePath);
         reader.setAutoTransform(true);
-        if (request.targetSize.isValid()) {
-            reader.setScaledSize(request.targetSize);
-        }
+        // DO NOT use setScaledSize() here - it forces exact dimensions and ignores aspect ratio
+        // Instead, load the full image and let the scaling below handle aspect ratio preservation
         image = reader.read();
         if (image.isNull()) {
             error = reader.errorString();

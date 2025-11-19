@@ -59,7 +59,7 @@ docs/
 - Avoid QApplication::processEvents(); communicate with signals/slots (queued connections)
 
 ### Live preview and conversions
-- GStreamer and (optionally) OpenImageIO power live preview and advanced formats; FFmpeg is no longer used for playback.
+- GStreamer powers video and image-sequence playback; OpenImageIO handles all still image formats for consistent quality and behavior; FFmpeg is no longer used for playback.
 - RAII wrappers ensure FFmpeg resources used by the Convert dialog are released on all paths.
 - Image conversions use ImageMagick; video conversions use FFmpeg via the Convert dialog/tools.
 - Conversion Pause/Resume is disabled by design.
