@@ -68,3 +68,45 @@ These paths are mentioned here for convenience only; Git will not remove them be
 - Suggested action:
   - Consider removing or updating the `npm` `/web` entry while keeping the `github-actions` and `pip` entries, since those are part of the active workflow.
 
+
+## 4. Intra-file cleanup candidates (dead C++ functions / legacy macro branches)
+
+These items live **inside** otherwise active source files. They appear unused based on code search and build configuration, but are not removed automatically.
+
+### 4.1 `native/qt6/src/live_preview_manager.cpp` – unused FFmpeg helper and includes
+- Code:
+  - A `ffmpegErrorString(int err)` helper wrapped in `#if defined(HAVE_FFMPEG) && HAVE_FFMPEG` plus an `#else` fallback `static QString ffmpegErrorString(int err)`.
+  - The corresponding `libav*` includes at the top of the file guarded by the same macro.
+- Evidence of being unused:
+  - Grepping the repository shows no call sites to `ffmpegErrorString` in any translation unit; only its own definitions appear.
+  - Inside `live_preview_manager.cpp` there are no uses of `AVFormatContext`, `AVCodec`, `AVFrame`, `SwsContext`, or other FFmpeg types.
+  - LivePreviewManager's actual preview/thumbnail pipeline is implemented with `GStreamerPlayer` and `OIIOImageLoader`; it does not perform in-process FFmpeg decoding.
+- Impact if removed:
+  - Leaves LivePreviewManager behavior unchanged.
+  - Drops an unused FFmpeg dependency from this translation unit, keeping the implementation aligned with the "GStreamer-only playback" design.
+
+### 4.2 `native/qt6/src/preview_overlay.cpp` – unused `HAVE_FFMPEG` include/comment block
+- Code:
+  - At the top of the file there is a `#ifdef HAVE_FFMPEG` block that:
+    - Includes `<libavformat/avformat.h>` and `<libavcodec/avcodec.h>`.
+    - Adds comments describing a "Unified FFmpeg-based video and image sequence playback backend" using an `FFmpegPlayer` member.
+- Evidence of being unused/legacy:
+  - The rest of `preview_overlay.cpp` never refers to any FFmpeg types or functions; all video/sequence playback is routed through `GStreamerPlayer`.
+  - There is no `FFmpegPlayer` class in the compiled sources; the only remaining references are:
+    - In comments here, and
+    - In the uncompiled legacy file `native/qt6/src/live_preview_manager_slots.cpp` (already listed in section 1.2).
+  - The includes pulled in by this block are otherwise unused, so the block has no effect on generated code.
+- Impact if removed:
+  - Pure cleanup of an unused macro block and outdated comments; safe with respect to the current GStreamer-based preview behavior.
+
+### 4.3 `native/qt6/src/video_metadata.{h,cpp}` – unused `MediaInfo::probeVideoFile`
+- Code:
+  - Function `bool probeVideoFile(const QString& filePath, VideoMetadata& out, QString* errorMessage)` declared in `video_metadata.h` and defined in `video_metadata.cpp` inside an `#ifdef HAVE_FFMPEG` block.
+  - Uses in-process FFmpeg APIs (`AVFormatContext`, `AVStream`, `AVCodecParameters`, `avformat_open_input`, `avcodec_find_decoder`, etc.) to probe codec, resolution, FPS, bitrate, and timecode.
+- Evidence of being unused:
+  - Code search shows no call sites to `MediaInfo::probeVideoFile` anywhere in the application or tests; only the declaration and definition exist.
+  - `mainwindow.cpp` currently contains TODO comments like "TODO: Extract video metadata using GStreamer" rather than calling this helper.
+- Impact if removed:
+  - No change to current features, since nothing invokes the function.
+  - Slightly reduces the in-process FFmpeg surface area, bringing the implementation closer to the documented policy that FFmpeg is used only by the Convert dialog/tools.
+  - Alternatively, if you decide to wire this into the metadata TODOs, you may want to keep it and then remove this entry from the cleanup list once it becomes actively used.
