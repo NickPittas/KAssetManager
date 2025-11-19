@@ -55,3 +55,4 @@ resources/ffmpeg/
 *.exe
 
 B165C015_241223_R0G5.mxf.txt
+.kilocode/mcp.json

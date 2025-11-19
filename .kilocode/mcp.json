@@ -1,15 +1,1 @@
-{
-  "mcpServers": {
-    "filesystem": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "@modelcontextprotocol/server-filesystem",
-        "E:/KAssetManager"
-      ],
-      "alwaysAllow": [
-        "read_file"
-      ]
-    }
-  }
-}
+{"mcpServers":{"filesystem":{"command":"npx","args":["-y","@modelcontextprotocol/server-filesystem","E:/KAssetManager"],"alwaysAllow":["read_file"],"disabled":true}}}
