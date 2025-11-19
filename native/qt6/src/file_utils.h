@@ -57,5 +57,21 @@ inline bool pathExists(const QString& path)
  */
 bool isPreviewableSuffix(const QString& suffix);
 
+/**
+ * Check if a file suffix represents an image file.
+ *
+ * @param suffix The file extension to check
+ * @return true if the suffix is an image format
+ */
+bool isImageFile(const QString& suffix);
+
+/**
+ * Check if a file suffix represents a video file.
+ *
+ * @param suffix The file extension to check
+ * @return true if the suffix is a video format
+ */
+bool isVideoFile(const QString& suffix);
+
 } // namespace FileUtils
 

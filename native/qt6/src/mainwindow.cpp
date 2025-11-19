@@ -162,7 +162,6 @@ QRect insetPreviewRect(const QRect &source)
 #include "asset_sequence_grouping_proxy_model.h"
 #include <QDockWidget>
 
-static bool isImageFile(const QString &ext);
 #include <QEventLoop>
 
 #include <QDesktopServices>
@@ -2339,8 +2338,6 @@ void MainWindow::onFmTreeActivated(const QModelIndex &index)
 }
 
 // Forward declarations for file-type helpers used by File Manager handlers
-static bool isImageFile(const QString &ext);
-static bool isVideoFile(const QString &ext);
 static bool isPreviewOverlayViewable(const QString &ext);
 
 
@@ -2393,7 +2390,7 @@ void MainWindow::onFmItemDoubleClicked(const QModelIndex &index)
     }
 
     const QString ext = fi.suffix();
-    if (isImageFile(ext) || isVideoFile(ext)) {
+    if (FileUtils::isImageFile(ext) || FileUtils::isVideoFile(ext)) {
         if (!previewOverlay) {
             previewOverlay = new PreviewOverlay(this);
             // Center overlay to the app window instead of screen top-left

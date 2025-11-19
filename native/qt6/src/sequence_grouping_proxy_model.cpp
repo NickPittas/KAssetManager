@@ -3,24 +3,7 @@
 #include "file_utils.h"
 #include <QDebug>
 
-// Helper function from mainwindow.cpp (assumed to be available or we need to include it)
-// We might need to move isImageFile to a shared utility if it's not already available.
-// For now, we will assume it is available via a header or we need to duplicate it/move it.
-// Looking at the original file, isImageFile was a static helper. We should probably move it to FileUtils.
-// But for this step, I will include the necessary headers.
 
-// Re-implementing isImageFile locally or assuming it's in file_utils if we moved it.
-// Since we haven't moved it yet, I'll add a local helper or include the header if it exists.
-// The report suggested moving it to FileTypeUtils.
-// For now, to avoid breaking compilation, I will assume we can use a local static or include a utility.
-// Let's check if file_utils.h has it. If not, I'll add a local static for now.
-
-static bool isImageFile(const QString &ext) {
-    static const QSet<QString> kImageSuffixes = {
-        "jpg", "jpeg", "png", "gif", "bmp", "tga", "tif", "tiff", "exr", "dpx", "cin", "psd", "webp", "ico", "svg"
-    };
-    return kImageSuffixes.contains(ext.toLower());
-}
 
 SequenceGroupingProxyModel::SequenceGroupingProxyModel(QObject* parent)
     : QSortFilterProxyModel(parent) {
@@ -185,7 +168,7 @@ SequenceGroupingProxyModel::BuildResult SequenceGroupingProxyModel::buildSequenc
         if (!m.hasMatch()) continue;
         const QString base = m.captured(1);
         const QString ext = m.captured(4).toLower();
-        if (!isImageFile(ext)) continue;
+        if (!FileUtils::isImageFile(ext)) continue;
         const QString key = fi.absolutePath() + "|" + base + "|" + ext;
         headCount[key] += 1;
         if (!headRepr.contains(key)) headRepr.insert(key, fi);
@@ -265,7 +248,7 @@ SequenceGroupingProxyModel::BuildResult SequenceGroupingProxyModel::buildSequenc
         if (!m.hasMatch()) continue;
         const QString base = m.captured(1);
         const QString ext = m.captured(4).toLower();
-        if (!isImageFile(ext)) continue;
+        if (!FileUtils::isImageFile(ext)) continue;
         const QString key = fi.absolutePath() + "|" + base + "|" + ext;
         const QString reprPath = headRepr.value(key).absoluteFilePath();
         if (!reprPath.isEmpty() && fi.absoluteFilePath() != reprPath && headCount.value(key,0) > 1) {
