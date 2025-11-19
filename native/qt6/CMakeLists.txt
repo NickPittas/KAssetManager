@@ -239,6 +239,14 @@ qt_add_executable(kassetmanagerqt WIN32
     src/star_rating_widget.cpp
     src/sequence_detector.h
     src/sequence_detector.cpp
+    src/sequence_grouping_proxy_model.h
+    src/sequence_grouping_proxy_model.cpp
+    src/asset_sequence_grouping_proxy_model.h
+    src/asset_sequence_grouping_proxy_model.cpp
+    src/asset_grid_view.h
+    src/asset_grid_view.cpp
+    src/icon_utils.h
+    src/icon_utils.cpp
     src/oiio_image_loader.h
     src/oiio_image_loader.cpp
     src/project_folder_watcher.h
