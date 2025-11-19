@@ -49,5 +49,13 @@ inline bool pathExists(const QString& path)
     return QFileInfo::exists(path);
 }
 
+/**
+ * Check if a file suffix represents a previewable image or video.
+ *
+ * @param suffix The file extension to check
+ * @return true if the suffix is in the list of supported preview formats
+ */
+bool isPreviewableSuffix(const QString& suffix);
+
 } // namespace FileUtils
 
