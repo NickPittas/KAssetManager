@@ -252,6 +252,10 @@ qt_add_executable(kassetmanagerqt WIN32
     src/asset_item_delegate.cpp
     src/fm_item_delegate.h
     src/fm_item_delegate.cpp
+    src/grid_scrub.h
+    src/grid_scrub.cpp
+    src/fm_views_ex.h
+    src/fm_views_ex.cpp
     src/oiio_image_loader.h
     src/oiio_image_loader.cpp
     src/project_folder_watcher.h
