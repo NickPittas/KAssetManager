@@ -555,7 +555,9 @@ void GStreamerPlayer::pause()
 
         m_playbackState = PlaybackState::Paused;
         emit playbackStateChanged(PlaybackState::Paused);
-        m_positionTimer->stop();
+        // Keep position timer running to query position in PAUSED state
+        // GStreamer supports position queries once pipeline is prerolled (PAUSED or PLAYING)
+        // Don't stop the timer - let onPositionUpdate continue querying
 
         qDebug() << "[GStreamerPlayer] Playback paused";
     }
@@ -799,8 +801,13 @@ void GStreamerPlayer::onBusMessage()
 void GStreamerPlayer::onPositionUpdate()
 {
 #ifdef HAVE_GSTREAMER
-    if (m_pipeline && m_playbackState.load() == PlaybackState::Playing) {
-        queryPosition();
+    // Query position in both PLAYING and PAUSED states
+    // GStreamer supports position queries once pipeline is prerolled (PAUSED or PLAYING)
+    if (m_pipeline) {
+        PlaybackState state = m_playbackState.load();
+        if (state == PlaybackState::Playing || state == PlaybackState::Paused) {
+            queryPosition();
+        }
     }
 #endif
 }
@@ -1158,4 +1165,196 @@ QImage GStreamerPlayer::extractThumbnail(const QString& filePath, const QSize& t
 #endif
 }
 
+QImage GStreamerPlayer::getCurrentFrame(const QSize& targetSize)
+{
+#ifdef HAVE_GSTREAMER
+    if (!m_pipeline) {
+        qWarning() << "[GStreamerPlayer] getCurrentFrame: No pipeline available";
+        return QImage();
+    }
+
+    // Create a temporary appsink pipeline to capture current frame
+    // We need to create a parallel pipeline because we can't interrupt the main playback
+    
+    // However, a simpler approach: use the current position and extract frame from current file
+    if (m_currentUri.isEmpty()) {
+        qWarning() << "[GStreamerPlayer] getCurrentFrame: No media loaded";
+        return QImage();
+    }
+
+    qint64 currentPos = m_position.load();
+    
+    // Create a temporary pipeline for frame extraction at current position
+    GstElement* pipeline = gst_element_factory_make("playbin", "frame-capture-playbin");
+    if (!pipeline) {
+        qWarning() << "[GStreamerPlayer] getCurrentFrame: Failed to create playbin";
+        return QImage();
+    }
+
+    g_object_set(pipeline, "uri", m_currentUri.toUtf8().constData(), nullptr);
+
+    // Create appsink for video frames
+    GstElement* videoSink = gst_element_factory_make("appsink", "frame-capture-videosink");
+    if (!videoSink) {
+        qWarning() << "[GStreamerPlayer] getCurrentFrame: Failed to create appsink";
+        gst_object_unref(pipeline);
+        return QImage();
+    }
+
+    g_object_set(videoSink,
+                 "emit-signals", FALSE,
+                 "drop", TRUE,
+                 "max-buffers", 1,
+                 nullptr);
+
+    // Set caps to receive RGB frames
+    GstCaps* caps = gst_caps_new_simple("video/x-raw",
+                                        "format", G_TYPE_STRING, "RGB",
+                                        nullptr);
+    gst_app_sink_set_caps(GST_APP_SINK(videoSink), caps);
+    gst_caps_unref(caps);
+
+    g_object_set(pipeline, "video-sink", videoSink, nullptr);
+
+    // Set to PAUSED to preroll
+    GstStateChangeReturn stateRet = gst_element_set_state(pipeline, GST_STATE_PAUSED);
+    if (stateRet == GST_STATE_CHANGE_FAILURE) {
+        qWarning() << "[GStreamerPlayer] getCurrentFrame: Failed to set pipeline to PAUSED";
+        gst_object_unref(pipeline);
+        return QImage();
+    }
+
+    // Wait for ASYNC_DONE message
+    GstBus* bus = gst_element_get_bus(pipeline);
+    bool prerollComplete = false;
+    GstClockTime timeout = 2 * GST_SECOND;
+    GstClockTime startTime = gst_util_get_timestamp();
+
+    while (!prerollComplete && (gst_util_get_timestamp() - startTime) < timeout) {
+        GstMessage* msg = gst_bus_timed_pop_filtered(bus, 100 * GST_MSECOND,
+            static_cast<GstMessageType>(GST_MESSAGE_ASYNC_DONE | GST_MESSAGE_ERROR));
+
+        if (msg) {
+            if (GST_MESSAGE_TYPE(msg) == GST_MESSAGE_ASYNC_DONE) {
+                prerollComplete = true;
+            } else if (GST_MESSAGE_TYPE(msg) == GST_MESSAGE_ERROR) {
+                GError* err = nullptr;
+                gchar* debug = nullptr;
+                gst_message_parse_error(msg, &err, &debug);
+                qWarning() << "[GStreamerPlayer] getCurrentFrame: Pipeline error:" 
+                           << (err ? err->message : "Unknown");
+                if (err) g_error_free(err);
+                if (debug) g_free(debug);
+                gst_message_unref(msg);
+                gst_object_unref(bus);
+                gst_element_set_state(pipeline, GST_STATE_NULL);
+                gst_object_unref(pipeline);
+                return QImage();
+            }
+            gst_message_unref(msg);
+        }
+    }
+
+    gst_object_unref(bus);
+
+    if (!prerollComplete) {
+        qWarning() << "[GStreamerPlayer] getCurrentFrame: Preroll timeout";
+        gst_element_set_state(pipeline, GST_STATE_NULL);
+        gst_object_unref(pipeline);
+        return QImage();
+    }
+
+    QImage frameImage;
+
+    // Seek to current position
+    if (currentPos > 0) {
+        gint64 position = currentPos * GST_MSECOND;
+        if (!gst_element_seek_simple(pipeline, GST_FORMAT_TIME,
+                               static_cast<GstSeekFlags>(GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_ACCURATE),
+                               position)) {
+            qWarning() << "[GStreamerPlayer] getCurrentFrame: Seek failed";
+            gst_element_set_state(pipeline, GST_STATE_NULL);
+            gst_object_unref(pipeline);
+            return QImage();
+        }
+
+        // Wait for seek to complete
+        GstBus* seekBus = gst_element_get_bus(pipeline);
+        GstMessage* msg = gst_bus_timed_pop_filtered(seekBus, 1 * GST_SECOND,
+            static_cast<GstMessageType>(GST_MESSAGE_ASYNC_DONE | GST_MESSAGE_ERROR));
+        if (msg) {
+            if (GST_MESSAGE_TYPE(msg) == GST_MESSAGE_ERROR) {
+                qWarning() << "[GStreamerPlayer] getCurrentFrame: Seek error";
+                gst_message_unref(msg);
+                gst_object_unref(seekBus);
+                gst_element_set_state(pipeline, GST_STATE_NULL);
+                gst_object_unref(pipeline);
+                return QImage();
+            }
+            gst_message_unref(msg);
+        }
+        gst_object_unref(seekBus);
+    }
+
+    // Set to PLAYING to push frame through pipeline
+    stateRet = gst_element_set_state(pipeline, GST_STATE_PLAYING);
+    if (stateRet == GST_STATE_CHANGE_FAILURE) {
+        qWarning() << "[GStreamerPlayer] getCurrentFrame: Failed to set pipeline to PLAYING";
+        gst_element_set_state(pipeline, GST_STATE_NULL);
+        gst_object_unref(pipeline);
+        return QImage();
+    }
+
+    // Wait for frame to be pushed
+    g_usleep(50000); // 50ms
+
+    // Pull the sample from appsink
+    GstSample* sample = gst_app_sink_try_pull_sample(GST_APP_SINK(videoSink), 200 * GST_MSECOND);
+    if (sample) {
+        GstCaps* sampleCaps = gst_sample_get_caps(sample);
+        GstBuffer* buffer = gst_sample_get_buffer(sample);
+
+        if (sampleCaps && buffer) {
+            GstStructure* structure = gst_caps_get_structure(sampleCaps, 0);
+            int width = 0, height = 0;
+            gst_structure_get_int(structure, "width", &width);
+            gst_structure_get_int(structure, "height", &height);
+
+            if (width > 0 && height > 0) {
+                GstMapInfo map;
+                if (gst_buffer_map(buffer, &map, GST_MAP_READ)) {
+                    QImage image(map.data, width, height, width * 3, QImage::Format_RGB888);
+                    frameImage = image.copy();
+                    gst_buffer_unmap(buffer, &map);
+
+                    // Scale to target size if needed
+                    if (targetSize.isValid()) {
+                        frameImage = frameImage.scaled(targetSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+                    }
+
+                    qDebug() << "[GStreamerPlayer] getCurrentFrame: Success at position" << currentPos << "ms";
+                } else {
+                    qWarning() << "[GStreamerPlayer] getCurrentFrame: Failed to map buffer";
+                }
+            } else {
+                qWarning() << "[GStreamerPlayer] getCurrentFrame: Invalid dimensions";
+            }
+        } else {
+            qWarning() << "[GStreamerPlayer] getCurrentFrame: Invalid sample caps or buffer";
+        }
+        gst_sample_unref(sample);
+    } else {
+        qWarning() << "[GStreamerPlayer] getCurrentFrame: Failed to pull sample";
+    }
+
+    // Cleanup
+    gst_element_set_state(pipeline, GST_STATE_NULL);
+    gst_object_unref(pipeline);
+
+    return frameImage;
+#else
+    Q_UNUSED(targetSize);
+    return QImage();
+#endif
+}
 

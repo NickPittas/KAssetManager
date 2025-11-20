@@ -61,6 +61,10 @@
 #include <QDrag>
 #include <QMimeData>
 #include <QUrl>
+#include <QColorDialog>
+#include <QFileDialog>
+#include <QMessageBox>
+#include <QGraphicsSceneMouseEvent>
 
 // Load media icons from disk without recoloring; search common install paths
 static QIcon loadMediaIcon(const QString& relative)
@@ -120,6 +124,10 @@ PreviewOverlay::PreviewOverlay(QWidget *parent)
     , currentColorSpace(OIIOImageLoader::ColorSpace::sRGB)
     , isHDRImage(false)
     , useCacheForSequences(true) // ENABLED - using QRecursiveMutex to fix deadlock
+    , annotationLayer(nullptr)
+    , annotationModeEnabled(false)
+    , annotationToolbar(nullptr)
+    , currentAnnotatedFrame(-1)
 {
     // Initialize GStreamer globally (call once)
     GStreamerPlayer::initialize();
@@ -168,6 +176,17 @@ PreviewOverlay::~PreviewOverlay()
     if (sequenceTimer) {
         sequenceTimer->stop();
     }
+    
+    // CRITICAL: Clean up annotation layer before scene is destroyed
+    if (annotationLayer) {
+        qDebug() << "[PreviewOverlay::~PreviewOverlay] Clearing annotation layer";
+        annotationLayer->clearAnnotations();
+        delete annotationLayer;
+        annotationLayer = nullptr;
+    }
+    
+    // Clean up frame annotations map (now uses JSON, no manual cleanup needed)
+    frameAnnotations.clear();
 
     // CRITICAL: Delete frame cache explicitly to ensure proper cleanup order
     // This triggers SequenceFrameCache destructor which waits for workers
@@ -239,6 +258,24 @@ void PreviewOverlay::setupUi()
     topLayout->addWidget(fileNameLabel);
 
     topLayout->addStretch();
+    
+    // Annotation toggle button with icon
+    toggleAnnotationBtn = new QPushButton(this);
+    QString annotationIconPath = QCoreApplication::applicationDirPath() + "/Icons/Annotation/Annotate.png";
+    toggleAnnotationBtn->setIcon(QIcon(annotationIconPath));
+    toggleAnnotationBtn->setIconSize(QSize(24, 24));
+    toggleAnnotationBtn->setText(" Annotate");
+    toggleAnnotationBtn->setFocusPolicy(Qt::NoFocus);
+    toggleAnnotationBtn->setCheckable(true);
+    toggleAnnotationBtn->setStyleSheet(
+        "QPushButton { background-color: #444; color: white; padding: 8px 15px; "
+        "border: none; border-radius: 4px; }"
+        "QPushButton:hover { background-color: #555; }"
+        "QPushButton:checked { background-color: #58a6ff; }"
+    );
+    toggleAnnotationBtn->setToolTip("Toggle annotation mode (A)");
+    connect(toggleAnnotationBtn, &QPushButton::clicked, this, &PreviewOverlay::onToggleAnnotation);
+    topLayout->addWidget(toggleAnnotationBtn);
 
     // Close button - right side
     closeBtn = new QPushButton("✕", this);
@@ -295,6 +332,33 @@ void PreviewOverlay::setupUi()
     videoWidget->installEventFilter(this);
     videoWidget->hide();
     contentLayout->addWidget(videoWidget);
+    
+    // Create transparent annotation overlay for videos
+    // This sits on top of videoWidget when annotation mode is enabled
+    // IMPORTANT: Don't parent to videoWidget because it has WA_PaintOnScreen which blocks Qt rendering
+    annotationOverlayView = new QGraphicsView(this); // Parent to PreviewOverlay instead
+    annotationOverlayScene = new QGraphicsScene(this);
+    annotationOverlayView->setScene(annotationOverlayScene);
+    
+    // Make the view and viewport truly transparent
+    annotationOverlayView->setStyleSheet("QGraphicsView { background: transparent; border: none; }");
+    annotationOverlayView->setAttribute(Qt::WA_TranslucentBackground);
+    annotationOverlayView->setAttribute(Qt::WA_TransparentForMouseEvents, false); // Accept mouse events
+    annotationOverlayView->setAttribute(Qt::WA_NoSystemBackground);
+    annotationOverlayView->viewport()->setAttribute(Qt::WA_TranslucentBackground);
+    annotationOverlayView->viewport()->setAutoFillBackground(false);
+    
+    // Set background brush to transparent
+    annotationOverlayView->setBackgroundBrush(Qt::transparent);
+    annotationOverlayScene->setBackgroundBrush(Qt::transparent);
+    
+    annotationOverlayView->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    annotationOverlayView->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    annotationOverlayView->setFrameShape(QFrame::NoFrame);
+    annotationOverlayView->setRenderHints(QPainter::Antialiasing | QPainter::TextAntialiasing);
+    annotationOverlayView->setInteractive(true);
+    annotationOverlayView->hide();
+    // Will position overlay absolutely when annotation mode is enabled
 #ifdef HAVE_QT_PDF
     // PDF view
     pdfDoc = new QPdfDocument(this);
@@ -556,6 +620,19 @@ void PreviewOverlay::setupUi()
 
     // Set initial volume
     m_gstreamerPlayer->setVolume(0.5);
+    
+    // Initialize annotation system
+    annotationLayer = new AnnotationLayer(imageScene, this);
+    annotationLayer->setParentWidget(this); // Set parent for dialogs
+    
+    // Connect annotation layer signals for immediate save
+    connect(annotationLayer, &AnnotationLayer::annotationAdded, this, [this](AnnotationItem* item) {
+        Q_UNUSED(item);
+        qDebug() << "[PreviewOverlay] Annotation added signal received - saving frame immediately";
+        saveCurrentFrameAnnotations();
+    });
+    
+    setupAnnotationToolbar();
 }
 
 void PreviewOverlay::showAsset(const QString &filePath, const QString &fileName, const QString &fileType)
@@ -817,7 +894,12 @@ void PreviewOverlay::onPlayPauseClicked()
     } else {
         // Handle video playback with GStreamer
         if (m_gstreamerPlayer->state() == GStreamerPlayer::PlaybackState::Playing) {
+            // Capture position before pausing
+            lastKnownPosition = m_gstreamerPlayer->position();
             m_gstreamerPlayer->pause();
+            // Update timecode immediately
+            qint64 durationMs = m_gstreamerPlayer->duration();
+            updateVideoTimeDisplays(lastKnownPosition, durationMs);
         } else {
             m_gstreamerPlayer->play();
         }
@@ -836,6 +918,15 @@ void PreviewOverlay::onSliderMoved(int position)
 
     // GStreamer path - always do live scrubbing
     m_gstreamerPlayer->seek(position);
+    
+    // Update timecode immediately during scrubbing
+    lastKnownPosition = position;
+    qint64 durationMs = m_gstreamerPlayer->duration();
+    updateVideoTimeDisplays(position, durationMs);
+    
+    // Don't recapture frame during drag if in annotation mode (too slow)
+    // Will update on release
+    
     controlsTimer->start();
 }
 
@@ -865,7 +956,12 @@ void PreviewOverlay::onSliderPressed()
     }
 
     wasPlayingBeforeSeek = (m_gstreamerPlayer->state() == GStreamerPlayer::PlaybackState::Playing);
+    // Capture position before pausing for seek
+    lastKnownPosition = m_gstreamerPlayer->position();
     m_gstreamerPlayer->pause();
+    // Update timecode immediately
+    qint64 durationMs = m_gstreamerPlayer->duration();
+    updateVideoTimeDisplays(lastKnownPosition, durationMs);
 }
 
 void PreviewOverlay::onSliderReleased()
@@ -880,7 +976,24 @@ void PreviewOverlay::onSliderReleased()
     }
 
     m_gstreamerPlayer->seek(pos);
-    if (wasPlayingBeforeSeek) m_gstreamerPlayer->play();
+    
+    // Calculate and explicitly track the frame number we seeked to
+    double fps = detectedFps > 0.0 ? detectedFps : 24.0;
+    lastKnownVideoFrame = static_cast<int>(qRound((pos / 1000.0) * fps));
+    qDebug() << "[PreviewOverlay] Seek to position" << pos << "ms - explicitly set frame to:" << lastKnownVideoFrame;
+    
+    // Update lastKnownPosition immediately for timecode display
+    lastKnownPosition = pos;
+    qint64 durationMs = m_gstreamerPlayer->duration();
+    updateVideoTimeDisplays(pos, durationMs);
+    
+    // If in annotation mode for video, update frame immediately
+    if (annotationModeEnabled && isVideo) {
+        updateVideoAnnotationFrame();
+    } else if (wasPlayingBeforeSeek) {
+        m_gstreamerPlayer->play();
+    }
+    
     userSeeking = false;
     controlsTimer->start();
 }
@@ -898,6 +1011,28 @@ void PreviewOverlay::onStepNextFrame()
 
     // GStreamer path - professional frame stepping
     m_gstreamerPlayer->stepForward();
+    
+    // Explicitly track frame number for frame-accurate annotations
+    if (lastKnownVideoFrame >= 0) {
+        lastKnownVideoFrame++;
+    } else {
+        // Initialize from current position
+        double fps = detectedFps > 0.0 ? detectedFps : 24.0;
+        lastKnownVideoFrame = static_cast<int>(qRound((m_gstreamerPlayer->position() / 1000.0) * fps)) + 1;
+    }
+    qDebug() << "[PreviewOverlay] Step forward - explicitly set frame to:" << lastKnownVideoFrame;
+    
+    // Wait briefly for GStreamer to update position, then update timecode
+    QTimer::singleShot(50, this, [this]() {
+        lastKnownPosition = m_gstreamerPlayer->position();
+        qint64 durationMs = m_gstreamerPlayer->duration();
+        updateVideoTimeDisplays(lastKnownPosition, durationMs);
+    });
+    
+    // If in annotation mode for video, update frame immediately
+    if (annotationModeEnabled && isVideo) {
+        updateVideoAnnotationFrame();
+    }
 }
 
 void PreviewOverlay::onStepPrevFrame()
@@ -913,6 +1048,28 @@ void PreviewOverlay::onStepPrevFrame()
 
     // GStreamer path - professional frame stepping
     m_gstreamerPlayer->stepBackward();
+    
+    // Explicitly track frame number for frame-accurate annotations
+    if (lastKnownVideoFrame >= 0) {
+        lastKnownVideoFrame = qMax(0, lastKnownVideoFrame - 1);
+    } else {
+        // Initialize from current position
+        double fps = detectedFps > 0.0 ? detectedFps : 24.0;
+        lastKnownVideoFrame = qMax(0, static_cast<int>(qRound((m_gstreamerPlayer->position() / 1000.0) * fps)) - 1);
+    }
+    qDebug() << "[PreviewOverlay] Step backward - explicitly set frame to:" << lastKnownVideoFrame;
+    
+    // Wait briefly for GStreamer to update position, then update timecode
+    QTimer::singleShot(50, this, [this]() {
+        lastKnownPosition = m_gstreamerPlayer->position();
+        qint64 durationMs = m_gstreamerPlayer->duration();
+        updateVideoTimeDisplays(lastKnownPosition, durationMs);
+    });
+    
+    // If in annotation mode for video, update frame immediately
+    if (annotationModeEnabled && isVideo) {
+        updateVideoAnnotationFrame();
+    }
 }
 
 double PreviewOverlay::frameDurationMs() const
@@ -1164,6 +1321,13 @@ void PreviewOverlay::resizeEvent(QResizeEvent *event)
     // Update video render rectangle if showing a video
     if (isVideo && videoWidget && videoWidget->isVisible()) {
         m_gstreamerPlayer->updateRenderRectangle();
+        
+        // Update annotation overlay geometry if enabled
+        if (annotationModeEnabled && annotationOverlayView && annotationOverlayView->isVisible()) {
+            QPoint overlayPos = videoWidget->mapTo(this, QPoint(0, 0));
+            annotationOverlayView->setGeometry(QRect(overlayPos, videoWidget->size()));
+            annotationOverlayScene->setSceneRect(0, 0, videoWidget->width(), videoWidget->height());
+        }
     }
 
     // Reposition nav arrows within their container on overlay resize
@@ -1208,6 +1372,59 @@ void PreviewOverlay::wheelEvent(QWheelEvent *event)
 
 bool PreviewOverlay::eventFilter(QObject* watched, QEvent* event)
 {
+    // Handle annotation mode mouse events on the scene
+    if (annotationModeEnabled && (watched == imageView || (imageView && watched == imageView->viewport()) ||
+                                  watched == annotationOverlayView || (annotationOverlayView && watched == annotationOverlayView->viewport()))) {
+        // In Select mode, let the scene handle events for item selection/movement
+        if (annotationLayer->currentMode() == AnnotationLayer::Select) {
+            return false; // Let scene handle it
+        }
+        
+        if (event->type() == QEvent::MouseButtonPress || 
+            event->type() == QEvent::MouseMove || 
+            event->type() == QEvent::MouseButtonRelease) {
+            
+            QMouseEvent* mouseEvent = static_cast<QMouseEvent*>(event);
+            
+            // Only handle left button for annotations
+            if (event->type() == QEvent::MouseButtonPress && mouseEvent->button() != Qt::LeftButton) {
+                return false; // Let other buttons through
+            }
+            
+            // Only handle move events if left button is pressed
+            if (event->type() == QEvent::MouseMove && !(mouseEvent->buttons() & Qt::LeftButton)) {
+                return false; // Not drawing
+            }
+            
+            // Convert viewport coordinates to scene coordinates
+            QGraphicsView* activeView = (watched == annotationOverlayView || watched == annotationOverlayView->viewport()) 
+                                        ? annotationOverlayView : imageView;
+            QPointF scenePos = activeView->mapToScene(mouseEvent->pos());
+            
+            // Create a scene mouse event
+            QGraphicsSceneMouseEvent sceneMouseEvent(
+                event->type() == QEvent::MouseButtonPress ? QEvent::GraphicsSceneMousePress :
+                event->type() == QEvent::MouseMove ? QEvent::GraphicsSceneMouseMove :
+                QEvent::GraphicsSceneMouseRelease
+            );
+            sceneMouseEvent.setScenePos(scenePos);
+            sceneMouseEvent.setButton(mouseEvent->button());
+            sceneMouseEvent.setButtons(mouseEvent->buttons());
+            sceneMouseEvent.setModifiers(mouseEvent->modifiers());
+            
+            // Forward to annotation layer
+            if (event->type() == QEvent::MouseButtonPress) {
+                annotationLayer->handleMousePress(&sceneMouseEvent);
+            } else if (event->type() == QEvent::MouseMove) {
+                annotationLayer->handleMouseMove(&sceneMouseEvent);
+            } else if (event->type() == QEvent::MouseButtonRelease) {
+                annotationLayer->handleMouseRelease(&sceneMouseEvent);
+            }
+            
+            return true; // Consume the event
+        }
+    }
+    
     // Handle wheel events for image/sequence zoom
     if ((watched == imageView || (imageView && watched == imageView->viewport())) && event->type() == QEvent::Wheel) {
         // Enable zoom for images (when pixmap is loaded) or sequences
@@ -1448,6 +1665,9 @@ void PreviewOverlay::showSequence(const QStringList &framePaths, const QString &
     // Update slider for sequence
     positionSlider->setRange(0, sequenceFramePaths.size() - 1);
     positionSlider->setValue(0);
+    
+    // Clear annotation markers when loading new sequence
+    positionSlider->clearAnnotatedFrames();
 
     // Update time labels
     updateSequenceTimeDisplays(0);
@@ -1465,6 +1685,11 @@ void PreviewOverlay::loadSequenceFrame(int frameIndex)
     if (frameIndex < 0 || frameIndex >= sequenceFramePaths.size()) {
         qWarning() << "[PreviewOverlay::loadSequenceFrame] Invalid frame index:" << frameIndex;
         return;
+    }
+    
+    // Save annotations for previous frame before loading new one
+    if (currentAnnotatedFrame >= 0 && currentAnnotatedFrame != frameIndex) {
+        saveCurrentFrameAnnotations();
     }
 
     currentSequenceFrame = frameIndex;
@@ -1513,10 +1738,25 @@ void PreviewOverlay::loadSequenceFrame(int frameIndex)
     }
 
     if (!originalPixmap.isNull()) {
+        // Preserve annotation items when updating frame
+        QList<QGraphicsItem*> annotationItems;
+        if (annotationLayer) {
+            for (AnnotationItem* item : annotationLayer->annotations()) {
+                annotationItems.append(item);
+            }
+        }
+        
         if (!imageItem) {
             imageItem = imageScene->addPixmap(originalPixmap);
         } else {
             imageItem->setPixmap(originalPixmap);
+        }
+        
+        // Re-add annotation items to scene after pixmap update
+        for (QGraphicsItem* item : annotationItems) {
+            if (!item->scene()) {
+                imageScene->addItem(item);
+            }
         }
         // Only update scene rect if size changed
         if (lastFrameSize != originalPixmap.size()) {
@@ -1563,6 +1803,12 @@ void PreviewOverlay::loadSequenceFrame(int frameIndex)
         positionSlider->setValue(frameIndex);
         positionSlider->blockSignals(false);
         updateSequenceTimeDisplays(frameIndex);
+    }
+    
+    // Load annotations for the new frame
+    if (annotationModeEnabled) {
+        currentAnnotatedFrame = frameIndex;
+        loadFrameAnnotations(frameIndex);
     }
 }
 
@@ -1756,6 +2002,15 @@ void PreviewOverlay::onGStreamerPositionChanged(qint64 positionMs)
 
     qint64 durationMs = m_gstreamerPlayer->duration();
     updateVideoTimeDisplays(positionMs, durationMs);
+    
+    // Store last known position for display during pause
+    lastKnownPosition = positionMs;
+    
+    // When playing back, clear the explicit frame tracking so we calculate from position
+    // This allows smooth playback while maintaining frame accuracy during pause/seek
+    if (m_gstreamerPlayer->state() == GStreamerPlayer::PlaybackState::Playing) {
+        lastKnownVideoFrame = -1; // Let calculation take over during playback
+    }
 }
 
 void PreviewOverlay::onGStreamerDurationChanged(qint64 durationMs)
@@ -1772,10 +2027,11 @@ void PreviewOverlay::onGStreamerMediaInfo(const GStreamerPlayer::MediaInfo& info
              << "Codec:" << info.codec
              << "Has Audio:" << info.hasAudio;
 
-    // Update duration display
+    // Update duration slider range
     if (info.durationMs > 0) {
         positionSlider->setRange(0, info.durationMs);
-        updateVideoTimeDisplays(0, info.durationMs);
+        // Don't reset timecode to 0 here - let GStreamer position queries handle it
+        // The position will be updated by onGStreamerPositionChanged
     }
 
     // Update FPS display
@@ -1796,6 +2052,11 @@ void PreviewOverlay::onGStreamerPlaybackStateChanged(GStreamerPlayer::PlaybackSt
         case GStreamerPlayer::PlaybackState::Paused:
         case GStreamerPlayer::PlaybackState::Stopped:
             if (playPauseBtn) playPauseBtn->setIcon(playIcon);
+            // Update time display with last known position when paused
+            if (isVideo && lastKnownPosition >= 0) {
+                qint64 durationMs = m_gstreamerPlayer->duration();
+                updateVideoTimeDisplays(lastKnownPosition, durationMs);
+            }
             break;
     }
 }
@@ -2507,5 +2768,676 @@ int SequenceFrameCache::calculateOptimalCacheSize(int percentOfFreeRAM)
     return cacheFrames;
 }
 
+// ============================================================================
+// Annotation System Implementation
+// ============================================================================
 
+void PreviewOverlay::setupAnnotationToolbar()
+{
+    // Create toolbar widget
+    annotationToolbar = new QWidget(this);
+    annotationToolbar->setStyleSheet("QWidget { background-color: rgba(0, 0, 0, 180); }");
+    annotationToolbar->setFixedHeight(60);
+    annotationToolbar->hide(); // Hidden by default
+    
+    QHBoxLayout* toolbarLayout = new QHBoxLayout(annotationToolbar);
+    toolbarLayout->setContentsMargins(10, 5, 10, 5);
+    toolbarLayout->setSpacing(10);
+    
+    // Icon button style - minimal styling to let icons show clearly
+    QString buttonStyle = "QPushButton { background-color: #444; border: none; border-radius: 4px; "
+                         "padding: 6px; min-width: 36px; min-height: 36px; }"
+                         "QPushButton:hover { background-color: #555; }"
+                         "QPushButton:checked { background-color: #58a6ff; }";
+    
+    // Load icons from Icons/Annotation folder
+    QString iconPath = QCoreApplication::applicationDirPath() + "/Icons/Annotation/";
+    
+    // Selection/move tool
+    QPushButton* selectToolBtn = new QPushButton(annotationToolbar);
+    selectToolBtn->setIcon(QIcon(iconPath + "cursor.png"));
+    selectToolBtn->setIconSize(QSize(24, 24));
+    selectToolBtn->setCheckable(true);
+    selectToolBtn->setChecked(true); // Default mode
+    selectToolBtn->setStyleSheet(buttonStyle);
+    selectToolBtn->setToolTip("Select and move annotations");
+    connect(selectToolBtn, &QPushButton::clicked, this, [this, selectToolBtn]() {
+        penToolBtn->setChecked(false);
+        textToolBtn->setChecked(false);
+        rectangleToolBtn->setChecked(false);
+        ellipseToolBtn->setChecked(false);
+        arrowToolBtn->setChecked(false);
+        selectToolBtn->setChecked(true);
+        annotationLayer->setDrawMode(AnnotationLayer::Select);
+    });
+    toolbarLayout->addWidget(selectToolBtn);
+    
+    penToolBtn = new QPushButton(annotationToolbar);
+    penToolBtn->setIcon(QIcon(iconPath + "paint.png"));
+    penToolBtn->setIconSize(QSize(24, 24));
+    penToolBtn->setCheckable(true);
+    penToolBtn->setStyleSheet(buttonStyle);
+    penToolBtn->setToolTip("Freehand drawing");
+    connect(penToolBtn, &QPushButton::clicked, this, &PreviewOverlay::onAnnotationToolSelected);
+    toolbarLayout->addWidget(penToolBtn);
+    
+    textToolBtn = new QPushButton(annotationToolbar);
+    textToolBtn->setIcon(QIcon(iconPath + "text.png"));
+    textToolBtn->setIconSize(QSize(24, 24));
+    textToolBtn->setCheckable(true);
+    textToolBtn->setStyleSheet(buttonStyle);
+    textToolBtn->setToolTip("Add text annotation");
+    connect(textToolBtn, &QPushButton::clicked, this, &PreviewOverlay::onAnnotationToolSelected);
+    toolbarLayout->addWidget(textToolBtn);
+    
+    rectangleToolBtn = new QPushButton(annotationToolbar);
+    rectangleToolBtn->setIcon(QIcon(iconPath + "Rectangle.png"));
+    rectangleToolBtn->setIconSize(QSize(24, 24));
+    rectangleToolBtn->setCheckable(true);
+    rectangleToolBtn->setStyleSheet(buttonStyle);
+    rectangleToolBtn->setToolTip("Draw rectangle");
+    connect(rectangleToolBtn, &QPushButton::clicked, this, &PreviewOverlay::onAnnotationToolSelected);
+    toolbarLayout->addWidget(rectangleToolBtn);
+    
+    ellipseToolBtn = new QPushButton(annotationToolbar);
+    ellipseToolBtn->setIcon(QIcon(iconPath + "circle.png"));
+    ellipseToolBtn->setIconSize(QSize(24, 24));
+    ellipseToolBtn->setCheckable(true);
+    ellipseToolBtn->setStyleSheet(buttonStyle);
+    ellipseToolBtn->setToolTip("Draw circle/ellipse");
+    connect(ellipseToolBtn, &QPushButton::clicked, this, &PreviewOverlay::onAnnotationToolSelected);
+    toolbarLayout->addWidget(ellipseToolBtn);
+    
+    arrowToolBtn = new QPushButton(annotationToolbar);
+    arrowToolBtn->setIcon(QIcon(iconPath + "arrow.png"));
+    arrowToolBtn->setIconSize(QSize(24, 24));
+    arrowToolBtn->setCheckable(true);
+    arrowToolBtn->setStyleSheet(buttonStyle);
+    arrowToolBtn->setToolTip("Draw arrow");
+    connect(arrowToolBtn, &QPushButton::clicked, this, &PreviewOverlay::onAnnotationToolSelected);
+    toolbarLayout->addWidget(arrowToolBtn);
+    
+    toolbarLayout->addSpacing(20);
+    
+    // Color picker button - use colored square as visual indicator
+    colorPickerBtn = new QPushButton(annotationToolbar);
+    colorPickerBtn->setFixedSize(36, 36);
+    colorPickerBtn->setStyleSheet(QString("QPushButton { background-color: %1; border: 2px solid #fff; "
+                                           "border-radius: 4px; }"
+                                           "QPushButton:hover { border: 2px solid #58a6ff; }")
+                                           .arg(annotationLayer->currentColor().name()));
+    colorPickerBtn->setToolTip("Change annotation color");
+    connect(colorPickerBtn, &QPushButton::clicked, this, &PreviewOverlay::onColorPicker);
+    toolbarLayout->addWidget(colorPickerBtn);
+    
+    // Pen width slider
+    QLabel* widthLabel = new QLabel("Width:", annotationToolbar);
+    widthLabel->setStyleSheet("QLabel { color: white; }");
+    toolbarLayout->addWidget(widthLabel);
+    
+    penWidthSlider = new QSlider(Qt::Horizontal, annotationToolbar);
+    penWidthSlider->setRange(1, 20);  // Doubled max width from 10 to 20
+    penWidthSlider->setValue(3);
+    penWidthSlider->setFixedWidth(100);
+    penWidthSlider->setStyleSheet(
+        "QSlider::groove:horizontal { background: #555; height: 4px; }"
+        "QSlider::handle:horizontal { background: #58a6ff; width: 12px; margin: -4px 0; border-radius: 6px; }"
+    );
+    connect(penWidthSlider, &QSlider::valueChanged, this, &PreviewOverlay::onPenWidthChanged);
+    toolbarLayout->addWidget(penWidthSlider);
+    
+    toolbarLayout->addStretch();
+    
+    // Undo/Redo buttons with icons
+    undoBtn = new QPushButton(annotationToolbar);
+    undoBtn->setIcon(QIcon(iconPath + "undo.png"));
+    undoBtn->setIconSize(QSize(24, 24));
+    undoBtn->setStyleSheet(buttonStyle);
+    undoBtn->setToolTip("Undo (Ctrl+Z)");
+    connect(undoBtn, &QPushButton::clicked, annotationLayer->undoStack(), &QUndoStack::undo);
+    toolbarLayout->addWidget(undoBtn);
+    
+    redoBtn = new QPushButton(annotationToolbar);
+    redoBtn->setIcon(QIcon(iconPath + "redo.png"));
+    redoBtn->setIconSize(QSize(24, 24));
+    redoBtn->setStyleSheet(buttonStyle);
+    redoBtn->setToolTip("Redo (Ctrl+Y)");
+    connect(redoBtn, &QPushButton::clicked, annotationLayer->undoStack(), &QUndoStack::redo);
+    toolbarLayout->addWidget(redoBtn);
+    
+    // Clear and save buttons with icons
+    clearAnnotationsBtn = new QPushButton(annotationToolbar);
+    clearAnnotationsBtn->setIcon(QIcon(iconPath + "clear.png"));
+    clearAnnotationsBtn->setIconSize(QSize(24, 24));
+    clearAnnotationsBtn->setStyleSheet(buttonStyle);
+    clearAnnotationsBtn->setToolTip("Clear all annotations on current frame");
+    connect(clearAnnotationsBtn, &QPushButton::clicked, this, &PreviewOverlay::onClearAnnotations);
+    toolbarLayout->addWidget(clearAnnotationsBtn);
+    
+    saveFrameBtn = new QPushButton(annotationToolbar);
+    saveFrameBtn->setIcon(QIcon(iconPath + "save.png"));
+    saveFrameBtn->setIconSize(QSize(24, 24));
+    saveFrameBtn->setStyleSheet(buttonStyle);
+    saveFrameBtn->setToolTip("Save annotated frame (Ctrl+S)");
+    connect(saveFrameBtn, &QPushButton::clicked, this, &PreviewOverlay::onSaveAnnotatedFrame);
+    toolbarLayout->addWidget(saveFrameBtn);
+    
+    saveAllFramesBtn = new QPushButton(annotationToolbar);
+    saveAllFramesBtn->setIcon(QIcon(iconPath + "save all.png"));
+    saveAllFramesBtn->setIconSize(QSize(24, 24));
+    saveAllFramesBtn->setStyleSheet(buttonStyle);
+    saveAllFramesBtn->setToolTip("Save all annotated frames");
+    saveAllFramesBtn->hide(); // Show only when multiple frames are annotated
+    connect(saveAllFramesBtn, &QPushButton::clicked, this, &PreviewOverlay::onSaveAllAnnotatedFrames);
+    toolbarLayout->addWidget(saveAllFramesBtn);
+    
+    // Insert toolbar below top bar
+    QVBoxLayout* mainLayout = qobject_cast<QVBoxLayout*>(layout());
+    if (mainLayout) {
+        mainLayout->insertWidget(1, annotationToolbar);
+    }
+}
+
+void PreviewOverlay::enableAnnotationMode(bool enable)
+{
+    annotationModeEnabled = enable;
+    
+    if (enable) {
+        // Show annotation toolbar
+        if (annotationToolbar) {
+            annotationToolbar->show();
+        }
+        
+        // Pause playback and capture position for timecode display
+        if (isVideo || isSequence) {
+            if (isVideo) {
+                // Capture current position before pausing
+                lastKnownPosition = m_gstreamerPlayer->position();
+                qDebug() << "[PreviewOverlay] Captured position before annotation mode:" << lastKnownPosition;
+                
+                if (m_gstreamerPlayer->playbackState() == GStreamerPlayer::PlaybackState::Playing) {
+                    m_gstreamerPlayer->pause();
+                }
+                
+                // Immediately update timecode display with captured position
+                qint64 durationMs = m_gstreamerPlayer->duration();
+                updateVideoTimeDisplays(lastKnownPosition, durationMs);
+            }
+            if (sequencePlaying) {
+                pauseSequence();
+            }
+        }
+        
+        // For videos, capture current frame and switch to imageView for annotation
+        // This works around Qt transparency issues with native video windows
+        if (isVideo) {
+            // Initialize explicit frame tracking from current position
+            double fps = detectedFps > 0.0 ? detectedFps : 24.0;
+            lastKnownVideoFrame = static_cast<int>(qRound((lastKnownPosition / 1000.0) * fps));
+            qDebug() << "[PreviewOverlay] Entering annotation mode - initialized frame to:" << lastKnownVideoFrame;
+            
+            QImage videoFrame = m_gstreamerPlayer->getCurrentFrame();
+            if (!videoFrame.isNull()) {
+                originalPixmap = QPixmap::fromImage(videoFrame);
+                
+                // Switch from video widget to image view
+                videoWidget->hide();
+                imageView->show();
+                
+                // Display captured frame in imageView
+                imageScene->clear();
+                imageItem = imageScene->addPixmap(originalPixmap);
+                imageScene->setSceneRect(originalPixmap.rect());
+                fitImageToView();
+                
+                qDebug() << "[PreviewOverlay] Video frame captured for annotation";
+            } else {
+                qWarning() << "[PreviewOverlay] Failed to capture video frame - annotation disabled";
+                toggleAnnotationBtn->setChecked(false);
+                annotationModeEnabled = false;
+                if (annotationToolbar) {
+                    annotationToolbar->hide();
+                }
+                return;
+            }
+            
+            // Use regular imageScene for video annotations
+            annotationLayer->setScene(imageScene);
+        } else {
+            // For images/sequences, use regular imageScene
+            annotationLayer->setScene(imageScene);
+        }
+        
+        // Enable scene interaction for annotations
+        if (imageView && imageView->isVisible()) {
+            imageView->setDragMode(QGraphicsView::NoDrag);
+            imageView->setMouseTracking(true);
+            imageView->viewport()->setMouseTracking(true);
+        }
+        
+        // Load annotations for current frame when entering annotation mode
+        int frameIndex = isSequence ? currentSequenceFrame : (isVideo ? getVideoFrameNumber() : 0);
+        currentAnnotatedFrame = frameIndex;
+        loadFrameAnnotations(frameIndex);
+        
+        // Set default to select mode (for moving/editing)
+        annotationLayer->setDrawMode(AnnotationLayer::Select);
+    } else {
+        // Save annotations before closing editor
+        saveCurrentFrameAnnotations();
+        
+        // Hide annotation toolbar
+        if (annotationToolbar) {
+            annotationToolbar->hide();
+        }
+        
+        // For videos, restore video playback
+        if (isVideo) {
+            // Clear annotations from scene (they're saved in frameAnnotations)
+            annotationLayer->clearAnnotations();
+            
+            // Switch back to video widget
+            imageView->hide();
+            videoWidget->show();
+            
+            // Clear imageScene
+            imageScene->clear();
+            imageItem = nullptr;
+            originalPixmap = QPixmap();
+            
+            qDebug() << "[PreviewOverlay] Restored video playback from annotation mode";
+        }
+        
+        // Restore normal interaction
+        if (imageView) {
+            imageView->setDragMode(QGraphicsView::ScrollHandDrag);
+            imageView->setMouseTracking(false);
+            imageView->viewport()->setMouseTracking(false);
+        }
+        
+        // Set to None mode but DON'T clear annotations - just disable editing
+        annotationLayer->setDrawMode(AnnotationLayer::None);
+    }
+}
+
+void PreviewOverlay::onToggleAnnotation()
+{
+    enableAnnotationMode(toggleAnnotationBtn->isChecked());
+}
+
+void PreviewOverlay::onAnnotationToolSelected()
+{
+    // Uncheck all tool buttons
+    penToolBtn->setChecked(false);
+    textToolBtn->setChecked(false);
+    rectangleToolBtn->setChecked(false);
+    ellipseToolBtn->setChecked(false);
+    arrowToolBtn->setChecked(false);
+    
+    // Check the clicked button and set mode
+    QPushButton* clicked = qobject_cast<QPushButton*>(sender());
+    if (clicked) {
+        clicked->setChecked(true);
+        
+        if (clicked == penToolBtn) {
+            annotationLayer->setDrawMode(AnnotationLayer::Pen);
+        } else if (clicked == textToolBtn) {
+            annotationLayer->setDrawMode(AnnotationLayer::Text);
+        } else if (clicked == rectangleToolBtn) {
+            annotationLayer->setDrawMode(AnnotationLayer::Rectangle);
+        } else if (clicked == ellipseToolBtn) {
+            annotationLayer->setDrawMode(AnnotationLayer::Ellipse);
+        } else if (clicked == arrowToolBtn) {
+            annotationLayer->setDrawMode(AnnotationLayer::Arrow);
+        }
+    }
+}
+
+void PreviewOverlay::onColorPicker()
+{
+    QColor color = QColorDialog::getColor(annotationLayer->currentColor(), this, "Select Annotation Color");
+    if (color.isValid()) {
+        annotationLayer->setCurrentColor(color);
+        // Update color picker button background
+        if (colorPickerBtn) {
+            colorPickerBtn->setStyleSheet(QString("QPushButton { background-color: %1; border: 2px solid #fff; "
+                                                   "border-radius: 4px; }"
+                                                   "QPushButton:hover { border: 2px solid #58a6ff; }")
+                                                   .arg(color.name()));
+        }
+    }
+}
+
+void PreviewOverlay::onPenWidthChanged(int width)
+{
+    annotationLayer->setCurrentPenWidth(width);
+}
+
+void PreviewOverlay::onClearAnnotations()
+{
+    annotationLayer->clearAnnotations();
+    
+    // Clear annotation marker for current frame
+    int frameIndex = isSequence ? currentAnnotatedFrame : 0;
+    if (frameIndex >= 0) {
+        frameAnnotations.remove(frameIndex);
+        annotatedFrameIndices.remove(frameIndex);
+        if (positionSlider) {
+            positionSlider->unmarkFrameAnnotated(frameIndex);
+        }
+    }
+}
+
+void PreviewOverlay::onSaveAnnotatedFrame()
+{
+    // Generate default name with pattern: {filename}_annotation_{frame}.png
+    QString baseName = QFileInfo(currentFilePath).completeBaseName();
+    int frameIndex = isSequence ? currentSequenceFrame : (isVideo ? getVideoFrameNumber() : 0);
+    QString defaultName;
+    
+    if (isSequence || isVideo) {
+        // For sequences and videos, include frame/time number
+        defaultName = QString("%1_annotation_%2.png").arg(baseName).arg(frameIndex, 4, 10, QChar('0'));
+    } else {
+        // For single images, no frame number needed
+        defaultName = baseName + "_annotation.png";
+    }
+    
+    QString filePath = QFileDialog::getSaveFileName(this, "Save Annotated Frame", defaultName,
+                                                      "PNG Image (*.png);;JPEG Image (*.jpg *.jpeg)");
+    if (!filePath.isEmpty()) {
+        QFileInfo fi(filePath);
+        QString format = fi.suffix().toLower();
+        if (format != "png" && format != "jpg" && format != "jpeg") {
+            format = "png"; // Default to PNG
+        }
+        exportAnnotatedFrame(filePath, format);
+    }
+}
+
+void PreviewOverlay::onSaveAllAnnotatedFrames()
+{
+    // Save current frame annotations before exporting all
+    if (annotationModeEnabled && currentAnnotatedFrame >= 0) {
+        qDebug() << "[PreviewOverlay] Saving current frame annotations before export all";
+        saveCurrentFrameAnnotations();
+    }
+    
+    QString directory = QFileDialog::getExistingDirectory(this, "Select Output Directory");
+    if (directory.isEmpty()) {
+        return;
+    }
+    
+    QString baseName = QFileInfo(currentFilePath).completeBaseName();
+    
+    // Save current frame/time state to restore later
+    int originalFrame = isSequence ? currentSequenceFrame : (isVideo ? getVideoFrameNumber() : 0);
+    
+    for (int frameIndex : annotatedFrameIndices) {
+        // For sequences, load the actual frame image first
+        if (isSequence && frameIndex < sequenceFramePaths.size()) {
+            loadSequenceFrame(frameIndex);
+        } else if (isVideo) {
+            // For videos, convert frame number back to time using FPS
+            double fps = detectedFps > 0.0 ? detectedFps : 24.0;
+            qint64 timeMs = static_cast<qint64>((frameIndex / fps) * 1000.0);
+            qDebug() << "[PreviewOverlay] Exporting frame" << frameIndex << "at time" << timeMs << "ms (fps:" << fps << ")";
+            m_gstreamerPlayer->seek(timeMs);
+            // Give GStreamer time to seek
+            QThread::msleep(100);
+            // Capture the frame
+            QImage videoFrame = m_gstreamerPlayer->getCurrentFrame();
+            if (!videoFrame.isNull()) {
+                originalPixmap = QPixmap::fromImage(videoFrame);
+            } else {
+                qWarning() << "[PreviewOverlay] Failed to capture video frame at time" << frameIndex;
+                continue;
+            }
+        }
+        
+        // Load annotations for this frame
+        loadFrameAnnotations(frameIndex);
+        
+        // Generate filename with pattern: {filename}_annotation_{frame}.png
+        QString fileName = QString("%1_annotation_%2.png").arg(baseName).arg(frameIndex, 4, 10, QChar('0'));
+        QString filePath = QDir(directory).filePath(fileName);
+        
+        // Export frame
+        exportAnnotatedFrame(filePath, "png");
+    }
+    
+    // Restore original frame/time
+    if (isSequence) {
+        loadSequenceFrame(originalFrame);
+        loadFrameAnnotations(originalFrame);
+    } else if (isVideo) {
+        // Convert frame number back to time
+        double fps = detectedFps > 0.0 ? detectedFps : 24.0;
+        qint64 timeMs = static_cast<qint64>((originalFrame / fps) * 1000.0);
+        m_gstreamerPlayer->seek(timeMs);
+        QThread::msleep(100);
+        QImage videoFrame = m_gstreamerPlayer->getCurrentFrame();
+        if (!videoFrame.isNull()) {
+            originalPixmap = QPixmap::fromImage(videoFrame);
+            loadFrameAnnotations(originalFrame);
+        }
+    }
+    
+    QMessageBox::information(this, "Export Complete", 
+                            QString("Exported %1 annotated frames to %2")
+                                .arg(annotatedFrameIndices.size())
+                                .arg(directory));
+}
+
+void PreviewOverlay::saveCurrentFrameAnnotations()
+{
+    qDebug() << "[PreviewOverlay] saveCurrentFrameAnnotations() called";
+    qDebug() << "  - annotationModeEnabled:" << annotationModeEnabled;
+    qDebug() << "  - currentAnnotatedFrame:" << currentAnnotatedFrame;
+    qDebug() << "  - isVideo:" << isVideo << "isSequence:" << isSequence;
+    
+    // Don't save if we never entered annotation mode on this frame
+    if (currentAnnotatedFrame < 0) {
+        qDebug() << "  - Skipping save: currentAnnotatedFrame < 0";
+        return;
+    }
+    
+    int frameIndex = isSequence ? currentAnnotatedFrame : (isVideo ? currentAnnotatedFrame : 0);
+    qDebug() << "  - Determined frameIndex:" << frameIndex;
+    
+    // Always serialize and save, even if empty (to clear previous annotations)
+    QJsonArray serialized = annotationLayer->serializeAnnotations();
+    qDebug() << "  - Serialized annotations count:" << serialized.size();
+    qDebug() << "  - Serialized JSON:" << QJsonDocument(serialized).toJson(QJsonDocument::Compact);
+    
+    if (serialized.isEmpty()) {
+        // If no annotations, remove from storage
+        qDebug() << "  - Removing frame from annotations (empty)";
+        frameAnnotations.remove(frameIndex);
+        annotatedFrameIndices.remove(frameIndex);
+        // Update timeline marker
+        if (positionSlider) {
+            // For videos, convert frame number to milliseconds for timeline marking
+            int markerPosition = frameIndex;
+            if (isVideo) {
+                double fps = detectedFps > 0.0 ? detectedFps : 24.0;
+                markerPosition = static_cast<int>((frameIndex / fps) * 1000.0);
+            }
+            positionSlider->unmarkFrameAnnotated(markerPosition);
+            qDebug() << "  - Cleared timeline marker for frame" << frameIndex;
+        }
+    } else {
+        // Save annotations
+        qDebug() << "  - Saving annotations for frame" << frameIndex;
+        frameAnnotations[frameIndex] = serialized;
+        bool wasNew = !annotatedFrameIndices.contains(frameIndex);
+        annotatedFrameIndices.insert(frameIndex);
+        qDebug() << "  - Frame was new:" << wasNew;
+        qDebug() << "  - Total annotated frames now:" << annotatedFrameIndices.size();
+        
+        // Update timeline marker
+        if (positionSlider) {
+            // For videos, convert frame number to milliseconds for timeline marking
+            int markerPosition = frameIndex;
+            if (isVideo) {
+                double fps = detectedFps > 0.0 ? detectedFps : 24.0;
+                markerPosition = static_cast<int>((frameIndex / fps) * 1000.0);
+                qDebug() << "  - Converting frame" << frameIndex << "to" << markerPosition << "ms for timeline (fps:" << fps << ")";
+            }
+            positionSlider->markFrameAnnotated(markerPosition);
+        } else {
+            qDebug() << "  - WARNING: positionSlider is null";
+        }
+    }
+    
+    // Show "Save All" button if multiple frames are annotated
+    if (saveAllFramesBtn) {
+        bool shouldShow = annotatedFrameIndices.size() > 1;
+        qDebug() << "  - Save All button should be visible:" << shouldShow << "(count:" << annotatedFrameIndices.size() << ")";
+        if (shouldShow) {
+            saveAllFramesBtn->show();
+        } else {
+            saveAllFramesBtn->hide();
+        }
+    } else {
+        qDebug() << "  - WARNING: saveAllFramesBtn is null";
+    }
+    
+    qDebug() << "[PreviewOverlay] saveCurrentFrameAnnotations() completed";
+}
+
+void PreviewOverlay::loadFrameAnnotations(int frameIndex)
+{
+    qDebug() << "[PreviewOverlay] Loading annotations for frame" << frameIndex;
+    
+    // Clear current annotations
+    annotationLayer->clearAnnotations();
+    
+    // Load annotations for this frame if they exist
+    if (frameAnnotations.contains(frameIndex)) {
+        QJsonArray data = frameAnnotations[frameIndex];
+        qDebug() << "  - Found" << data.size() << "annotations to load";
+        qDebug() << "  - JSON:" << QJsonDocument(data).toJson(QJsonDocument::Compact);
+        annotationLayer->deserializeAnnotations(data);
+        qDebug() << "  - After deserialization, annotation count:" << annotationLayer->annotationCount();
+    } else {
+        qDebug() << "  - No annotations found for this frame";
+    }
+}
+
+QImage PreviewOverlay::captureCurrentFrame()
+{
+    if (isVideo) {
+        // For video, capture current frame from GStreamer
+        QImage frame = m_gstreamerPlayer->getCurrentFrame();
+        if (frame.isNull()) {
+            qWarning() << "[PreviewOverlay] Failed to capture video frame for annotation";
+        }
+        return frame;
+    } else if (imageItem && !originalPixmap.isNull()) {
+        // For images/sequences, capture from the pixmap
+        return originalPixmap.toImage();
+    }
+    
+    return QImage();
+}
+
+void PreviewOverlay::exportAnnotatedFrame(const QString& filePath, const QString& format)
+{
+    // Capture base frame
+    QImage baseFrame = captureCurrentFrame();
+    if (baseFrame.isNull()) {
+        QMessageBox::warning(this, "Export Failed", "Could not capture current frame.");
+        return;
+    }
+    
+    // Create a painter to render annotations on top
+    QPainter painter(&baseFrame);
+    painter.setRenderHint(QPainter::Antialiasing);
+    
+    // Render only the annotation items (not the entire scene)
+    for (AnnotationItem* item : annotationLayer->annotations()) {
+        // Save painter state
+        painter.save();
+        
+        // Translate to item position
+        painter.translate(item->pos());
+        
+        // Render the item
+        item->paint(&painter, nullptr, nullptr);
+        
+        // Restore painter state
+        painter.restore();
+    }
+    
+    painter.end();
+    
+    // Save the composited image
+    if (baseFrame.save(filePath, format.toUpper().toUtf8().constData())) {
+        qDebug() << "[PreviewOverlay] Saved annotated frame to" << filePath;
+    } else {
+        QMessageBox::warning(this, "Export Failed", "Could not save file to " + filePath);
+    }
+}
+
+int PreviewOverlay::getVideoFrameNumber() const
+{
+    if (!isVideo) return 0;
+    
+    // If we have an explicitly tracked frame number from seek/step operations,
+    // use it directly for frame-perfect annotation positioning
+    if (lastKnownVideoFrame >= 0) {
+        qDebug() << "[PreviewOverlay] Using explicitly tracked frame:" << lastKnownVideoFrame;
+        return lastKnownVideoFrame;
+    }
+    
+    // Otherwise calculate from position with rounding to nearest frame
+    qint64 currentTimeMs = m_gstreamerPlayer->position();
+    double fps = detectedFps > 0.0 ? detectedFps : 24.0; // Default to 24fps if not detected
+    
+    // Calculate frame number with proper rounding to snap to frame boundaries
+    // This prevents ±1 frame drift from GStreamer position reporting
+    int frameNumber = static_cast<int>(qRound((currentTimeMs / 1000.0) * fps));
+    
+    qDebug() << "[PreviewOverlay] Frame calculation: position=" << currentTimeMs 
+             << "ms, fps=" << fps << "-> frame" << frameNumber;
+    
+    return frameNumber;
+}
+
+void PreviewOverlay::updateVideoAnnotationFrame()
+{
+    if (!isVideo || !annotationModeEnabled) {
+        return;
+    }
+    
+    // Get current frame number using FPS
+    int newFrameIndex = getVideoFrameNumber();
+    
+    // Save annotations for previous frame if it changed
+    if (currentAnnotatedFrame >= 0 && currentAnnotatedFrame != newFrameIndex) {
+        qDebug() << "[PreviewOverlay] Saving annotations for frame" << currentAnnotatedFrame << "before switching to" << newFrameIndex;
+        saveCurrentFrameAnnotations();
+    }
+    
+    // Update frame index BEFORE loading
+    int previousFrame = currentAnnotatedFrame;
+    currentAnnotatedFrame = newFrameIndex;
+    
+    // Capture new frame (this is slow but necessary for accuracy)
+    // Use a single-shot timer to avoid blocking
+    QTimer::singleShot(0, this, [this, newFrameIndex, previousFrame]() {
+        QImage videoFrame = m_gstreamerPlayer->getCurrentFrame();
+        if (!videoFrame.isNull() && imageItem) {
+            originalPixmap = QPixmap::fromImage(videoFrame);
+            imageItem->setPixmap(originalPixmap);
+            
+            // Load annotations for this frame
+            loadFrameAnnotations(newFrameIndex);
+            
+            qDebug() << "[PreviewOverlay] Updated video annotation frame at time" << newFrameIndex 
+                     << "- annotated frames:" << annotatedFrameIndices.size();
+        }
+    });
+}
 

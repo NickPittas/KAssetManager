@@ -301,6 +301,10 @@ qt_add_executable(kassetmanagerqt WIN32
     src/media/gstreamer_player.cpp
     src/theme_manager.h
     src/theme_manager.cpp
+    src/annotation_items.h
+    src/annotation_items.cpp
+    src/annotation_layer.h
+    src/annotation_layer.cpp
     ${APP_RESOURCES}
 )
 

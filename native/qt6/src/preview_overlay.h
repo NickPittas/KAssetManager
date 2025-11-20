@@ -14,6 +14,8 @@
 #include <QGraphicsSvgItem>
 #include <QComboBox>
 #include <QCheckBox>
+#include <QJsonArray>
+#include "annotation_layer.h"
 #ifdef HAVE_QT_PDF
 #include <QPdfDocument>
 #include <QPdfView>
@@ -109,6 +111,45 @@ public:
         m_cachedFrames.clear();
         update(); // Trigger repaint
     }
+    
+    /**
+     * @brief Set annotated frames (bulk update)
+     * @param frames Set of frame indices that have annotations
+     */
+    void setAnnotatedFrames(const QSet<int> &frames)
+    {
+        m_annotatedFrames = frames;
+        update(); // Trigger repaint
+    }
+    
+    /**
+     * @brief Mark a single frame as annotated
+     * @param frameIndex The frame index to mark as annotated
+     */
+    void markFrameAnnotated(int frameIndex)
+    {
+        m_annotatedFrames.insert(frameIndex);
+        update(); // Trigger repaint
+    }
+    
+    /**
+     * @brief Unmark a frame as annotated
+     * @param frameIndex The frame index to remove annotation marker
+     */
+    void unmarkFrameAnnotated(int frameIndex)
+    {
+        m_annotatedFrames.remove(frameIndex);
+        update(); // Trigger repaint
+    }
+    
+    /**
+     * @brief Clear all annotation indicators
+     */
+    void clearAnnotatedFrames()
+    {
+        m_annotatedFrames.clear();
+        update(); // Trigger repaint
+    }
 
 protected:
     // Custom paint event to draw cached frame indicators
@@ -118,8 +159,8 @@ protected:
         // First, let the base QSlider paint itself
         QSlider::paintEvent(event);
 
-        // Don't draw cache indicators if there are no cached frames
-        if (m_cachedFrames.isEmpty() || maximum() <= 0) {
+        // Don't draw indicators if we have nothing to show
+        if ((m_cachedFrames.isEmpty() && m_annotatedFrames.isEmpty()) || maximum() <= 0) {
             return;
         }
 
@@ -131,49 +172,73 @@ protected:
         initStyleOption(&opt);
         QRect grooveRect = style()->subControlRect(QStyle::CC_Slider, &opt, QStyle::SC_SliderGroove, this);
 
-        // Draw cached frame indicator as a thin red line above the groove
-        // This matches the visual style of professional video editing applications
-        const int lineHeight = 3; // Height of the cache indicator line
-        const int lineY = grooveRect.top() - lineHeight - 2; // Position above groove with 2px gap
+        // Draw indicators as thin lines above the groove
+        const int lineHeight = 3; // Height of indicator lines
+        const int cacheLineY = grooveRect.top() - lineHeight - 2; // Position above groove with 2px gap
+        const int annotationLineY = grooveRect.top() - (lineHeight * 2) - 4; // Position above cache line
 
         // Calculate the width per frame for positioning
         const int totalFrames = maximum() - minimum() + 1;
         const double pixelsPerFrame = static_cast<double>(grooveRect.width()) / totalFrames;
 
-        // Sort cached frames to find continuous ranges for efficient drawing
-        QVector<int> sortedFrames = m_cachedFrames.values();
-        std::sort(sortedFrames.begin(), sortedFrames.end());
-
-        if (sortedFrames.isEmpty()) {
-            return;
+        // Draw cached frames as red line segments
+        if (!m_cachedFrames.isEmpty()) {
+            QVector<int> sortedFrames = m_cachedFrames.values();
+            std::sort(sortedFrames.begin(), sortedFrames.end());
+            
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(QColor(220, 50, 50)); // Bright red color
+            
+            int rangeStart = sortedFrames[0];
+            int rangeEnd = sortedFrames[0];
+            
+            for (int i = 1; i <= sortedFrames.size(); ++i) {
+                if (i < sortedFrames.size() && sortedFrames[i] == rangeEnd + 1) {
+                    rangeEnd = sortedFrames[i];
+                } else {
+                    const int startOffset = rangeStart - minimum();
+                    const int endOffset = rangeEnd - minimum();
+                    const int x = grooveRect.left() + static_cast<int>(startOffset * pixelsPerFrame);
+                    const int width = std::max(1, static_cast<int>((endOffset - startOffset + 1) * pixelsPerFrame));
+                    
+                    QRect cacheRect(x, cacheLineY, width, lineHeight);
+                    painter.drawRect(cacheRect);
+                    
+                    if (i < sortedFrames.size()) {
+                        rangeStart = sortedFrames[i];
+                        rangeEnd = sortedFrames[i];
+                    }
+                }
+            }
         }
 
-        // Draw cached frames as red line segments
-        // Adjacent cached frames are merged into continuous segments for clean appearance
-        painter.setPen(Qt::NoPen);
-        painter.setBrush(QColor(220, 50, 50)); // Bright red color
-
-        int rangeStart = sortedFrames[0];
-        int rangeEnd = sortedFrames[0];
-
-        for (int i = 1; i <= sortedFrames.size(); ++i) {
-            if (i < sortedFrames.size() && sortedFrames[i] == rangeEnd + 1) {
-                // Continue the current range
-                rangeEnd = sortedFrames[i];
-            } else {
-                // Draw the current range as a red line segment
-                const int startOffset = rangeStart - minimum();
-                const int endOffset = rangeEnd - minimum();
-                const int x = grooveRect.left() + static_cast<int>(startOffset * pixelsPerFrame);
-                const int width = std::max(1, static_cast<int>((endOffset - startOffset + 1) * pixelsPerFrame));
-
-                QRect cacheRect(x, lineY, width, lineHeight);
-                painter.drawRect(cacheRect);
-
-                // Start a new range
-                if (i < sortedFrames.size()) {
-                    rangeStart = sortedFrames[i];
-                    rangeEnd = sortedFrames[i];
+        // Draw annotated frames as green line segments
+        if (!m_annotatedFrames.isEmpty()) {
+            QVector<int> sortedAnnotations = m_annotatedFrames.values();
+            std::sort(sortedAnnotations.begin(), sortedAnnotations.end());
+            
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(QColor(50, 220, 100)); // Bright green color
+            
+            int rangeStart = sortedAnnotations[0];
+            int rangeEnd = sortedAnnotations[0];
+            
+            for (int i = 1; i <= sortedAnnotations.size(); ++i) {
+                if (i < sortedAnnotations.size() && sortedAnnotations[i] == rangeEnd + 1) {
+                    rangeEnd = sortedAnnotations[i];
+                } else {
+                    const int startOffset = rangeStart - minimum();
+                    const int endOffset = rangeEnd - minimum();
+                    const int x = grooveRect.left() + static_cast<int>(startOffset * pixelsPerFrame);
+                    const int width = std::max(1, static_cast<int>((endOffset - startOffset + 1) * pixelsPerFrame));
+                    
+                    QRect annotationRect(x, annotationLineY, width, lineHeight);
+                    painter.drawRect(annotationRect);
+                    
+                    if (i < sortedAnnotations.size()) {
+                        rangeStart = sortedAnnotations[i];
+                        rangeEnd = sortedAnnotations[i];
+                    }
                 }
             }
         }
@@ -181,6 +246,7 @@ protected:
 
 private:
     QSet<int> m_cachedFrames;
+    QSet<int> m_annotatedFrames;
 };
 
 // CacheBarWidget: shows cached frames as a thin red line bar (no slider)
@@ -292,6 +358,15 @@ private slots:
     void onGStreamerPlaybackStateChanged(GStreamerPlayer::PlaybackState state);
     void onGStreamerError(const QString& errorString);
     void onGStreamerEndOfStream();
+    
+    // Annotation slots
+    void onToggleAnnotation();
+    void onAnnotationToolSelected();
+    void onColorPicker();
+    void onPenWidthChanged(int width);
+    void onClearAnnotations();
+    void onSaveAnnotatedFrame();
+    void onSaveAllAnnotatedFrames();
 
 private:
     void setupUi();
@@ -320,6 +395,16 @@ private:
     // Seeking helpers
     double frameDurationMs() const; // based on detectedFps (from metadata) or fallbackFps
     void updateDetectedFps();
+    
+    // Annotation helpers
+    void setupAnnotationToolbar();
+    void enableAnnotationMode(bool enable);
+    void saveCurrentFrameAnnotations();
+    void loadFrameAnnotations(int frameIndex);
+    QImage captureCurrentFrame();
+    void exportAnnotatedFrame(const QString& filePath, const QString& format);
+    void updateVideoAnnotationFrame(); // Update frame and handle per-frame annotations for videos
+    int getVideoFrameNumber() const; // Calculate frame number from current position and FPS
 
     // UI Components
     QGraphicsView *imageView;
@@ -381,6 +466,8 @@ private:
     bool userSeeking = false;
     bool wasPlayingBeforeSeek = false;
     double detectedFps = 0.0;
+    qint64 lastKnownPosition = -1; // Store position for display during pause
+    int lastKnownVideoFrame = -1; // Explicitly tracked frame number for annotation accuracy
     // Embedded timecode metadata (if probed via FFmpeg)
     bool hasEmbeddedTimecode = false;
     QString embeddedStartTimecode;
@@ -425,6 +512,33 @@ private:
 
     // Cache bar update throttle
     QElapsedTimer cacheBarUpdateTimer;
+    
+    // Annotation system
+    AnnotationLayer* annotationLayer;
+    bool annotationModeEnabled;
+    QWidget* annotationToolbar;
+    
+    // Annotation overlay for videos (transparent layer on top of videoWidget)
+    QGraphicsView* annotationOverlayView;
+    QGraphicsScene* annotationOverlayScene;
+    QPushButton* toggleAnnotationBtn;
+    QPushButton* penToolBtn;
+    QPushButton* textToolBtn;
+    QPushButton* rectangleToolBtn;
+    QPushButton* ellipseToolBtn;
+    QPushButton* arrowToolBtn;
+    QPushButton* colorPickerBtn;
+    QSlider* penWidthSlider;
+    QPushButton* clearAnnotationsBtn;
+    QPushButton* saveFrameBtn;
+    QPushButton* saveAllFramesBtn;
+    QPushButton* undoBtn;
+    QPushButton* redoBtn;
+    
+    // Per-frame annotation storage for sequences/videos (using JSON serialization)
+    QMap<int, QJsonArray> frameAnnotations;
+    QSet<int> annotatedFrameIndices;
+    int currentAnnotatedFrame;
 
 };
 
