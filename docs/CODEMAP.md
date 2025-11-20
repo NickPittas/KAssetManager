@@ -77,10 +77,22 @@ Key UI subsystems:
   - `ThumbnailGeneratorWorker` – `native/qt6/src/thumbnail_generator_worker.{h,cpp}`; worker that generates thumbnails via GStreamer/OIIO on background threads.
   - `ThumbnailGeneratorDialog` – `native/qt6/src/thumbnail_generator_dialog.{h,cpp}`; UI for bulk thumbnail generation over projects or folders.
 
-## 8. Preview overlay window
-- **PreviewOverlay**
-  - `PreviewOverlay` – `native/qt6/src/preview_overlay.{h,cpp}`; dedicated resizable preview window with transport controls, scrubbing, zoom/pan, color-space selection, and sequence playback.
+## 8. Preview overlay window and annotation system
+- **PreviewOverlay and core playback**
+  - `PreviewOverlay` – `native/qt6/src/preview_overlay.{h,cpp}`; dedicated resizable preview window with transport controls, scrubbing, zoom/pan, color-space selection, sequence playback, and integrated annotation mode.
   - `OfficePreview` – `native/qt6/src/office_preview.{h,cpp}`; helper used by `PreviewOverlay` to display non-media documents (PDF / Office) when supported.
+- **Annotation system**
+  - `AnnotationLayer` – `native/qt6/src/annotation_layer.{h,cpp}`; manages annotation mode, drawing tools (pen, text, rectangle, ellipse, arrow), undo/redo stack (QUndoStack), and scene integration.
+  - `AnnotationItem` and derived classes – `native/qt6/src/annotation_items.{h,cpp}`; base annotation item class with 5 concrete implementations:
+    - `TextAnnotation` – text labels with font/size/color
+    - `FreehandAnnotation` – freehand drawing paths with QPainterPath
+    - `RectangleAnnotation` – rectangle/square shapes
+    - `EllipseAnnotation` – circle/ellipse shapes
+    - `ArrowAnnotation` – arrows with directional heads
+  - All annotation items support JSON serialization/deserialization, interactive editing with resize handles, and per-frame storage in `PreviewOverlay::frameAnnotations` map.
+  - Frame-accurate positioning uses explicit frame tracking (`PreviewOverlay::lastKnownVideoFrame`) to prevent ±1 frame drift from GStreamer position queries.
+  - Timeline markers (green lines) indicate which frames contain annotations.
+  - Export workflow captures frame + annotations composite as PNG/JPG.
 
 ## 9. Search and Everything integration
 - **Everything SDK integration**

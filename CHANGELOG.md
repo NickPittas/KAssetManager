@@ -7,12 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Frame-Accurate Annotation System**: Professional annotation tools integrated into the full-screen preview overlay
+  - **5 Drawing Tools**: Freehand pen, text labels, rectangles, circles/ellipses, and arrows
+  - **Per-Frame Storage**: Each video/sequence frame maintains its own annotations with JSON serialization
+  - **Frame-Perfect Positioning**: Explicit frame tracking prevents ±1 frame drift from GStreamer position queries
+  - **Interactive Editing**: Move and resize annotations with handles, customize colors and pen widths (1-20px)
+  - **Undo/Redo**: Full QUndoStack integration with Ctrl+Z/Ctrl+Y support
+  - **Timeline Markers**: Visual green lines on timeline indicate annotated frames
+  - **Export Options**: Save individual frames or batch export all annotated frames as PNG/JPG
+  - **Keyboard Shortcuts**: `A` toggle mode, `,/.` frame step, `Del` delete annotation, `Esc` exit
+  - **Icon Integration**: Custom PNG icons for all annotation tools from `Icons/Annotation/` folder
+
 ### Changed
 - **OpenImageIO Unified Image Loading**: All still image formats (PNG, JPG, BMP, GIF, TIFF, EXR, HDR, PFM, PSD, etc.) are now handled exclusively by OpenImageIO for consistent quality, proper aspect ratio handling, and unified behavior across all formats. This eliminates redundancy with Qt's image reader and provides superior color management.
+- **GStreamer Player Enhancement**: Added `getCurrentFrame()` method for frame capture and kept position timer running in PAUSED state for accurate timecode display during annotation mode
 
 ### Fixed
 - **Grayscale Image Display**: Fixed grayscale images displaying with red tint in thumbnails and preview panes. Now properly replicates grayscale channel to all RGB channels for correct monochrome display.
 - **HDR/PFM Thumbnail Generation**: Fixed HDR (.hdr) and PFM (.pfm) files not generating thumbnails in File Manager grid view. These formats are now properly recognized as previewable.
+- **Video Frame Accuracy**: Fixed ±1 frame drift issue when annotating videos by implementing explicit frame tracking with proper rounding (`qRound()`) and storing frame numbers during seek/step operations
 
 ### Technical
 - Modified `oiio_image_loader.cpp` to use OpenImageIO for all image formats instead of just "advanced" formats

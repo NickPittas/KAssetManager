@@ -49,8 +49,18 @@ KAsset Manager is a native Windows desktop application built with Qt 6 that prov
 - **Image Sequences** - Automatic detection and playback at 24fps
 - **HDR/EXR Support** - Color space selection (Linear, sRGB, Rec.709)
 - **Hover Scrubbing** - Hold Ctrl over grid cards to scrub videos and image sequences
-
 - **Focus Restoration** - When closing full-size preview, selection and keyboard focus return to the previously selected item so you can continue navigating with arrow keys instantly
+
+#### 🖊️ **Annotation Tools**
+
+- **Frame-Accurate Annotations** - Annotate any frame of videos or image sequences with pixel-perfect accuracy
+- **5 Drawing Tools** - Freehand pen, text labels, rectangles, circles/ellipses, and arrows
+- **Per-Frame Storage** - Each frame maintains its own set of annotations
+- **Color & Width Control** - Customize annotation colors and pen widths (1-20px)
+- **Undo/Redo Support** - Full undo/redo stack for annotation edits
+- **Export Capabilities** - Save individual annotated frames or batch export all annotated frames as PNG/JPG
+- **Timeline Markers** - Visual indicators on timeline showing which frames have annotations
+- **Professional Workflow** - Pause playback, annotate, step frame-by-frame with keyboard shortcuts
 
 #### 🚀 **Performance**
 

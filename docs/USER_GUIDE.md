@@ -35,10 +35,37 @@ This guide covers day-to-day usage of KAsset Manager. The UI is designed to feel
 
 ## Preview and playback
 - Double-click to open Preview; right-click  e Preview also available
-- Images: Zoom/Pan
+- Images: Zoom/Pan with mouse wheel and drag
 - Videos and sequences: Timeline scrub; hold Ctrl over a grid card to scrub when enabled
 - HDR/EXR: Basic color space selection (Linear, sRGB, Rec.709)
 - Closing full-size preview restores focus/selection to the previously selected item for immediate keyboard navigation
+
+## Annotation tools
+- Click the **Annotate** button (top bar) to enter annotation mode
+- **Drawing tools**:
+  - **Select tool** (cursor icon) - Move and resize existing annotations
+  - **Pen tool** - Freehand drawing with customizable color and width (1-20px)
+  - **Text tool** - Add text labels with font and color selection
+  - **Rectangle tool** - Draw rectangles and squares
+  - **Circle tool** - Draw circles and ellipses
+  - **Arrow tool** - Draw directional arrows
+- **Per-frame annotations**: Each frame of a video or sequence maintains its own annotations
+- **Timeline markers**: Green lines on the timeline indicate frames with annotations
+- **Frame navigation**: Use frame step buttons (comma/period keys) or timeline scrubbing while in annotation mode
+- **Frame accuracy**: Annotations are locked to exact frame numbers, preventing drift when scrubbing
+- **Undo/Redo**: Full undo/redo support (Ctrl+Z/Ctrl+Y)
+- **Clear**: Remove all annotations from current frame
+- **Save options**:
+  - **Save Frame**: Export current annotated frame as PNG/JPG
+  - **Save All**: Batch export all annotated frames with naming pattern `{filename}_annotation_{frame}.png`
+- **Keyboard shortcuts**:
+  - `A` - Toggle annotation mode
+  - `Ctrl+Z` - Undo last annotation
+  - `Ctrl+Y` - Redo annotation
+  - `Del` - Delete selected annotation
+  - `,` (comma) - Previous frame
+  - `.` (period) - Next frame
+  - `Esc` - Exit annotation mode
 
 ## Tags and ratings
 - Right-click assets  e Assign Tag / Set Rating
