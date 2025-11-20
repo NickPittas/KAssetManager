@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Planned Features
+- Keyboard shortcuts for common operations
+- Custom metadata fields
+- Smart folders with saved searches
+- Collection sharing and export
+- Crash reporting
+
+## [1.3.0] - 2025-11-20
+
 ### Added
 - **Frame-Accurate Annotation System**: Professional annotation tools integrated into the full-screen preview overlay
   - **5 Drawing Tools**: Freehand pen, text labels, rectangles, circles/ellipses, and arrows
@@ -32,16 +41,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Modified `oiio_image_loader.cpp` to use OpenImageIO for all image formats instead of just "advanced" formats
 - Added explicit channel replication logic for grayscale (1-channel) to RGB (3-channel) conversion using `channelOrder = {0, 0, 0}`
 - Added "hdr" and "pfm" extensions to `isPreviewableSuffix()` in `mainwindow.cpp` to enable thumbnail generation
-- Updated all documentation to reflect OpenImageIO as the unified image loading backend
-
-### Planned Features
-- Keyboard shortcuts for common operations
-- Batch export functionality
-- Custom metadata fields
-- Smart folders with saved searches
-- Collection sharing and export
-- Undo/redo system
-- Crash reporting
+- Created new annotation system with 4 source files: `annotation_layer.{h,cpp}` and `annotation_items.{h,cpp}`
+- Updated CMake project version, Windows resources (app.rc), and NSIS installer metadata to 1.3.0
+- Release artifacts now use the `KAssetManager-Setup-1.3.0.exe` naming
 
 ## [1.2.0] - 2025-11-14
 
@@ -202,6 +204,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 | Version | Date | Description |
 |---------|------|-------------|
+| 1.3.0 | 2025-11-20 | Frame-accurate annotation system with 5 drawing tools, per-frame storage, undo/redo, timeline markers, batch export |
 | 1.2.0 | 2025-11-14 | File Manager network-drive performance, selection-only metadata/previews, contextual progress bar, GStreamer-only playback |
 | 1.1.0 | 2025-11-08 | Sequence-aware drag-and-drop (Explorer/Nuke/AE), file manager tree optimizations, preview pane fixes |
 | 0.2.0 | 2025-10-29 | Folder-preserving Add to Library; folders-first sorting; preview focus restore; tree sync; crash fix |
