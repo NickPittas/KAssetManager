@@ -1,8 +1,10 @@
 #include "thumbnail_generator_worker.h"
 #include "thumbnail_cache_manager.h"
 #include "media/gstreamer_player.h"
+#include "oiio_image_loader.h"
 #include <QFileInfo>
 #include <QImage>
+#include <QImageReader>
 #include <QPixmap>
 #include <QDebug>
 #include <QDir>
@@ -146,13 +148,33 @@ bool ThumbnailGeneratorWorker::generateImageThumbnail(int index, const QString& 
 {
     // Load image and generate single thumbnail
     QFileInfo fileInfo(filePath);
-    QImage image(filePath);
+
+    QImage image; // try OIIO first for advanced formats (EXR/HDR/PSD/TIFF/…)
+    if (OIIOImageLoader::isOIIOSupported(filePath)) {
+#if defined(HAVE_OPENIMAGEIO) && HAVE_OPENIMAGEIO
+        image = OIIOImageLoader::loadImage(filePath, size.width(), size.height());
+        if (image.isNull()) {
+            emit logLine(QString("  WARNING: OIIO failed to load %1; falling back to Qt reader")
+                .arg(fileInfo.fileName()));
+        }
+#else
+        emit logLine(QString("  INFO: OIIO support not compiled; using Qt image reader for %1")
+            .arg(fileInfo.fileName()));
+#endif
+    }
+
     if (image.isNull()) {
-        emit logLine(QString("  ERROR: Failed to load image - format: %1, size: %2 bytes")
-            .arg(fileInfo.suffix().toUpper())
-            .arg(fileInfo.size()));
-        emit logLine(QString("  Path: %1").arg(filePath));
-        return false;
+        // Qt reader fallback (handles PNG/JPG/BMP/TIFF/etc.)
+        QImageReader reader(filePath);
+        reader.setAutoTransform(true);
+        image = reader.read();
+        if (image.isNull()) {
+            emit logLine(QString("  ERROR: Failed to load image - format: %1, size: %2 bytes")
+                .arg(fileInfo.suffix().toUpper())
+                .arg(fileInfo.size()));
+            emit logLine(QString("  Path: %1").arg(filePath));
+            return false;
+        }
     }
 
     emit logLine(QString("  Loaded image: %1x%2, format: %3")
@@ -160,8 +182,11 @@ bool ThumbnailGeneratorWorker::generateImageThumbnail(int index, const QString& 
         .arg(image.height())
         .arg(fileInfo.suffix().toUpper()));
 
-    // Scale to thumbnail size
-    QImage scaled = image.scaled(size, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    // Ensure requested thumbnail size (OIIO path may already have resized)
+    QImage scaled = image;
+    if (!size.isEmpty() && (image.width() > size.width() || image.height() > size.height())) {
+        scaled = image.scaled(size, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    }
     QPixmap pixmap = QPixmap::fromImage(scaled);
 
     // Store in cache
@@ -254,8 +279,18 @@ bool ThumbnailGeneratorWorker::generateSequenceThumbnails(int index, const Task&
 
         QString framePath = task.sequenceFrames[frameIndex];
 
-        // Load frame
-        QImage image(framePath);
+        // Load frame (prefer OIIO for HDR/EXR/PSD/etc.)
+        QImage image;
+        if (OIIOImageLoader::isOIIOSupported(framePath)) {
+#if defined(HAVE_OPENIMAGEIO) && HAVE_OPENIMAGEIO
+            image = OIIOImageLoader::loadImage(framePath, size.width(), size.height());
+#endif
+        }
+        if (image.isNull()) {
+            QImageReader reader(framePath);
+            reader.setAutoTransform(true);
+            image = reader.read();
+        }
         if (image.isNull()) {
             emit logLine(QString("  WARNING: Failed to load frame at position %1").arg(pos));
             continue;
