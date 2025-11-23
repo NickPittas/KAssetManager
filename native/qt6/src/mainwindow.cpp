@@ -3539,11 +3539,19 @@ void MainWindow::onAssetContextMenu(const QPoint &pos)
 {
     // Get index from the currently active view
     QModelIndex index;
+    QAbstractItemView *activeView = nullptr;
     if (isGridMode) {
-        index = assetGridView->indexAt(pos);
+        activeView = assetGridView;
+        if (assetGridView)
+            index = assetGridView->indexAt(pos);
     } else {
-        index = assetTableView->indexAt(pos);
+        activeView = assetTableView;
+        if (assetTableView)
+            index = assetTableView->indexAt(pos);
     }
+
+    if (!activeView)
+        return;
 
     QMenu menu(this);
     menu.setStyleSheet(
@@ -3555,8 +3563,8 @@ void MainWindow::onAssetContextMenu(const QPoint &pos)
         // Asset context menu
         QAction *openAction = menu.addAction("Open Preview");
         QAction *showInExplorerAction = menu.addAction("Show in Explorer");
+        QAction *generateThumbAction = menu.addAction("Generate Thumbnail");
         menu.addSeparator();
-
 
         // Assign Tag submenu
         QMenu *assignTagMenu = menu.addMenu("Assign Tag");
@@ -3566,11 +3574,9 @@ void MainWindow::onAssetContextMenu(const QPoint &pos)
         for (const auto& tag : tags) {
             QAction *tagAction = assignTagMenu->addAction(tag.second);
             tagAction->setData(tag.first);
-
         }
         if (tags.isEmpty()) {
             QAction *noTagsAction = assignTagMenu->addAction("(No tags available)");
-
             noTagsAction->setEnabled(false);
         }
 
@@ -3586,9 +3592,6 @@ void MainWindow::onAssetContextMenu(const QPoint &pos)
         QAction *rating2 = setRatingMenu->addAction("★★☆☆☆");
         rating2->setData(2);
         QAction *rating3 = setRatingMenu->addAction("★★★☆☆");
-
-
-
         rating3->setData(3);
         QAction *rating4 = setRatingMenu->addAction("★★★★☆");
         rating4->setData(4);
@@ -3604,23 +3607,22 @@ void MainWindow::onAssetContextMenu(const QPoint &pos)
             bulkRenameAction = menu.addAction(QString("Bulk Rename (%1 assets)...").arg(selectedIds.size()));
         }
 
-
         // Convert to Format... only when all selected assets are supported media files
-        QAction *convertAction = nullptr; QStringList selectedAssetFilePaths;
+        QAction *convertAction = nullptr;
+        QStringList selectedAssetFilePaths;
         {
             QSet<int> ids = getSelectedAssetIds();
             if (!ids.isEmpty() && assetsModel) {
                 const int rows = assetsModel->rowCount(QModelIndex());
-                for (int r=0; r<rows; ++r) {
-                    QModelIndex mi = assetsModel->index(r,0);
+                for (int r = 0; r < rows; ++r) {
+                    QModelIndex mi = assetsModel->index(r, 0);
                     int id = mi.data(AssetsModel::IdRole).toInt();
                     if (ids.contains(id)) {
                         const QString fp = mi.data(AssetsModel::FilePathRole).toString();
-
                         if (!fp.isEmpty()) selectedAssetFilePaths << fp;
                     }
                 }
-                auto isSupportedExt = [](const QString &ext){
+                auto isSupportedExt = [](const QString &ext) {
                     static const QSet<QString> img{ "png","jpg","jpeg","tif","tiff","exr","iff","psd" };
                     static const QSet<QString> vid{ "mov","mxf","mp4","avi","mp5" };
                     return img.contains(ext) || vid.contains(ext);
@@ -3628,7 +3630,10 @@ void MainWindow::onAssetContextMenu(const QPoint &pos)
                 bool allSupported = !selectedAssetFilePaths.isEmpty();
                 for (const QString &p : selectedAssetFilePaths) {
                     QFileInfo fi(p);
-                    if (!fi.exists() || fi.isDir() || !isSupportedExt(fi.suffix().toLower())) { allSupported = false; break; }
+                    if (!fi.exists() || fi.isDir() || !isSupportedExt(fi.suffix().toLower())) {
+                        allSupported = false;
+                        break;
+                    }
                 }
                 if (allSupported) convertAction = menu.addAction("Convert to Format...");
             }
@@ -3636,30 +3641,95 @@ void MainWindow::onAssetContextMenu(const QPoint &pos)
 
         QAction *removeAction = menu.addAction("Remove from App");
 
-        QAction *selected = menu.exec(assetGridView->mapToGlobal(pos));
+        QAction *selected = menu.exec(activeView->viewport()->mapToGlobal(pos));
 
         if (selected == openAction) {
             showPreview(index.row());
         } else if (selected == showInExplorerAction) {
+#ifdef Q_OS_WIN
             QString filePath = index.data(AssetsModel::FilePathRole).toString();
-            QFileInfo fileInfo(filePath);
-            QStringList args;
-            args << "/select," + QDir::toNativeSeparators(fileInfo.absoluteFilePath());
-            QProcess::startDetached("explorer", args);
+            if (!filePath.isEmpty()) {
+                QFileInfo fileInfo(filePath);
+                QStringList args;
+                args << "/select," << QDir::toNativeSeparators(fileInfo.absoluteFilePath());
+                QProcess::startDetached("explorer", args);
+            }
+#endif
+        } else if (selected == generateThumbAction) {
+            const QString filePath = index.data(AssetsModel::FilePathRole).toString();
+            const bool isSequence = index.data(AssetsModel::IsSequenceRole).toBool();
+            const QString fileType = index.data(AssetsModel::FileTypeRole).toString().toLower();
+
+            if (!filePath.isEmpty()) {
+                QVector<ThumbnailGeneratorWorker::Task> tasks;
+                ThumbnailGeneratorWorker::Task task;
+                task.filePath = filePath;
+
+                static const QSet<QString> videoExts = {
+                    "mov", "qt", "mp4", "m4v", "mxf", "avi", "mkv", "webm",
+                    "mpg", "mpeg", "m2v", "m2ts", "mts", "wmv", "asf", "flv"
+                };
+
+                if (isSequence) {
+                    task.isSequence = true;
+                    task.isVideo = false;
+
+                    const int startFrame = index.data(AssetsModel::SequenceStartFrameRole).toInt();
+                    const int endFrame = index.data(AssetsModel::SequenceEndFrameRole).toInt();
+                    QStringList framePaths = reconstructSequenceFramePaths(filePath, startFrame, endFrame);
+                    task.sequenceFrames = framePaths;
+                } else if (videoExts.contains(fileType)) {
+                    task.isVideo = true;
+                    task.isSequence = false;
+                } else {
+                    task.isVideo = false;
+                    task.isSequence = false;
+                }
+
+                tasks.append(task);
+
+                auto *worker = new ThumbnailGeneratorWorker();
+                auto *thread = new QThread(this);
+
+                worker->moveToThread(thread);
+                connect(thread, &QThread::finished, worker, &QObject::deleteLater);
+                connect(this, &QObject::destroyed, thread, &QThread::quit);
+
+                connect(worker, &ThumbnailGeneratorWorker::queueFinished, this, [this, thread]() {
+                    if (assetGridView) assetGridView->viewport()->update();
+                    if (assetTableView) assetTableView->viewport()->update();
+                    statusBar()->showMessage("Thumbnail generation completed", 3000);
+                    thread->quit();
+                });
+
+                connect(worker, &ThumbnailGeneratorWorker::logLine, this, [](const QString &line) {
+                    qDebug() << "[ThumbnailGeneratorWorker]" << line;
+                });
+
+                thread->start(QThread::LowPriority);
+
+                ThumbnailCacheManager &cache = ThumbnailCacheManager::instance();
+                const QSize thumbnailSize = cache.getThumbnailSize();
+
+                QMetaObject::invokeMethod(worker, [worker, tasks, thumbnailSize]() {
+                    worker->start(tasks, thumbnailSize);
+                }, Qt::QueuedConnection);
+
+                statusBar()->showMessage("Generating thumbnail...", 2000);
+            }
         } else if (selected == convertAction) {
             releaseAnyPreviewLocksForPaths(selectedAssetFilePaths);
             auto *dlg = new MediaConvertDialog(selectedAssetFilePaths, this);
             dlg->setAttribute(Qt::WA_DeleteOnClose);
             connect(dlg, &QDialog::accepted, this, &MainWindow::onFmRefresh);
-            connect(dlg, &QObject::destroyed, this, [this](){ QTimer::singleShot(100, this, &MainWindow::onFmRefresh); });
+            connect(dlg, &QObject::destroyed, this, [this]() { QTimer::singleShot(100, this, &MainWindow::onFmRefresh); });
             dlg->show(); dlg->raise(); dlg->activateWindow();
-
         } else if (selected && assignTagMenu->actions().contains(selected)) {
             // Assign tag action
             int tagId = selected->data().toInt();
             QSet<int> selectedIds = getSelectedAssetIds();
             QList<int> assetIdsList = selectedIds.values();
-            QList<int> tagIds = {tagId};
+            QList<int> tagIds = { tagId };
 
             if (DB::instance().assignTagsToAssets(assetIdsList, tagIds)) {
                 updateInfoPanel();
