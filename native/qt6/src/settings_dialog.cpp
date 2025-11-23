@@ -498,7 +498,7 @@ void SettingsDialog::setupAboutTab()
     appName->setAlignment(Qt::AlignCenter);
     layout->addWidget(appName);
 
-    versionLabel = new QLabel("Version 0.1.0", aboutTab);
+    versionLabel = new QLabel(QString("Version %1").arg(QCoreApplication::applicationVersion()), aboutTab);
     versionLabel->setStyleSheet("color: #999; font-size: 12px;");
     versionLabel->setAlignment(Qt::AlignCenter);
     layout->addWidget(versionLabel);

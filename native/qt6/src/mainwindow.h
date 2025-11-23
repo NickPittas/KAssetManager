@@ -113,6 +113,10 @@ private slots:
     // Main tabs
     void onTabChanged(int index);
 
+    // Help menu
+    void onShowUserGuide();
+    void onAboutKAssetManager();
+
     // Asset Manager navigation toolbar
     void onAssetNavigateBack();
     void onAssetNavigateUp();

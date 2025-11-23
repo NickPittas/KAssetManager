@@ -1,4 +1,111 @@
-# User Guide
+#include "user_guide_dialog.h"
+#include "theme_manager.h"
+#include <QTextBrowser>
+#include <QVBoxLayout>
+#include <QPushButton>
+#include <QScrollBar>
+
+UserGuideDialog::UserGuideDialog(QWidget *parent)
+    : QDialog(parent)
+    , textBrowser(nullptr)
+{
+    setupUi();
+    loadUserGuide();
+}
+
+UserGuideDialog::~UserGuideDialog()
+{
+}
+
+void UserGuideDialog::setupUi()
+{
+    setWindowTitle("KAsset Manager - User Guide");
+    resize(900, 700);
+
+    QVBoxLayout* mainLayout = new QVBoxLayout(this);
+    mainLayout->setContentsMargins(0, 0, 0, 0);
+    mainLayout->setSpacing(0);
+
+    // Text browser for markdown content
+    textBrowser = new QTextBrowser(this);
+    textBrowser->setOpenExternalLinks(true);
+    textBrowser->setReadOnly(true);
+
+    // Apply theme-aware styling
+    bool isDark = ThemeManager::instance().currentTheme() == ThemeManager::Dark;
+    QString bgColor = isDark ? "#2b2b2b" : "#ffffff";
+    QString textColor = isDark ? "#e0e0e0" : "#000000";
+    QString linkColor = isDark ? "#4a9eff" : "#0066cc";
+    QString codeBlockBg = isDark ? "#1e1e1e" : "#f5f5f5";
+    QString codeBorder = isDark ? "#404040" : "#d0d0d0";
+    
+    textBrowser->setStyleSheet(QString(
+        "QTextBrowser {"
+        "    background-color: %1;"
+        "    color: %2;"
+        "    border: none;"
+        "    padding: 20px;"
+        "    font-size: 11pt;"
+        "    line-height: 1.6;"
+        "}"
+        "QTextBrowser a {"
+        "    color: %3;"
+        "    text-decoration: none;"
+        "}"
+        "QTextBrowser a:hover {"
+        "    text-decoration: underline;"
+        "}"
+    ).arg(bgColor, textColor, linkColor));
+
+    // Set document CSS for better markdown rendering
+    textBrowser->document()->setDefaultStyleSheet(QString(
+        "h1, h2, h3 { color: %1; margin-top: 20px; margin-bottom: 10px; }"
+        "h1 { font-size: 24pt; border-bottom: 2px solid %2; padding-bottom: 8px; }"
+        "h2 { font-size: 18pt; border-bottom: 1px solid %2; padding-bottom: 6px; }"
+        "h3 { font-size: 14pt; }"
+        "p { margin: 8px 0; }"
+        "ul, ol { margin: 8px 0; padding-left: 30px; }"
+        "li { margin: 4px 0; }"
+        "code { "
+        "    background-color: %3;"
+        "    border: 1px solid %4;"
+        "    padding: 2px 6px;"
+        "    border-radius: 3px;"
+        "    font-family: 'Consolas', 'Courier New', monospace;"
+        "    font-size: 10pt;"
+        "}"
+        "pre { "
+        "    background-color: %3;"
+        "    border: 1px solid %4;"
+        "    padding: 12px;"
+        "    border-radius: 5px;"
+        "    margin: 10px 0;"
+        "    overflow-x: auto;"
+        "}"
+        "strong { font-weight: bold; }"
+        "em { font-style: italic; }"
+    ).arg(textColor, codeBorder, codeBlockBg, codeBorder));
+
+    mainLayout->addWidget(textBrowser);
+
+    // Close button
+    QHBoxLayout* buttonLayout = new QHBoxLayout();
+    buttonLayout->setContentsMargins(10, 10, 10, 10);
+    buttonLayout->addStretch();
+    
+    QPushButton* closeButton = new QPushButton("Close", this);
+    closeButton->setMinimumWidth(100);
+    closeButton->setStyleSheet(ThemeManager::instance().buttonStyleSheet());
+    connect(closeButton, &QPushButton::clicked, this, &QDialog::accept);
+    
+    buttonLayout->addWidget(closeButton);
+    mainLayout->addLayout(buttonLayout);
+}
+
+void UserGuideDialog::loadUserGuide()
+{
+    // Embedded markdown content
+    const QString markdownContent = R"(# User Guide
 
 This guide covers day-to-day usage of KAsset Manager. The UI is designed to feel like Windows Explorer with a persistent folder tree and powerful preview, tagging, and conversion tools.
 
@@ -34,7 +141,7 @@ This guide covers day-to-day usage of KAsset Manager. The UI is designed to feel
 - Folders-first sorting (in both Grid and List) always lists folders before files
 
 ## Preview and playback
-- Double-click to open Preview; right-click  e Preview also available
+- Double-click to open Preview; right-click → Preview also available
 - Images: Zoom/Pan with mouse wheel and drag
 - Videos and sequences: Timeline scrub; hold Ctrl over a grid card to scrub when enabled
 - HDR/EXR: Basic color space selection (Linear, sRGB, Rec.709)
@@ -71,7 +178,7 @@ This guide covers day-to-day usage of KAsset Manager. The UI is designed to feel
   - `Esc` - Exit annotation mode
 
 ## Tags and ratings
-- Right-click assets  e Assign Tag / Set Rating
+- Right-click assets → Assign Tag / Set Rating
 - Tags can be created, renamed, merged, or deleted; multiple tags per asset are supported
 - 5-star rating system; filters can combine rating and tags
 
@@ -79,7 +186,6 @@ This guide covers day-to-day usage of KAsset Manager. The UI is designed to feel
 
 - Numbered image sequences are detected automatically and can be grouped (toolbar: Group Sequences)
 - First/Last frame detection is available in File Manager
-
 
 ## External drag-and-drop to other applications
 
@@ -108,7 +214,7 @@ This guide covers day-to-day usage of KAsset Manager. The UI is designed to feel
 - These actions are available in both Asset Manager grid/list views
 
 ## Logging and diagnostics
-- Log Viewer (Help  e Logs) shows recent messages (ring buffer) and writes to app.log next to the executable
+- Log Viewer (Help → Logs) shows recent messages (ring buffer) and writes to app.log next to the executable
 - Decoder/preview issues are labeled with [LivePreview] in logs; converter issues show [Convert]
 
 ## Data persistence
@@ -134,3 +240,12 @@ This guide covers day-to-day usage of KAsset Manager. The UI is designed to feel
 - **Help menu**: Access the Help menu from the menu bar for quick access to documentation and application information
 - **User Guide**: Select Help → User Guide (or press F1) to open this comprehensive user guide
 - **About KAsset Manager**: Select Help → About KAsset Manager to view application version, author, license information, and links to documentation and the GitHub repository
+)";
+
+    // Set markdown content
+    textBrowser->setMarkdown(markdownContent);
+
+    // Scroll to top
+    textBrowser->verticalScrollBar()->setValue(0);
+}
+

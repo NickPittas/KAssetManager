@@ -10,6 +10,7 @@
 #include "live_preview_manager.h"
 #include "import_progress_dialog.h"
 #include "settings_dialog.h"
+#include "user_guide_dialog.h"
 #include "star_rating_widget.h"
 #include "project_folder_watcher.h"
 #include "log_viewer_widget.h"
@@ -141,6 +142,7 @@ QHash<QString, QString> g_lastPreviewError;
 
 constexpr qreal kScrubDefaultPosition = 0.0;
 constexpr int kPreviewInset = 1; // minimize border between thumbnail and preview
+constexpr auto kGithubUrl = "https://github.com/NickPittas/KAssetManager";
 
 QRect insetPreviewRect(const QRect &source)
 {
@@ -342,6 +344,35 @@ MainWindow::~MainWindow()
 {
 }
 
+void MainWindow::onShowUserGuide()
+{
+    UserGuideDialog dialog(this);
+    dialog.exec();
+}
+
+void MainWindow::onAboutKAssetManager()
+{
+    const QString version = QCoreApplication::applicationVersion();
+
+    QString text;
+    text += "<h3>KAsset Manager</h3>";
+    if (!version.isEmpty()) {
+        text += QString("<p><b>Version:</b> %1</p>").arg(version.toHtmlEscaped());
+    }
+    text += "<p><b>Author:</b> Nick Pittas</p>";
+    text += "<p><b>License:</b> MIT License</p>";
+    text += "<p><b>Documentation:</b> Press F1 or select Help → User Guide</p>";
+    text += QString("<p><b>GitHub:</b> <a href=\"%1\">%1</a></p>")
+                .arg(QString::fromUtf8(kGithubUrl));
+
+    QMessageBox aboutBox(this);
+    aboutBox.setWindowTitle("About KAsset Manager");
+    aboutBox.setTextFormat(Qt::RichText);
+    aboutBox.setText(text);
+    aboutBox.setIcon(QMessageBox::Information);
+    aboutBox.exec();
+}
+
 void MainWindow::setupUi()
 {
     LogManager::instance().addLog("[TRACE] setupUi enter", "DEBUG");
@@ -385,6 +416,17 @@ void MainWindow::setupUi()
     QAction* dbHealthAction = toolsMenu->addAction("Database &Health...");
     dbHealthAction->setShortcut(QKeySequence("Ctrl+H"));
     connect(dbHealthAction, &QAction::triggered, this, &MainWindow::showDatabaseHealthDialog);
+
+    // Help menu
+    QMenu* helpMenu = menuBar->addMenu("&Help");
+    helpMenu->setStyleSheet(ThemeManager::instance().menuStyleSheet());
+
+    QAction* userGuideAction = helpMenu->addAction("&User Guide...");
+    userGuideAction->setShortcut(QKeySequence::HelpContents);
+    connect(userGuideAction, &QAction::triggered, this, &MainWindow::onShowUserGuide);
+
+    QAction* aboutAction = helpMenu->addAction("&About KAsset Manager...");
+    connect(aboutAction, &QAction::triggered, this, &MainWindow::onAboutKAssetManager);
 
     // Tabs: Asset Manager | File Manager
     mainTabs = new QTabWidget(this);

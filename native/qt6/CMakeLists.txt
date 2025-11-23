@@ -235,6 +235,8 @@ qt_add_executable(kassetmanagerqt WIN32
     src/import_progress_dialog.cpp
     src/settings_dialog.h
     src/settings_dialog.cpp
+    src/user_guide_dialog.h
+    src/user_guide_dialog.cpp
     src/star_rating_widget.h
     src/star_rating_widget.cpp
     src/sequence_detector.h
@@ -307,6 +309,8 @@ qt_add_executable(kassetmanagerqt WIN32
     src/annotation_layer.cpp
     ${APP_RESOURCES}
 )
+
+target_compile_definitions(kassetmanagerqt PRIVATE KAM_APP_VERSION="${PROJECT_VERSION}")
 
 target_include_directories(kassetmanagerqt PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src

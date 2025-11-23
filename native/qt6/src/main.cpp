@@ -44,6 +44,7 @@ int main(int argc, char *argv[])
     QCoreApplication::setOrganizationName("KAsset");
     QCoreApplication::setOrganizationDomain("kasset.local");
     QCoreApplication::setApplicationName("KAsset Manager Qt");
+    QCoreApplication::setApplicationVersion(QStringLiteral(KAM_APP_VERSION));
 
     // Install centralized message handler that logs via LogManager to app.log
     QString appDir = QCoreApplication::applicationDirPath();
