@@ -14,6 +14,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Collection sharing and export
 - Crash reporting
 
+## [1.3.8] - 2025-11-23
+
+### Added
+- **Help Menu**: New Help menu in the menu bar with quick access to documentation and application information
+  - **User Guide (F1)**: Opens embedded user guide dialog with beautifully rendered markdown documentation
+  - **About KAsset Manager**: Shows application version, author, license, and GitHub repository link
+- **Embedded User Guide**: Complete user documentation is now embedded in the application binary
+  - **Theme-Aware Rendering**: Automatically adapts to dark/light mode with custom CSS styling
+  - **Native Markdown Display**: Uses Qt's QTextBrowser with setMarkdown() for proper formatting
+  - **No External Dependencies**: All 137 lines of documentation embedded as C++ raw string literal
+  - **Beautiful Typography**: Custom CSS for headings, code blocks, lists, and links
+- **Full-Screen Preview Navigation Enhancements**:
+  - **Synchronized Selection**: When navigating assets in full-screen preview using arrow keys, the Asset Manager grid/list automatically highlights the currently previewed asset in the background
+  - **Persistent Selection**: When closing the full-screen preview, the Asset Manager selection remains on the last previewed asset for immediate keyboard navigation
+- **Context Menu Actions**:
+  - **Show in Explorer**: Right-click any asset and select "Show in Explorer" to open Windows Explorer with that file selected
+  - **Generate Thumbnail**: Right-click any asset (image, video, or sequence) to regenerate its thumbnail immediately
+
+### Changed
+- **Settings Dialog**: Version label now dynamically displays the application version from `QCoreApplication::applicationVersion()` instead of hard-coded string
+- **About Dialog**: Documentation link now instructs users to press F1 instead of linking to external file
+
+### Technical
+- Created `UserGuideDialog` class (`native/qt6/src/user_guide_dialog.{h,cpp}`) with embedded markdown content
+- Added Help menu to MainWindow with F1 shortcut for User Guide
+- Updated `main.cpp` to set `QCoreApplication::applicationVersion()` from CMake `PROJECT_VERSION` macro
+- Added compile definition `KAM_APP_VERSION="${PROJECT_VERSION}"` in CMakeLists.txt
+- Implemented synchronized selection in `MainWindow::showPreview()` and `MainWindow::changePreview()`
+- Added "Show in Explorer" and "Generate Thumbnail" actions to asset context menu in `MainWindow::onAssetContextMenu()`
+- Updated CMake project version, Windows resources (app.rc), and NSIS installer metadata to 1.3.8
+- Release artifacts now use the `KAssetManager-Setup-1.3.8.exe` naming
+
 ## [1.3.0] - 2025-11-20
 
 ### Added

@@ -44,6 +44,7 @@ Key UI subsystems:
 - **Dialogs and settings**
   - `ImportProgressDialog` – `native/qt6/src/import_progress_dialog.{h,cpp}`; modal dialog showing per-asset import progress and errors.
   - `SettingsDialog` – `native/qt6/src/settings_dialog.{h,cpp}`; application settings (paths, preview behaviour, keyboard shortcuts where applicable).
+  - `UserGuideDialog` – `native/qt6/src/user_guide_dialog.{h,cpp}`; embedded user guide viewer with theme-aware markdown rendering; displays comprehensive documentation without external file dependencies.
   - `BulkRenameDialog` – `native/qt6/src/bulk_rename_dialog.{h,cpp}`; batch renaming tool for assets/files with preview of name changes.
 
 ## 5. File Manager UI and file operations

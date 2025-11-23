@@ -49,7 +49,8 @@ KAsset Manager is a native Windows desktop application built with Qt 6 that prov
 - **Image Sequences** - Automatic detection and playback at 24fps
 - **HDR/EXR Support** - Color space selection (Linear, sRGB, Rec.709)
 - **Hover Scrubbing** - Hold Ctrl over grid cards to scrub videos and image sequences
-- **Focus Restoration** - When closing full-size preview, selection and keyboard focus return to the previously selected item so you can continue navigating with arrow keys instantly
+- **Synchronized Navigation** - Arrow keys navigate between assets in full-screen preview while automatically highlighting the current asset in the background grid/list
+- **Focus Restoration** - When closing full-size preview, selection and keyboard focus return to the last previewed item so you can continue navigating with arrow keys instantly
 
 #### 🖊️ **Annotation Tools**
 
@@ -100,6 +101,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-windows.ps1 
 5. **Rate Assets** - Right-click and choose "Set Rating"
 6. **Filter** - Use the filters panel on the right to search and filter assets
 7. **Preview** - Double-click an asset to open preview mode
+8. **Get Help** - Press F1 or select Help → User Guide to view the embedded documentation
 
 ## Documentation
 
@@ -188,6 +190,7 @@ SQLite database stored in persistent user data location (see [docs/INSTALL.md](d
 
 ### Getting Help
 
+- Press **F1** in the application or select **Help → User Guide** to view the embedded documentation
 - Check the **[docs/USER_GUIDE.md](docs/USER_GUIDE.md)** for detailed instructions
 - Review **[TECH.md](TECH.md)** for technical information
 - Report bugs on GitHub Issues (include steps to reproduce)
