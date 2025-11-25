@@ -35,6 +35,7 @@
 #include <QPointer>
 #include <atomic>
 #include <QElapsedTimer>
+#include <cmath>
 
 
 #include "oiio_image_loader.h"
@@ -76,6 +77,18 @@ public:
     explicit CachedFrameSlider(Qt::Orientation orientation, QWidget *parent = nullptr)
         : QSlider(orientation, parent)
     {
+    }
+
+    /**
+     * @brief Set context for drawing timeline guides
+     * @param isVideo True when slider units are milliseconds, false when units are frames
+     * @param fps Frames per second used to derive 1-second markers
+     */
+    void setTimelineContext(bool isVideo, double fps)
+    {
+        m_isVideo = isVideo;
+        m_fps = (fps > 0.0) ? fps : 24.0;
+        update();
     }
 
     /**
@@ -156,95 +169,113 @@ protected:
     // Draws a thin red line above the timeline groove showing which frames are in cache
     void paintEvent(QPaintEvent *event) override
     {
-        // First, let the base QSlider paint itself
-        QSlider::paintEvent(event);
+        Q_UNUSED(event);
 
-        // Don't draw indicators if we have nothing to show
-        if ((m_cachedFrames.isEmpty() && m_annotatedFrames.isEmpty()) || maximum() <= 0) {
-            return;
-        }
-
-        QPainter painter(this);
-        painter.setRenderHint(QPainter::Antialiasing);
-
-        // Get the groove rect (the track area where the slider moves)
         QStyleOptionSlider opt;
         initStyleOption(&opt);
         QRect grooveRect = style()->subControlRect(QStyle::CC_Slider, &opt, QStyle::SC_SliderGroove, this);
 
-        // Draw indicators as thin lines above the groove
-        const int lineHeight = 3; // Height of indicator lines
-        const int cacheLineY = grooveRect.top() - lineHeight - 2; // Position above groove with 2px gap
-        const int annotationLineY = grooveRect.top() - (lineHeight * 2) - 4; // Position above cache line
+        // Build a thicker, clip-like timeline centered on the style groove
+        const int timelineHeight = 26;
+        const int centerY = grooveRect.center().y();
+        QRectF timelineRect(grooveRect.left(), centerY - timelineHeight / 2.0, grooveRect.width(), timelineHeight);
+        timelineRect = timelineRect.intersected(rect());
 
-        // Calculate the width per frame for positioning
-        const int totalFrames = maximum() - minimum() + 1;
-        const double pixelsPerFrame = static_cast<double>(grooveRect.width()) / totalFrames;
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing);
 
-        // Draw cached frames as red line segments
-        if (!m_cachedFrames.isEmpty()) {
-            QVector<int> sortedFrames = m_cachedFrames.values();
-            std::sort(sortedFrames.begin(), sortedFrames.end());
-            
-            painter.setPen(Qt::NoPen);
-            painter.setBrush(QColor(220, 50, 50)); // Bright red color
-            
-            int rangeStart = sortedFrames[0];
-            int rangeEnd = sortedFrames[0];
-            
-            for (int i = 1; i <= sortedFrames.size(); ++i) {
-                if (i < sortedFrames.size() && sortedFrames[i] == rangeEnd + 1) {
-                    rangeEnd = sortedFrames[i];
-                } else {
-                    const int startOffset = rangeStart - minimum();
-                    const int endOffset = rangeEnd - minimum();
-                    const int x = grooveRect.left() + static_cast<int>(startOffset * pixelsPerFrame);
-                    const int width = std::max(1, static_cast<int>((endOffset - startOffset + 1) * pixelsPerFrame));
-                    
-                    QRect cacheRect(x, cacheLineY, width, lineHeight);
-                    painter.drawRect(cacheRect);
-                    
-                    if (i < sortedFrames.size()) {
-                        rangeStart = sortedFrames[i];
-                        rangeEnd = sortedFrames[i];
-                    }
-                }
+        // Base clip body
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(QColor(30, 30, 32));
+        painter.drawRoundedRect(timelineRect, 5, 5);
+        painter.setBrush(QColor(255, 255, 255, 10));
+        painter.drawRoundedRect(timelineRect.adjusted(1, 1, -1, -1), 5, 5);
+        painter.setPen(QPen(QColor(70, 70, 75), 1));
+        painter.setBrush(Qt::NoBrush);
+        painter.drawRoundedRect(timelineRect.adjusted(0.5, 0.5, -0.5, -0.5), 5, 5);
+
+        const double totalUnits = static_cast<double>(maximum() - minimum());
+        const double unitsPerSecond = m_isVideo ? 1000.0 : qMax(1.0, m_fps);
+
+        // Alternate shading for each second plus a thin guide line
+        if (totalUnits > 0.0) {
+            const double totalSeconds = totalUnits / unitsPerSecond;
+            const int stripeCount = static_cast<int>(std::ceil(totalSeconds));
+            QColor stripeLight(255, 255, 255, 18);
+            QColor stripeDark(255, 255, 255, 6);
+            QColor secondLine(255, 255, 255, 60);
+
+            for (int sec = 0; sec < stripeCount; ++sec) {
+                const double startUnit = minimum() + (sec * unitsPerSecond);
+                const double endUnit = qMin<double>(minimum() + ((sec + 1) * unitsPerSecond), maximum());
+                const double startX = timelineRect.left() + ((startUnit - minimum()) / totalUnits) * timelineRect.width();
+                const double endX = timelineRect.left() + ((endUnit - minimum()) / totalUnits) * timelineRect.width();
+
+                const QRectF stripeRect(startX, timelineRect.top() + 1, qMax(1.0, endX - startX), timelineRect.height() - 2);
+                painter.fillRect(stripeRect, (sec % 2 == 0) ? stripeLight : stripeDark);
+
+                const double tickX = qMin(endX, timelineRect.right());
+                painter.setPen(QPen(secondLine, 1));
+                painter.drawLine(QPointF(tickX, timelineRect.top() + 1), QPointF(tickX, timelineRect.bottom() - 1));
             }
         }
 
-        // Draw annotated frames as green line segments
-        if (!m_annotatedFrames.isEmpty()) {
-            QVector<int> sortedAnnotations = m_annotatedFrames.values();
-            std::sort(sortedAnnotations.begin(), sortedAnnotations.end());
-            
+        auto drawSegments = [&](const QSet<int>& values, const QColor& color, int barHeight, int topPadding) {
+            if (values.isEmpty() || totalUnits <= 0.0) return;
+            QVector<int> sorted = values.values();
+            std::sort(sorted.begin(), sorted.end());
+
             painter.setPen(Qt::NoPen);
-            painter.setBrush(QColor(50, 220, 100)); // Bright green color
-            
-            int rangeStart = sortedAnnotations[0];
-            int rangeEnd = sortedAnnotations[0];
-            
-            for (int i = 1; i <= sortedAnnotations.size(); ++i) {
-                if (i < sortedAnnotations.size() && sortedAnnotations[i] == rangeEnd + 1) {
-                    rangeEnd = sortedAnnotations[i];
+            painter.setBrush(color);
+
+            int rangeStart = sorted[0];
+            int rangeEnd = sorted[0];
+            for (int i = 1; i <= sorted.size(); ++i) {
+                if (i < sorted.size() && sorted[i] == rangeEnd + 1) {
+                    rangeEnd = sorted[i];
                 } else {
-                    const int startOffset = rangeStart - minimum();
-                    const int endOffset = rangeEnd - minimum();
-                    const int x = grooveRect.left() + static_cast<int>(startOffset * pixelsPerFrame);
-                    const int width = std::max(1, static_cast<int>((endOffset - startOffset + 1) * pixelsPerFrame));
-                    
-                    QRect annotationRect(x, annotationLineY, width, lineHeight);
-                    painter.drawRect(annotationRect);
-                    
-                    if (i < sortedAnnotations.size()) {
-                        rangeStart = sortedAnnotations[i];
-                        rangeEnd = sortedAnnotations[i];
+                    const double startX = timelineRect.left() + ((rangeStart - minimum()) / totalUnits) * timelineRect.width();
+                    const double endX = timelineRect.left() + ((rangeEnd - minimum()) / totalUnits) * timelineRect.width();
+                    const QRectF segment(startX,
+                                         timelineRect.top() + topPadding,
+                                         qMax(2.0, endX - startX),
+                                         barHeight);
+                    painter.drawRoundedRect(segment, 2, 2);
+
+                    if (i < sorted.size()) {
+                        rangeStart = sorted[i];
+                        rangeEnd = sorted[i];
                     }
                 }
             }
+        };
+
+        // Cached and annotated frame strips inside the clip
+        drawSegments(m_cachedFrames, QColor(220, 50, 50, 200), 4, 4);
+        drawSegments(m_annotatedFrames, QColor(50, 220, 100, 210), 4, static_cast<int>(timelineRect.height()) - 8);
+
+        // Playhead as a vertical line (editor-style scrubber)
+        double playheadX = timelineRect.left();
+        if (totalUnits > 0.0) {
+            playheadX = timelineRect.left() + ((value() - minimum()) / totalUnits) * timelineRect.width();
         }
+        QColor playheadColor(255, 125, 85);
+        painter.setPen(QPen(playheadColor, 2));
+        painter.drawLine(QPointF(playheadX, timelineRect.top() - 6), QPointF(playheadX, timelineRect.bottom() + 6));
+
+        painter.setBrush(playheadColor);
+        painter.setPen(Qt::NoPen);
+        const QVector<QPointF> head = {
+            QPointF(playheadX, timelineRect.top() - 8),
+            QPointF(playheadX - 6, timelineRect.top() - 1),
+            QPointF(playheadX + 6, timelineRect.top() - 1)
+        };
+        painter.drawPolygon(head.constData(), head.size());
     }
 
 private:
+    bool m_isVideo = true;
+    double m_fps = 24.0;
     QSet<int> m_cachedFrames;
     QSet<int> m_annotatedFrames;
 };

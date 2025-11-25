@@ -5,6 +5,7 @@
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QPixmap>
+#include <QPainter>
 #include <QFileInfo>
 #include <QScrollArea>
 #include <QStyle>
@@ -83,6 +84,30 @@ static QIcon loadMediaIcon(const QString& relative)
     }
     qWarning() << "[PreviewOverlay] Icon not found:" << relative;
     return QIcon();
+}
+
+// Simple tint helper to force monochrome icons to a desired color
+static QIcon tintIcon(const QIcon& base, const QColor& color)
+{
+    if (base.isNull()) return base;
+    QIcon result;
+    const QList<QIcon::Mode> modes = {QIcon::Normal, QIcon::Disabled, QIcon::Active, QIcon::Selected};
+    const QList<QIcon::State> states = {QIcon::Off, QIcon::On};
+    for (QIcon::Mode mode : modes) {
+        for (QIcon::State state : states) {
+            QPixmap pm = base.pixmap(32, 32, mode, state);
+            if (pm.isNull()) continue;
+            QPixmap tinted(pm.size());
+            tinted.fill(Qt::transparent);
+            QPainter p(&tinted);
+            p.drawPixmap(0, 0, pm);
+            p.setCompositionMode(QPainter::CompositionMode_SourceIn);
+            p.fillRect(tinted.rect(), color);
+            p.end();
+            result.addPixmap(tinted, mode, state);
+        }
+    }
+    return result.isNull() ? base : result;
 }
 
 #ifdef HAVE_FFMPEG
@@ -409,9 +434,11 @@ void PreviewOverlay::setupUi()
     positionSlider = new CachedFrameSlider(Qt::Horizontal, this);
     positionSlider->setFocusPolicy(Qt::NoFocus);
     positionSlider->setStyleSheet(
-        "QSlider::groove:horizontal { background: #555; height: 4px; }"
-        "QSlider::handle:horizontal { background: #58a6ff; width: 12px; margin: -4px 0; border-radius: 6px; }"
+        "QSlider::groove:horizontal { background: transparent; height: 28px; margin: 0 12px; }"
+        "QSlider::handle:horizontal { background: transparent; width: 18px; margin: -14px 0; }"
     );
+    positionSlider->setFixedHeight(42);
+    positionSlider->setTimelineContext(true, 24.0);
     connect(positionSlider, &QSlider::sliderMoved, this, &PreviewOverlay::onSliderMoved);
     connect(positionSlider, &QSlider::sliderPressed, this, &PreviewOverlay::onSliderPressed);
     connect(positionSlider, &QSlider::sliderReleased, this, &PreviewOverlay::onSliderReleased);
@@ -421,9 +448,9 @@ void PreviewOverlay::setupUi()
     pauseIcon = loadMediaIcon("media/Pause.png");
     prevFrameIcon = loadMediaIcon("media/Previous Frame.png");
     nextFrameIcon = loadMediaIcon("media/Next Frame.png");
-    audioIcon = loadMediaIcon("media/Audio.png");
-    muteIcon = loadMediaIcon("media/Mute.png");
-    noAudioIcon = loadMediaIcon("media/No Audio.png");
+    audioIcon = tintIcon(loadMediaIcon("media/Audio.png"), Qt::white);
+    muteIcon = tintIcon(loadMediaIcon("media/Mute.png"), Qt::white);
+    noAudioIcon = tintIcon(loadMediaIcon("media/No Audio.png"), Qt::white);
 
     // ========== ROW 1: Cache bar (red line) ==========
     cacheBar = new CacheBarWidget(this);
@@ -444,8 +471,6 @@ void PreviewOverlay::setupUi()
 
     fpsLabel = new QLabel("-- fps", this);
     fpsLabel->setStyleSheet("QLabel { color: #9aa7b0; font-size: 13px; padding: 0 8px; }");
-
-    positionSlider->setFixedHeight(20);
 
     {
         QHBoxLayout *timelineRow = new QHBoxLayout();
@@ -548,7 +573,12 @@ void PreviewOverlay::setupUi()
     volumeSlider->setRange(0, 100);
     volumeSlider->setValue(50);
     volumeSlider->setFocusPolicy(Qt::NoFocus);
-    volumeSlider->setStyleSheet(positionSlider->styleSheet());
+    volumeSlider->setStyleSheet(
+        "QSlider::groove:horizontal { background: #555; height: 4px; border-radius: 2px; }"
+        "QSlider::sub-page:horizontal { background: #58a6ff; height: 4px; border-radius: 2px; }"
+        "QSlider::add-page:horizontal { background: #333; height: 4px; border-radius: 2px; }"
+        "QSlider::handle:horizontal { background: #ffffff; border: 1px solid #58a6ff; width: 12px; margin: -6px 0; border-radius: 6px; }"
+    );
     connect(volumeSlider, &QSlider::valueChanged, this, &PreviewOverlay::onVolumeChanged);
     audioLayout->addWidget(volumeSlider);
 
@@ -639,6 +669,10 @@ void PreviewOverlay::showAsset(const QString &filePath, const QString &fileName,
 {
     // First, stop any ongoing playback (video, fallback, or sequence)
     stopPlayback();
+    detectedFps = 0.0;
+    if (positionSlider) {
+        positionSlider->clearCachedFrames();
+    }
 
     // Reset sequence state
     isSequence = false;
@@ -874,6 +908,9 @@ void PreviewOverlay::showVideo(const QString &filePath)
 
     originalPixmap = QPixmap(); // Clear the pixmap
     fitPending = true;
+
+    // Default timeline context while media info is loading
+    positionSlider->setTimelineContext(true, 24.0);
 
     // Load and play video with GStreamer
     m_gstreamerPlayer->loadMedia(filePath);
@@ -1605,20 +1642,17 @@ void PreviewOverlay::showSequence(const QStringList &framePaths, const QString &
 
         // Update the separate cache bar as frames are cached (incremental)
         connect(frameCache, &SequenceFrameCache::frameCached, this, [this](int frameIndex){
-            if (!cacheBar) return;
-            if (!cacheBarUpdateTimer.isValid()) cacheBarUpdateTimer.start();
-            if (cacheBarUpdateTimer.elapsed() >= 16) {
-                cacheBar->markFrameCached(frameIndex);
-                cacheBar->show();
+            if (!positionSlider) return;
+            if (!cacheBarUpdateTimer.isValid() || cacheBarUpdateTimer.elapsed() >= 16) {
+                positionSlider->markFrameCached(frameIndex);
                 cacheBarUpdateTimer.restart();
             }
         });
 
         // Snapshots replace stale marks when window slides or evictions happen
         connect(frameCache, &SequenceFrameCache::cacheSnapshot, this, [this](const QSet<int>& frames){
-            if (!cacheBar) return;
-            cacheBar->setCachedFrames(frames);
-            cacheBar->show();
+            if (!positionSlider) return;
+            positionSlider->setCachedFrames(frames);
         });
         // Start pre-fetching immediately (this will load frames in background)
         frameCache->startPrefetch(0);
@@ -1652,11 +1686,7 @@ void PreviewOverlay::showSequence(const QStringList &framePaths, const QString &
             imageScene->clear();
             imageItem = imageScene->addPixmap(originalPixmap);
     // Initialize cache bar for sequence
-    if (cacheBar) {
-        cacheBar->setTotalFrames(sequenceFramePaths.size());
-        cacheBar->clearCachedFrames();
-        cacheBar->show();
-    }
+    positionSlider->clearCachedFrames();
             imageScene->setSceneRect(originalPixmap.rect());
             fitImageToView();
         }
@@ -1665,6 +1695,7 @@ void PreviewOverlay::showSequence(const QStringList &framePaths, const QString &
     // Update slider for sequence
     positionSlider->setRange(0, sequenceFramePaths.size() - 1);
     positionSlider->setValue(0);
+    positionSlider->setTimelineContext(false, 24.0);
     
     // Clear annotation markers when loading new sequence
     positionSlider->clearAnnotatedFrames();
@@ -1938,11 +1969,9 @@ void PreviewOverlay::onColorSpaceChanged(int index)
         // Clear cache and reinitialize with new color space (only if cache is enabled)
         if (frameCache && useCacheForSequences) {
             frameCache->setSequence(sequenceFramePaths, currentColorSpace);
-            // Clear cache bar visualization and restart prefetch for accurate redraw
-            if (cacheBar) {
-                cacheBar->clearCachedFrames();
-                cacheBar->setTotalFrames(sequenceFramePaths.size());
-                cacheBar->show();
+            // Clear cache visualization on the timeline and restart prefetch for accurate redraw
+            if (positionSlider) {
+                positionSlider->clearCachedFrames();
             }
             frameCache->startPrefetch(currentSequenceFrame);
         }
@@ -2039,6 +2068,8 @@ void PreviewOverlay::onGStreamerMediaInfo(const GStreamerPlayer::MediaInfo& info
         detectedFps = info.fps;
         if (fpsLabel) fpsLabel->setText(QString::number(info.fps, 'f', 1) + " fps");
     }
+
+    positionSlider->setTimelineContext(true, detectedFps > 0.0 ? detectedFps : info.fps);
 }
 
 void PreviewOverlay::onGStreamerPlaybackStateChanged(GStreamerPlayer::PlaybackState state)
