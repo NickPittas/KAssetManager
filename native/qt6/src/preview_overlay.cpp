@@ -66,6 +66,7 @@
 #include <QFileDialog>
 #include <QMessageBox>
 #include <QGraphicsSceneMouseEvent>
+#include <algorithm>
 
 // Load media icons from disk without recoloring; search common install paths
 static QIcon loadMediaIcon(const QString& relative)
@@ -3193,6 +3194,14 @@ void PreviewOverlay::onSaveAllAnnotatedFrames()
         qDebug() << "[PreviewOverlay] Saving current frame annotations before export all";
         saveCurrentFrameAnnotations();
     }
+
+    // Use only frames that actually have stored annotations (skip unannotated current frame)
+    QList<int> framesToExport = frameAnnotations.keys();
+    std::sort(framesToExport.begin(), framesToExport.end());
+    if (framesToExport.isEmpty()) {
+        QMessageBox::information(this, "Export Annotated Frames", "No annotated frames to export.");
+        return;
+    }
     
     QString directory = QFileDialog::getExistingDirectory(this, "Select Output Directory");
     if (directory.isEmpty()) {
@@ -3203,8 +3212,12 @@ void PreviewOverlay::onSaveAllAnnotatedFrames()
     
     // Save current frame/time state to restore later
     int originalFrame = isSequence ? currentSequenceFrame : (isVideo ? getVideoFrameNumber() : 0);
+    GStreamerPlayer::PlaybackState originalState = m_gstreamerPlayer->state();
+    if (isVideo && originalState == GStreamerPlayer::PlaybackState::Playing) {
+        m_gstreamerPlayer->pause();
+    }
     
-    for (int frameIndex : annotatedFrameIndices) {
+    for (int frameIndex : framesToExport) {
         // For sequences, load the actual frame image first
         if (isSequence && frameIndex < sequenceFramePaths.size()) {
             loadSequenceFrame(frameIndex);
@@ -3227,6 +3240,7 @@ void PreviewOverlay::onSaveAllAnnotatedFrames()
         }
         
         // Load annotations for this frame
+        currentAnnotatedFrame = frameIndex;
         loadFrameAnnotations(frameIndex);
         
         // Generate filename with pattern: {filename}_annotation_{frame}.png
@@ -3241,6 +3255,7 @@ void PreviewOverlay::onSaveAllAnnotatedFrames()
     if (isSequence) {
         loadSequenceFrame(originalFrame);
         loadFrameAnnotations(originalFrame);
+        currentAnnotatedFrame = originalFrame;
     } else if (isVideo) {
         // Convert frame number back to time
         double fps = detectedFps > 0.0 ? detectedFps : 24.0;
@@ -3251,12 +3266,16 @@ void PreviewOverlay::onSaveAllAnnotatedFrames()
         if (!videoFrame.isNull()) {
             originalPixmap = QPixmap::fromImage(videoFrame);
             loadFrameAnnotations(originalFrame);
+            currentAnnotatedFrame = originalFrame;
+        }
+        if (originalState == GStreamerPlayer::PlaybackState::Playing) {
+            m_gstreamerPlayer->play();
         }
     }
     
     QMessageBox::information(this, "Export Complete", 
                             QString("Exported %1 annotated frames to %2")
-                                .arg(annotatedFrameIndices.size())
+                                .arg(framesToExport.size())
                                 .arg(directory));
 }
 
