@@ -14,7 +14,7 @@
 
 ; Name and file
 Name "KAsset Manager"
-OutFile "..\\dist\\KAssetManager-Setup-1.3.8.exe"
+OutFile "..\\dist\\KAssetManager-Setup-1.4.0.exe"
 
 ; Default installation folder (user-writable location)
 InstallDir "$LOCALAPPDATA\KAsset Manager"
@@ -29,13 +29,13 @@ RequestExecutionLevel user
 SetCompressor /SOLID lzma
 
 ; Version Information
-VIProductVersion "1.3.8.0"
+VIProductVersion "1.4.0.0"
 VIAddVersionKey "ProductName" "KAsset Manager"
 VIAddVersionKey "CompanyName" "Your Company Name"
 VIAddVersionKey "LegalCopyright" "Copyright (C) 2024"
 VIAddVersionKey "FileDescription" "KAsset Manager Installer"
-VIAddVersionKey "FileVersion" "1.3.8.0"
-VIAddVersionKey "ProductVersion" "1.3.8.0"
+VIAddVersionKey "FileVersion" "1.4.0.0"
+VIAddVersionKey "ProductVersion" "1.4.0.0"
 
 ;--------------------------------
 ; Interface Settings

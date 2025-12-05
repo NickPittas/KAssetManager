@@ -170,6 +170,7 @@ private slots:
     void onFmOpenOverlay();   // Space: toggle full-screen overlay
     void changeFmPreview(int delta); // Navigate in File Manager overlay
     void applyTheme(); // Apply current theme to all UI elements
+    void onFmTreeChildrenFetched(const QModelIndex &parent); // Handle async tree fetch completion
 
 private:
     QString fmPathForIndex(const QModelIndex& idx) const;
@@ -387,6 +388,11 @@ private:
     // Auto-refresh watchers for File Manager
     QFileSystemWatcher *fmDirectoryWatcher = nullptr;
     QTimer fmDirChangeTimer;
+    
+    // Navigation debouncing and async tree scrolling
+    QTimer fmNavigationDebounceTimer;
+    QString fmPendingNavigationPath;
+    QString fmPendingTreeScrollPath;  // Path waiting for async fetch to complete
 
     // Navigation history
     QStringList fmNavigationHistory;

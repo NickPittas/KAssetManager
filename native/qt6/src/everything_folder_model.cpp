@@ -11,6 +11,8 @@
 #include <QPainter>
 #include <QApplication>
 #include <QStyle>
+#include <QtConcurrent/QtConcurrentRun>
+#include <QMutexLocker>
 
 #include <algorithm>
 
@@ -34,6 +36,21 @@ EverythingFolderModel::EverythingFolderModel(QObject *parent)
 
 EverythingFolderModel::~EverythingFolderModel()
 {
+    // Cancel all pending fetches
+    for (auto *watcher : m_pendingFetches) {
+        watcher->cancel();
+        watcher->waitForFinished();
+        delete watcher;
+    }
+    m_pendingFetches.clear();
+    
+    for (auto *watcher : m_pendingPathResolves) {
+        watcher->cancel();
+        watcher->waitForFinished();
+        delete watcher;
+    }
+    m_pendingPathResolves.clear();
+    
     clear(m_root);
     m_nodesByPath.clear();
 }
@@ -41,6 +58,16 @@ EverythingFolderModel::~EverythingFolderModel()
 void EverythingFolderModel::refresh()
 {
     beginResetModel();
+    
+    // Cancel all pending fetches
+    for (auto *watcher : m_pendingFetches) {
+        watcher->cancel();
+        watcher->waitForFinished();
+        delete watcher;
+    }
+    m_pendingFetches.clear();
+    m_fetchingPaths.clear();
+    
     m_nodesByPath.clear();
     clear(m_root);
     m_root = new Node;
@@ -78,7 +105,8 @@ QModelIndex EverythingFolderModel::index(int row, int column, const QModelIndex 
     if (!node) {
         return QModelIndex();
     }
-    ensureFetched(node);
+    // DO NOT call ensureFetched here - it blocks the UI thread!
+    // The view should call canFetchMore/fetchMore for lazy loading
     if (row >= node->children.size()) {
         return QModelIndex();
     }
@@ -183,19 +211,18 @@ bool EverythingFolderModel::canFetchMore(const QModelIndex &parent) const
     if (!node) {
         return false;
     }
-    // Can fetch more if the node hasn't been fetched yet
-    return !node->fetched && node != m_root;
+    // Can fetch more if the node hasn't been fetched yet and isn't currently fetching
+    return !node->fetched && !node->fetching && node != m_root;
 }
 
 void EverythingFolderModel::fetchMore(const QModelIndex &parent)
 {
     Node *node = parent.isValid() ? static_cast<Node*>(parent.internalPointer()) : m_root;
-    if (!node || node->fetched || node == m_root) {
+    if (!node || node->fetched || node->fetching || node == m_root) {
         return;
     }
-    qInfo() << "[EverythingFolderModel] fetchMore called for node:" << node->name << "path:" << node->path;
-    fetchChildren(node);
-    qInfo() << "[EverythingFolderModel] fetchMore completed for node:" << node->name;
+    qDebug() << "[EverythingFolderModel] fetchMore (async) called for node:" << node->name << "path:" << node->path;
+    fetchChildrenAsync(node);
 }
 
 bool EverythingFolderModel::hasChildren(const QModelIndex &parent) const
@@ -249,7 +276,14 @@ QModelIndex EverythingFolderModel::indexForPath(const QString &path)
 
     for (int i = 0; i < segments.size(); ++i) {
         const QString &segment = segments.at(i);
-        ensureFetched(current);
+        
+        // If current node isn't fetched, we can't continue synchronously
+        // Return what we have and let caller use resolvePathAsync for full resolution
+        if (!current->fetched) {
+            qDebug() << "[EverythingFolderModel] indexForPath: node not fetched, returning partial index for" << current->path;
+            return currentIndex;
+        }
+        
         Node *match = nullptr;
         int row = -1;
 
@@ -287,6 +321,90 @@ QModelIndex EverythingFolderModel::indexForPath(const QString &path)
         m_nodesByPath.insert(key, current);
     }
     return currentIndex;
+}
+
+void EverythingFolderModel::resolvePathAsync(const QString &path)
+{
+    QString normalized = normalizePath(path);
+    if (normalized.isEmpty()) {
+        emit pathResolved(path, QModelIndex());
+        return;
+    }
+    
+    const QString key = normalized.toCaseFolded();
+    
+    // Check if already cached
+    if (m_nodesByPath.contains(key)) {
+        Node *node = m_nodesByPath.value(key);
+        emit pathResolved(path, createIndex(rowOfNode(node), 0, node));
+        return;
+    }
+    
+    // Check if resolution is already in progress
+    if (m_pendingPathResolves.contains(key)) {
+        return;
+    }
+    
+    QStringList segments = tokenizePath(normalized);
+    if (segments.isEmpty()) {
+        emit pathResolved(path, QModelIndex());
+        return;
+    }
+    
+    // Find how far we can go synchronously
+    Node *current = m_root;
+    int resolvedCount = 0;
+    
+    for (int i = 0; i < segments.size(); ++i) {
+        if (!current->fetched) {
+            break;
+        }
+        
+        const QString &segment = segments.at(i);
+        Node *match = nullptr;
+        
+        if (i == 0 && segment.contains(QLatin1Char(':'))) {
+            for (Node *candidate : current->children) {
+                if (candidate->path.compare(segment, Qt::CaseInsensitive) == 0) {
+                    match = candidate;
+                    break;
+                }
+            }
+        } else {
+            for (Node *candidate : current->children) {
+                if (candidate->name.compare(segment, Qt::CaseInsensitive) == 0) {
+                    match = candidate;
+                    break;
+                }
+            }
+        }
+        
+        if (!match) {
+            break;
+        }
+        
+        current = match;
+        resolvedCount = i + 1;
+    }
+    
+    // If fully resolved, emit immediately
+    if (resolvedCount == segments.size()) {
+        m_nodesByPath.insert(key, current);
+        emit pathResolved(path, createIndex(rowOfNode(current), 0, current));
+        return;
+    }
+    
+    // Need to fetch more - start async resolution
+    // First, trigger fetch for the first unfetched node
+    if (!current->fetched && !current->fetching) {
+        fetchChildrenAsync(current);
+    }
+    
+    // Store the pending request to retry when fetch completes
+    // For simplicity, we'll just retry indexForPath after each childrenFetched signal
+    // The MainWindow will handle re-calling resolvePathAsync
+    qDebug() << "[EverythingFolderModel] resolvePathAsync: need to fetch more for" << path 
+             << ", resolved" << resolvedCount << "of" << segments.size() << "segments";
 }
 
 void EverythingFolderModel::clear(Node *node)
@@ -351,45 +469,81 @@ void EverythingFolderModel::populateRoot()
     }
 }
 
-void EverythingFolderModel::ensureFetched(Node *node) const
+void EverythingFolderModel::fetchChildrenAsync(Node *node)
 {
-    if (!node || node == m_root || node->fetched) {
+    if (!node || node->fetched || node->fetching || node == m_root) {
         return;
     }
-    qInfo() << "[EverythingFolderModel] ensureFetched called for node:" << node->name << "path:" << node->path;
-    const_cast<EverythingFolderModel*>(this)->fetchChildren(node);
-    qInfo() << "[EverythingFolderModel] ensureFetched completed for node:" << node->name;
+    
+    const QString pathKey = node->path.toCaseFolded();
+    
+    // Check if already fetching this path
+    {
+        QMutexLocker locker(&m_fetchMutex);
+        if (m_fetchingPaths.contains(pathKey)) {
+            return;
+        }
+        m_fetchingPaths.insert(pathKey);
+    }
+    
+    node->fetching = true;
+    qDebug() << "[EverythingFolderModel] fetchChildrenAsync START for node:" << node->name << "path:" << node->path;
+    
+    // Create watcher for this fetch
+    auto *watcher = new QFutureWatcher<FetchResult>(this);
+    m_pendingFetches.insert(pathKey, watcher);
+    
+    // Use lambda to capture pathKey for the callback
+    connect(watcher, &QFutureWatcher<FetchResult>::finished, this, [this, watcher, pathKey]() {
+        FetchResult result = watcher->result();
+        
+        // Remove from pending
+        m_pendingFetches.remove(pathKey);
+        {
+            QMutexLocker locker(&m_fetchMutex);
+            m_fetchingPaths.remove(pathKey);
+        }
+        watcher->deleteLater();
+        
+        // Apply result on UI thread
+        applyFetchResult(result);
+    });
+    
+    // Start background fetch
+    QFuture<FetchResult> future = QtConcurrent::run(&EverythingFolderModel::fetchChildrenWorker, node->path);
+    watcher->setFuture(future);
 }
 
-void EverythingFolderModel::fetchChildren(Node *node)
+EverythingFolderModel::FetchResult EverythingFolderModel::fetchChildrenWorker(const QString &parentPath)
 {
-    if (!node || node->fetched) {
-        return;
+    FetchResult result;
+    result.nodePath = parentPath;
+    
+    if (parentPath.isEmpty()) {
+        return result;
     }
-
-    qInfo() << "[EverythingFolderModel] fetchChildren START for node:" << node->name << "path:" << node->path;
-
-    QVector<Node*> newChildren;
-
-    QString parentPath = node->path;
-    QVector<EverythingResult> results;
-    if (!parentPath.isEmpty()) {
-        const QString query = QStringLiteral("parent:\"%1\" folder:").arg(escapeQueryString(parentPath));
-        qInfo() << "[EverythingFolderModel] About to call Everything search with query:" << query;
-        results = EverythingSearch::instance().search(query, kMaxEverythingResults);
-        qInfo() << "[EverythingFolderModel] Everything search returned" << results.size() << "results";
-    }
-
-    std::sort(results.begin(), results.end(), [](const EverythingResult &a, const EverythingResult &b) {
+    
+    qDebug() << "[EverythingFolderModel] fetchChildrenWorker running in thread for:" << parentPath;
+    
+    // Try Everything SDK first
+    const QString query = QStringLiteral("parent:\"%1\" folder:").arg(parentPath);
+    QVector<EverythingResult> searchResults = EverythingSearch::instance().search(query, kMaxEverythingResults);
+    
+    qDebug() << "[EverythingFolderModel] Everything search returned" << searchResults.size() << "results for" << parentPath;
+    
+    // Sort results
+    std::sort(searchResults.begin(), searchResults.end(), [](const EverythingResult &a, const EverythingResult &b) {
         return QString::localeAwareCompare(a.fileName, b.fileName) < 0;
     });
-
+    
     QSet<QString> seen;
-    for (const EverythingResult &result : results) {
-        if (!result.isFolder) {
+    for (const EverythingResult &sr : searchResults) {
+        if (!sr.isFolder) {
             continue;
         }
-        QString childPath = normalizePath(result.fullPath);
+        QString childPath = sr.fullPath;
+        // Normalize path
+        childPath = QDir::toNativeSeparators(childPath.trimmed());
         if (childPath.isEmpty()) {
             continue;
         }
@@ -398,15 +552,16 @@ void EverythingFolderModel::fetchChildren(Node *node)
             continue;
         }
         seen.insert(key);
-        QString name = result.fileName;
-        newChildren.append(createNode(nullptr, name, childPath));
+        result.children.append(qMakePair(sr.fileName, childPath));
     }
-
-    if (newChildren.isEmpty()) {
+    
+    // Fallback to QDir if Everything returned nothing
+    if (result.children.isEmpty()) {
+        qDebug() << "[EverythingFolderModel] Falling back to QDir for:" << parentPath;
         QDir dir(parentPath);
         const QFileInfoList entries = dir.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name | QDir::IgnoreCase);
         for (const QFileInfo &entry : entries) {
-            QString childPath = normalizePath(entry.absoluteFilePath());
+            QString childPath = QDir::toNativeSeparators(entry.absoluteFilePath());
             if (childPath.isEmpty()) {
                 continue;
             }
@@ -415,16 +570,54 @@ void EverythingFolderModel::fetchChildren(Node *node)
                 continue;
             }
             seen.insert(key);
-            newChildren.append(createNode(nullptr, entry.fileName(), childPath));
+            result.children.append(qMakePair(entry.fileName(), childPath));
         }
     }
+    
+    qDebug() << "[EverythingFolderModel] fetchChildrenWorker completed with" << result.children.size() << "children";
+    return result;
+}
 
+void EverythingFolderModel::applyFetchResult(const FetchResult &result)
+{
+    const QString pathKey = result.nodePath.toCaseFolded();
+    
+    // Find the node
+    Node *node = m_nodesByPath.value(pathKey, nullptr);
+    if (!node) {
+        qWarning() << "[EverythingFolderModel] applyFetchResult: node not found for" << result.nodePath;
+        return;
+    }
+    
+    if (node->fetched) {
+        qDebug() << "[EverythingFolderModel] applyFetchResult: node already fetched" << result.nodePath;
+        node->fetching = false;
+        return;
+    }
+    
+    qDebug() << "[EverythingFolderModel] applyFetchResult applying" << result.children.size() << "children to" << result.nodePath;
+    
+    QVector<Node*> newChildren;
+    for (const auto &pair : result.children) {
+        const QString &name = pair.first;
+        const QString &childPath = pair.second;
+        const QString childKey = childPath.toCaseFolded();
+        
+        // Skip if already exists
+        if (m_nodesByPath.contains(childKey)) {
+            continue;
+        }
+        
+        newChildren.append(createNode(nullptr, name, childPath));
+    }
+    
     if (!newChildren.isEmpty()) {
         const int startRow = node->children.size();
         const int endRow = startRow + newChildren.size() - 1;
         QModelIndex parentIndex = (node->parent == nullptr || node == m_root)
             ? QModelIndex()
             : createIndex(rowOfNode(node), 0, node);
+        
         beginInsertRows(parentIndex, startRow, endRow);
         for (Node *child : newChildren) {
             child->parent = node;
@@ -433,8 +626,17 @@ void EverythingFolderModel::fetchChildren(Node *node)
         }
         endInsertRows();
     }
-
+    
     node->fetched = true;
+    node->fetching = false;
+    
+    // Emit signal so MainWindow can continue path resolution if needed
+    QModelIndex parentIndex = (node->parent == nullptr || node == m_root)
+        ? QModelIndex()
+        : createIndex(rowOfNode(node), 0, node);
+    emit childrenFetched(parentIndex);
+    
+    qDebug() << "[EverythingFolderModel] applyFetchResult completed for" << result.nodePath;
 }
 
 EverythingFolderModel::Node *EverythingFolderModel::createNode(Node *parent, const QString &name, const QString &path)

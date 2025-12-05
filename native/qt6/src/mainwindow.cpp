@@ -1277,6 +1277,11 @@ void MainWindow::setupUi()
     if (fmEverythingTreeModel && fmTree) {
         LogManager::instance().addLog("[FileManager] Setting Everything model on tree", "INFO");
         fmTree->setModel(fmEverythingTreeModel);
+        
+        // Connect to async fetch completion for deferred tree scrolling
+        connect(fmEverythingTreeModel, &EverythingFolderModel::childrenFetched,
+                this, &MainWindow::onFmTreeChildrenFetched);
+        
         LogManager::instance().addLog("[FileManager] Everything model activated", "INFO");
     }
 
@@ -2361,7 +2366,35 @@ void MainWindow::onFmTreeCurrentChanged(const QModelIndex &current, const QModel
         LogManager::instance().addLog("[FileManager] Invalid index in tree selection", "WARN");
         return;
     }
-    onFmTreeActivated(current);
+    
+    // Debounce rapid tree selection changes to avoid blocking the UI
+    // Store the pending path and reset the timer
+    QString path = fmPathForIndex(current);
+    if (path.isEmpty()) {
+        LogManager::instance().addLog("[FileManager] Empty path from tree index", "WARN");
+        return;
+    }
+    
+    fmPendingNavigationPath = path;
+    
+    // Configure debounce timer if not already done
+    if (!fmNavigationDebounceTimer.isSingleShot()) {
+        fmNavigationDebounceTimer.setSingleShot(true);
+        fmNavigationDebounceTimer.setInterval(50); // 50ms debounce
+        connect(&fmNavigationDebounceTimer, &QTimer::timeout, this, [this]() {
+            if (!fmPendingNavigationPath.isEmpty()) {
+                QString path = fmPendingNavigationPath;
+                fmPendingNavigationPath.clear();
+                
+                fmSuppressTreeSync = true;
+                fmNavigateToPath(path, true);
+                fmSuppressTreeSync = false;
+            }
+        });
+    }
+    
+    // Restart the timer - this cancels any pending navigation and starts fresh
+    fmNavigationDebounceTimer.start();
 }
 
 
@@ -7831,6 +7864,35 @@ void MainWindow::fmScrollTreeToPath(const QString& path)
 
     QModelIndex treeIdx = fmIndexForPath(path);
     if (treeIdx.isValid()) {
+        // Check if this is the full path or just a partial resolution
+        QString resolvedPath;
+        if (fmEverythingTreeModel) {
+            resolvedPath = fmEverythingTreeModel->pathForIndex(treeIdx);
+        } else if (fmTreeModel) {
+            resolvedPath = fmTreeModel->filePath(treeIdx);
+        }
+        
+        // Normalize for comparison
+        QString normalizedPath = QDir::toNativeSeparators(path);
+        QString normalizedResolved = QDir::toNativeSeparators(resolvedPath);
+        
+        if (normalizedResolved.compare(normalizedPath, Qt::CaseInsensitive) != 0) {
+            // Partial resolution - the model needs to fetch more data
+            // Store the pending path and wait for childrenFetched signal
+            fmPendingTreeScrollPath = path;
+            qDebug() << "[FileManager] fmScrollTreeToPath: partial resolution, waiting for async fetch"
+                     << "requested:" << path << "resolved:" << resolvedPath;
+            
+            // Trigger async fetch for the resolved node
+            if (fmEverythingTreeModel) {
+                fmEverythingTreeModel->resolvePathAsync(path);
+            }
+            return;
+        }
+        
+        // Full resolution - proceed with tree selection
+        fmPendingTreeScrollPath.clear();
+        
         QItemSelectionModel *sel = fmTree->selectionModel();
         QSignalBlocker blocker(sel);
 
@@ -7843,6 +7905,32 @@ void MainWindow::fmScrollTreeToPath(const QString& path)
         // Select and scroll to the folder
         fmTree->setCurrentIndex(treeIdx);
         fmTree->scrollTo(treeIdx, QAbstractItemView::PositionAtCenter);
+    } else {
+        // Index not valid - may need async fetch
+        fmPendingTreeScrollPath = path;
+        qDebug() << "[FileManager] fmScrollTreeToPath: index not valid, triggering async resolve for" << path;
+        if (fmEverythingTreeModel) {
+            fmEverythingTreeModel->resolvePathAsync(path);
+        }
+    }
+}
+
+void MainWindow::onFmTreeChildrenFetched(const QModelIndex &parent)
+{
+    Q_UNUSED(parent);
+    
+    // If we have a pending path to scroll to, try again
+    if (!fmPendingTreeScrollPath.isEmpty()) {
+        QString pendingPath = fmPendingTreeScrollPath;
+        qDebug() << "[FileManager] onFmTreeChildrenFetched: retrying scroll to" << pendingPath;
+        
+        // Clear first to avoid infinite loops
+        fmPendingTreeScrollPath.clear();
+        
+        // Retry the scroll - use a short delay to let the model update
+        QTimer::singleShot(10, this, [this, pendingPath]() {
+            fmScrollTreeToPath(pendingPath);
+        });
     }
 }
 

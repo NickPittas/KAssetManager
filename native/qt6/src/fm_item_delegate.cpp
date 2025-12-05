@@ -57,9 +57,20 @@ void FmItemDelegate::paint(QPainter *painter, const QStyleOptionViewItem &option
     QRect thumbRect(option.rect.x() + (option.rect.width()-thumbSide)/2, option.rect.y() + margin, thumbSide, thumbSide);
     const QString filePath = index.data(QFileSystemModel::FilePathRole).toString();
 
-    // Check if this is a folder
-    QFileInfo fileInfo(filePath);
-    const bool isFolder = fileInfo.isDir();
+    // Check if this is a folder by examining the path
+    // QFileSystemModel doesn't have FileTypeRole, so we check if it's a directory via the model
+    // The model knows this already from its internal cache, avoiding extra disk I/O
+    const QFileSystemModel *fsModel = qobject_cast<const QFileSystemModel*>(index.model());
+    bool isFolder = false;
+    if (fsModel) {
+        // Use isDir() method which uses cached data
+        isFolder = fsModel->isDir(index);
+    } else {
+        // Fallback: check if path ends with separator or use filename heuristic
+        // This is rare (proxy model case) - check via QFileInfo only in this case
+        QFileInfo fi(filePath);
+        isFolder = fi.isDir();
+    }
 
     bool drewPreview = false;
 
@@ -84,7 +95,13 @@ void FmItemDelegate::paint(QPainter *painter, const QStyleOptionViewItem &option
         LivePreviewManager &previewMgr = LivePreviewManager::instance();
         ThumbnailCacheManager& cacheManager = ThumbnailCacheManager::instance();
         const QSize targetSize = cacheManager.getThumbnailSize(); // Use cache's native size (256x256)
-        const QString suffix = fileInfo.suffix().toLower();
+        
+        // Extract suffix from file path directly (avoids QFileInfo construction)
+        QString suffix;
+        int dotPos = filePath.lastIndexOf(QLatin1Char('.'));
+        if (dotPos >= 0 && dotPos < filePath.length() - 1) {
+            suffix = filePath.mid(dotPos + 1).toLower();
+        }
         const bool previewable = FileUtils::isPreviewableSuffix(suffix);
 
         if (previewable) {
@@ -106,8 +123,12 @@ void FmItemDelegate::paint(QPainter *painter, const QStyleOptionViewItem &option
     }
 
     if (!drewPreview) {
-        // Try to use file type icon
-        QString suffix = fileInfo.suffix();
+        // Try to use file type icon - extract suffix from path directly
+        QString suffix;
+        int dotPos = filePath.lastIndexOf(QLatin1Char('.'));
+        if (dotPos >= 0 && dotPos < filePath.length() - 1) {
+            suffix = filePath.mid(dotPos + 1);
+        }
         QIcon fileIcon = getFileTypeIcon(suffix);
 
         QRect iconRect = insetPreviewRect(thumbRect);

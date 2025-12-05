@@ -1,50 +1,57 @@
-## KAsset Manager — AI agent guide
+## KAsset Manager - AI agent guide
 
-This repo is a native Windows app built with Qt 6 (C++). Focus on productivity by following the project’s architecture, threading, build, and testing patterns below. Keep changes minimal, safe, and aligned with existing conventions.
+Native Windows asset manager built with Qt 6 (C++20). Keep changes minimal and aligned with existing patterns.
 
-### Architecture at a glance
-- UI: Qt Widgets app (`native/qt6/src/mainwindow.*`, models under `src/*_model*.{h,cpp}`) runs on the UI thread only.
-- Background work: Use QtConcurrent/QThreadPool. Examples:
-  - Live previews: `live_preview_manager.{h,cpp}` decodes off-UI, caches pixmaps via `QCache` (LRU), posts results via queued signals.
-  - Import: `importer.{h,cpp}` batches DB inserts inside transactions and emits progress; currently uses main thread DB connection.
-- Logging: `qInstallMessageHandler(customMessageHandler)` in `main.cpp` forwards all Qt logs to `LogManager` (`log_manager.{h,cpp}`), which keeps a thread-safe ring buffer and writes `app.log` next to the exe. Don’t add new message handlers.
-- DB: SQLite via QtSql (`db.{h,cpp}`)
-  - Connection is single-threaded. Do not share QSqlDatabase/QSqlQuery across threads; open/use per-thread if you add background DB work.
-  - Batch heavy ops inside transactions; prefer prepared statements and safe IN-clause construction (see `assets_model.cpp` and `DB::getAssetIdsInFolder`).
-- Data location and migration: Use `QStandardPaths::AppDataLocation`. `main.cpp` migrates legacy `./data/kasset.db` to `%AppData%/KAsset/.../kasset.db` and writes minidumps on crash (Windows-only SEH filter).
-- External integrations:
-  - FFmpeg: optional (headers/libs) for decode/log suppression; linked when found. DLLs copied into `dist/portable/bin` during packaging.
-  - OpenImageIO: optional; guards via `HAVE_OPENIMAGEIO` for advanced image formats.
-  - Everything SDK: `everything_search*.{h,cpp}`, DLL packaged if present in `third_party/everything/Everything64.dll`.
+### Architecture
+- **UI thread only**: Qt Widgets (`mainwindow.*`, `*_model*.{h,cpp}`). Never block with I/O or heavy CPU.
+- **Background work**: `QtConcurrent::run` / QThreadPool. Return results via queued signals.
+  - `live_preview_manager.*` - decodes off-UI, uses `QCache` (LRU ~512MB), delivers via signals
+  - `importer.*` - batches DB inserts in transactions, emits progress (currently main-thread DB)
+- **DB**: SQLite via QtSql (`db.{h,cpp}`). Single-threaded connection - never share QSqlDatabase/QSqlQuery across threads. Use transactions for bulk ops; prefer prepared statements (see `assets_model.cpp`).
+- **Logging**: Single handler in `main.cpp` -> `LogManager`. Use `qDebug/qWarning/qCritical`; don't add handlers.
+- **Data path**: `QStandardPaths::AppDataLocation` (`%AppData%/KAsset/...`). Legacy migration in `main.cpp`.
 
-### Models, filtering, and DnD patterns
-- Examples: `assets_model.{h,cpp}` exposes roles (`IdRole`, `FilePathRole`, `PreviewStateRole`, etc.), coalesces resets, and debounces reloads with a single `QTimer`.
-- Filtering: keep UI responsive by rebuilding filters in-memory and querying DB once per reload (`AssetsModel::query` then `rebuildFilter`).
-- Drag-and-drop:
-  - Internal: `application/x-kasset-asset-ids` (QDataStream of IDs), `application/x-kasset-sequence-urls` (expanded paths).
-  - External: provide folder path for sequences; file URL for single files; also provide text/uri-list for DCCs.
+### Media backends
+| Purpose | Backend | Guard macro |
+|---------|---------|-------------|
+| Video/sequence playback | GStreamer | `HAVE_GSTREAMER` |
+| Still images | OpenImageIO | `HAVE_OPENIMAGEIO` |
+| Conversion only | FFmpeg | `HAVE_FFMPEG` |
+| PDF viewing | Qt PDF | `HAVE_QT_PDF[_WIDGETS]` |
 
-### Build, run, and package (Windows)
-- Preferred path is the helper script. It configures, builds, installs to a staging dir, verifies the exe, and produces a portable package:
-  - `scripts/build-windows.ps1 -Generator Ninja -Package`
-  - Output portable app: `dist/portable/bin/kassetmanagerqt.exe`
-- Environment variables auto-detected when possible:
-  - `VCPKG_ROOT` (e.g., `C:\vcpkg`), `FFMPEG_ROOT` (with include/, lib/, bin/), `IMAGEMAGICK_ROOT`.
-- CMake toggles (see `native/qt6/CMakeLists.txt`): `BUILD_APP`, `BUILD_TESTS`, `ENABLE_CLANG_TIDY`, `ENABLE_COVERAGE`, plus sanitizer flags for GCC/Clang.
+Guard optional features: `#if defined(HAVE_...) && HAVE_...`
 
-### Tests and how to run them
-- Framework: QtTest. Sources in `native/qt6/tests/` with per-test executables defined in `tests/CMakeLists.txt`.
-- Typical local flow (Windows, via the build script): tests are installed in `native/qt6/build/<gen>/install_run/bin`; `ctest` is configured by CMake. Some tests set `HAVE_OPENIMAGEIO=0`/`HAVE_FFMPEG=0` to avoid heavy deps.
+### Build (Windows)
+```powershell
+scripts/build-windows.ps1 -Generator Ninja -Package
+# Output: dist/portable/bin/kassetmanagerqt.exe
+```
+- Auto-detects `VCPKG_ROOT`, `FFMPEG_ROOT`, `IMAGEMAGICK_ROOT`, bundled GStreamer in `third_party/gstreamer`
+- CMake options: `BUILD_APP`, `BUILD_TESTS`, `ENABLE_CLANG_TIDY`, `ENABLE_ASAN`, `ENABLE_UBSAN`, `ENABLE_COVERAGE`
 
-### Conventions and safety
-- Threading: Never block the UI thread. Use signals/slots (queued connections) to return results. If you must add DB work off-UI, first introduce a per-thread QSqlDatabase and keep it private to that thread.
-- Logging: Use `qDebug/qWarning/qCritical`; `LogManager` captures and persists. Avoid sensitive data in logs.
-- Filesystem ops: Use existing helpers (e.g., `file_ops*.{h,cpp}`, `drag_utils.{h,cpp}`) and OS-native behavior for Explorer interoperability.
-- Feature flags: Gate optional deps with compile definitions (`HAVE_OPENIMAGEIO`, `HAVE_FFMPEG`, `HAVE_QT_PDF[_WIDGETS]`). Follow the existing preprocessor guard style (defined(...) && ...).
+### Tests
+- Framework: QtTest (`native/qt6/tests/`)
+- Run: after build, executables in `native/qt6/build/<gen>/install_run/bin`; use `ctest`
+- Some tests compile with `HAVE_OPENIMAGEIO=0`/`HAVE_FFMPEG=0` to skip heavy deps
 
-### When adding features
-- Wire UI via `MainWindow` and existing models. Keep long work off-UI; prefer `QtConcurrent::run` and post results back.
-- Reuse the packaging hooks in `CMakeLists.txt` to deploy Qt plugins, vcpkg DLLs, FFmpeg, Everything DLL, and icons.
-- Follow the existing drag-and-drop and sequence handling conventions when integrating new viewers/converters.
+### Key patterns
+- **Models**: `AssetsModel` exposes roles (`IdRole`, `FilePathRole`, etc.), debounces reloads via `QTimer` (100ms)
+- **Sequences**: `sequence_detector.*` handles image sequence detection, gap analysis, and version tracking. Sequences stored as single DB rows with frame range metadata.
+- **Annotations**: `annotation_layer.*` and `annotation_items.*` provide frame-accurate drawing tools (pen, text, shapes, arrows) with per-frame storage and export.
+- **Drag-and-drop**: Internal MIME `application/x-kasset-asset-ids`; external uses `text/uri-list` + folder paths for sequences
+- **File ops**: Use `file_ops.*`, `drag_utils.*`; shell integration for Explorer interop
+- **Everything SDK**: Fast disk search via `everything_search*.{h,cpp}`, DLL in `third_party/everything/`
 
-References to study first: `docs/ARCHITECTURE.md`, `docs/DEVELOPER_GUIDE.md`, `native/qt6/CMakeLists.txt`, `src/main.cpp`, `src/assets_model.cpp`, `src/live_preview_manager.cpp`, `scripts/build-windows.ps1`.
+### File Manager performance
+- **Tree expansion**: Folder-only - never trigger file enumeration, shell icon lookups, or metadata/preview work when expanding nodes
+- **Preview/Info panes**: Only invoke `LivePreviewManager` and metadata readers on explicit selection AND when panes are visible
+- **Lazy loading**: Decode only when items enter the viewport; use `FileOpsQueue` for shell operations
+
+### Adding features
+1. Wire UI via `MainWindow` and existing models
+2. Long work -> `QtConcurrent::run`, post back via signals
+3. New optional deps -> add CMake detection + `HAVE_*` guard
+4. Reuse packaging hooks in `CMakeLists.txt` for DLL deployment
+
+### Key files
+`docs/ARCHITECTURE.md`, `docs/DEVELOPER_GUIDE.md`, `native/qt6/CMakeLists.txt`, `src/main.cpp`, `src/assets_model.cpp`, `src/live_preview_manager.cpp`, `scripts/build-windows.ps1`
