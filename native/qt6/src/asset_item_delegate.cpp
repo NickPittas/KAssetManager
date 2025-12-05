@@ -10,6 +10,24 @@
 namespace {
     constexpr int kPreviewInset = 1; // minimize border between thumbnail and preview
 
+    // Cached fonts to avoid construction in paint() - significant performance win
+    static const QFont& nameFont() {
+        static QFont font("Segoe UI", 9);
+        return font;
+    }
+    static const QFont& placeholderFont() {
+        static QFont font("Segoe UI", 9, QFont::Medium);
+        return font;
+    }
+    static const QFont& badgeFont() {
+        static QFont font("Segoe UI", 10, QFont::Bold);
+        return font;
+    }
+    static const QFont& warningBadgeFont() {
+        static QFont font("Segoe UI", 14, QFont::Bold);
+        return font;
+    }
+
     QRect insetPreviewRect(const QRect &source)
     {
         QRect result = source.adjusted(kPreviewInset, kPreviewInset, -kPreviewInset, -kPreviewInset);
@@ -126,8 +144,7 @@ void AssetItemDelegate::paint(QPainter *painter, const QStyleOptionViewItem &opt
             QString label = fileType.toUpper();
             if (label.isEmpty()) label = suffix.toUpper();
             if (label.isEmpty()) label = "FILE";
-            QFont placeholder("Segoe UI", 9, QFont::Medium);
-            painter->setFont(placeholder);
+            painter->setFont(placeholderFont());
             painter->setPen(ThemeManager::instance().textColorSecondary());
             painter->drawText(thumbRect.adjusted(10,10,-10,-10), Qt::AlignCenter | Qt::TextWordWrap, label.left(6));
         }
@@ -144,8 +161,7 @@ void AssetItemDelegate::paint(QPainter *painter, const QStyleOptionViewItem &opt
 
             // Draw checkmark icon
             painter->setPen(QPen(QColor(255, 255, 255), 2)); // Always white on blue badge
-            QFont badgeFont("Segoe UI", 10, QFont::Bold);
-            painter->setFont(badgeFont);
+            painter->setFont(badgeFont());
             painter->drawText(badgeRect, Qt::AlignCenter, "✓");
         }
 
@@ -166,20 +182,19 @@ void AssetItemDelegate::paint(QPainter *painter, const QStyleOptionViewItem &opt
 
             // Draw warning icon (exclamation mark)
             painter->setPen(QColor(255, 255, 255));
-            QFont badgeFont("Segoe UI", 14, QFont::Bold);
-            painter->setFont(badgeFont);
+            painter->setFont(warningBadgeFont());
             painter->drawText(badgeRect, Qt::AlignCenter, "!");
 
             // Tooltip would show: "Sequence has X gap(s)"
+            Q_UNUSED(gapCount);
         }
 
         QString fileName = index.data(AssetsModel::FileNameRole).toString();
-        QFont nameFont("Segoe UI", 9);
-        painter->setFont(nameFont);
+        painter->setFont(nameFont());
         painter->setPen(ThemeManager::instance().textColor());
         // Use compact text area: closer to thumbnail with minimal padding
         QRect nameRect(option.rect.x()+2, thumbRect.bottom()+2, option.rect.width()-4, 30);
-        QString elided = QFontMetrics(nameFont).elidedText(fileName, Qt::ElideRight, nameRect.width());
+        QString elided = QFontMetrics(nameFont()).elidedText(fileName, Qt::ElideRight, nameRect.width());
         painter->drawText(nameRect, Qt::AlignHCenter | Qt::AlignTop, elided);
     } catch (const std::exception& e) {
         qCritical() << "[AssetItemDelegate] Exception in paint():" << e.what();

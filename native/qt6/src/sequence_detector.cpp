@@ -1,5 +1,4 @@
 #include "sequence_detector.h"
-#include <QFileInfo>
 #include <QDebug>
 #include <QHash>
 #include <QDir>
@@ -41,9 +40,12 @@ QVector<ImageSequence> SequenceDetector::detectSequences(const QStringList& file
 
     // Group files by sequence pattern
     for (const QString& filePath : filePaths) {
-        QFileInfo fi(filePath);
-        QString fileName = fi.fileName();
-        QString extension = fi.suffix().toLower();
+        // Extract fileName and extension without QFileInfo (avoids disk I/O)
+        int lastSep = filePath.lastIndexOf(QLatin1Char('/'));
+        if (lastSep < 0) lastSep = filePath.lastIndexOf(QLatin1Char('\\'));
+        QString fileName = (lastSep >= 0) ? filePath.mid(lastSep + 1) : filePath;
+        int dotPos = fileName.lastIndexOf(QLatin1Char('.'));
+        QString extension = (dotPos > 0) ? fileName.mid(dotPos + 1).toLower() : QString();
 
         // Only detect sequences for image files, not videos
         if (!imageExtensions.contains(extension)) {

@@ -82,6 +82,8 @@ public:
     void pause();
     void stop();
     void seek(qint64 positionMs);
+    void setPlaybackRate(double rate); // Negative for reverse playback (JKL scrubbing)
+    double playbackRate() const;
 
     // Frame stepping (uses GStreamer's step events)
     void stepForward();
@@ -142,6 +144,7 @@ private:
     std::atomic<qint64> m_duration{0};
     std::atomic<double> m_volume{1.0};
     std::atomic<bool> m_muted{false};
+    std::atomic<double> m_playbackRate{1.0};
 
     MediaInfo m_mediaInfo;
     QString m_currentUri;

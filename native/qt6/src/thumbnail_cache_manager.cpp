@@ -165,7 +165,8 @@ bool ThumbnailCacheManager::storeThumbnail(const QString& filePath, const QSize&
     QString cachePath = getCachePath(filePath, size, position);
     QDir().mkpath(QFileInfo(cachePath).absolutePath());
 
-    // Debug logging for storage
+#ifndef NDEBUG
+    // Debug logging for storage (only in debug builds)
     QString absPath = QFileInfo(filePath).absoluteFilePath();
     QString hash = hashFilePath(filePath);
     qDebug() << "[ThumbnailCache] storeThumbnail:";
@@ -173,6 +174,7 @@ bool ThumbnailCacheManager::storeThumbnail(const QString& filePath, const QSize&
     qDebug() << "  Absolute path:" << absPath;
     qDebug() << "  Hash:" << hash;
     qDebug() << "  Cache path:" << cachePath;
+#endif
 
     // Save thumbnail as JPEG (good compression for photos/videos)
     if (!pixmap.save(cachePath, "JPG", 90)) {
@@ -184,7 +186,9 @@ bool ThumbnailCacheManager::storeThumbnail(const QString& filePath, const QSize&
     FileMetadata meta = getFileMetadata(filePath);
     if (meta.isValid()) {
         saveMetadata(filePath, meta);
+#ifndef NDEBUG
         qDebug() << "[ThumbnailCache] Saved metadata - size:" << meta.fileSize << "modified:" << meta.lastModified;
+#endif
     }
 
     emit thumbnailStored(filePath, size, position);
@@ -198,17 +202,17 @@ bool ThumbnailCacheManager::isCached(const QString& filePath, const QSize& size,
     bool exists = QFile::exists(cachePath);
     bool outdated = isOutdated(filePath);
 
-    // Debug logging for cache lookups
-    QString absPath = QFileInfo(filePath).absoluteFilePath();
-    QString hash = hashFilePath(filePath);
-    qDebug() << "[ThumbnailCache] isCached check:";
-    qDebug() << "  Input path:" << filePath;
-    qDebug() << "  Absolute path:" << absPath;
-    qDebug() << "  Hash:" << hash;
-    qDebug() << "  Cache path:" << cachePath;
-    qDebug() << "  Exists:" << exists;
-    qDebug() << "  Outdated:" << outdated;
-    qDebug() << "  Result:" << (exists && !outdated);
+#ifndef NDEBUG
+    // Debug logging for cache lookups (only in debug builds - very verbose)
+    static int logCounter = 0;
+    if (++logCounter % 100 == 0) { // Rate limit: log every 100th call
+        QString absPath = QFileInfo(filePath).absoluteFilePath();
+        QString hash = hashFilePath(filePath);
+        qDebug() << "[ThumbnailCache] isCached check (sampled):";
+        qDebug() << "  Input path:" << filePath;
+        qDebug() << "  Exists:" << exists << "Outdated:" << outdated;
+    }
+#endif
 
     return exists && !outdated;
 }

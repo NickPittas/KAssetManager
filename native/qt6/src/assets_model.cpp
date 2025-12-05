@@ -327,7 +327,7 @@ void AssetsModel::query(){
     QSqlQuery q(DB::instance().database());
     if (globalScope) {
         LogManager::instance().addLog("DB query (all assets) started", "DEBUG");
-        q.prepare("SELECT id,file_name,file_path,file_size,COALESCE(rating,-1),virtual_folder_id,COALESCE(is_sequence,0),sequence_pattern,sequence_start_frame,sequence_end_frame,sequence_frame_count,COALESCE(sequence_has_gaps,0),COALESCE(sequence_gap_count,0),sequence_version FROM assets ORDER BY file_name");
+        q.prepare("SELECT id,file_name,file_path,file_size,COALESCE(rating,-1),virtual_folder_id,COALESCE(is_sequence,0),sequence_pattern,sequence_start_frame,sequence_end_frame,sequence_frame_count,COALESCE(sequence_has_gaps,0),COALESCE(sequence_gap_count,0),sequence_version,file_type,last_modified FROM assets ORDER BY file_name");
     } else {
         if (m_folderId<=0) {
             m_filteredRowIndexes.clear();
@@ -347,14 +347,14 @@ void AssetsModel::query(){
             for (int i = 0; i < assetIds.size(); ++i) marks << "?";
             const QString placeholders = marks.join(',');
 
-            q.prepare(QString("SELECT id,file_name,file_path,file_size,COALESCE(rating,-1),virtual_folder_id,COALESCE(is_sequence,0),sequence_pattern,sequence_start_frame,sequence_end_frame,sequence_frame_count,COALESCE(sequence_has_gaps,0),COALESCE(sequence_gap_count,0),sequence_version FROM assets WHERE id IN (%1) ORDER BY file_name").arg(placeholders));
+            q.prepare(QString("SELECT id,file_name,file_path,file_size,COALESCE(rating,-1),virtual_folder_id,COALESCE(is_sequence,0),sequence_pattern,sequence_start_frame,sequence_end_frame,sequence_frame_count,COALESCE(sequence_has_gaps,0),COALESCE(sequence_gap_count,0),sequence_version,file_type,last_modified FROM assets WHERE id IN (%1) ORDER BY file_name").arg(placeholders));
             LogManager::instance().addLog(QString("DB query (assets by folder %1, recursive) started - %2 assets").arg(m_folderId).arg(assetIds.size()), "DEBUG");
             for (int assetId : assetIds) {
                 q.addBindValue(assetId);
             }
         } else {
             // Non-recursive: just get assets in this folder
-            q.prepare("SELECT id,file_name,file_path,file_size,COALESCE(rating,-1),virtual_folder_id,COALESCE(is_sequence,0),sequence_pattern,sequence_start_frame,sequence_end_frame,sequence_frame_count,COALESCE(sequence_has_gaps,0),COALESCE(sequence_gap_count,0),sequence_version FROM assets WHERE virtual_folder_id=? ORDER BY file_name");
+            q.prepare("SELECT id,file_name,file_path,file_size,COALESCE(rating,-1),virtual_folder_id,COALESCE(is_sequence,0),sequence_pattern,sequence_start_frame,sequence_end_frame,sequence_frame_count,COALESCE(sequence_has_gaps,0),COALESCE(sequence_gap_count,0),sequence_version,file_type,last_modified FROM assets WHERE virtual_folder_id=? ORDER BY file_name");
             LogManager::instance().addLog(QString("DB query (assets by folder %1) started").arg(m_folderId), "DEBUG");
             q.addBindValue(m_folderId);
         }
@@ -381,10 +381,10 @@ void AssetsModel::query(){
         r.sequenceGapCount = q.value(12).toInt();
         r.sequenceVersion = q.value(13).toString();
 
-        QFileInfo fi(r.filePath);
-        const bool exists = fi.exists();
-        r.fileType = exists ? fi.suffix().toLower() : QString();
-        r.lastModified = exists ? fi.lastModified() : QDateTime();
+        // Use cached file_type and last_modified from DB (avoids expensive QFileInfo calls)
+        r.fileType = q.value(14).toString();
+        QString lastModStr = q.value(15).toString();
+        r.lastModified = lastModStr.isEmpty() ? QDateTime() : QDateTime::fromString(lastModStr, Qt::ISODate);
         m_rows.push_back(r);
         ++rows;
     }

@@ -139,6 +139,15 @@ bool DB::migrate(){
         exec("ALTER TABLE assets ADD COLUMN checksum TEXT NULL");
     }
 
+    // Add file_type column for cached extension (avoids QFileInfo in query loop)
+    if (!hasColumn("assets", "file_type")) {
+        exec("ALTER TABLE assets ADD COLUMN file_type TEXT NULL");
+    }
+    // Add last_modified column for cached modification time (avoids QFileInfo in query loop)
+    if (!hasColumn("assets", "last_modified")) {
+        exec("ALTER TABLE assets ADD COLUMN last_modified TEXT NULL");
+    }
+
     // Version history table
     exec(
         "CREATE TABLE IF NOT EXISTS asset_versions (\n"
@@ -168,6 +177,8 @@ bool DB::migrate(){
     exec("CREATE INDEX IF NOT EXISTS idx_assets_folder_updated_at ON assets(virtual_folder_id, updated_at);");
     exec("CREATE INDEX IF NOT EXISTS idx_assets_folder_mime ON assets(virtual_folder_id, mime_type);");
     exec("CREATE INDEX IF NOT EXISTS idx_assets_sequence_pattern ON assets(sequence_pattern) WHERE is_sequence=1;");
+    exec("CREATE INDEX IF NOT EXISTS idx_assets_file_type ON assets(file_type);");
+    exec("CREATE INDEX IF NOT EXISTS idx_assets_folder_file_type ON assets(virtual_folder_id, file_type);");
 
     // If we were on an older version, update user_version to latest
     if (ver < kLatestVersion) {
@@ -385,6 +396,8 @@ int DB::insertAssetMetadataFast(const QString& filePath, int folderId)
         return 0;
     }
     const QString absPath = fi.absoluteFilePath();
+    const QString fileType = fi.suffix().toLower();
+    const QString lastModified = fi.lastModified().toString(Qt::ISODate);
 
     // Check if already exists
     QSqlQuery sel(m_db);
@@ -394,10 +407,12 @@ int DB::insertAssetMetadataFast(const QString& filePath, int folderId)
         bool okId=false; int existingId = sel.value(0).toInt(&okId);
         if (!okId) { qWarning() << "DB::insertAssetMetadataFast: invalid id from DB"; return 0; }
         QSqlQuery upd(m_db);
-        upd.prepare("UPDATE assets SET file_name=?, virtual_folder_id=?, file_size=?, updated_at=CURRENT_TIMESTAMP WHERE id=?");
+        upd.prepare("UPDATE assets SET file_name=?, virtual_folder_id=?, file_size=?, file_type=?, last_modified=?, updated_at=CURRENT_TIMESTAMP WHERE id=?");
         upd.addBindValue(fi.fileName());
         upd.addBindValue(folderId<=0?m_rootId:folderId);
         upd.addBindValue((qint64)fi.size());
+        upd.addBindValue(fileType);
+        upd.addBindValue(lastModified);
         upd.addBindValue(existingId);
         if (!upd.exec()) {
             qWarning() << "DB::insertAssetMetadataFast: UPDATE failed:" << upd.lastError();
@@ -407,11 +422,13 @@ int DB::insertAssetMetadataFast(const QString& filePath, int folderId)
 
     // New asset: insert minimal metadata (no checksum, no versioning)
     QSqlQuery ins(m_db);
-    ins.prepare("INSERT INTO assets(file_path,file_name,virtual_folder_id,file_size,checksum,is_sequence) VALUES(?,?,?,?,NULL,0)");
+    ins.prepare("INSERT INTO assets(file_path,file_name,virtual_folder_id,file_size,file_type,last_modified,checksum,is_sequence) VALUES(?,?,?,?,?,?,NULL,0)");
     ins.addBindValue(absPath);
     ins.addBindValue(fi.fileName());
     ins.addBindValue(folderId<=0?m_rootId:folderId);
     ins.addBindValue((qint64)fi.size());
+    ins.addBindValue(fileType);
+    ins.addBindValue(lastModified);
     if (!ins.exec()) {
         qWarning() << "DB::insertAssetMetadataFast: INSERT failed:" << ins.lastError();
         return 0;

@@ -1,7 +1,7 @@
 #include "import_progress_dialog.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
-#include <QApplication>
+#include <QCoreApplication>
 #include <QStyle>
 #include <QTimer>
 
@@ -66,16 +66,16 @@ void ImportProgressDialog::setProgress(int current, int total)
     progressBar->setValue(current);
     progressBar->setFormat(QString("%1 / %2 files (%p%)").arg(current).arg(total));
     
-    // Process events to keep UI responsive
-    QApplication::processEvents();
+    // Process events with timeout to keep UI responsive while limiting reentrancy
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
 }
 
 void ImportProgressDialog::setCurrentFile(const QString& fileName)
 {
     fileLabel->setText(QString("Processing: %1").arg(fileName));
 
-    // Process events to keep UI responsive
-    QApplication::processEvents();
+    // Process events with timeout to keep UI responsive while limiting reentrancy
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
 }
 
 void ImportProgressDialog::setCurrentFolder(const QString& folderName)
@@ -84,8 +84,8 @@ void ImportProgressDialog::setCurrentFolder(const QString& folderName)
     fileLabel->setText("");
     progressBar->setValue(0);
 
-    // Process events to keep UI responsive
-    QApplication::processEvents();
+    // Process events with timeout to keep UI responsive while limiting reentrancy
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
 }
 
 void ImportProgressDialog::setComplete()

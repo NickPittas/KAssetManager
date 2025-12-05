@@ -517,6 +517,7 @@ private:
     int sequenceEndFrame;
     QTimer *sequenceTimer;
     bool sequencePlaying;
+    int sequencePlayDirection; // 1 = forward, -1 = reverse (for JKL scrubbing)
     SequenceFrameCache *frameCache;
     bool useCacheForSequences; // Flag to enable/disable cache (disabled by default)
 

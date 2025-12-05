@@ -112,7 +112,9 @@ LivePreviewManager::LivePreviewManager(QObject* parent)
     qInfo() << "[LivePreview] Renderer backend:" << "OIIO+Qt (no tlRender)";
 #endif
     // Initialize QCache capacity based on default setting
-    m_cache.setMaxCost(m_maxCacheEntries);
+    // Cost is in KB units; assume ~256KB per thumbnail (256x256x4 bytes)
+    // So maxCost = entries * 256 KB
+    m_cache.setMaxCost(m_maxCacheEntries * 256);
     m_sequenceMetaCache.setMaxCost(m_sequenceMetaLimit);
 
     qInfo() << "[LivePreview] LivePreviewManager initialized with GStreamer backend";
@@ -120,50 +122,45 @@ LivePreviewManager::LivePreviewManager(QObject* parent)
 
 LivePreviewManager::FrameHandle LivePreviewManager::cachedFrame(const QString& filePath, const QSize& targetSize, qreal position)
 {
-    // First check persistent cache
+    // Check memory cache FIRST (faster than disk)
+    const QString key = makeCacheKey(filePath, targetSize, position);
+    {
+        QMutexLocker locker(&m_mutex);
+        if (auto* entry = m_cache.object(key)) {
+            ++m_cacheHits;
+            return { entry->pixmap, entry->position, entry->size };
+        }
+    }
+
+    // Then check persistent disk cache
     ThumbnailCacheManager& persistentCache = ThumbnailCacheManager::instance();
     QPixmap persistentPixmap = persistentCache.getCachedThumbnail(filePath, targetSize, position);
     if (!persistentPixmap.isNull()) {
         // Store in memory cache for faster subsequent access
-        const QString key = makeCacheKey(filePath, targetSize, position);
         storeFrame(key, persistentPixmap, position, targetSize);
         return { persistentPixmap, position, targetSize };
     }
 
-    // Then check memory cache
-    const QString key = makeCacheKey(filePath, targetSize, position);
-    QMutexLocker locker(&m_mutex);
-    if (auto* entry = m_cache.object(key)) {
-        ++m_cacheHits;
-        return { entry->pixmap, entry->position, entry->size };
-    }
     return {};
 }
 
 void LivePreviewManager::requestFrame(const QString& filePath, const QSize& targetSize, qreal position)
 {
-    QFileInfo info(filePath);
-    if (!info.exists() || !info.isFile()) {
-        return;
+    // Extract suffix from path directly (avoid QFileInfo for performance)
+    QString suffix;
+    int dotPos = filePath.lastIndexOf(QLatin1Char('.'));
+    if (dotPos >= 0 && dotPos < filePath.length() - 1) {
+        suffix = filePath.mid(dotPos + 1).toLower();
     }
-    const QString suffix = info.suffix().toLower();
+    
     if (!isImageExtension(suffix) && !isHdrExtension(suffix) &&
         !isSequenceFriendlyExtension(suffix) && !isVideoExtension(suffix)) {
         return;
     }
 
-    // First check persistent cache
-    ThumbnailCacheManager& persistentCache = ThumbnailCacheManager::instance();
-    QPixmap persistentPixmap = persistentCache.getCachedThumbnail(filePath, targetSize, position);
-    if (!persistentPixmap.isNull()) {
-        // Store in memory cache and emit immediately
-        const QString key = makeCacheKey(filePath, targetSize, position);
-        storeFrame(key, persistentPixmap, position, targetSize);
-        emit frameReady(filePath, position, targetSize, persistentPixmap);
-        return;
-    }
-
     const QString key = makeCacheKey(filePath, targetSize, position);
+    
+    // Check memory cache FIRST (fastest)
     {
         QMutexLocker locker(&m_mutex);
         if (auto* cached = m_cache.object(key)) {
@@ -178,6 +175,26 @@ void LivePreviewManager::requestFrame(const QString& filePath, const QSize& targ
         if (m_inFlight.contains(key)) {
             return;
         }
+    }
+
+    // Then check persistent disk cache
+    ThumbnailCacheManager& persistentCache = ThumbnailCacheManager::instance();
+    QPixmap persistentPixmap = persistentCache.getCachedThumbnail(filePath, targetSize, position);
+    if (!persistentPixmap.isNull()) {
+        // Store in memory cache and emit immediately
+        storeFrame(key, persistentPixmap, position, targetSize);
+        emit frameReady(filePath, position, targetSize, persistentPixmap);
+        return;
+    }
+
+    // Check file exists before queueing expensive decode (use QFileInfo only if needed)
+    QFileInfo info(filePath);
+    if (!info.exists() || !info.isFile()) {
+        return;
+    }
+
+    {
+        QMutexLocker locker(&m_mutex);
         m_inFlight.insert(key);
         ++m_cacheMisses;
     }
@@ -225,8 +242,10 @@ void LivePreviewManager::setMaxCacheEntries(int maxEntries)
     const int bounded = qBound(kMinCacheEntries, maxEntries, kMaxCacheEntries);
     QMutexLocker locker(&m_mutex);
     m_maxCacheEntries = bounded;
-    m_cache.setMaxCost(bounded);
-    qInfo() << "[LivePreview] Cache size set to" << bounded << "entries";
+    // Cost is in KB units; assume ~256KB per thumbnail (256x256x4 bytes)
+    // So maxCost = entries * 256 KB
+    m_cache.setMaxCost(bounded * 256);
+    qInfo() << "[LivePreview] Cache size set to" << bounded << "entries (~" << (bounded * 256 / 1024) << "MB)";
 }
 
 int LivePreviewManager::maxCacheEntries() const
@@ -384,12 +403,18 @@ void LivePreviewManager::startDecodeTask(const Request& request, const QString& 
 void LivePreviewManager::storeFrame(const QString& key, const QPixmap& pixmap, qreal position, const QSize& size)
 {
     QMutexLocker locker(&m_mutex);
-    // Insert into QCache with cost=1 (entry count eviction)
+    // Calculate actual memory cost for better cache eviction
+    // Approximate bytes: width * height * depth / 8 (depth is typically 32 bits)
+    int cost = (pixmap.width() * pixmap.height() * pixmap.depth()) / 8;
+    if (cost < 1) cost = 1; // Minimum cost of 1
+    // Normalize cost to reasonable units (1KB = 1 cost unit)
+    cost = qMax(1, cost / 1024);
+    
     auto* entry = new CachedEntry();
     entry->pixmap = pixmap;
     entry->position = position;
     entry->size = size;
-    m_cache.insert(key, entry, 1);
+    m_cache.insert(key, entry, cost);
 }
 
 bool LivePreviewManager::isImageSequence(const QString& filePath) const

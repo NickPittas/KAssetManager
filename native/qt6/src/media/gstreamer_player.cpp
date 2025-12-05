@@ -667,6 +667,70 @@ void GStreamerPlayer::setMuted(bool muted)
 #endif
 }
 
+void GStreamerPlayer::setPlaybackRate(double rate)
+{
+#ifdef HAVE_GSTREAMER
+    if (!m_pipeline) return;
+
+    // Clamp rate to reasonable bounds (e.g., -8x to 8x)
+    rate = std::clamp(rate, -8.0, 8.0);
+    if (std::abs(rate) < 0.01) rate = 0.0; // Treat near-zero as pause
+
+    if (rate == 0.0) {
+        pause();
+        return;
+    }
+
+    m_playbackRate = rate;
+
+    // Get current position for seek
+    gint64 currentPos = 0;
+    if (!gst_element_query_position(m_pipeline, GST_FORMAT_TIME, &currentPos)) {
+        currentPos = m_position.load() * GST_MSECOND;
+    }
+
+    // Perform rate change via seek
+    // For negative rates, we seek from current position to 0
+    // For positive rates, we seek from current position to end
+    gboolean success;
+    if (rate > 0) {
+        success = gst_element_seek(m_pipeline, rate,
+                                   GST_FORMAT_TIME,
+                                   static_cast<GstSeekFlags>(GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_ACCURATE),
+                                   GST_SEEK_TYPE_SET, currentPos,
+                                   GST_SEEK_TYPE_END, 0);
+    } else {
+        // Negative rate: seek backward from current position to start
+        success = gst_element_seek(m_pipeline, rate,
+                                   GST_FORMAT_TIME,
+                                   static_cast<GstSeekFlags>(GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_ACCURATE),
+                                   GST_SEEK_TYPE_SET, 0,
+                                   GST_SEEK_TYPE_SET, currentPos);
+    }
+
+    if (success) {
+        qDebug() << "[GStreamerPlayer] Playback rate set to:" << rate;
+        // Ensure we're in playing state
+        if (m_playbackState.load() != PlaybackState::Playing) {
+            gst_element_set_state(m_pipeline, GST_STATE_PLAYING);
+            m_playbackState = PlaybackState::Playing;
+            emit playbackStateChanged(PlaybackState::Playing);
+        }
+    } else {
+        qWarning() << "[GStreamerPlayer] Failed to set playback rate:" << rate;
+        // Reset rate to 1.0 on failure
+        m_playbackRate = 1.0;
+    }
+#else
+    Q_UNUSED(rate);
+#endif
+}
+
+double GStreamerPlayer::playbackRate() const
+{
+    return m_playbackRate.load();
+}
+
 double GStreamerPlayer::volume() const
 {
     return m_volume.load();

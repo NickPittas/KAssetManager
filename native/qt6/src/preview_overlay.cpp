@@ -678,6 +678,7 @@ void PreviewOverlay::showAsset(const QString &filePath, const QString &fileName,
     // Reset sequence state
     isSequence = false;
     sequencePlaying = false;
+    sequencePlayDirection = 1; // Default forward
     if (sequenceTimer->isActive()) {
         sequenceTimer->stop();
     }
@@ -1323,6 +1324,47 @@ void PreviewOverlay::keyPressEvent(QKeyEvent *event)
         case Qt::Key_Comma: // ',' previous frame
             if (isVideo || isSequence) { onStepPrevFrame(); return; }
             break;
+
+        // JKL scrubbing (NLE-style playback control)
+        case Qt::Key_J:
+            // J = Play backward
+            if (isSequence) {
+                sequencePlayDirection = -1;
+                if (!sequencePlaying) {
+                    playSequence();
+                }
+            } else if (isVideo) {
+                m_gstreamerPlayer->setPlaybackRate(-1.0);
+            }
+            return;
+        case Qt::Key_K:
+            // K = Pause/Stop
+            if (isSequence) {
+                if (sequencePlaying) {
+                    pauseSequence();
+                }
+            } else if (isVideo) {
+                m_gstreamerPlayer->pause();
+            }
+            return;
+        case Qt::Key_L:
+            // L = Play forward
+            if (isSequence) {
+                sequencePlayDirection = 1;
+                if (!sequencePlaying) {
+                    playSequence();
+                }
+            } else if (isVideo) {
+                // If already playing forward, just ensure rate is 1.0
+                if (m_gstreamerPlayer->state() == GStreamerPlayer::PlaybackState::Playing &&
+                    m_gstreamerPlayer->playbackRate() > 0) {
+                    // Already playing forward, do nothing or could increase speed
+                } else {
+                    m_gstreamerPlayer->setPlaybackRate(1.0);
+                }
+            }
+            return;
+
 #ifdef HAVE_QT_PDF
         case Qt::Key_Up:
             if ((currentFileType == "pdf" || currentFileType == "ai") && pdfDoc && pdfDoc->pageCount() > 1) {
@@ -1562,6 +1604,7 @@ void PreviewOverlay::showSequence(const QStringList &framePaths, const QString &
     sequenceEndFrame = endFrame;
     currentSequenceFrame = 0;
     sequencePlaying = false;
+    sequencePlayDirection = 1; // Default forward
 
     // Check if this is an HDR/EXR sequence
     if (!framePaths.isEmpty()) {
@@ -1921,10 +1964,10 @@ void PreviewOverlay::onSequenceTimerTick()
         return;
     }
 
-    // Advance to next frame
-    currentSequenceFrame++;
+    // Advance frame based on play direction (for JKL scrubbing)
+    currentSequenceFrame += sequencePlayDirection;
 
-    // Loop back to start if at end
+    // Handle looping
     if (currentSequenceFrame >= sequenceFramePaths.size()) {
         currentSequenceFrame = 0;
         // When looping, only kick prefetch if cache isn’t already full
@@ -1935,6 +1978,9 @@ void PreviewOverlay::onSequenceTimerTick()
                 frameCache->startPrefetch(0);
             }
         }
+    } else if (currentSequenceFrame < 0) {
+        // Loop back to end when playing in reverse
+        currentSequenceFrame = sequenceFramePaths.size() - 1;
     }
 
     loadSequenceFrame(currentSequenceFrame);

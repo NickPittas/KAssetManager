@@ -11,6 +11,18 @@
 namespace {
     constexpr int kPreviewInset = 1; // minimize border between thumbnail and preview
 
+    // Cached font to avoid construction in paint() - significant performance win
+    static const QFont& nameFont() {
+        static QFont font("Segoe UI", 9);
+        return font;
+    }
+    
+    // Cache the QFontMetrics as well for sizeHint calculations
+    static const QFontMetrics& nameFontMetrics() {
+        static QFontMetrics fm(nameFont());
+        return fm;
+    }
+
     QRect insetPreviewRect(const QRect &source)
     {
         QRect result = source.adjusted(kPreviewInset, kPreviewInset, -kPreviewInset, -kPreviewInset);
@@ -144,8 +156,7 @@ void FmItemDelegate::paint(QPainter *painter, const QStyleOptionViewItem &option
     }
 
     QString name = index.data(Qt::DisplayRole).toString();
-    QFont f("Segoe UI", 9);
-    painter->setFont(f);
+    painter->setFont(nameFont());
     painter->setPen(ThemeManager::instance().textColor());
     const int textTop = thumbRect.bottom() + 3; // 3px below image inside the thumbnail
     int textHeight = option.rect.bottom() - textTop; // Use remaining space
@@ -163,14 +174,12 @@ QSize FmItemDelegate::sizeHint(const QStyleOptionViewItem &option, const QModelI
     Q_UNUSED(option);
     // Calculate height needed for wrapped text
     QString name = index.data(Qt::DisplayRole).toString();
-    QFont f("Segoe UI", 9);
-    QFontMetrics fm(f);
 
     // Calculate text area width (cell width minus margins)
     int textWidth = m_thumbnailSize + 8 - 4; // grid width minus horizontal margins
 
-    // Calculate how many lines the text will need
-    QRect boundingRect = fm.boundingRect(QRect(0, 0, textWidth, 1000),
+    // Calculate how many lines the text will need using cached font metrics
+    QRect boundingRect = nameFontMetrics().boundingRect(QRect(0, 0, textWidth, 1000),
                                          Qt::AlignHCenter | Qt::AlignTop | Qt::TextWordWrap,
                                          name);
     int textHeight = boundingRect.height();
