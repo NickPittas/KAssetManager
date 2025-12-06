@@ -11,6 +11,7 @@
 #include <QImageReader>
 #include <QRegularExpression>
 #include <QCoreApplication>
+#include <QGuiApplication>
 #include <QMutexLocker>
 #include <QDir>
 #include <algorithm>
@@ -116,17 +117,32 @@ LivePreviewManager::LivePreviewManager(QObject* parent)
     // So maxCost = entries * 256 KB
     m_cache.setMaxCost(m_maxCacheEntries * 256);
     m_sequenceMetaCache.setMaxCost(m_sequenceMetaLimit);
+    
+    // Create dedicated thread pool for decode operations
+    // This ensures thumbnail decoding spreads across all CPU cores
+    // and doesn't compete with Qt's global thread pool for other work
+    m_decodePool = new QThreadPool(this);
+    int idealThreads = QThread::idealThreadCount();
+    // Use all available cores but cap at a reasonable maximum
+    int poolSize = qBound(2, idealThreads, 16);
+    m_decodePool->setMaxThreadCount(poolSize);
+    m_decodePool->setExpiryTimeout(30000); // 30 sec thread expiry for efficiency
+    
+    m_lastRequestTime.start();
 
-    qInfo() << "[LivePreview] LivePreviewManager initialized with GStreamer backend";
+    qInfo() << "[LivePreview] LivePreviewManager initialized with GStreamer backend,"
+            << poolSize << "decode threads";
 }
 
 LivePreviewManager::FrameHandle LivePreviewManager::cachedFrame(const QString& filePath, const QSize& targetSize, qreal position)
 {
     // Check memory cache FIRST (faster than disk)
+    // Use read lock for fast concurrent cache reads during paint()
     const QString key = makeCacheKey(filePath, targetSize, position);
     {
-        QMutexLocker locker(&m_mutex);
+        QReadLocker locker(&m_cacheLock);
         if (auto* entry = m_cache.object(key)) {
+            QMutexLocker statsLocker(&m_mutex);
             ++m_cacheHits;
             return { entry->pixmap, entry->position, entry->size };
         }
@@ -146,6 +162,28 @@ LivePreviewManager::FrameHandle LivePreviewManager::cachedFrame(const QString& f
 
 void LivePreviewManager::requestFrame(const QString& filePath, const QSize& targetSize, qreal position)
 {
+    // Skip new decode requests entirely when suspended (during resize/splitter drag)
+    // Cached frames are still returned by cachedFrame(), but no new work is queued
+    if (m_requestsSuspended.load()) {
+        return;
+    }
+    
+    // Rapid-event throttling: if requests are coming too fast (e.g., during resize/scroll),
+    // AND mouse button is pressed (user is actively dragging), skip entirely.
+    // This prevents thumbnail decode work during window resize and splitter drags.
+    qint64 elapsed = m_lastRequestTime.elapsed();
+    if (elapsed < 16) { // Less than ~1 frame at 60fps
+        // If mouse is down (resize/splitter drag in progress), skip all new requests
+        if (QGuiApplication::mouseButtons() != Qt::NoButton) {
+            return; // Will be re-requested when user releases mouse
+        }
+        // During rapid events without mouse drag, limit concurrent work
+        if (m_pendingDecodes.load() >= kMaxConcurrentDecodes / 2) {
+            return; // Skip this request - will be re-requested on next paint
+        }
+    }
+    m_lastRequestTime.restart();
+    
     // Extract suffix from path directly (avoid QFileInfo for performance)
     QString suffix;
     int dotPos = filePath.lastIndexOf(QLatin1Char('.'));
@@ -161,17 +199,25 @@ void LivePreviewManager::requestFrame(const QString& filePath, const QSize& targ
     const QString key = makeCacheKey(filePath, targetSize, position);
     
     // Check memory cache FIRST (fastest)
+    // Check memory cache FIRST (fastest) - use read lock for concurrent reads
     {
-        QMutexLocker locker(&m_mutex);
+        QReadLocker cacheLocker(&m_cacheLock);
         if (auto* cached = m_cache.object(key)) {
+            QMutexLocker statsLocker(&m_mutex);
             ++m_cacheHits;
             QPixmap pixmap = cached->pixmap;
             QSize cachedSize = cached->size;
             qreal cachedPos = cached->position;
-            locker.unlock();
+            statsLocker.unlock();
+            cacheLocker.unlock();
             emit frameReady(filePath, cachedPos, cachedSize, pixmap);
             return;
         }
+    }
+    
+    // Check if already in flight (separate from cache)
+    {
+        QMutexLocker locker(&m_mutex);
         if (m_inFlight.contains(key)) {
             return;
         }
@@ -205,34 +251,60 @@ void LivePreviewManager::requestFrame(const QString& filePath, const QSize& targ
 
 void LivePreviewManager::invalidate(const QString& filePath)
 {
-    QMutexLocker locker(&m_mutex);
     // Remove cached entries for this file path by scanning keys
-    const auto keys = m_cache.keys();
-    for (const QString& k : keys) {
-        if (k.startsWith(filePath + "|")) {
-            m_cache.remove(k);
+    {
+        QWriteLocker cacheLocker(&m_cacheLock);
+        const auto keys = m_cache.keys();
+        for (const QString& k : keys) {
+            if (k.startsWith(filePath + "|")) {
+                m_cache.remove(k);
+            }
         }
     }
     // Clear any in-flight requests for this file path
-    for (auto it = m_inFlight.begin(); it != m_inFlight.end(); ) {
-        if (it->startsWith(filePath + "|")) {
-            it = m_inFlight.erase(it);
-        } else {
-            ++it;
+    {
+        QMutexLocker locker(&m_mutex);
+        for (auto it = m_inFlight.begin(); it != m_inFlight.end(); ) {
+            if (it->startsWith(filePath + "|")) {
+                it = m_inFlight.erase(it);
+            } else {
+                ++it;
+            }
         }
     }
 }
 
 void LivePreviewManager::clear()
 {
+    {
+        QWriteLocker cacheLocker(&m_cacheLock);
+        m_cache.clear();
+    }
+    {
+        QMutexLocker locker(&m_mutex);
+        m_inFlight.clear();
+        m_sequenceQueue.clear();
+    }
+}
+
+void LivePreviewManager::cancelPending()
+{
+    // Increment cancellation token - all in-flight decode tasks will see this
+    // and abort early, making UI clicks immediately responsive
+    ++m_cancellationToken;
+    
     QMutexLocker locker(&m_mutex);
-    m_cache.clear();
+    // Clear pending queues
     m_inFlight.clear();
+    m_sequenceQueue.clear();
+    m_activeSequenceLoads = 0;
+    
+    qDebug() << "[LivePreview] Cancelled all pending requests, token:" << m_cancellationToken.load();
 }
 
 int LivePreviewManager::cacheEntryCount() const
 {
-    QMutexLocker locker(&m_mutex);
+    QReadLocker locker(&m_cacheLock);
     return m_cache.size();
 }
 
@@ -240,11 +312,16 @@ void LivePreviewManager::setMaxCacheEntries(int maxEntries)
 {
     // Bounds: kMinCacheEntries-kMaxCacheEntries
     const int bounded = qBound(kMinCacheEntries, maxEntries, kMaxCacheEntries);
-    QMutexLocker locker(&m_mutex);
-    m_maxCacheEntries = bounded;
-    // Cost is in KB units; assume ~256KB per thumbnail (256x256x4 bytes)
-    // So maxCost = entries * 256 KB
-    m_cache.setMaxCost(bounded * 256);
+    {
+        QMutexLocker locker(&m_mutex);
+        m_maxCacheEntries = bounded;
+    }
+    {
+        QWriteLocker cacheLocker(&m_cacheLock);
+        // Cost is in KB units; assume ~256KB per thumbnail (256x256x4 bytes)
+        // So maxCost = entries * 256 KB
+        m_cache.setMaxCost(bounded * 256);
+    }
     qInfo() << "[LivePreview] Cache size set to" << bounded << "entries (~" << (bounded * 256 / 1024) << "MB)";
 }
 
@@ -258,6 +335,21 @@ int LivePreviewManager::maxCacheEntries() const
 quint64 LivePreviewManager::cacheHits() const { QMutexLocker locker(&m_mutex); return m_cacheHits; }
 quint64 LivePreviewManager::cacheMisses() const { QMutexLocker locker(&m_mutex); return m_cacheMisses; }
 double LivePreviewManager::cacheHitRate() const { QMutexLocker locker(&m_mutex); const quint64 total = m_cacheHits + m_cacheMisses; return total ? double(m_cacheHits) / double(total) : 0.0; }
+
+void LivePreviewManager::suspendRequests()
+{
+    m_requestsSuspended.store(true);
+}
+
+void LivePreviewManager::resumeRequests()
+{
+    m_requestsSuspended.store(false);
+}
+
+bool LivePreviewManager::isRequestsSuspended() const
+{
+    return m_requestsSuspended.load();
+}
 
 void LivePreviewManager::setSequenceDetectionEnabled(bool enabled)
 {
@@ -335,23 +427,45 @@ void LivePreviewManager::enqueueSequenceDecode(const Request& request, const QSt
 
 void LivePreviewManager::startDecodeTask(const Request& request, const QString& cacheKey, bool fromSequenceQueue)
 {
-    // Capture sequence detection state at the time of task creation
+    // Throttle: limit concurrent decodes to prevent overloading during rapid resize/scroll
+    int pending = m_pendingDecodes.load();
+    if (pending >= kMaxConcurrentDecodes) {
+        // Too many pending - skip this request, it will be re-requested on next paint
+        QMutexLocker locker(&m_mutex);
+        m_inFlight.remove(cacheKey);
+        return;
+    }
+    ++m_pendingDecodes;
+    
+    // Capture sequence detection state and cancellation token at the time of task creation
     bool seqDetectionEnabled = false;
+    uint64_t startToken = m_cancellationToken.load();
     {
         QMutexLocker locker(&m_mutex);
         seqDetectionEnabled = m_sequenceDetectionEnabled;
     }
 
-    auto future = QtConcurrent::run([this, request, cacheKey, fromSequenceQueue, seqDetectionEnabled]() {
+    // Use dedicated thread pool for decode tasks - ensures proper parallelism
+    // across all CPU cores without competing with Qt's global thread pool
+    auto task = [this, request, cacheKey, fromSequenceQueue, seqDetectionEnabled, startToken]() {
+        // Decrement pending count when done (even if cancelled)
+        struct PendingGuard {
+            std::atomic<int>& counter;
+            ~PendingGuard() { --counter; }
+        } guard{m_pendingDecodes};
+        
+        // Early abort if cancelled before we even start
+        if (m_cancellationToken.load() != startToken) {
+            return;
+        }
+        
         QString error;
         QImage image;
 
         const bool treatAsSequence = fromSequenceQueue || (seqDetectionEnabled && isImageSequence(request.filePath));
         if (treatAsSequence) {
-            qDebug() << "[LivePreview] Loading as SEQUENCE:" << request.filePath << "seqDetection=" << seqDetectionEnabled;
             image = loadSequenceFrame(request, error);
         } else {
-            qDebug() << "[LivePreview] Loading as INDIVIDUAL:" << request.filePath << "seqDetection=" << seqDetectionEnabled;
             QFileInfo info(request.filePath);
             const QString suffix = info.suffix().toLower();
             if (isImageExtension(suffix) || isHdrExtension(suffix)) {
@@ -360,8 +474,18 @@ void LivePreviewManager::startDecodeTask(const Request& request, const QString& 
                 image = loadVideoFrame(request, error);
             }
         }
+        
+        // Check again after decode - if cancelled, don't bother posting result
+        if (m_cancellationToken.load() != startToken) {
+            return;
+        }
 
-        QMetaObject::invokeMethod(this, [this, request, cacheKey, image, error, fromSequenceQueue]() {
+        QMetaObject::invokeMethod(this, [this, request, cacheKey, image, error, fromSequenceQueue, startToken]() {
+            // Final check on UI thread - if cancelled, discard result
+            if (m_cancellationToken.load() != startToken) {
+                return;
+            }
+            
             SequenceTask nextTask;
             bool launchNext = false;
 
@@ -396,13 +520,14 @@ void LivePreviewManager::startDecodeTask(const Request& request, const QString& 
                 startDecodeTask(nextTask.request, nextTask.cacheKey, true);
             }
         }, Qt::QueuedConnection);
-    });
-    Q_UNUSED(future);
+    };
+    
+    // Submit to dedicated decode pool for proper multi-core utilization
+    m_decodePool->start(task);
 }
 
 void LivePreviewManager::storeFrame(const QString& key, const QPixmap& pixmap, qreal position, const QSize& size)
 {
-    QMutexLocker locker(&m_mutex);
     // Calculate actual memory cost for better cache eviction
     // Approximate bytes: width * height * depth / 8 (depth is typically 32 bits)
     int cost = (pixmap.width() * pixmap.height() * pixmap.depth()) / 8;
@@ -414,6 +539,9 @@ void LivePreviewManager::storeFrame(const QString& key, const QPixmap& pixmap, q
     entry->pixmap = pixmap;
     entry->position = position;
     entry->size = size;
+    
+    // Use write lock for cache insertion
+    QWriteLocker locker(&m_cacheLock);
     m_cache.insert(key, entry, cost);
 }
 

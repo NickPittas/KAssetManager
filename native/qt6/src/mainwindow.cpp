@@ -4069,8 +4069,10 @@ void MainWindow::navigateToFolder(int folderId, bool addToHistory)
         }
     }
 
-    // Stop any preview playback but do NOT cancel thumbnail generation; allow it to continue in background
+    // Stop any preview playback and cancel pending thumbnail generation
+    // Cancelling pending requests ensures user clicks take priority over background work
     if (previewOverlay) previewOverlay->stopPlayback();
+    LivePreviewManager::instance().cancelPending();
 
     // Update navigation history
     if (addToHistory) {
@@ -7810,6 +7812,10 @@ void MainWindow::fmRefreshTreeModel()
 void MainWindow::fmNavigateToPath(const QString& path, bool addToHistory)
 {
     if (path.isEmpty()) return;
+
+    // Cancel any pending thumbnail generation immediately
+    // This ensures user clicks take priority over background work
+    LivePreviewManager::instance().cancelPending();
 
     // Add current path to history before navigating (if requested)
     if (addToHistory && fmDirModel) {

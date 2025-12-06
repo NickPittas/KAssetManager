@@ -7,9 +7,12 @@
 #include <QHash>
 #include <QSet>
 #include <QMutex>
+#include <QReadWriteLock>
 #include <QElapsedTimer>
 #include <QList>
 #include <QStringList>
+#include <QThreadPool>
+#include <QThread>
 
 #include <QCache>
 
@@ -66,6 +69,11 @@ public:
     // Remove cached entries for a specific asset (all sizes/positions).
     void invalidate(const QString& filePath);
     void clear();
+    
+    // Cancel all pending decode requests (for responsive navigation)
+    // This allows user clicks to take priority over background thumbnail generation
+    void cancelPending();
+    
     int cacheEntryCount() const;
 
     // Configure cache size (bounds: 64-2048 entries)
@@ -75,6 +83,13 @@ public:
     // Enable/disable automatic sequence detection for File Manager
     void setSequenceDetectionEnabled(bool enabled);
     bool sequenceDetectionEnabled() const;
+
+    // Suspend/resume thumbnail requests during resize operations
+    // When suspended, requestFrame() calls are ignored (cached frames still returned)
+    // Call resumeRequests() on mouse-up to trigger viewport refresh
+    void suspendRequests();
+    void resumeRequests();
+    bool isRequestsSuspended() const;
 
     // Cache metrics
     quint64 cacheHits() const;
@@ -131,7 +146,8 @@ private:
         }
     };
 
-    mutable QMutex m_mutex;
+    mutable QMutex m_mutex;  // For inFlight, sequenceQueue, sequenceMeta
+    mutable QReadWriteLock m_cacheLock;  // Reader-writer lock for cache (faster reads during paint)
     QCache<QString, CachedEntry> m_cache;
     QSet<QString> m_inFlight;
     QList<SequenceTask> m_sequenceQueue;
@@ -142,6 +158,22 @@ private:
     int m_sequenceMetaLimit = 64;
     int m_sequenceQueueLimit = 24;
     bool m_sequenceDetectionEnabled = true; // Default to enabled for backward compatibility
+    
+    // Cancellation token for responsive navigation - incremented on cancelPending()
+    // Decode tasks check this before/during expensive operations
+    std::atomic<uint64_t> m_cancellationToken{0};
+    
+    // Dedicated thread pool for decode tasks - avoids contention with Qt's global pool
+    // and ensures we spread work across all available CPU cores
+    QThreadPool* m_decodePool = nullptr;
+    
+    // Throttle requests during rapid events (resize/scroll)
+    QElapsedTimer m_lastRequestTime;
+    std::atomic<int> m_pendingDecodes{0};
+    static constexpr int kMaxConcurrentDecodes = 8; // Limit concurrent decodes
+    
+    // Suspend requests during resize operations (window resize, splitter drag)
+    std::atomic<bool> m_requestsSuspended{false};
 
     // Metrics (protected by m_mutex)
     quint64 m_cacheHits = 0;

@@ -159,7 +159,12 @@ void GStreamerPlayer::loadMedia(const QString& filePath)
     // Creating a new pipeline every time is extremely slow (5-10 seconds)
     // Just change the URI on the existing playbin instead
     if (m_pipeline) {
-        // Stop current playback
+        // Check current state - if NULL, we need to re-establish window handle
+        GstState currentState = GST_STATE_NULL;
+        gst_element_get_state(m_pipeline, &currentState, nullptr, 0);
+        bool wasInNullState = (currentState == GST_STATE_NULL);
+        
+        // Stop current playback and go to READY state
         gst_element_set_state(m_pipeline, GST_STATE_READY);
 
         // Change URI - playbin will handle codec detection automatically
@@ -170,6 +175,19 @@ void GStreamerPlayer::loadMedia(const QString& filePath)
         if (ret == GST_STATE_CHANGE_FAILURE) {
             emit error("Failed to set pipeline to PAUSED state");
             return;
+        }
+
+        // CRITICAL: If pipeline was in NULL state (from stop()), we need to:
+        // 1. Restart bus message processing (it was stopped in stop())
+        // 2. Re-establish window handle (video sink loses it in NULL state)
+        if (wasInNullState) {
+            if (!m_busTimer->isActive()) {
+                m_busTimer->start();
+            }
+            if (m_videoWidget) {
+                qInfo() << "[GStreamerPlayer] Re-establishing window handle after NULL state";
+                setWindowHandle();
+            }
         }
 
         // Update media info asynchronously when preroll completes

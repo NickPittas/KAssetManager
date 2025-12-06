@@ -381,8 +381,15 @@ void AssetsModel::query(){
         r.sequenceGapCount = q.value(12).toInt();
         r.sequenceVersion = q.value(13).toString();
 
-        // Use cached file_type and last_modified from DB (avoids expensive QFileInfo calls)
+        // Use cached file_type from DB; fall back to extracting from file_path for older assets
+        // that were imported before file_type column was added
         r.fileType = q.value(14).toString();
+        if (r.fileType.isEmpty() && !r.filePath.isEmpty()) {
+            int dotPos = r.filePath.lastIndexOf(QLatin1Char('.'));
+            if (dotPos >= 0 && dotPos < r.filePath.length() - 1) {
+                r.fileType = r.filePath.mid(dotPos + 1).toLower();
+            }
+        }
         QString lastModStr = q.value(15).toString();
         r.lastModified = lastModStr.isEmpty() ? QDateTime() : QDateTime::fromString(lastModStr, Qt::ISODate);
         m_rows.push_back(r);

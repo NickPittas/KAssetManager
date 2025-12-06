@@ -320,11 +320,12 @@ int DB::upsertAsset(const QString& filePath){
 
     // New asset: insert row (no immediate checksum to avoid blocking UI)
     QSqlQuery ins(m_db);
-    ins.prepare("INSERT INTO assets(file_path,file_name,virtual_folder_id,file_size,checksum) VALUES(?,?,?,?,NULL)");
+    ins.prepare("INSERT INTO assets(file_path,file_name,virtual_folder_id,file_size,file_type,checksum) VALUES(?,?,?,?,?,NULL)");
     ins.addBindValue(absPath);
     ins.addBindValue(fi.fileName());
     ins.addBindValue(m_rootId);
     ins.addBindValue((qint64)fi.size());
+    ins.addBindValue(fi.suffix().toLower()); // Store file extension for video type detection
     if (!ins.exec()) {
         qWarning() << "DB::upsertAsset: INSERT failed:" << ins.lastError();
         return 0;
