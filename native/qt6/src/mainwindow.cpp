@@ -2415,8 +2415,6 @@ void MainWindow::onFmTreeActivated(const QModelIndex &index)
 // Forward declarations for file-type helpers used by File Manager handlers
 static bool isPreviewOverlayViewable(const QString &ext);
 
-
-
 void MainWindow::onFmItemDoubleClicked(const QModelIndex &index)
 {
     QModelIndex idx = index.sibling(index.row(), 0);
@@ -2438,7 +2436,7 @@ void MainWindow::onFmItemDoubleClicked(const QModelIndex &index)
                 // Center overlay to the app window instead of screen top-left
                 previewOverlay->setGeometry(geometry());
                 connect(previewOverlay, &PreviewOverlay::closed, this, &MainWindow::closePreview);
-                connect(previewOverlay, &PreviewOverlay::navigateRequested, this, &MainWindow::changePreview);
+                connect(previewOverlay, &PreviewOverlay::navigateRequested, this, &MainWindow::changeFmPreview);
             } else {
                 previewOverlay->stopPlayback();
             }
@@ -2471,7 +2469,7 @@ void MainWindow::onFmItemDoubleClicked(const QModelIndex &index)
             // Center overlay to the app window instead of screen top-left
             previewOverlay->setGeometry(geometry());
             connect(previewOverlay, &PreviewOverlay::closed, this, &MainWindow::closePreview);
-            connect(previewOverlay, &PreviewOverlay::navigateRequested, this, &MainWindow::changePreview);
+            connect(previewOverlay, &PreviewOverlay::navigateRequested, this, &MainWindow::changeFmPreview);
         } else {
             previewOverlay->stopPlayback();
         }
@@ -2628,38 +2626,34 @@ void MainWindow::onFmRefresh()
     QString currentPath = fmDirModel->rootPath();
 
     if (currentPath.isEmpty()) {
-        // If no specific path is set, refresh the entire model
-        fmDirModel->setRootPath("");
-        fmRefreshTreeModel();
+        // If no specific path is set, just update viewports
+        if (fmGridView) fmGridView->viewport()->update();
+        if (fmListView) fmListView->viewport()->update();
         statusBar()->showMessage("File Manager refreshed", 2000);
         return;
     }
 
-    // Manual refresh: optionally clear preview cache for a full rebuild
-    // Note: Do NOT clear cache on automatic (watcher) refreshes to avoid flicker
-    LivePreviewManager::instance().clear();
+    // Manual F5 refresh: force QFileSystemModel to re-read the directory.
+    // QFileSystemModel has an internal file watcher but manual refresh can be useful
+    // if the watcher missed something or for external drive changes.
+    // 
+    // Note: We intentionally do NOT clear LivePreviewManager cache here.
+    // Cache is keyed by file path, so stale entries won't be displayed.
+    // Clearing it causes all visible thumbnails to flicker and re-decode.
 
-    // Force QFileSystemModel to re-read the directory
-    // We do this by temporarily setting a different root and then setting it back
+    // Re-read directory by flipping root path (only for manual F5 refresh)
     QString tempPath = QDir::tempPath();
     fmDirModel->setRootPath(tempPath);
     fmDirModel->setRootPath(currentPath);
 
-    // Also refresh the tree model
-    fmRefreshTreeModel();
-
-    // Rebuild proxy model if it exists
-    if (fmProxyModel) {
+    // Rebuild sequence grouping proxy if enabled (required after model reset)
+    if (fmProxyModel && fmProxyModel->groupingEnabled()) {
         fmProxyModel->rebuildForRoot(currentPath);
     }
 
     // Force viewport updates
-    if (fmGridView) {
-        fmGridView->viewport()->update();
-    }
-    if (fmListView) {
-        fmListView->viewport()->update();
-    }
+    if (fmGridView) fmGridView->viewport()->update();
+    if (fmListView) fmListView->viewport()->update();
 
     statusBar()->showMessage("Folder refreshed", 2000);
 }
@@ -3374,11 +3368,10 @@ void MainWindow::setupConnections()
     connect(&DB::instance(), &DB::assetVersionsChanged,
             this, &MainWindow::onAssetVersionsChanged);
 
-    // Auto-refresh File Manager after file operations complete
-    connect(&FileOpsQueue::instance(), &FileOpsQueue::itemFinished,
-            this, [this](int, bool success, const QString&){
-                if (success) QTimer::singleShot(100, this, &MainWindow::onFmRefresh);
-            });
+    // Note: We intentionally do NOT refresh File Manager after file operations.
+    // QFileSystemModel has its own internal file watcher that auto-updates.
+    // Triggering onFmRefresh() would cause unnecessary 1sec+ delays after every operation.
+    // Use F5 or View > Refresh for manual refresh if needed.
 }
 
 

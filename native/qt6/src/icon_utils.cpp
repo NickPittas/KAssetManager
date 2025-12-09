@@ -7,17 +7,38 @@
 #include <QImage>
 #include <QPixmap>
 #include <QPainterPath>
+#include <QScreen>
+#include <QGuiApplication>
 
 // Icon generation helpers
+// Creates DPI-aware icons that render crisply on High DPI displays
 QIcon mkIcon(const std::function<void(QPainter&, const QRectF&)>& draw, const QColor& color)
 {
-    QPixmap pm(32, 32); pm.fill(Qt::transparent);
-    QPainter p(&pm); p.setRenderHint(QPainter::Antialiasing);
+    // Get device pixel ratio for High DPI support
+    qreal dpr = 1.0;
+    if (QGuiApplication::primaryScreen()) {
+        dpr = QGuiApplication::primaryScreen()->devicePixelRatio();
+    }
+
+    // Create pixmap at physical pixel size for crisp rendering
+    int logicalSize = 32;
+    int physicalSize = static_cast<int>(logicalSize * dpr);
+
+    QPixmap pm(physicalSize, physicalSize);
+    pm.setDevicePixelRatio(dpr);
+    pm.fill(Qt::transparent);
+
+    QPainter p(&pm);
+    p.setRenderHint(QPainter::Antialiasing);
+    // Use logical coordinates - Qt will handle the scaling
     QRectF r(4, 4, 24, 24);
-    QPen pen(color); pen.setWidthF(2.0);
-    p.setPen(pen); p.setBrush(Qt::NoBrush);
+    QPen pen(color);
+    pen.setWidthF(2.0);
+    p.setPen(pen);
+    p.setBrush(Qt::NoBrush);
     draw(p, r);
     p.end();
+
     return QIcon(pm);
 }
 
@@ -44,17 +65,28 @@ QIcon loadPngIcon(const QString& filename, const QColor& targetColor)
         return QIcon();
     }
 
-    // Load the image and scale it to appropriate size (32x32 for toolbar icons)
+    // Get device pixel ratio for High DPI support
+    qreal dpr = 1.0;
+    if (QGuiApplication::primaryScreen()) {
+        dpr = QGuiApplication::primaryScreen()->devicePixelRatio();
+    }
+
+    // Load the image at high resolution for crisp High DPI rendering
     QPixmap pixmap(foundPath);
     if (pixmap.isNull()) {
         qWarning() << "Failed to load icon pixmap:" << foundPath;
         return QIcon();
     }
 
-    // Scale to 32x32 if needed (smooth scaling)
-    if (pixmap.width() != 32 || pixmap.height() != 32) {
-        pixmap = pixmap.scaled(32, 32, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    // Scale to 32x32 logical pixels (physical pixels = 32 * dpr) for toolbar icons
+    // Use higher resolution for High DPI displays
+    int logicalSize = 32;
+    int physicalSize = static_cast<int>(logicalSize * dpr);
+
+    if (pixmap.width() != physicalSize || pixmap.height() != physicalSize) {
+        pixmap = pixmap.scaled(physicalSize, physicalSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
     }
+    pixmap.setDevicePixelRatio(dpr);
 
     // Recolor dark pixels to target color
     QImage img = pixmap.toImage().convertToFormat(QImage::Format_ARGB32);
@@ -72,7 +104,9 @@ QIcon loadPngIcon(const QString& filename, const QColor& targetColor)
             }
         }
     }
+    img.setDevicePixelRatio(dpr);
     pixmap = QPixmap::fromImage(img);
+    pixmap.setDevicePixelRatio(dpr);
 
     // Create QIcon and explicitly set pixmaps for all states to prevent Qt from auto-generating grey disabled versions
     QIcon icon;

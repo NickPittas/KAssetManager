@@ -1,4 +1,5 @@
 ﻿#include <QApplication>
+#include <QGuiApplication>
 #include <QDebug>
 #include <QDir>
 #include <QFile>
@@ -32,6 +33,14 @@ extern "C" {
 
 int main(int argc, char *argv[])
 {
+    // High DPI Configuration - MUST be set before QApplication is created
+    // Qt 6 enables High DPI scaling by default, but we need to configure it properly
+    // to prevent blurry rendering and ensure consistent UI across different DPI displays.
+    //
+    // PassThrough: Use exact device pixel ratio without rounding (prevents blurry text)
+    // This is the recommended policy for Qt 6 applications.
+    QGuiApplication::setHighDpiScaleFactorRoundingPolicy(
+        Qt::HighDpiScaleFactorRoundingPolicy::PassThrough);
 
     // Suppress FFmpeg error messages to prevent console spam
 #ifdef HAVE_FFMPEG_LOG
