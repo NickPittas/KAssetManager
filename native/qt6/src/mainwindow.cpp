@@ -27,6 +27,14 @@
 #include "everything_folder_model.h"
 #include "everything_search.h"
 #include "theme_manager.h"
+#include "projects_model.h"
+#include "project_assets_model.h"
+#include "project_folders_model.h"
+#include "project_sequence_grouping_proxy_model.h"
+#include "project_item_delegate.h"
+#include "project_db.h"
+#include "project_version_detector.h"
+#include "project_manager_watcher.h"
 
 #include "office_preview.h"
 
@@ -36,6 +44,8 @@
 #include "thumbnail_generator_dialog.h"
 #include "thumbnail_generator_dialog.h"
 
+#include <QTableWidget>
+#include <QDialog>
 #include <QHeaderView>
 #include <QStyledItemDelegate>
 #include <QPainter>
@@ -53,6 +63,7 @@
 
 #include <QDragEnterEvent>
 #include <QDropEvent>
+#include <QCloseEvent>
 #include <QMimeData>
 #include <QUrl>
 #include <QDataStream>
@@ -83,6 +94,7 @@ static size_t currentWorkingSetMB() {
 #include <QMouseEvent>
 #include <QFuture>
 #include <QFutureWatcher>
+#include <QBrush>
 #include <QtConcurrent/QtConcurrentRun>
 #include <functional>
 #include <algorithm>
@@ -309,6 +321,8 @@ MainWindow::MainWindow(QWidget *parent)
         g_lastPreviewError.remove(filePath);
         if (assetGridView && assetGridView->viewport()) assetGridView->viewport()->update();
         if (fmGridView && fmGridView->viewport()) fmGridView->viewport()->update();
+        if (pmAssetsGridView && pmAssetsGridView->viewport()) pmAssetsGridView->viewport()->update();
+        if (pmAssetsTableView && pmAssetsTableView->viewport()) pmAssetsTableView->viewport()->update();
         versionPreviewCache[filePath] = pixmap;
         if (versionTable) {
             for (int row = 0; row < versionTable->rowCount(); ++row) {
@@ -317,6 +331,15 @@ MainWindow::MainWindow(QWidget *parent)
                     iconItem->setIcon(QIcon(pixmap));
                     iconItem->setText(QString());
                 }
+            }
+        }
+        // Update PM preview panel if this is the currently selected item
+        if (!pmCurrentPreviewPath.isEmpty() && filePath == pmCurrentPreviewPath) {
+            if (pmImageScene && pmImageView) {
+                pmImageScene->clear();
+                pmImageItem = pmImageScene->addPixmap(pixmap);
+                pmImageScene->setSceneRect(pmImageItem->boundingRect());
+                pmImageView->fitInView(pmImageItem, Qt::KeepAspectRatio);
             }
         }
         visibleThumbTimer.start(50);
@@ -1102,6 +1125,14 @@ void MainWindow::setupUi()
     // Add Asset Manager page to tabs
     mainTabs->addTab(assetManagerPage, "Asset Manager");
 
+    // Project Manager page
+    LogManager::instance().addLog("[TRACE] Creating Project Manager page...", "DEBUG");
+    projectManagerPage = new QWidget(this);
+    LogManager::instance().addLog("[TRACE] Calling setupProjectManagerUi()...", "DEBUG");
+    setupProjectManagerUi();
+    LogManager::instance().addLog("[TRACE] setupProjectManagerUi() completed", "DEBUG");
+    mainTabs->addTab(projectManagerPage, "Project Manager");
+
     // Log viewer as dock widget at bottom (hidden by default)
     QDockWidget* logDock = new QDockWidget("Application Log", this);
     LogManager::instance().addLog("[TRACE] logDock created", "DEBUG");
@@ -1212,6 +1243,7 @@ void MainWindow::setupUi()
         LogManager::instance().addLog("[TRACE] restore asset table columns", "DEBUG");
     }
     LogManager::instance().addLog("[TRACE] window state restored", "DEBUG");
+    restoreProjectManagerState();
 
     // Load initial data
     folderModel->reload();
@@ -2258,7 +2290,8 @@ void MainWindow::setupFileManagerUi()
     }
 
     // Restore persisted workspace for File Manager (after widgets are shown)
-    QTimer::singleShot(0, this, [this]{
+    // Use a longer delay to ensure window is fully laid out before restoring splitter sizes
+    QTimer::singleShot(100, this, [this]{
         QSettings s("AugmentCode", "KAssetManager");
         // View mode and preview visibility first
         if (s.contains("FileManager/ViewMode")) {
@@ -2312,19 +2345,24 @@ void MainWindow::setupFileManagerUi()
             }
         }
 
-        // Splitters
+        // Splitters - restore state
         if (fmSplitter && s.contains("FileManager/MainSplitter")) fmSplitter->restoreState(s.value("FileManager/MainSplitter").toByteArray());
         if (fmLeftSplitter && s.contains("FileManager/LeftSplitter")) fmLeftSplitter->restoreState(s.value("FileManager/LeftSplitter").toByteArray());
         if (fmRightSplitter && s.contains("FileManager/RightSplitter")) fmRightSplitter->restoreState(s.value("FileManager/RightSplitter").toByteArray());
         if (fmPreviewInfoSplitter && s.contains("FileManager/PreviewInfoSplitter")) fmPreviewInfoSplitter->restoreState(s.value("FileManager/PreviewInfoSplitter").toByteArray());
-        // Fallback: explicit sizes if present
+        // Fallback: explicit sizes if present (skip if any size is 0 or too small - indicates collapsed panel)
         auto applySizes = [](QSplitter* sp, const QVariant& v) {
             if (!sp) return;
             if (!v.isValid()) return;
             QList<int> sizes;
             const auto list = v.toList();
-            for (const QVariant &x : list) sizes << x.toInt();
-            if (!sizes.isEmpty()) sp->setSizes(sizes);
+            bool hasZero = false;
+            for (const QVariant &x : list) {
+                int sz = x.toInt();
+                sizes << sz;
+                if (sz < 10) hasZero = true;  // Skip if any panel is essentially collapsed
+            }
+            if (!sizes.isEmpty() && !hasZero) sp->setSizes(sizes);
         };
         applySizes(fmSplitter, s.value("FileManager/MainSplitterSizes"));
         applySizes(fmLeftSplitter, s.value("FileManager/LeftSplitterSizes"));
@@ -2942,6 +2980,7 @@ void MainWindow::onFmTreeContextMenu(const QPoint &pos)
     QAction *createFolderWithSelA = menu.addAction("Create Folder with Selected Files");
     menu.addSeparator();
     QAction *addLibA = menu.addAction("Add to Asset Library");
+    QAction *importPmA = menu.addAction("Import to Project Manager");
     QAction *favA = menu.addAction("Add to Favorites");
     menu.addSeparator();
     QAction *openInExplorerA = menu.addAction("Open in Explorer");
@@ -2950,12 +2989,14 @@ void MainWindow::onFmTreeContextMenu(const QPoint &pos)
     // Enable states
     const bool hasClipboard = !fmClipboard.isEmpty();
     const bool hasSelection = !selectedPaths.isEmpty();
+    const bool isSingleFolder = hasSelection && selectedPaths.size() == 1 && QFileInfo(selectedPaths.first()).isDir();
     pasteA->setEnabled(hasClipboard);
     copyA->setEnabled(hasSelection);
     cutA->setEnabled(hasSelection);
     delA->setEnabled(hasSelection);
     permDelA->setEnabled(hasSelection);
     addLibA->setEnabled(hasSelection);
+    importPmA->setEnabled(isSingleFolder);
     favA->setEnabled(hasSelection);
     openInExplorerA->setEnabled(hasSelection && selectedPaths.size() == 1);
     propertiesA->setEnabled(hasSelection && selectedPaths.size() == 1);
@@ -3022,6 +3063,12 @@ void MainWindow::onFmTreeContextMenu(const QPoint &pos)
         fileOpsDialog->show(); fileOpsDialog->raise(); fileOpsDialog->activateWindow();
     } else if (chosen == addLibA) {
         onAddTreeSelectionToAssetLibrary();
+    } else if (chosen == importPmA && isSingleFolder) {
+        QString folderPath = selectedPaths.first();
+        QString folderName = QDir(folderPath).dirName();
+        pmImportToProject(folderName, folderPath);
+        // Switch to Project Manager tab
+        if (mainTabs) mainTabs->setCurrentWidget(projectManagerPage);
     } else if (chosen == favA) {
         onFmAddToFavorites();
     } else if (chosen == openInExplorerA && hasSelection && selectedPaths.size() == 1) {
@@ -3276,6 +3323,2282 @@ void MainWindow::importToAssetLibrary(const QStringList& filePathsIn, const QStr
     }
 }
 
+// ============= PROJECT MANAGER UI =============
+
+void MainWindow::setupProjectManagerUi()
+{
+    LogManager::instance().addLog("[ProjectManager] Setting up Project Manager UI...", "INFO");
+    
+    // Initialize ProjectDB with separate database file
+    const QString dataDir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    const QString projectsDbPath = dataDir + "/projects.db";
+    if (!ProjectDB::instance().init(projectsDbPath)) {
+        LogManager::instance().addLog("[ProjectManager] Failed to initialize ProjectDB at: " + projectsDbPath, "ERROR");
+        return;
+    }
+    LogManager::instance().addLog("[ProjectManager] ProjectDB initialized at: " + projectsDbPath, "INFO");
+    
+    // Main layout for project manager page
+    QVBoxLayout *pmLayout = new QVBoxLayout(projectManagerPage);
+    pmLayout->setContentsMargins(0, 0, 0, 0);
+    
+    // Main splitter: left (project list + folders) | right (toolbar + assets + preview)
+    pmSplitter = new QSplitter(Qt::Horizontal, projectManagerPage);
+    pmLayout->addWidget(pmSplitter);
+    
+    // ===== LEFT PANEL: Projects + Folder Tree =====
+    QWidget *leftPanel = new QWidget(pmSplitter);
+    QVBoxLayout *leftLayout = new QVBoxLayout(leftPanel);
+    leftLayout->setContentsMargins(0, 0, 0, 0);
+    leftLayout->setSpacing(0);
+    
+    // Left splitter: projects list | folder tree
+    pmLeftSplitter = new QSplitter(Qt::Vertical, leftPanel);
+    
+    // -- Projects section --
+    QWidget *projectsContainer = new QWidget(pmLeftSplitter);
+    QVBoxLayout *projectsLayout = new QVBoxLayout(projectsContainer);
+    projectsLayout->setContentsMargins(0, 0, 0, 0);
+    projectsLayout->setSpacing(0);
+    
+    // Project list header
+    QWidget *projectHeader = new QWidget(projectsContainer);
+    QHBoxLayout *headerLayout = new QHBoxLayout(projectHeader);
+    headerLayout->setContentsMargins(8, 8, 8, 8);
+    
+    QLabel *projectsLabel = new QLabel("Projects", projectHeader);
+    projectsLabel->setStyleSheet("font-weight: bold; color: #fff; font-size: 14px;");
+    headerLayout->addWidget(projectsLabel);
+    headerLayout->addStretch();
+    
+    // Add project button
+    QToolButton *addProjectBtn = new QToolButton(projectHeader);
+    addProjectBtn->setIcon(icoAdd(ThemeManager::instance().iconColor()));
+    addProjectBtn->setToolTip("Add New Project");
+    addProjectBtn->setAutoRaise(true);
+    connect(addProjectBtn, &QToolButton::clicked, this, &MainWindow::onPmCreateProject);
+    headerLayout->addWidget(addProjectBtn);
+    
+    // Notification badge button
+    pmNotificationBadge = new QPushButton("0", projectHeader);
+    pmNotificationBadge->setFixedSize(28, 28);
+    pmNotificationBadge->setStyleSheet(
+        "QPushButton { background-color: #d73a49; color: white; border-radius: 14px; font-weight: bold; font-size: 11px; }"
+        "QPushButton:hover { background-color: #e34856; }"
+    );
+    pmNotificationBadge->setToolTip("New files detected - click to view");
+    pmNotificationBadge->hide();
+    connect(pmNotificationBadge, &QPushButton::clicked, this, &MainWindow::onPmShowNotifications);
+    headerLayout->addWidget(pmNotificationBadge);
+    
+    projectsLayout->addWidget(projectHeader);
+    
+    // Projects list view
+    pmProjectsListView = new QListView(projectsContainer);
+    pmProjectsModel = new ProjectsModel(this);
+    pmProjectsListView->setModel(pmProjectsModel);
+    pmProjectsListView->setStyleSheet(ThemeManager::instance().listViewStyleSheet());
+    pmProjectsListView->setContextMenuPolicy(Qt::CustomContextMenu);
+    pmProjectsListView->setMaximumHeight(200);
+    connect(pmProjectsListView, &QListView::clicked, this, &MainWindow::onPmProjectSelected);
+    connect(pmProjectsListView, &QListView::customContextMenuRequested, this, &MainWindow::onPmProjectContextMenu);
+    projectsLayout->addWidget(pmProjectsListView);
+    
+    pmLeftSplitter->addWidget(projectsContainer);
+    
+    // -- Folder tree section (like FM's folder tree) --
+    QWidget *foldersContainer = new QWidget(pmLeftSplitter);
+    QVBoxLayout *foldersLayout = new QVBoxLayout(foldersContainer);
+    foldersLayout->setContentsMargins(0, 0, 0, 0);
+    foldersLayout->setSpacing(0);
+    
+    QLabel *foldersLabel = new QLabel("Folders", foldersContainer);
+    foldersLabel->setStyleSheet("font-weight: bold; color: #fff; font-size: 13px; padding: 8px;");
+    foldersLayout->addWidget(foldersLabel);
+    
+    pmFolderTree = new QTreeView(foldersContainer);
+    pmFoldersModel = new ProjectFoldersModel(this);
+    pmFolderTree->setModel(pmFoldersModel);
+    pmFolderTree->setHeaderHidden(true);
+    pmFolderTree->setExpandsOnDoubleClick(true);
+    pmFolderTree->setStyleSheet(ThemeManager::instance().treeViewStyleSheet());
+    pmFolderTree->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(pmFolderTree, &QTreeView::clicked, this, &MainWindow::onPmFolderSelected);
+    connect(pmFolderTree, &QTreeView::customContextMenuRequested, this, &MainWindow::onPmFolderContextMenu);
+    foldersLayout->addWidget(pmFolderTree);
+    
+    pmLeftSplitter->addWidget(foldersContainer);
+    pmLeftSplitter->setStretchFactor(0, 1);
+    pmLeftSplitter->setStretchFactor(1, 2);
+    
+    leftLayout->addWidget(pmLeftSplitter);
+    
+    // ===== RIGHT PANEL: Toolbar + Assets + Preview/Info =====
+    QWidget *rightPanel = new QWidget(pmSplitter);
+    QVBoxLayout *rightLayout = new QVBoxLayout(rightPanel);
+    rightLayout->setContentsMargins(0, 0, 0, 0);
+    rightLayout->setSpacing(0);
+    
+    // Toolbar (mirrors FM toolbar)
+    pmToolbar = new QWidget(rightPanel);
+    pmToolbar->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    pmToolbar->setFixedHeight(48);
+    
+    QHBoxLayout *tb = new QHBoxLayout(pmToolbar);
+    tb->setContentsMargins(8, 6, 8, 6);
+    tb->setSpacing(8);
+    
+    auto mkTb = [&](const QIcon &ic, const QString &tip) {
+        QToolButton *b = new QToolButton(pmToolbar);
+        b->setIcon(ic);
+        b->setToolTip(tip);
+        b->setAutoRaise(true);
+        b->setIconSize(QSize(28, 28));
+        return b;
+    };
+    
+    // Navigation buttons
+    pmBackButton = mkTb(icoBack(ThemeManager::instance().iconColor()), "Back");
+    connect(pmBackButton, &QToolButton::clicked, this, &MainWindow::onPmNavigateBack);
+    tb->addWidget(pmBackButton);
+    
+    pmUpButton = mkTb(icoUp(ThemeManager::instance().iconColor()), "Up");
+    connect(pmUpButton, &QToolButton::clicked, this, &MainWindow::onPmNavigateUp);
+    tb->addWidget(pmUpButton);
+    
+    // Separator
+    QFrame *sep1 = new QFrame(pmToolbar);
+    sep1->setFrameShape(QFrame::VLine);
+    sep1->setFrameShadow(QFrame::Sunken);
+    tb->addWidget(sep1);
+    
+    // File operation buttons
+    pmNewFolderBtn = mkTb(icoFolderNew(ThemeManager::instance().iconColor()), "New Folder");
+    connect(pmNewFolderBtn, &QToolButton::clicked, this, &MainWindow::onPmNewFolder);
+    tb->addWidget(pmNewFolderBtn);
+    
+    pmCopyBtn = mkTb(icoCopy(ThemeManager::instance().iconColor()), "Copy");
+    connect(pmCopyBtn, &QToolButton::clicked, this, &MainWindow::onPmCopy);
+    tb->addWidget(pmCopyBtn);
+    
+    pmCutBtn = mkTb(icoCut(ThemeManager::instance().iconColor()), "Cut");
+    connect(pmCutBtn, &QToolButton::clicked, this, &MainWindow::onPmCut);
+    tb->addWidget(pmCutBtn);
+    
+    pmPasteBtn = mkTb(icoPaste(ThemeManager::instance().iconColor()), "Paste");
+    connect(pmPasteBtn, &QToolButton::clicked, this, &MainWindow::onPmPaste);
+    tb->addWidget(pmPasteBtn);
+    
+    pmDeleteBtn = mkTb(icoDelete(ThemeManager::instance().iconColor()), "Delete");
+    connect(pmDeleteBtn, &QToolButton::clicked, this, &MainWindow::onPmDelete);
+    tb->addWidget(pmDeleteBtn);
+    
+    pmRenameBtn = mkTb(icoRename(ThemeManager::instance().iconColor()), "Rename");
+    connect(pmRenameBtn, &QToolButton::clicked, this, &MainWindow::onPmRename);
+    tb->addWidget(pmRenameBtn);
+    
+    pmOpenExternalBtn = mkTb(icoMediaPlay(ThemeManager::instance().iconColor()), "Open in External App");
+    connect(pmOpenExternalBtn, &QToolButton::clicked, this, &MainWindow::onPmOpenExternal);
+    tb->addWidget(pmOpenExternalBtn);
+    
+    // Separator
+    QFrame *sep2 = new QFrame(pmToolbar);
+    sep2->setFrameShape(QFrame::VLine);
+    sep2->setFrameShadow(QFrame::Sunken);
+    tb->addWidget(sep2);
+    
+    // View mode toggle
+    pmViewModeButton = mkTb(icoGrid(ThemeManager::instance().iconColor()), "Toggle Grid/List");
+    connect(pmViewModeButton, &QToolButton::clicked, this, &MainWindow::onPmViewModeToggled);
+    tb->addWidget(pmViewModeButton);
+    
+    // Thumbnail size slider
+    pmSizeLabel = new QLabel("Size:", pmToolbar);
+    pmSizeLabel->setStyleSheet("color: #9aa0a6;");
+    tb->addWidget(pmSizeLabel);
+    
+    pmThumbnailSizeSlider = new QSlider(Qt::Horizontal, pmToolbar);
+    pmThumbnailSizeSlider->setRange(64, 320);
+    pmThumbnailSizeSlider->setValue(180);
+    pmThumbnailSizeSlider->setFixedWidth(140);
+    pmThumbnailSizeSlider->setToolTip("Adjust thumbnail size");
+    connect(pmThumbnailSizeSlider, &QSlider::valueChanged, this, &MainWindow::onPmThumbnailSizeChanged);
+    tb->addWidget(pmThumbnailSizeSlider);
+    
+    tb->addStretch();
+    
+    // Group sequences toggle
+    pmGroupSequencesBtn = new QToolButton(pmToolbar);
+    pmGroupSequencesBtn->setIcon(icoGroup(ThemeManager::instance().iconColor()));
+    pmGroupSequencesBtn->setToolTip("Group image sequences");
+    pmGroupSequencesBtn->setCheckable(true);
+    pmGroupSequencesBtn->setChecked(true);  // Default to grouped
+    pmGroupSequencesBtn->setAutoRaise(true);
+    pmGroupSequencesBtn->setIconSize(QSize(28, 28));
+    pmGroupSequencesBtn->setStyleSheet(
+        "QToolButton { background-color: transparent; border: none; border-radius: 4px; padding: 4px; }"
+        "QToolButton:checked { background-color: #58a6ff; }"
+        "QToolButton:hover { background-color: #2a2a2a; }"
+    );
+    connect(pmGroupSequencesBtn, &QToolButton::toggled, this, &MainWindow::onPmGroupSequencesToggled);
+    tb->addWidget(pmGroupSequencesBtn);
+    
+    // Show all versions toggle
+    pmShowAllVersionsButton = new QToolButton(pmToolbar);
+    pmShowAllVersionsButton->setText("All Versions");
+    pmShowAllVersionsButton->setCheckable(true);
+    pmShowAllVersionsButton->setChecked(false);
+    pmShowAllVersionsButton->setToolTip("Show all versions instead of grouping by highest version");
+    pmShowAllVersionsButton->setStyleSheet(
+        "QToolButton { color: #9aa0a6; padding: 4px 8px; }"
+        "QToolButton:checked { color: #58a6ff; background-color: #21262d; border-radius: 4px; }"
+    );
+    connect(pmShowAllVersionsButton, &QToolButton::toggled, this, &MainWindow::onPmToggleShowAllVersions);
+    tb->addWidget(pmShowAllVersionsButton);
+    
+    // Preview panel toggle
+    pmPreviewToggleButton = mkTb(icoEye(ThemeManager::instance().iconColor()), "Show/Hide Preview Panel");
+    pmPreviewToggleButton->setCheckable(true);
+    pmPreviewToggleButton->setChecked(true);
+    connect(pmPreviewToggleButton, &QToolButton::toggled, this, &MainWindow::onPmTogglePreview);
+    tb->addWidget(pmPreviewToggleButton);
+    
+    // Refresh button
+    pmRefreshButton = mkTb(icoRefresh(ThemeManager::instance().iconColor()), "Refresh");
+    connect(pmRefreshButton, &QToolButton::clicked, this, &MainWindow::onPmRefresh);
+    tb->addWidget(pmRefreshButton);
+    
+    rightLayout->addWidget(pmToolbar);
+    
+    // ===== ASSETS VIEW + PREVIEW/INFO =====
+    pmRightSplitter = new QSplitter(Qt::Horizontal, rightPanel);
+    
+    // Assets view stack (grid/list)
+    pmViewStack = new QStackedWidget(pmRightSplitter);
+    
+    // Create models and proxy
+    pmAssetsModel = new ProjectAssetsModel(this);
+    pmSequenceProxy = new ProjectSequenceGroupingProxyModel(this);
+    pmSequenceProxy->setSourceModel(pmAssetsModel);
+    pmSequenceProxy->setGroupingEnabled(true); // Default to grouped
+    pmItemDelegate = new ProjectItemDelegate(this);
+    
+    // Grid view
+    pmAssetsGridView = new QListView(pmViewStack);
+    pmAssetsGridView->setModel(pmSequenceProxy);  // Use proxy model
+    pmAssetsGridView->setItemDelegate(pmItemDelegate);
+    pmAssetsGridView->setViewMode(QListView::IconMode);
+    pmAssetsGridView->setResizeMode(QListView::Adjust);
+    pmAssetsGridView->setSpacing(1);
+    pmAssetsGridView->setUniformItemSizes(false);
+    pmAssetsGridView->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    pmAssetsGridView->setContextMenuPolicy(Qt::CustomContextMenu);
+    pmAssetsGridView->setStyleSheet("QListView { background-color: #0a0a0a; border: none; }");
+    pmAssetsGridView->setDragEnabled(true);
+    connect(pmAssetsGridView, &QListView::doubleClicked, this, &MainWindow::onPmAssetDoubleClicked);
+    connect(pmAssetsGridView, &QListView::customContextMenuRequested, this, &MainWindow::onPmAssetContextMenu);
+    connect(pmAssetsGridView->selectionModel(), &QItemSelectionModel::selectionChanged, this, &MainWindow::onPmAssetSelectionChanged);
+    pmViewStack->addWidget(pmAssetsGridView);
+    
+    // PM Scrub controller for thumbnail scrubbing (like FM and AM)
+    pmScrubController = new GridScrubController(
+        pmAssetsGridView,
+        [this](const QModelIndex& idx) -> QString {
+            if (!idx.isValid()) return QString();
+            // Map through proxy if needed
+            QModelIndex srcIdx = idx;
+            if (pmSequenceProxy && idx.model() == pmSequenceProxy) {
+                srcIdx = pmSequenceProxy->mapToSource(idx);
+            }
+            if (!srcIdx.isValid()) return QString();
+            // Get file path from model
+            QString path = srcIdx.data(ProjectAssetsModel::FilePathRole).toString();
+            return path;
+        },
+        this);
+    pmScrubController->setSequenceGroupingEnabled(true);  // Default to enabled
+    
+    // Table/List view
+    pmAssetsTableView = new QTableView(pmViewStack);
+    pmAssetsTableView->setModel(pmSequenceProxy);  // Use proxy model
+    pmAssetsTableView->setSelectionBehavior(QAbstractItemView::SelectRows);
+    pmAssetsTableView->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    pmAssetsTableView->setSortingEnabled(true);
+    pmAssetsTableView->setAlternatingRowColors(false);
+    pmAssetsTableView->setShowGrid(false);
+    pmAssetsTableView->verticalHeader()->setVisible(false);
+    pmAssetsTableView->verticalHeader()->setDefaultSectionSize(22);
+    pmAssetsTableView->setIconSize(QSize(18, 18));
+    pmAssetsTableView->horizontalHeader()->setStretchLastSection(true);
+    pmAssetsTableView->setStyleSheet(ThemeManager::instance().tableViewStyleSheet());
+    pmAssetsTableView->setContextMenuPolicy(Qt::CustomContextMenu);
+    pmAssetsTableView->setDragEnabled(true);
+    connect(pmAssetsTableView, &QTableView::doubleClicked, this, &MainWindow::onPmAssetDoubleClicked);
+    connect(pmAssetsTableView, &QTableView::customContextMenuRequested, this, &MainWindow::onPmAssetContextMenu);
+    connect(pmAssetsTableView->selectionModel(), &QItemSelectionModel::selectionChanged, this, &MainWindow::onPmAssetSelectionChanged);
+    pmViewStack->addWidget(pmAssetsTableView);
+    
+    pmViewStack->setCurrentIndex(0);
+    
+    // ===== PREVIEW + INFO PANEL (mirrors FM) =====
+    pmPreviewInfoSplitter = new QSplitter(Qt::Vertical, pmRightSplitter);
+    
+    // Preview panel
+    pmPreviewPanel = new QWidget(pmPreviewInfoSplitter);
+    pmPreviewPanel->setMinimumWidth(260);
+    pmPreviewPanel->setStyleSheet("background-color:#0e0e0e; border-left:1px solid #222;");
+    QVBoxLayout *pv = new QVBoxLayout(pmPreviewPanel);
+    pv->setContentsMargins(8, 8, 8, 8);
+    pv->setSpacing(6);
+    
+    QLabel *pvTitle = new QLabel("Preview", pmPreviewPanel);
+    pvTitle->setStyleSheet("color:#9aa0a6; font-weight:bold;");
+    pv->addWidget(pvTitle);
+    
+    // Image view with zoom/pan
+    pmImageScene = new QGraphicsScene(pmPreviewPanel);
+    pmImageItem = new QGraphicsPixmapItem();
+    pmImageScene->addItem(pmImageItem);
+    pmImageView = new QGraphicsView(pmImageScene, pmPreviewPanel);
+    pmImageView->setDragMode(QGraphicsView::ScrollHandDrag);
+    pmImageView->setRenderHints(QPainter::Antialiasing | QPainter::SmoothPixmapTransform);
+    pmImageView->setMinimumHeight(160);
+    pmImageView->setStyleSheet("background:#090909; border:1px solid #222;");
+    pmImageView->setTransformationAnchor(QGraphicsView::AnchorUnderMouse);
+    pmImageView->setResizeAnchor(QGraphicsView::AnchorUnderMouse);
+    pmImageView->setAlignment(Qt::AlignCenter);
+    pmImageView->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    
+    // Video widget (hidden by default)
+    pmVideoWidget = new QWidget(pmPreviewPanel);
+    pmVideoWidget->setMinimumHeight(160);
+    pmVideoWidget->setStyleSheet("background:#000;");
+    pmVideoWidget->hide();
+    
+    // Preview content container
+    QWidget *previewContent = new QWidget(pmPreviewPanel);
+    QVBoxLayout *pc = new QVBoxLayout(previewContent);
+    pc->setContentsMargins(0, 0, 0, 0);
+    pc->setSpacing(6);
+    pc->addWidget(pmImageView, 1);
+    pc->addWidget(pmVideoWidget, 1);
+    pv->addWidget(previewContent);
+    
+    // Media controls
+    QHBoxLayout *mc = new QHBoxLayout();
+    mc->setSpacing(4);
+    
+    pmPrevFrameBtn = new QPushButton(pmPreviewPanel);
+    pmPrevFrameBtn->setIcon(icoMediaPrevFrame(ThemeManager::instance().iconColor()));
+    pmPrevFrameBtn->setFixedSize(28, 28);
+    pmPrevFrameBtn->setToolTip("Previous frame");
+    pmPrevFrameBtn->hide();
+    mc->addWidget(pmPrevFrameBtn);
+    
+    pmPlayPauseBtn = new QPushButton(pmPreviewPanel);
+    pmPlayPauseBtn->setIcon(icoMediaPlay(ThemeManager::instance().iconColor()));
+    pmPlayPauseBtn->setFixedSize(28, 28);
+    pmPlayPauseBtn->setToolTip("Play/Pause");
+    pmPlayPauseBtn->hide();
+    mc->addWidget(pmPlayPauseBtn);
+    
+    pmNextFrameBtn = new QPushButton(pmPreviewPanel);
+    pmNextFrameBtn->setIcon(icoMediaNextFrame(ThemeManager::instance().iconColor()));
+    pmNextFrameBtn->setFixedSize(28, 28);
+    pmNextFrameBtn->setToolTip("Next frame");
+    pmNextFrameBtn->hide();
+    mc->addWidget(pmNextFrameBtn);
+    
+    pmPositionSlider = new QSlider(Qt::Horizontal, pmPreviewPanel);
+    pmPositionSlider->setRange(0, 1000);
+    pmPositionSlider->hide();
+    mc->addWidget(pmPositionSlider, 1);
+    
+    pmTimeLabel = new QLabel("00:00 / 00:00", pmPreviewPanel);
+    pmTimeLabel->setStyleSheet("color:#9aa0a6; font-size:11px;");
+    pmTimeLabel->hide();
+    mc->addWidget(pmTimeLabel);
+    
+    pmVolumeSlider = new QSlider(Qt::Horizontal, pmPreviewPanel);
+    pmVolumeSlider->setRange(0, 100);
+    pmVolumeSlider->setValue(100);
+    pmVolumeSlider->setFixedWidth(60);
+    pmVolumeSlider->hide();
+    mc->addWidget(pmVolumeSlider);
+    
+    pmMuteBtn = new QPushButton(pmPreviewPanel);
+    pmMuteBtn->setIcon(icoMediaAudio(ThemeManager::instance().iconColor()));
+    pmMuteBtn->setFixedSize(28, 28);
+    pmMuteBtn->setToolTip("Mute/Unmute");
+    pmMuteBtn->hide();
+    mc->addWidget(pmMuteBtn);
+    
+    pv->addLayout(mc);
+    
+    // Create GStreamer player for video playback
+    pmGStreamerPlayer = new GStreamerPlayer(pmPreviewPanel);
+    
+    // Sequence timer for image sequence playback
+    pmSequenceTimer = new QTimer(pmPreviewPanel);
+    connect(pmSequenceTimer, &QTimer::timeout, this, [this]{
+        if (!pmIsSequence || pmSequenceFramePaths.isEmpty()) return;
+        int next = pmSequenceCurrentIndex + 1;
+        if (next >= pmSequenceFramePaths.size()) next = 0; // loop
+        loadPmSequenceFrame(next);
+    });
+    
+    // Wire up media controls
+    connect(pmPrevFrameBtn, &QPushButton::clicked, this, [this]{ 
+        if (pmIsSequence) stepPmSequence(-1); 
+        else if (pmGStreamerPlayer) pmGStreamerPlayer->stepBackward();
+    });
+    connect(pmNextFrameBtn, &QPushButton::clicked, this, [this]{ 
+        if (pmIsSequence) stepPmSequence(1); 
+        else if (pmGStreamerPlayer) pmGStreamerPlayer->stepForward();
+    });
+    
+    connect(pmPlayPauseBtn, &QPushButton::clicked, this, [this]{
+        if (pmIsSequence) {
+            if (pmSequencePlaying) pausePmSequence(); else playPmSequence();
+            return;
+        }
+        if (!pmGStreamerPlayer) return;
+        if (pmGStreamerPlayer->state() == GStreamerPlayer::PlaybackState::Playing) {
+            pmGStreamerPlayer->pause();
+            pmPlayPauseBtn->setIcon(icoMediaPlay(ThemeManager::instance().iconColor()));
+        } else {
+            pmGStreamerPlayer->play();
+            pmPlayPauseBtn->setIcon(icoMediaPause(ThemeManager::instance().iconColor()));
+        }
+    });
+    
+    connect(pmGStreamerPlayer, &GStreamerPlayer::positionChanged, this, [this](qint64 pos){
+        if (pmIsSequence) return;
+        qint64 duration = pmGStreamerPlayer->duration();
+        if (pmGStreamerPlayer && duration > 0){
+            pmPositionSlider->blockSignals(true);
+            pmPositionSlider->setValue(int(pos*1000/duration));
+            pmPositionSlider->blockSignals(false);
+            pmTimeLabel->setText(QString("%1 / %2")
+                .arg(QTime::fromMSecsSinceStartOfDay(int(pos)).toString("mm:ss"))
+                .arg(QTime::fromMSecsSinceStartOfDay(int(duration)).toString("mm:ss")));
+        }
+    });
+    
+    connect(pmGStreamerPlayer, &GStreamerPlayer::playbackStateChanged, this, [this](GStreamerPlayer::PlaybackState state){
+        if (pmPlayPauseBtn) {
+            pmPlayPauseBtn->setIcon(state == GStreamerPlayer::PlaybackState::Playing 
+                ? icoMediaPause(ThemeManager::instance().iconColor()) 
+                : icoMediaPlay(ThemeManager::instance().iconColor()));
+        }
+    });
+    
+    connect(pmPositionSlider, &QSlider::sliderMoved, this, [this](int v){
+        if (pmIsSequence) {
+            loadPmSequenceFrame(v);
+            return;
+        }
+        if (pmGStreamerPlayer) {
+            qint64 duration = pmGStreamerPlayer->duration();
+            if (duration > 0) {
+                pmGStreamerPlayer->seek(v * duration / 1000);
+            }
+        }
+    });
+    
+    connect(pmVolumeSlider, &QSlider::valueChanged, this, [this](int v){
+        if (pmGStreamerPlayer) pmGStreamerPlayer->setVolume(v / 100.0);
+    });
+    
+    connect(pmMuteBtn, &QPushButton::clicked, this, [this]{
+        if (!pmGStreamerPlayer) return;
+        bool newMuted = !pmGStreamerPlayer->isMuted();
+        pmGStreamerPlayer->setMuted(newMuted);
+        pmMuteBtn->setIcon(newMuted ? icoMediaMute(ThemeManager::instance().iconColor()) 
+                                    : icoMediaAudio(ThemeManager::instance().iconColor()));
+    });
+    
+    // ===== INFO PANEL (mirrors FM info panel) =====
+    pmInfoPanel = new QWidget(pmPreviewInfoSplitter);
+    pmInfoPanel->setMinimumWidth(260);
+    pmInfoPanel->setStyleSheet("background-color:#121212; border-left:1px solid #222;");
+    QVBoxLayout *infoPanelLayout = new QVBoxLayout(pmInfoPanel);
+    infoPanelLayout->setContentsMargins(0, 0, 0, 0);
+    infoPanelLayout->setSpacing(0);
+    
+    QLabel *infoTitle = new QLabel("File Info", pmInfoPanel);
+    infoTitle->setStyleSheet("font-size: 14px; font-weight: bold; color: #ffffff; padding: 8px; background-color: #1a1a1a;");
+    infoPanelLayout->addWidget(infoTitle);
+    
+    // Scrollable area for metadata
+    QScrollArea *infoScrollArea = new QScrollArea(pmInfoPanel);
+    infoScrollArea->setWidgetResizable(true);
+    infoScrollArea->setFrameShape(QFrame::NoFrame);
+    infoScrollArea->setStyleSheet("QScrollArea { background-color: #121212; border: none; }");
+    
+    QWidget *infoScrollWidget = new QWidget();
+    QVBoxLayout *infoLayout = new QVBoxLayout(infoScrollWidget);
+    infoLayout->setContentsMargins(8, 8, 8, 8);
+    infoLayout->setSpacing(4);
+    
+    pmInfoFileName = new QLabel("No selection", pmInfoPanel);
+    pmInfoFileName->setStyleSheet("color: #ffffff; margin-top: 4px; font-weight: bold;");
+    pmInfoFileName->setWordWrap(true);
+    infoLayout->addWidget(pmInfoFileName);
+    
+    pmInfoFilePath = new QLabel("", pmInfoPanel);
+    pmInfoFilePath->setStyleSheet("color: #999; font-size: 10px;");
+    pmInfoFilePath->setWordWrap(true);
+    infoLayout->addWidget(pmInfoFilePath);
+    
+    // Separator
+    QFrame *separator1 = new QFrame(pmInfoPanel);
+    separator1->setFrameShape(QFrame::HLine);
+    separator1->setStyleSheet("background-color: #333;");
+    separator1->setFixedHeight(1);
+    infoLayout->addWidget(separator1);
+    
+    pmInfoFileSize = new QLabel("", pmInfoPanel);
+    pmInfoFileSize->setStyleSheet("color: #ccc; font-size: 11px;");
+    pmInfoFileSize->setWordWrap(true);
+    infoLayout->addWidget(pmInfoFileSize);
+    
+    pmInfoFileType = new QLabel("", pmInfoPanel);
+    pmInfoFileType->setStyleSheet("color: #ccc; font-size: 11px;");
+    pmInfoFileType->setWordWrap(true);
+    infoLayout->addWidget(pmInfoFileType);
+    
+    pmInfoDimensions = new QLabel("", pmInfoPanel);
+    pmInfoDimensions->setStyleSheet("color: #ccc; font-size: 11px;");
+    pmInfoDimensions->setWordWrap(true);
+    infoLayout->addWidget(pmInfoDimensions);
+    
+    pmInfoCreated = new QLabel("", pmInfoPanel);
+    pmInfoCreated->setStyleSheet("color: #ccc; font-size: 11px;");
+    pmInfoCreated->setWordWrap(true);
+    infoLayout->addWidget(pmInfoCreated);
+    
+    pmInfoModified = new QLabel("", pmInfoPanel);
+    pmInfoModified->setStyleSheet("color: #ccc; font-size: 11px;");
+    pmInfoModified->setWordWrap(true);
+    infoLayout->addWidget(pmInfoModified);
+    
+    pmInfoPermissions = new QLabel("", pmInfoPanel);
+    pmInfoPermissions->setStyleSheet("color: #ccc; font-size: 11px;");
+    pmInfoPermissions->setWordWrap(true);
+    infoLayout->addWidget(pmInfoPermissions);
+    
+    pmInfoVersions = new QLabel("", pmInfoPanel);
+    pmInfoVersions->setStyleSheet("color: #58a6ff; font-size: 11px;");
+    pmInfoVersions->setWordWrap(true);
+    infoLayout->addWidget(pmInfoVersions);
+    
+    infoLayout->addStretch();
+    infoScrollWidget->setLayout(infoLayout);
+    infoScrollArea->setWidget(infoScrollWidget);
+    infoPanelLayout->addWidget(infoScrollArea);
+    
+    // Assemble preview/info splitter
+    pmPreviewInfoSplitter->addWidget(pmPreviewPanel);
+    pmPreviewInfoSplitter->addWidget(pmInfoPanel);
+    pmPreviewInfoSplitter->setStretchFactor(0, 2);
+    pmPreviewInfoSplitter->setStretchFactor(1, 1);
+    
+    // Assemble right splitter
+    pmRightSplitter->addWidget(pmViewStack);
+    pmRightSplitter->addWidget(pmPreviewInfoSplitter);
+    pmRightSplitter->setStretchFactor(0, 3);
+    pmRightSplitter->setStretchFactor(1, 1);
+    
+    rightLayout->addWidget(pmRightSplitter);
+    
+    // Assemble main splitter
+    pmSplitter->addWidget(leftPanel);
+    pmSplitter->addWidget(rightPanel);
+    pmSplitter->setStretchFactor(0, 1);
+    pmSplitter->setStretchFactor(1, 4);
+
+    // Persist Project Manager splitter positions immediately when moved
+    if (pmSplitter) {
+        connect(pmSplitter, &QSplitter::splitterMoved, this, [this](int, int){
+            QSettings s("AugmentCode", "KAssetManager");
+            s.setValue("ProjectManager/MainSplitter", pmSplitter->saveState());
+            s.sync();
+        });
+    }
+    if (pmLeftSplitter) {
+        connect(pmLeftSplitter, &QSplitter::splitterMoved, this, [this](int, int){
+            QSettings s("AugmentCode", "KAssetManager");
+            s.setValue("ProjectManager/LeftSplitter", pmLeftSplitter->saveState());
+            s.sync();
+        });
+    }
+    if (pmRightSplitter) {
+        connect(pmRightSplitter, &QSplitter::splitterMoved, this, [this](int, int){
+            QSettings s("AugmentCode", "KAssetManager");
+            s.setValue("ProjectManager/RightSplitter", pmRightSplitter->saveState());
+            s.sync();
+        });
+    }
+    if (pmPreviewInfoSplitter) {
+        connect(pmPreviewInfoSplitter, &QSplitter::splitterMoved, this, [this](int, int){
+            QSettings s("AugmentCode", "KAssetManager");
+            s.setValue("ProjectManager/PreviewInfoSplitter", pmPreviewInfoSplitter->saveState());
+            s.sync();
+        });
+    }
+    
+    // Connect version selection from delegate
+    connect(pmItemDelegate, &ProjectItemDelegate::versionSelected, this, &MainWindow::onPmVersionSelected);
+    
+    // Initialize project watcher
+    pmWatcher = new ProjectManagerWatcher(this);
+    connect(pmWatcher, &ProjectManagerWatcher::newFilesDetected, this, &MainWindow::onPmNewFilesDetected);
+    connect(&ProjectDB::instance(), &ProjectDB::projectFoldersChanged, this, [this](int projectId) {
+        if (pmFoldersModel && pmFoldersModel->projectId() == projectId) {
+            pmFoldersModel->setProjectId(projectId);
+        }
+    });
+    connect(&ProjectDB::instance(), &ProjectDB::notificationsChanged, this, &MainWindow::updatePmNotificationBadge);
+    
+    // Start watching all existing projects
+    QVector<Project> projects = ProjectDB::instance().listProjects();
+    for (const Project& p : projects) {
+        if (!p.watchPath.isEmpty()) {
+            pmWatcher->watchProject(p.id, p.watchPath);
+        }
+    }
+    
+    // Load initial notification count
+    updatePmNotificationBadge();
+    
+    // Create Project Manager shortcuts
+    {
+        auto sc = new QShortcut(QKeySequence(Qt::Key_Space), projectManagerPage);
+        connect(sc, &QShortcut::activated, this, &MainWindow::onPmOpenOverlay);
+    }
+    {
+        auto sc = new QShortcut(QKeySequence::Copy, projectManagerPage);
+        connect(sc, &QShortcut::activated, this, &MainWindow::onPmCopy);
+    }
+    {
+        auto sc = new QShortcut(QKeySequence::Cut, projectManagerPage);
+        connect(sc, &QShortcut::activated, this, &MainWindow::onPmCut);
+    }
+    {
+        auto sc = new QShortcut(QKeySequence::Paste, projectManagerPage);
+        connect(sc, &QShortcut::activated, this, &MainWindow::onPmPaste);
+    }
+    {
+        auto sc = new QShortcut(QKeySequence::Delete, projectManagerPage);
+        connect(sc, &QShortcut::activated, this, &MainWindow::onPmDelete);
+    }
+    {
+        auto sc = new QShortcut(QKeySequence(Qt::Key_F2), projectManagerPage);
+        connect(sc, &QShortcut::activated, this, &MainWindow::onPmRename);
+    }
+    {
+        auto sc = new QShortcut(QKeySequence(Qt::Key_F5), projectManagerPage);
+        connect(sc, &QShortcut::activated, this, &MainWindow::onPmRefresh);
+    }
+    {
+        auto sc = new QShortcut(QKeySequence(Qt::Key_Backspace), projectManagerPage);
+        connect(sc, &QShortcut::activated, this, &MainWindow::onPmNavigateUp);
+    }
+    
+    restoreProjectManagerState();
+    LogManager::instance().addLog("[ProjectManager] UI setup complete", "INFO");
+}
+
+void MainWindow::onPmProjectSelected(const QModelIndex &index)
+{
+    if (!index.isValid()) return;
+    
+    pmCurrentProjectId = index.data(ProjectsModel::IdRole).toInt();
+    QString watchPath = index.data(ProjectsModel::WatchPathRole).toString();
+    
+    LogManager::instance().addLog(QString("[ProjectManager] Selected project %1 with watch path: %2")
+        .arg(pmCurrentProjectId).arg(watchPath), "DEBUG");
+    
+    // Update folder tree model
+    if (pmFoldersModel) {
+        pmFoldersModel->setProjectId(pmCurrentProjectId);
+        qDebug() << "[PM] Folder model row count:" << pmFoldersModel->rowCount();
+        // Expand the root folder
+        if (pmFolderTree && pmFoldersModel->rowCount() > 0) {
+            QModelIndex rootIdx = pmFoldersModel->index(0, 0);
+            qDebug() << "[PM] Root index valid:" << rootIdx.isValid() << "data:" << rootIdx.data().toString();
+            pmFolderTree->expand(rootIdx);
+        }
+    }
+    
+    // Reset folder filter and history
+    pmCurrentFolderId = -1;
+    pmFolderHistory.clear();
+    pmFolderHistoryIndex = -1;
+    
+    if (pmAssetsModel) {
+        pmAssetsModel->setProjectId(pmCurrentProjectId);
+        pmAssetsModel->setFolderId(-1);  // Show all assets initially
+    }
+}
+
+void MainWindow::onPmFolderSelected(const QModelIndex &index)
+{
+    if (!index.isValid() || !pmFoldersModel) return;
+    
+    int folderId = pmFoldersModel->folderIdForIndex(index);
+    if (folderId <= 0) return;
+    
+    // Add to history
+    if (pmFolderHistoryIndex < pmFolderHistory.size() - 1) {
+        pmFolderHistory = pmFolderHistory.mid(0, pmFolderHistoryIndex + 1);
+    }
+    pmFolderHistory.append(folderId);
+    pmFolderHistoryIndex = pmFolderHistory.size() - 1;
+    pmCurrentFolderId = folderId;
+    
+    // Filter assets to selected folder
+    if (pmAssetsModel) {
+        pmAssetsModel->setFolderId(folderId);
+    }
+    
+    LogManager::instance().addLog(QString("[ProjectManager] Selected folder id %1").arg(folderId), "DEBUG");
+}
+
+void MainWindow::onPmAssetSelectionChanged()
+{
+    // Get selection from the currently active view
+    QModelIndexList selected;
+    if (pmIsGridMode && pmAssetsGridView && pmAssetsGridView->selectionModel()) {
+        selected = pmAssetsGridView->selectionModel()->selectedIndexes();
+    } else if (!pmIsGridMode && pmAssetsTableView && pmAssetsTableView->selectionModel()) {
+        selected = pmAssetsTableView->selectionModel()->selectedIndexes();
+    }
+    
+    if (selected.isEmpty()) {
+        clearPmPreview();
+        return;
+    }
+    
+    updatePmPreviewForIndex(selected.first());
+    updatePmInfoPanel();
+}
+
+void MainWindow::onPmAssetDoubleClicked(const QModelIndex &index)
+{
+    if (!index.isValid()) return;
+    
+    // Check if it's a folder - navigate into it
+    bool isFolder = index.data(ProjectAssetsModel::IsFolderRole).toBool();
+    if (isFolder) {
+        int subFolderId = index.data(ProjectAssetsModel::SubFolderIdRole).toInt();
+        if (subFolderId > 0) {
+            // Navigate into the folder
+            pmNavigateToFolder(subFolderId);
+            
+            // Also select this folder in the tree view
+            if (pmFolderTree && pmFoldersModel) {
+                QModelIndex folderIdx = pmFoldersModel->indexForFolderId(subFolderId);
+                if (folderIdx.isValid()) {
+                    pmFolderTree->setCurrentIndex(folderIdx);
+                    pmFolderTree->expand(folderIdx);
+                }
+            }
+        }
+        return;
+    }
+    
+    QString filePath = index.data(ProjectAssetsModel::FilePathRole).toString();
+    
+    // Check if it's a project file that should open in external app
+    if (ProjectVersionDetector::isProjectFile(filePath)) {
+        QSettings s("AugmentCode", "KAssetManager");
+        QString exePath;
+        
+        if (ProjectVersionDetector::isAfterEffectsFile(filePath)) {
+            exePath = s.value("ExternalApps/AfterEffectsPath").toString();
+        } else if (ProjectVersionDetector::isNukeFile(filePath)) {
+            exePath = s.value("ExternalApps/NukeXPath").toString();
+        }
+        
+        if (!exePath.isEmpty() && QFile::exists(exePath)) {
+            QProcess::startDetached(exePath, QStringList() << filePath);
+            LogManager::instance().addLog(QString("[ProjectManager] Launching: %1 %2").arg(exePath, filePath), "INFO");
+        } else {
+            // Fall back to system default
+            QDesktopServices::openUrl(QUrl::fromLocalFile(filePath));
+        }
+    } else {
+        // Open media files in preview overlay
+        onPmOpenOverlay();
+    }
+}
+
+void MainWindow::onPmOpenOverlay()
+{
+    // Toggle: if overlay is visible, close it
+    if (previewOverlay && previewOverlay->isVisible()) {
+        closePreview();
+        return;
+    }
+    
+    // Get current selection
+    QModelIndex idx;
+    if (pmIsGridMode && pmAssetsGridView) {
+        idx = pmAssetsGridView->currentIndex();
+    } else if (pmAssetsTableView) {
+        idx = pmAssetsTableView->currentIndex();
+    }
+    
+    if (!idx.isValid()) return;
+    
+    QString filePath = idx.data(ProjectAssetsModel::FilePathRole).toString();
+    bool isSequence = idx.data(ProjectAssetsModel::IsSequenceRole).toBool();
+    
+    if (filePath.isEmpty()) return;
+    
+    if (!previewOverlay) {
+        previewOverlay = new PreviewOverlay(this);
+        previewOverlay->setGeometry(geometry());
+        connect(previewOverlay, &PreviewOverlay::closed, this, &MainWindow::closePreview);
+        connect(previewOverlay, &PreviewOverlay::navigateRequested, this, &MainWindow::changePmPreview);
+    } else {
+        previewOverlay->stopPlayback();
+    }
+    
+    if (isSequence) {
+        QString pattern = idx.data(ProjectAssetsModel::SequencePatternRole).toString();
+        int startFrame = idx.data(ProjectAssetsModel::SequenceStartFrameRole).toInt();
+        int endFrame = idx.data(ProjectAssetsModel::SequenceEndFrameRole).toInt();
+        
+        // Reconstruct frame paths
+        QStringList frames;
+        QFileInfo fi(pattern);
+        QString base = fi.completeBaseName();
+        QString ext = fi.suffix();
+        QString dir = fi.absolutePath();
+        int hashCount = base.count('#');
+        
+        if (hashCount > 0) {
+            int hashStart = base.indexOf('#');
+            QString prefix = base.left(hashStart);
+            QString suffix = base.mid(hashStart + hashCount);
+            
+            for (int f = startFrame; f <= endFrame; ++f) {
+                QString frameStr = QString("%1").arg(f, hashCount, 10, QLatin1Char('0'));
+                QString framePath = dir + "/" + prefix + frameStr + suffix + "." + ext;
+                if (QFileInfo::exists(framePath)) {
+                    frames.append(framePath);
+                }
+            }
+        }
+        
+        if (!frames.isEmpty()) {
+            QString seqName = QFileInfo(pattern).fileName();
+            previewOverlay->showSequence(frames, seqName, startFrame, endFrame);
+            return;
+        }
+    }
+    
+    // Single file preview
+    QFileInfo info(filePath);
+    if (info.exists()) {
+        previewOverlay->showAsset(filePath, info.fileName(), info.suffix());
+    }
+}
+
+void MainWindow::onPmAssetContextMenu(const QPoint &pos)
+{
+    QMenu menu;
+    
+    QModelIndex index;
+    QAbstractItemView *view = pmIsGridMode ? static_cast<QAbstractItemView*>(pmAssetsGridView) : static_cast<QAbstractItemView*>(pmAssetsTableView);
+    if (!view) return;
+    
+    index = view->indexAt(pos);
+    
+    // Get all selected items
+    QModelIndexList selectedIndexes = view->selectionModel()->selectedIndexes();
+    QStringList selectedPaths;
+    QList<int> selectedAssetIds;
+    
+    for (const QModelIndex &idx : selectedIndexes) {
+        QString path = idx.data(ProjectAssetsModel::FilePathRole).toString();
+        int assetId = idx.data(ProjectAssetsModel::IdRole).toInt();
+        if (!path.isEmpty() && !selectedPaths.contains(path)) {
+            selectedPaths.append(path);
+            selectedAssetIds.append(assetId);
+        }
+    }
+    
+    bool hasSel = !selectedPaths.isEmpty();
+    int selCount = selectedPaths.size();
+    
+    // Standard actions like FM
+    QAction *openA = menu.addAction("Open");
+    openA->setEnabled(selCount == 1);
+    
+    if (index.isValid()) {
+        QString filePath = index.data(ProjectAssetsModel::FilePathRole).toString();
+        if (ProjectVersionDetector::isProjectFile(filePath)) {
+            QString appName = ProjectVersionDetector::isAfterEffectsFile(filePath) ? "After Effects" : "NukeX";
+            QAction *openInAppA = menu.addAction(QString("Open in %1").arg(appName));
+            connect(openInAppA, &QAction::triggered, this, [this, index]() {
+                onPmAssetDoubleClicked(index);
+            });
+        }
+    }
+    
+    menu.addSeparator();
+    
+    QAction *copyA = menu.addAction("Copy");
+    copyA->setShortcut(QKeySequence::Copy);
+    copyA->setEnabled(hasSel);
+    
+    QAction *cutA = menu.addAction("Cut");
+    cutA->setShortcut(QKeySequence::Cut);
+    cutA->setEnabled(hasSel);
+    
+    QAction *pasteA = menu.addAction("Paste");
+    pasteA->setShortcut(QKeySequence::Paste);
+    pasteA->setEnabled(!pmClipboard.isEmpty());
+    
+    menu.addSeparator();
+    
+    QAction *renameA = menu.addAction("Rename");
+    renameA->setShortcut(QKeySequence(Qt::Key_F2));
+    renameA->setEnabled(selCount == 1);
+    
+    QAction *deleteA = menu.addAction("Delete");
+    deleteA->setShortcut(QKeySequence::Delete);
+    deleteA->setEnabled(hasSel);
+    
+    menu.addSeparator();
+    
+    QAction *showInExplorerA = menu.addAction("Show in Explorer");
+    showInExplorerA->setEnabled(selCount == 1);
+    
+    QAction *propertiesA = menu.addAction("Properties");
+    propertiesA->setEnabled(selCount == 1);
+    
+    QAction *generateThumbA = nullptr;
+    if (index.isValid()) {
+        generateThumbA = menu.addAction("Generate Thumbnail");
+    }
+    
+    QAction *chosen = menu.exec(view->viewport()->mapToGlobal(pos));
+    if (!chosen) return;
+    
+    if (chosen == openA && selCount == 1) {
+        QDesktopServices::openUrl(QUrl::fromLocalFile(selectedPaths.first()));
+    } else if (chosen == copyA) {
+        pmClipboard = selectedPaths;
+        pmClipboardCutMode = false;
+        statusBar()->showMessage(QString("Copied %1 file(s)").arg(selCount), 2000);
+    } else if (chosen == cutA) {
+        pmClipboard = selectedPaths;
+        pmClipboardCutMode = true;
+        statusBar()->showMessage(QString("Cut %1 file(s)").arg(selCount), 2000);
+    } else if (chosen == pasteA) {
+        onPmPaste();
+    } else if (chosen == renameA && selCount == 1) {
+        onPmRename();
+    } else if (chosen == deleteA) {
+        onPmDelete();
+    } else if (chosen == showInExplorerA && selCount == 1) {
+        QProcess::startDetached("explorer.exe", {"/select,", QDir::toNativeSeparators(selectedPaths.first())});
+    } else if (chosen == propertiesA && selCount == 1) {
+        #ifdef Q_OS_WIN
+        std::wstring wpath = selectedPaths.first().toStdWString();
+        SHELLEXECUTEINFOW sei = { sizeof(sei) };
+        sei.lpVerb = L"properties";
+        sei.lpFile = wpath.c_str();
+        sei.nShow = SW_SHOW;
+        sei.fMask = SEE_MASK_INVOKEIDLIST;
+        ShellExecuteExW(&sei);
+        #endif
+    } else if (chosen == generateThumbA && index.isValid()) {
+        QString filePath = index.data(ProjectAssetsModel::FilePathRole).toString();
+        bool isSequence = index.data(ProjectAssetsModel::IsSequenceRole).toBool();
+        QString fileType = index.data(ProjectAssetsModel::FileTypeRole).toString().toLower();
+
+        if (!filePath.isEmpty()) {
+            QVector<ThumbnailGeneratorWorker::Task> tasks;
+            ThumbnailGeneratorWorker::Task task;
+            task.filePath = filePath;
+
+            static const QSet<QString> videoExts = {
+                "mov", "qt", "mp4", "m4v", "mxf", "avi", "mkv", "webm",
+                "mpg", "mpeg", "m2v", "m2ts", "mts", "wmv", "asf", "flv"
+            };
+
+            if (isSequence) {
+                task.isSequence = true;
+                task.isVideo = false;
+
+                const int startFrame = index.data(ProjectAssetsModel::SequenceStartFrameRole).toInt();
+                const int endFrame = index.data(ProjectAssetsModel::SequenceEndFrameRole).toInt();
+                QStringList framePaths = reconstructSequenceFramePaths(filePath, startFrame, endFrame);
+                task.sequenceFrames = framePaths;
+            } else if (videoExts.contains(fileType)) {
+                task.isVideo = true;
+                task.isSequence = false;
+            } else {
+                task.isVideo = false;
+                task.isSequence = false;
+            }
+
+            tasks.append(task);
+
+            auto *worker = new ThumbnailGeneratorWorker();
+            auto *thread = new QThread(this);
+
+            worker->moveToThread(thread);
+            connect(thread, &QThread::finished, worker, &QObject::deleteLater);
+            connect(this, &QObject::destroyed, thread, &QThread::quit);
+
+            connect(worker, &ThumbnailGeneratorWorker::queueFinished, this, [this, thread]() {
+                if (pmAssetsGridView && pmAssetsGridView->viewport()) pmAssetsGridView->viewport()->update();
+                if (pmAssetsTableView && pmAssetsTableView->viewport()) pmAssetsTableView->viewport()->update();
+                statusBar()->showMessage("Thumbnail generation completed", 3000);
+                thread->quit();
+            });
+
+            connect(worker, &ThumbnailGeneratorWorker::logLine, this, [](const QString &line) {
+                qDebug() << "[ThumbnailGeneratorWorker]" << line;
+            });
+
+            thread->start(QThread::LowPriority);
+
+            ThumbnailCacheManager &cache = ThumbnailCacheManager::instance();
+            const QSize thumbnailSize = cache.getThumbnailSize();
+
+            QMetaObject::invokeMethod(worker, [worker, tasks, thumbnailSize]() {
+                worker->start(tasks, thumbnailSize);
+            }, Qt::QueuedConnection);
+
+            statusBar()->showMessage("Generating thumbnail...", 2000);
+        }
+    }
+}
+
+void MainWindow::onPmProjectContextMenu(const QPoint &pos)
+{
+    QMenu menu;
+    
+    QModelIndex index = pmProjectsListView->indexAt(pos);
+    
+    if (index.isValid()) {
+        menu.addAction("Rename Project", this, &MainWindow::onPmRenameProject);
+        menu.addAction("Change Watch Folder...", this, &MainWindow::onPmAddWatchFolder);
+        menu.addSeparator();
+        menu.addAction("Re-sync Asset Folders", this, [this, index]() {
+            int projectId = index.data(ProjectsModel::IdRole).toInt();
+            if (projectId <= 0) return;
+            
+            statusBar()->showMessage("Re-syncing asset folders...");
+            int fixed = ProjectDB::instance().resyncAssetFolders(projectId);
+            statusBar()->showMessage(QString("Re-sync complete: %1 assets updated").arg(fixed), 5000);
+            
+            if (fixed > 0 && pmAssetsModel && pmAssetsModel->projectId() == projectId) {
+                pmAssetsModel->reload();
+            }
+            if (pmFoldersModel) {
+                pmFoldersModel->setProjectId(pmFoldersModel->projectId()); // Force refresh
+            }
+        });
+        menu.addSeparator();
+        menu.addAction("Delete Project", this, &MainWindow::onPmDeleteProject);
+    } else {
+        menu.addAction("New Project...", this, &MainWindow::onPmCreateProject);
+    }
+    
+    menu.exec(pmProjectsListView->viewport()->mapToGlobal(pos));
+}
+
+void MainWindow::onPmCreateProject()
+{
+    // First ask for folder - then derive name from it
+    QString watchPath = QFileDialog::getExistingDirectory(this, "Select Project Folder");
+    if (watchPath.isEmpty()) return;
+    
+    // Default name from folder
+    QString defaultName = QDir(watchPath).dirName();
+    
+    bool ok;
+    QString name = QInputDialog::getText(this, "New Project", "Project name:", QLineEdit::Normal, defaultName, &ok);
+    if (!ok || name.isEmpty()) return;
+    
+    pmImportToProject(name, watchPath);
+}
+
+void MainWindow::pmImportToProject(const QString& name, const QString& watchPath)
+{
+    if (!pmProjectsModel) return;
+    
+    int projectId = pmProjectsModel->createProject(name, watchPath);
+    if (projectId <= 0) {
+        LogManager::instance().addLog("[ProjectManager] Failed to create project: " + name, "ERROR");
+        QMessageBox::warning(this, "Error", "Failed to create project. Check logs for details.");
+        return;
+    }
+    
+    LogManager::instance().addLog(QString("[ProjectManager] Created project '%1' (id=%2) at %3")
+        .arg(name).arg(projectId).arg(watchPath), "INFO");
+    
+    // Start watching the new project
+    if (pmWatcher) {
+        pmWatcher->watchProject(projectId, watchPath);
+    }
+    
+    // Get the root folder for this project to use as import target
+    int folderId = ProjectDB::instance().getProjectRootFolderId(projectId);
+    if (folderId <= 0) {
+        LogManager::instance().addLog("[ProjectManager] Failed to get root folder for project", "ERROR");
+        return;
+    }
+    
+    // Create importer targeting ProjectDB
+    Importer projectImporter(this, &ProjectDB::instance());
+    projectImporter.setSequenceDetectionEnabled(false);
+    connect(&projectImporter, &Importer::currentFileChanged, this, [this](const QString& file) {
+        statusBar()->showMessage("Importing: " + QFileInfo(file).fileName(), 2000);
+    });
+    
+    LogManager::instance().addLog(QString("[ProjectManager] Importing folder contents from %1 into folder id %2").arg(watchPath).arg(folderId), "INFO");
+    
+    // Import the folder contents directly into the project root (no wrapper folder)
+    if (projectImporter.importFolderContents(watchPath, folderId)) {
+        LogManager::instance().addLog("[ProjectManager] Import completed successfully", "INFO");
+        // Refresh the assets view
+        if (pmAssetsModel) {
+            pmAssetsModel->setProjectId(projectId);
+        }
+        // Refresh folder tree
+        if (pmFoldersModel) {
+            pmFoldersModel->setProjectId(projectId);
+        }
+    } else {
+        LogManager::instance().addLog("[ProjectManager] Import failed", "ERROR");
+    }
+}
+
+void MainWindow::onPmRenameProject()
+{
+    QModelIndex index = pmProjectsListView->currentIndex();
+    if (!index.isValid()) return;
+    
+    QString oldName = index.data(ProjectsModel::NameRole).toString();
+    bool ok;
+    QString newName = QInputDialog::getText(this, "Rename Project", "New name:", QLineEdit::Normal, oldName, &ok);
+    if (!ok || newName.isEmpty() || newName == oldName) return;
+    
+    int projectId = index.data(ProjectsModel::IdRole).toInt();
+    if (pmProjectsModel) {
+        pmProjectsModel->renameProject(projectId, newName);
+    }
+}
+
+void MainWindow::onPmDeleteProject()
+{
+    QModelIndex index = pmProjectsListView->currentIndex();
+    if (!index.isValid()) return;
+    
+    QString name = index.data(ProjectsModel::NameRole).toString();
+    int projectId = index.data(ProjectsModel::IdRole).toInt();
+    
+    QMessageBox::StandardButton reply = QMessageBox::question(
+        this, "Delete Project",
+        QString("Are you sure you want to delete project '%1'?\n\nThis will not delete any files, only the project entry.").arg(name),
+        QMessageBox::Yes | QMessageBox::No
+    );
+    
+    if (reply == QMessageBox::Yes && pmProjectsModel) {
+        // Stop watching before deleting
+        if (pmWatcher) {
+            pmWatcher->unwatchProject(projectId);
+        }
+        
+        pmProjectsModel->deleteProject(projectId);
+        pmCurrentProjectId = -1;
+        if (pmAssetsModel) {
+            pmAssetsModel->setProjectId(-1);
+        }
+    }
+}
+
+void MainWindow::onPmAddWatchFolder()
+{
+    QModelIndex index = pmProjectsListView->currentIndex();
+    if (!index.isValid()) return;
+    
+    QString currentPath = index.data(ProjectsModel::WatchPathRole).toString();
+    QString newPath = QFileDialog::getExistingDirectory(this, "Select Watch Folder", currentPath);
+    if (newPath.isEmpty()) return;
+    
+    int projectId = index.data(ProjectsModel::IdRole).toInt();
+    ProjectDB::instance().updateProjectWatchPath(projectId, newPath);
+    
+    // Update watcher with new path
+    if (pmWatcher) {
+        pmWatcher->watchProject(projectId, newPath);
+    }
+    
+    if (pmProjectsModel) {
+        pmProjectsModel->refresh();
+    }
+}
+
+void MainWindow::onPmViewModeToggled()
+{
+    pmIsGridMode = !pmIsGridMode;
+    if (pmViewStack) {
+        pmViewStack->setCurrentIndex(pmIsGridMode ? 0 : 1);
+    }
+    if (pmViewModeButton) {
+        pmViewModeButton->setIcon(pmIsGridMode ? icoList(ThemeManager::instance().iconColor()) : icoGrid(ThemeManager::instance().iconColor()));
+    }
+    QSettings s("AugmentCode", "KAssetManager");
+    s.setValue("ProjectManager/ViewMode", pmIsGridMode);
+}
+
+void MainWindow::onPmThumbnailSizeChanged(int size)
+{
+    if (pmItemDelegate) {
+        pmItemDelegate->setThumbnailSize(size);
+    }
+    if (pmAssetsGridView) {
+        pmAssetsGridView->setGridSize(QSize(size + 24, size + 45));
+        pmAssetsGridView->viewport()->update();
+    }
+    QSettings s("AugmentCode", "KAssetManager");
+    s.setValue("ProjectManager/ThumbnailSize", size);
+}
+
+void MainWindow::onPmToggleShowAllVersions(bool checked)
+{
+    if (pmAssetsModel) {
+        pmAssetsModel->setShowAllVersions(checked);
+    }
+}
+
+void MainWindow::onPmVersionSelected(qint64 assetId, const QString &versionPath)
+{
+    Q_UNUSED(assetId);
+    Q_UNUSED(versionPath);
+    // TODO: Handle version selection - possibly switch displayed version
+    LogManager::instance().addLog(QString("[ProjectManager] Version selected for asset %1: %2")
+        .arg(assetId).arg(versionPath), "DEBUG");
+}
+
+void MainWindow::onPmRefresh()
+{
+    if (pmProjectsModel) {
+        pmProjectsModel->refresh();
+    }
+    if (pmAssetsModel && pmCurrentProjectId > 0) {
+        pmAssetsModel->setProjectId(pmCurrentProjectId);
+    }
+}
+
+void MainWindow::onPmMarkNotificationsRead()
+{
+    if (pmCurrentProjectId > 0) {
+        ProjectDB::instance().markNotificationsRead(pmCurrentProjectId);
+        updatePmNotificationBadge();
+    }
+}
+
+void MainWindow::onPmShowNotifications()
+{
+    int scopedProjectId = pmCurrentProjectId > 0 ? pmCurrentProjectId : -1;
+    QVector<ProjectNotification> notifications = ProjectDB::instance().getUnacknowledgedNotifications(scopedProjectId);
+
+    if (notifications.isEmpty()) {
+        QMessageBox::information(this, "Notifications", "No new files detected.");
+        return;
+    }
+
+    QDialog dialog(this);
+    dialog.setWindowTitle("Project Notifications");
+    dialog.resize(800, 420);
+    QVBoxLayout *layout = new QVBoxLayout(&dialog);
+
+    QLabel *hint = new QLabel("Click 'Go To Asset' to jump directly to the file inside the Project Manager.", &dialog);
+    hint->setStyleSheet("color: #9aa0a6;");
+    layout->addWidget(hint);
+
+    QTableWidget *table = new QTableWidget(notifications.size(), 4, &dialog);
+    table->setHorizontalHeaderLabels({"Asset", "Location", "Detected", ""});
+    table->horizontalHeader()->setStretchLastSection(false);
+    table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+    table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
+    table->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+    table->horizontalHeader()->setSectionResizeMode(3, QHeaderView::ResizeToContents);
+    table->verticalHeader()->setVisible(false);
+    table->setSelectionMode(QAbstractItemView::NoSelection);
+    table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+
+    for (int row = 0; row < notifications.size(); ++row) {
+        const ProjectNotification notif = notifications.at(row);
+        QFileInfo info(notif.filePath);
+
+        auto *nameItem = new QTableWidgetItem(info.fileName());
+        table->setItem(row, 0, nameItem);
+
+        auto *pathItem = new QTableWidgetItem(info.absolutePath());
+        table->setItem(row, 1, pathItem);
+
+        const QDateTime detected = QDateTime::fromString(notif.detectedAt, Qt::ISODate);
+        auto *detectedItem = new QTableWidgetItem(detected.isValid() ? detected.toString("yyyy-MM-dd hh:mm:ss") : notif.detectedAt);
+        table->setItem(row, 2, detectedItem);
+
+        QPushButton *openBtn = new QPushButton("Go To Asset", table);
+        openBtn->setAutoDefault(false);
+        table->setCellWidget(row, 3, openBtn);
+
+        connect(openBtn, &QPushButton::clicked, this, [this, notif, openBtn, nameItem]() {
+            navigateToProjectAsset(notif.projectId, notif.assetId, notif.filePath);
+            ProjectDB::instance().acknowledgeNotification(notif.id);
+            updatePmNotificationBadge();
+            if (nameItem) {
+                nameItem->setText(nameItem->text() + " ✓");
+                nameItem->setForeground(QBrush(Qt::gray));
+            }
+            openBtn->setEnabled(false);
+        });
+    }
+
+    layout->addWidget(table, 1);
+
+    QHBoxLayout *buttonsLayout = new QHBoxLayout();
+    QPushButton *markAllBtn = new QPushButton("Mark All Read", &dialog);
+    QPushButton *closeBtn = new QPushButton("Close", &dialog);
+    buttonsLayout->addStretch();
+    buttonsLayout->addWidget(markAllBtn);
+    buttonsLayout->addWidget(closeBtn);
+    layout->addLayout(buttonsLayout);
+
+    connect(markAllBtn, &QPushButton::clicked, this, [this, scopedProjectId, &dialog]() {
+        ProjectDB::instance().acknowledgeAllNotifications(scopedProjectId);
+        updatePmNotificationBadge();
+        dialog.accept();
+    });
+    connect(closeBtn, &QPushButton::clicked, &dialog, &QDialog::reject);
+
+    dialog.exec();
+}
+
+void MainWindow::onPmNewFilesDetected(int projectId, const QStringList &newFiles)
+{
+    Q_UNUSED(projectId);
+    LogManager::instance().addLog(QString("[ProjectManager] New files detected: %1").arg(newFiles.join(", ")), "INFO");
+    
+    // Update notification badge
+    updatePmNotificationBadge();
+    
+    // Refresh the current view if viewing this project
+    if (projectId == pmCurrentProjectId && pmAssetsModel) {
+        pmAssetsModel->setProjectId(pmCurrentProjectId);
+    }
+}
+
+void MainWindow::updatePmNotificationBadge()
+{
+    pmUnreadNotificationCount = ProjectDB::instance().getUnreadNotificationCount();
+    
+    if (pmNotificationBadge) {
+        if (pmUnreadNotificationCount > 0) {
+            QString text = pmUnreadNotificationCount > 99 ? "99+" : QString::number(pmUnreadNotificationCount);
+            pmNotificationBadge->setText(text);
+            pmNotificationBadge->show();
+        } else {
+            pmNotificationBadge->hide();
+        }
+    }
+}
+
+void MainWindow::updatePmInfoPanel()
+{
+    if (!pmInfoFileName) return;
+    
+    // Get selection from the currently active view
+    QModelIndexList selected;
+    if (pmIsGridMode && pmAssetsGridView && pmAssetsGridView->selectionModel()) {
+        selected = pmAssetsGridView->selectionModel()->selectedIndexes();
+    } else if (!pmIsGridMode && pmAssetsTableView && pmAssetsTableView->selectionModel()) {
+        selected = pmAssetsTableView->selectionModel()->selectedIndexes();
+    }
+    
+    if (selected.isEmpty()) {
+        pmInfoFileName->setText("No selection");
+        if (pmInfoFilePath) pmInfoFilePath->clear();
+        if (pmInfoFileSize) pmInfoFileSize->clear();
+        if (pmInfoFileType) pmInfoFileType->clear();
+        if (pmInfoDimensions) pmInfoDimensions->clear();
+        if (pmInfoCreated) pmInfoCreated->clear();
+        if (pmInfoModified) pmInfoModified->clear();
+        if (pmInfoPermissions) pmInfoPermissions->clear();
+        if (pmInfoVersions) pmInfoVersions->clear();
+        return;
+    }
+    
+    QModelIndex index = selected.first();
+    
+    // Check if it's a folder
+    bool isFolder = index.data(ProjectAssetsModel::IsFolderRole).toBool();
+    if (isFolder) {
+        QString folderName = index.data(ProjectAssetsModel::FileNameRole).toString();
+        pmInfoFileName->setText(folderName);
+        if (pmInfoFilePath) pmInfoFilePath->setText("Folder");
+        if (pmInfoFileSize) pmInfoFileSize->clear();
+        if (pmInfoFileType) pmInfoFileType->setText("Type: Folder");
+        if (pmInfoDimensions) pmInfoDimensions->clear();
+        if (pmInfoCreated) pmInfoCreated->clear();
+        if (pmInfoModified) pmInfoModified->clear();
+        if (pmInfoPermissions) pmInfoPermissions->clear();
+        if (pmInfoVersions) pmInfoVersions->clear();
+        return;
+    }
+    
+    QString fileName = index.data(ProjectAssetsModel::FileNameRole).toString();
+    QString filePath = index.data(ProjectAssetsModel::FilePathRole).toString();
+    QString versionStr = index.data(ProjectAssetsModel::VersionStringRole).toString();
+    bool hasMultiple = index.data(ProjectAssetsModel::HasMultipleVersionsRole).toBool();
+    QStringList versions = index.data(ProjectAssetsModel::VersionListRole).toStringList();
+    
+    pmInfoFileName->setText(fileName);
+    if (pmInfoFilePath) pmInfoFilePath->setText(filePath);
+    
+    QFileInfo fi(filePath);
+    if (fi.exists()) {
+        // File size
+        qint64 size = fi.size();
+        QString sizeStr;
+        if (size < 1024) sizeStr = QString("Size: %1 bytes").arg(size);
+        else if (size < 1024*1024) sizeStr = QString("Size: %1 KB").arg(size/1024.0, 0, 'f', 1);
+        else if (size < 1024*1024*1024) sizeStr = QString("Size: %1 MB").arg(size/(1024.0*1024.0), 0, 'f', 2);
+        else sizeStr = QString("Size: %1 GB").arg(size/(1024.0*1024.0*1024.0), 0, 'f', 2);
+        if (pmInfoFileSize) pmInfoFileSize->setText(sizeStr);
+        
+        // File type
+        QString ext = fi.suffix().toUpper();
+        if (pmInfoFileType) pmInfoFileType->setText(QString("Type: %1 File").arg(ext.isEmpty() ? "Unknown" : ext));
+        
+        // Timestamps
+        if (pmInfoCreated) pmInfoCreated->setText(QString("Created: %1").arg(fi.birthTime().toString("yyyy-MM-dd hh:mm:ss")));
+        if (pmInfoModified) pmInfoModified->setText(QString("Modified: %1").arg(fi.lastModified().toString("yyyy-MM-dd hh:mm:ss")));
+        
+        // Permissions
+        QString perms;
+        if (fi.isReadable()) perms += "R";
+        if (fi.isWritable()) perms += "W";
+        if (fi.isExecutable()) perms += "X";
+        if (pmInfoPermissions) pmInfoPermissions->setText(QString("Permissions: %1").arg(perms.isEmpty() ? "None" : perms));
+        
+        // Try to get image dimensions
+        if (pmInfoDimensions) {
+            QString dimStr;
+            QImageReader reader(filePath);
+            if (reader.canRead()) {
+                QSize imgSize = reader.size();
+                if (imgSize.isValid()) {
+                    dimStr = QString("Dimensions: %1 x %2").arg(imgSize.width()).arg(imgSize.height());
+                }
+            }
+            pmInfoDimensions->setText(dimStr);
+        }
+    }
+    
+    // Version info
+    if (pmInfoVersions) {
+        if (hasMultiple) {
+            pmInfoVersions->setText(QString("Version: %1 (%2 versions)").arg(versionStr).arg(versions.count()));
+        } else if (!versionStr.isEmpty()) {
+            pmInfoVersions->setText(QString("Version: %1").arg(versionStr));
+        } else {
+            pmInfoVersions->clear();
+        }
+    }
+}
+
+void MainWindow::updatePmPreviewForIndex(const QModelIndex &idx)
+{
+    if (!idx.isValid()) {
+        clearPmPreview();
+        return;
+    }
+    
+    // Skip folders - they don't have previews
+    bool isFolder = idx.data(ProjectAssetsModel::IsFolderRole).toBool();
+    if (isFolder) {
+        clearPmPreview();
+        return;
+    }
+    
+    QString filePath = idx.data(ProjectAssetsModel::FilePathRole).toString();
+    bool isSequenceFlag = idx.data(ProjectAssetsModel::IsSequenceRole).toBool();
+    QString fileType = idx.data(ProjectAssetsModel::FileTypeRole).toString().toLower();
+    
+    // Store the current preview path for async callback matching
+    pmCurrentPreviewPath = filePath;
+    
+    if (filePath.isEmpty()) {
+        clearPmPreview();
+        return;
+    }
+    
+    // Handle sequences
+    if (isSequenceFlag) {
+        QString pattern = idx.data(ProjectAssetsModel::SequencePatternRole).toString();
+        int startFrame = idx.data(ProjectAssetsModel::SequenceStartFrameRole).toInt();
+        int endFrame = idx.data(ProjectAssetsModel::SequenceEndFrameRole).toInt();
+        
+        // Reconstruct sequence frame paths
+        QStringList framePaths = reconstructSequenceFramePaths(pattern, startFrame, endFrame);
+        if (!framePaths.isEmpty()) {
+            showPmSequence(framePaths);
+            return;
+        }
+    }
+    
+    if (!QFileInfo::exists(filePath)) {
+        clearPmPreview();
+        return;
+    }
+    
+    // Check if it's a video file
+    static const QStringList videoExts = {"mp4", "mov", "avi", "mkv", "webm", "wmv", "flv", "m4v", "mpg", "mpeg", "mxf"};
+    QString ext = QFileInfo(filePath).suffix().toLower();
+    
+    if (videoExts.contains(ext)) {
+        showPmVideo(filePath);
+    } else {
+        showPmImage(filePath);
+    }
+}
+
+void MainWindow::clearPmPreview()
+{
+    pmCurrentPreviewPath.clear();
+    
+    // Stop video playback
+    if (pmGStreamerPlayer) {
+        pmGStreamerPlayer->stop();
+    }
+    
+    // Stop sequence playback
+    pausePmSequence();
+    pmIsSequence = false;
+    pmSequenceFramePaths.clear();
+    
+    // Clear image
+    if (pmImageScene) {
+        pmImageScene->clear();
+        pmImageItem = nullptr;
+    }
+    
+    // Hide video widget, show image view
+    if (pmVideoWidget) pmVideoWidget->hide();
+    if (pmImageView) pmImageView->show();
+    
+    // Hide media controls
+    if (pmPrevFrameBtn) pmPrevFrameBtn->hide();
+    if (pmPlayPauseBtn) pmPlayPauseBtn->hide();
+    if (pmNextFrameBtn) pmNextFrameBtn->hide();
+    if (pmPositionSlider) pmPositionSlider->hide();
+    if (pmTimeLabel) pmTimeLabel->hide();
+    if (pmVolumeSlider) pmVolumeSlider->hide();
+    if (pmMuteBtn) pmMuteBtn->hide();
+}
+
+void MainWindow::playPmSequence()
+{
+    if (pmSequenceFramePaths.isEmpty()) return;
+    pmSequencePlaying = true;
+    if (pmPlayPauseBtn) pmPlayPauseBtn->setIcon(icoMediaPause(ThemeManager::instance().iconColor()));
+    if (pmSequenceTimer) pmSequenceTimer->start(42); // ~24fps
+}
+
+void MainWindow::pausePmSequence()
+{
+    pmSequencePlaying = false;
+    if (pmPlayPauseBtn) pmPlayPauseBtn->setIcon(icoMediaPlay(ThemeManager::instance().iconColor()));
+    if (pmSequenceTimer) pmSequenceTimer->stop();
+}
+
+void MainWindow::stepPmSequence(int delta)
+{
+    if (pmSequenceFramePaths.isEmpty()) return;
+    pausePmSequence();
+    int newIdx = pmSequenceCurrentIndex + delta;
+    if (newIdx < 0) newIdx = pmSequenceFramePaths.size() - 1;
+    if (newIdx >= pmSequenceFramePaths.size()) newIdx = 0;
+    loadPmSequenceFrame(newIdx);
+}
+
+void MainWindow::loadPmSequenceFrame(int index)
+{
+    if (index < 0 || index >= pmSequenceFramePaths.size()) return;
+    pmSequenceCurrentIndex = index;
+    
+    QString framePath = pmSequenceFramePaths.at(index);
+    QPixmap pixmap;
+    QSize size(512, 512);
+    
+    auto& lpm = LivePreviewManager::instance();
+    auto handle = lpm.cachedFrame(framePath, size);
+    if (handle.isValid()) {
+        pixmap = handle.pixmap;
+    } else {
+        lpm.requestFrame(framePath, size, 0.0);
+        return; // Will be updated via signal
+    }
+    
+    if (!pixmap.isNull() && pmImageScene && pmImageView) {
+        pmImageScene->clear();
+        pmImageItem = pmImageScene->addPixmap(pixmap);
+        pmImageView->fitInView(pmImageItem, Qt::KeepAspectRatio);
+    }
+    
+    // Update slider and time
+    if (pmPositionSlider) {
+        pmPositionSlider->blockSignals(true);
+        pmPositionSlider->setValue(index);
+        pmPositionSlider->blockSignals(false);
+    }
+    if (pmTimeLabel) {
+        pmTimeLabel->setText(QString("%1 / %2").arg(index + 1).arg(pmSequenceFramePaths.size()));
+    }
+}
+
+void MainWindow::showPmVideo(const QString &filePath)
+{
+    if (!pmGStreamerPlayer || !pmVideoWidget) return;
+    
+    // Stop any previous playback
+    pmGStreamerPlayer->stop();
+    pausePmSequence();
+    pmIsSequence = false;
+    
+    // Show video widget, hide image view
+    if (pmImageView) pmImageView->hide();
+    pmVideoWidget->show();
+    
+    // Set video widget for GStreamer (needs valid window handle)
+    pmGStreamerPlayer->setVideoWidget(pmVideoWidget);
+    
+    // Show media controls
+    if (pmPrevFrameBtn) pmPrevFrameBtn->show();
+    if (pmPlayPauseBtn) pmPlayPauseBtn->show();
+    if (pmNextFrameBtn) pmNextFrameBtn->show();
+    if (pmPositionSlider) { pmPositionSlider->setRange(0, 1000); pmPositionSlider->show(); }
+    if (pmTimeLabel) pmTimeLabel->show();
+    if (pmVolumeSlider) pmVolumeSlider->show();
+    if (pmMuteBtn) pmMuteBtn->show();
+    
+    // Load and play
+    pmGStreamerPlayer->loadMedia(filePath);
+    pmGStreamerPlayer->play();
+}
+
+void MainWindow::showPmImage(const QString &filePath)
+{
+    // Stop any previous playback
+    if (pmGStreamerPlayer) pmGStreamerPlayer->stop();
+    pausePmSequence();
+    pmIsSequence = false;
+    
+    // Show image view, hide video widget
+    if (pmVideoWidget) pmVideoWidget->hide();
+    if (pmImageView) pmImageView->show();
+    
+    // Hide media controls for static images
+    if (pmPrevFrameBtn) pmPrevFrameBtn->hide();
+    if (pmPlayPauseBtn) pmPlayPauseBtn->hide();
+    if (pmNextFrameBtn) pmNextFrameBtn->hide();
+    if (pmPositionSlider) pmPositionSlider->hide();
+    if (pmTimeLabel) pmTimeLabel->hide();
+    if (pmVolumeSlider) pmVolumeSlider->hide();
+    if (pmMuteBtn) pmMuteBtn->hide();
+    
+    // Load image
+    QPixmap pixmap;
+    QSize size(512, 512);
+    
+    auto& lpm = LivePreviewManager::instance();
+    auto handle = lpm.cachedFrame(filePath, size);
+    if (handle.isValid()) {
+        pixmap = handle.pixmap;
+    } else {
+        lpm.requestFrame(filePath, size, 0.0);
+        ThumbnailCacheManager& cache = ThumbnailCacheManager::instance();
+        if (cache.isCached(filePath, size, 0.0)) {
+            pixmap = cache.getCachedThumbnail(filePath, size, 0.0);
+        }
+    }
+    
+    if (!pixmap.isNull() && pmImageScene && pmImageView) {
+        pmImageScene->clear();
+        pmImageItem = pmImageScene->addPixmap(pixmap);
+        pmImageView->fitInView(pmImageItem, Qt::KeepAspectRatio);
+    }
+}
+
+void MainWindow::showPmSequence(const QStringList &framePaths)
+{
+    if (framePaths.isEmpty()) return;
+    
+    // Stop any previous playback
+    if (pmGStreamerPlayer) pmGStreamerPlayer->stop();
+    
+    pmIsSequence = true;
+    pmSequenceFramePaths = framePaths;
+    pmSequenceCurrentIndex = 0;
+    pmSequencePlaying = false;
+    
+    // Show image view, hide video widget
+    if (pmVideoWidget) pmVideoWidget->hide();
+    if (pmImageView) pmImageView->show();
+    
+    // Show media controls (no audio controls for sequences)
+    if (pmPrevFrameBtn) pmPrevFrameBtn->show();
+    if (pmPlayPauseBtn) { pmPlayPauseBtn->setIcon(icoMediaPlay(ThemeManager::instance().iconColor())); pmPlayPauseBtn->show(); }
+    if (pmNextFrameBtn) pmNextFrameBtn->show();
+    if (pmPositionSlider) {
+        pmPositionSlider->setRange(0, framePaths.size() - 1);
+        pmPositionSlider->setValue(0);
+        pmPositionSlider->show();
+    }
+    if (pmTimeLabel) { pmTimeLabel->setText(QString("1 / %1").arg(framePaths.size())); pmTimeLabel->show(); }
+    if (pmVolumeSlider) pmVolumeSlider->hide();
+    if (pmMuteBtn) pmMuteBtn->hide();
+    
+    // Load first frame
+    loadPmSequenceFrame(0);
+}
+
+void MainWindow::changePmPreview(int delta)
+{
+    // Navigate through Project Manager assets in overlay
+    QAbstractItemView* view = pmIsGridMode ? static_cast<QAbstractItemView*>(pmAssetsGridView) : static_cast<QAbstractItemView*>(pmAssetsTableView);
+    if (!view || !view->model()) return;
+    
+    QModelIndex current = view->currentIndex();
+    if (!current.isValid()) return;
+    
+    int newRow = current.row() + delta;
+    int rowCount = view->model()->rowCount();
+    
+    if (newRow < 0) newRow = rowCount - 1;
+    if (newRow >= rowCount) newRow = 0;
+    
+    QModelIndex newIdx = view->model()->index(newRow, 0);
+    if (newIdx.isValid()) {
+        view->setCurrentIndex(newIdx);
+        view->scrollTo(newIdx);
+        
+        // Update overlay with new asset
+        QString filePath = newIdx.data(ProjectAssetsModel::FilePathRole).toString();
+        bool isSequence = newIdx.data(ProjectAssetsModel::IsSequenceRole).toBool();
+        
+        if (previewOverlay && previewOverlay->isVisible()) {
+            previewOverlay->stopPlayback();
+            
+            if (isSequence) {
+                QString pattern = newIdx.data(ProjectAssetsModel::SequencePatternRole).toString();
+                int startFrame = newIdx.data(ProjectAssetsModel::SequenceStartFrameRole).toInt();
+                int endFrame = newIdx.data(ProjectAssetsModel::SequenceEndFrameRole).toInt();
+                
+                QStringList frames;
+                QFileInfo fi(pattern);
+                QString base = fi.completeBaseName();
+                QString ext = fi.suffix();
+                QString dir = fi.absolutePath();
+                int hashCount = base.count('#');
+                
+                if (hashCount > 0) {
+                    int hashStart = base.indexOf('#');
+                    QString prefix = base.left(hashStart);
+                    QString suffix = base.mid(hashStart + hashCount);
+                    
+                    for (int f = startFrame; f <= endFrame; ++f) {
+                        QString frameStr = QString("%1").arg(f, hashCount, 10, QLatin1Char('0'));
+                        QString framePath = dir + "/" + prefix + frameStr + suffix + "." + ext;
+                        if (QFileInfo::exists(framePath)) {
+                            frames.append(framePath);
+                        }
+                    }
+                }
+                
+                if (!frames.isEmpty()) {
+                    QString seqName = QFileInfo(pattern).fileName();
+                    previewOverlay->showSequence(frames, seqName, startFrame, endFrame);
+                    return;
+                }
+            }
+            
+            QFileInfo info(filePath);
+            if (info.exists()) {
+                previewOverlay->showAsset(filePath, info.fileName(), info.suffix());
+            }
+        }
+    }
+}
+
+// ===== PM Navigation and File Operations =====
+
+void MainWindow::onPmNavigateBack()
+{
+    if (pmFolderHistoryIndex > 0) {
+        pmFolderHistoryIndex--;
+        pmCurrentFolderId = pmFolderHistory.at(pmFolderHistoryIndex);
+        
+        // Update folder tree selection
+        if (pmFoldersModel && pmFolderTree) {
+            QModelIndex idx = pmFoldersModel->indexForFolderId(pmCurrentFolderId);
+            if (idx.isValid()) {
+                pmFolderTree->setCurrentIndex(idx);
+            }
+        }
+        
+        // Filter assets
+        if (pmAssetsModel) {
+            pmAssetsModel->setFolderId(pmCurrentFolderId);
+        }
+    }
+}
+
+void MainWindow::onPmNavigateUp()
+{
+    if (!pmFoldersModel || pmCurrentFolderId <= 0) return;
+    
+    int parentId = pmFoldersModel->parentFolderId(pmCurrentFolderId);
+    if (parentId > 0) {
+        pmNavigateToFolder(parentId);
+    } else {
+        // Go to all assets (root level)
+        pmCurrentFolderId = -1;
+        if (pmAssetsModel) {
+            pmAssetsModel->setFolderId(-1);
+        }
+    }
+}
+
+void MainWindow::pmNavigateToFolder(int folderId)
+{
+    if (folderId <= 0) return;
+    
+    // Add to history
+    if (pmFolderHistoryIndex < pmFolderHistory.size() - 1) {
+        pmFolderHistory = pmFolderHistory.mid(0, pmFolderHistoryIndex + 1);
+    }
+    pmFolderHistory.append(folderId);
+    pmFolderHistoryIndex = pmFolderHistory.size() - 1;
+    pmCurrentFolderId = folderId;
+    
+    // Update folder tree selection
+    if (pmFoldersModel && pmFolderTree) {
+        QModelIndex idx = pmFoldersModel->indexForFolderId(folderId);
+        if (idx.isValid()) {
+            pmFolderTree->setCurrentIndex(idx);
+        }
+    }
+    
+    // Filter assets
+    if (pmAssetsModel) {
+        pmAssetsModel->setFolderId(folderId);
+    }
+}
+
+void MainWindow::pmNavigateBack()
+{
+    onPmNavigateBack();
+}
+
+void MainWindow::pmNavigateUp()
+{
+    onPmNavigateUp();
+}
+
+QStringList MainWindow::getSelectedPmAssetPaths() const
+{
+    QStringList paths;
+    QModelIndexList selected;
+    
+    if (pmIsGridMode && pmAssetsGridView && pmAssetsGridView->selectionModel()) {
+        selected = pmAssetsGridView->selectionModel()->selectedIndexes();
+    } else if (!pmIsGridMode && pmAssetsTableView && pmAssetsTableView->selectionModel()) {
+        selected = pmAssetsTableView->selectionModel()->selectedRows();
+    }
+    
+    for (const QModelIndex &idx : selected) {
+        QString path = idx.data(ProjectAssetsModel::FilePathRole).toString();
+        if (!path.isEmpty()) {
+            paths.append(path);
+        }
+    }
+    
+    return paths;
+}
+
+void MainWindow::restoreProjectManagerState()
+{
+    QSettings s("AugmentCode", "KAssetManager");
+
+    if (pmSplitter && s.contains("ProjectManager/MainSplitter")) {
+        pmSplitter->restoreState(s.value("ProjectManager/MainSplitter").toByteArray());
+    }
+    if (pmLeftSplitter && s.contains("ProjectManager/LeftSplitter")) {
+        pmLeftSplitter->restoreState(s.value("ProjectManager/LeftSplitter").toByteArray());
+    }
+    if (pmRightSplitter && s.contains("ProjectManager/RightSplitter")) {
+        pmRightSplitter->restoreState(s.value("ProjectManager/RightSplitter").toByteArray());
+    }
+    if (pmPreviewInfoSplitter && s.contains("ProjectManager/PreviewInfoSplitter")) {
+        pmPreviewInfoSplitter->restoreState(s.value("ProjectManager/PreviewInfoSplitter").toByteArray());
+    }
+
+    if (s.contains("ProjectManager/PreviewVisible")) {
+        bool previewVisible = s.value("ProjectManager/PreviewVisible").toBool();
+        if (pmPreviewToggleButton) {
+            QSignalBlocker block(pmPreviewToggleButton);
+            pmPreviewToggleButton->setChecked(previewVisible);
+        }
+        if (pmPreviewPanel) pmPreviewPanel->setVisible(previewVisible);
+        if (pmInfoPanel) pmInfoPanel->setVisible(previewVisible);
+    }
+
+    if (s.contains("ProjectManager/ViewMode")) {
+        pmIsGridMode = s.value("ProjectManager/ViewMode").toBool();
+        if (pmViewStack) pmViewStack->setCurrentIndex(pmIsGridMode ? 0 : 1);
+        if (pmViewModeButton) {
+            pmViewModeButton->setIcon(pmIsGridMode ? icoList(ThemeManager::instance().iconColor())
+                                                   : icoGrid(ThemeManager::instance().iconColor()));
+        }
+    }
+
+    if (s.contains("ProjectManager/ThumbnailSize")) {
+        int thumbSize = s.value("ProjectManager/ThumbnailSize").toInt();
+        if (pmThumbnailSizeSlider) {
+            QSignalBlocker block(pmThumbnailSizeSlider);
+            pmThumbnailSizeSlider->setValue(thumbSize);
+        }
+        if (pmItemDelegate) pmItemDelegate->setThumbnailSize(thumbSize);
+        if (pmAssetsGridView) {
+            pmAssetsGridView->setGridSize(QSize(thumbSize + 24, thumbSize + 45));
+            pmAssetsGridView->viewport()->update();
+        }
+    }
+
+    if (s.contains("ProjectManager/GroupSequences")) {
+        bool grouping = s.value("ProjectManager/GroupSequences").toBool();
+        if (pmGroupSequencesBtn) {
+            QSignalBlocker block(pmGroupSequencesBtn);
+            pmGroupSequencesBtn->setChecked(grouping);
+        }
+        if (pmSequenceProxy) pmSequenceProxy->setGroupingEnabled(grouping);
+    }
+}
+
+void MainWindow::saveProjectManagerState(QSettings& s)
+{
+    if (pmSplitter) s.setValue("ProjectManager/MainSplitter", pmSplitter->saveState());
+    if (pmLeftSplitter) s.setValue("ProjectManager/LeftSplitter", pmLeftSplitter->saveState());
+    if (pmRightSplitter) s.setValue("ProjectManager/RightSplitter", pmRightSplitter->saveState());
+    if (pmPreviewInfoSplitter) s.setValue("ProjectManager/PreviewInfoSplitter", pmPreviewInfoSplitter->saveState());
+    if (pmPreviewToggleButton) s.setValue("ProjectManager/PreviewVisible", pmPreviewToggleButton->isChecked());
+    s.setValue("ProjectManager/ViewMode", pmIsGridMode);
+    if (pmThumbnailSizeSlider) s.setValue("ProjectManager/ThumbnailSize", pmThumbnailSizeSlider->value());
+    if (pmGroupSequencesBtn) s.setValue("ProjectManager/GroupSequences", pmGroupSequencesBtn->isChecked());
+}
+
+QModelIndex MainWindow::pmIndexForProjectId(int projectId) const
+{
+    if (!pmProjectsModel || projectId <= 0) return QModelIndex();
+    for (int row = 0; row < pmProjectsModel->rowCount(); ++row) {
+        QModelIndex idx = pmProjectsModel->index(row, 0);
+        if (idx.data(ProjectsModel::IdRole).toInt() == projectId) {
+            return idx;
+        }
+    }
+    return QModelIndex();
+}
+
+void MainWindow::navigateToProjectAsset(int projectId, int assetId, const QString& filePath)
+{
+    if (projectId <= 0 || !pmProjectsModel) return;
+
+    QModelIndex projectIdx = pmIndexForProjectId(projectId);
+    if (!projectIdx.isValid()) return;
+
+    if (pmProjectsListView) {
+        pmProjectsListView->setCurrentIndex(projectIdx);
+    }
+    onPmProjectSelected(projectIdx);
+
+    if (pmFoldersModel && pmFoldersModel->projectId() != pmCurrentProjectId) {
+        pmFoldersModel->setProjectId(pmCurrentProjectId);
+    }
+
+    QFileInfo fi(filePath);
+    QString folderPath = fi.absolutePath();
+
+    int folderId = assetId > 0 ? ProjectDB::instance().getAssetFolderId(assetId) : 0;
+    if (folderId <= 0) {
+        folderId = ProjectDB::instance().ensureFolderForPath(projectId, folderPath);
+    }
+    if (folderId > 0) {
+        pmNavigateToFolder(folderId);
+        if (pmFolderTree && pmFoldersModel) {
+            QModelIndex idx = pmFoldersModel->indexForFolderId(folderId);
+            if (idx.isValid()) {
+                pmFolderTree->expand(idx);
+                pmFolderTree->scrollTo(idx, QAbstractItemView::PositionAtCenter);
+            }
+        }
+    }
+
+    if (!pmAssetsModel) return;
+
+    int targetRow = -1;
+    const int totalRows = pmAssetsModel->rowCount();
+    for (int row = 0; row < totalRows; ++row) {
+        QModelIndex srcIdx = pmAssetsModel->index(row, 0);
+        bool match = false;
+        if (assetId > 0) {
+            match = (srcIdx.data(ProjectAssetsModel::IdRole).toInt() == assetId);
+        }
+        if (!match && !filePath.isEmpty()) {
+            match = srcIdx.data(ProjectAssetsModel::FilePathRole).toString().compare(filePath, Qt::CaseInsensitive) == 0;
+        }
+        if (match) {
+            targetRow = row;
+            break;
+        }
+    }
+
+    if (targetRow < 0) return;
+
+    QModelIndex sourceIndex = pmAssetsModel->index(targetRow, 0);
+    QModelIndex viewIndex = pmSequenceProxy ? pmSequenceProxy->mapFromSource(sourceIndex) : sourceIndex;
+    if (!viewIndex.isValid()) return;
+
+    QAbstractItemView *view = pmIsGridMode ? static_cast<QAbstractItemView*>(pmAssetsGridView)
+                                           : static_cast<QAbstractItemView*>(pmAssetsTableView);
+    if (view && view->selectionModel()) {
+        view->selectionModel()->select(viewIndex, QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+        view->scrollTo(viewIndex, QAbstractItemView::PositionAtCenter);
+        updatePmPreviewForIndex(viewIndex);
+        updatePmInfoPanel();
+    }
+}
+
+void MainWindow::onPmCopy()
+{
+    pmClipboard = getSelectedPmAssetPaths();
+    pmClipboardCutMode = false;
+    if (!pmClipboard.isEmpty()) {
+        statusBar()->showMessage(QString("Copied %1 item(s)").arg(pmClipboard.size()), 2000);
+    }
+}
+
+void MainWindow::onPmCut()
+{
+    pmClipboard = getSelectedPmAssetPaths();
+    pmClipboardCutMode = true;
+    if (!pmClipboard.isEmpty()) {
+        statusBar()->showMessage(QString("Cut %1 item(s)").arg(pmClipboard.size()), 2000);
+    }
+}
+
+void MainWindow::onPmPaste()
+{
+    if (pmClipboard.isEmpty()) return;
+    
+    // Get current folder path from the first item's directory or project watch path
+    QString destDir;
+    if (pmCurrentProjectId > 0) {
+        QVector<Project> projects = ProjectDB::instance().listProjects();
+        for (const Project& p : projects) {
+            if (p.id == pmCurrentProjectId) {
+                destDir = p.watchPath;
+                break;
+            }
+        }
+    }
+    
+    if (destDir.isEmpty()) {
+        QMessageBox::warning(this, "Paste", "No destination folder available");
+        return;
+    }
+    
+    auto &q = FileOpsQueue::instance();
+    if (pmClipboardCutMode) {
+        q.enqueueMove(pmClipboard, destDir);
+    } else {
+        q.enqueueCopy(pmClipboard, destDir);
+    }
+    
+    if (!fileOpsDialog) fileOpsDialog = new FileOpsProgressDialog(this);
+    fileOpsDialog->show();
+    fileOpsDialog->raise();
+    
+    pmClipboard.clear();
+    pmClipboardCutMode = false;
+}
+
+void MainWindow::onPmDelete()
+{
+    QStringList paths = getSelectedPmAssetPaths();
+    if (paths.isEmpty()) return;
+    
+    int ret = QMessageBox::question(this, "Delete Files", 
+        QString("Move %1 item(s) to Recycle Bin?").arg(paths.size()),
+        QMessageBox::Yes | QMessageBox::No);
+    
+    if (ret != QMessageBox::Yes) return;
+    
+    FileOpsQueue::instance().enqueueDelete(paths);
+    if (!fileOpsDialog) fileOpsDialog = new FileOpsProgressDialog(this);
+    fileOpsDialog->show();
+}
+
+void MainWindow::onPmRename()
+{
+    QStringList paths = getSelectedPmAssetPaths();
+    if (paths.size() != 1) return;
+    
+    QFileInfo fi(paths.first());
+    bool ok = false;
+    QString newName = QInputDialog::getText(this, "Rename", "New name:", QLineEdit::Normal, fi.fileName(), &ok);
+    if (!ok || newName.trimmed().isEmpty() || newName == fi.fileName()) return;
+    
+    QDir parent(fi.absolutePath());
+    if (parent.rename(fi.fileName(), newName.trimmed())) {
+        statusBar()->showMessage("Renamed successfully", 2000);
+        onPmRefresh();
+    } else {
+        QMessageBox::warning(this, "Rename", "Failed to rename file");
+    }
+}
+
+void MainWindow::onPmNewFolder()
+{
+    // Create folder in current project's watch path
+    QString destDir;
+    if (pmCurrentProjectId > 0) {
+        QVector<Project> projects = ProjectDB::instance().listProjects();
+        for (const Project& p : projects) {
+            if (p.id == pmCurrentProjectId) {
+                destDir = p.watchPath;
+                break;
+            }
+        }
+    }
+    
+    if (destDir.isEmpty()) {
+        QMessageBox::warning(this, "New Folder", "No project selected");
+        return;
+    }
+    
+    bool ok = false;
+    QString folderName = QInputDialog::getText(this, "New Folder", "Folder name:", QLineEdit::Normal, "New Folder", &ok);
+    if (!ok || folderName.trimmed().isEmpty()) return;
+    
+    QDir dir(destDir);
+    if (dir.mkdir(folderName.trimmed())) {
+        statusBar()->showMessage("Folder created", 2000);
+        onPmRefresh();
+    } else {
+        QMessageBox::warning(this, "New Folder", "Failed to create folder");
+    }
+}
+
+void MainWindow::onPmOpenExternal()
+{
+    QStringList paths = getSelectedPmAssetPaths();
+    if (paths.isEmpty()) return;
+    
+    for (const QString &path : paths) {
+        if (ProjectVersionDetector::isProjectFile(path)) {
+            QSettings s("AugmentCode", "KAssetManager");
+            QString exePath;
+            
+            if (ProjectVersionDetector::isAfterEffectsFile(path)) {
+                exePath = s.value("ExternalApps/AfterEffectsPath").toString();
+            } else if (ProjectVersionDetector::isNukeFile(path)) {
+                exePath = s.value("ExternalApps/NukeXPath").toString();
+            }
+            
+            if (!exePath.isEmpty() && QFile::exists(exePath)) {
+                QProcess::startDetached(exePath, QStringList() << path);
+                continue;
+            }
+        }
+        QDesktopServices::openUrl(QUrl::fromLocalFile(path));
+    }
+}
+
+void MainWindow::onPmTogglePreview(bool checked)
+{
+    if (pmPreviewInfoSplitter) {
+        pmPreviewPanel->setVisible(checked);
+        pmInfoPanel->setVisible(checked);
+    }
+    QSettings s("AugmentCode", "KAssetManager");
+    s.setValue("ProjectManager/PreviewVisible", checked);
+}
+
+void MainWindow::onPmGroupSequencesToggled(bool checked)
+{
+    // Toggle sequence grouping in the proxy model
+    if (pmSequenceProxy) {
+        pmSequenceProxy->setGroupingEnabled(checked);
+    }
+    statusBar()->showMessage("Sequence grouping: " + QString(checked ? "ON" : "OFF"), 2000);
+    QSettings s("AugmentCode", "KAssetManager");
+    s.setValue("ProjectManager/GroupSequences", checked);
+}
+
+void MainWindow::onPmFolderContextMenu(const QPoint &pos)
+{
+    if (!pmFolderTree) return;
+    
+    QModelIndex index = pmFolderTree->indexAt(pos);
+    
+    QMenu menu;
+    QAction *refreshA = menu.addAction("Refresh");
+    QAction *newFolderA = menu.addAction("New Folder");
+    QAction *generateThumbsA = nullptr;
+    QAction *generateThumbsRecA = nullptr;
+
+    int folderId = -1;
+    if (index.isValid()) {
+        folderId = index.data(ProjectFoldersModel::IdRole).toInt();
+        menu.addSeparator();
+        generateThumbsA = menu.addAction("Generate Thumbnails");
+        generateThumbsRecA = menu.addAction("Generate Thumbnails (Recursive)");
+    }
+    
+    QAction *chosen = menu.exec(pmFolderTree->viewport()->mapToGlobal(pos));
+    if (!chosen) return;
+    
+    if (chosen == refreshA) {
+        onPmRefresh();
+    } else if (chosen == newFolderA) {
+        onPmNewFolder();
+    } else if (chosen == generateThumbsA && folderId > 0) {
+        auto *dialog = new ThumbnailGeneratorDialog(folderId, false, this, true);
+        dialog->setAttribute(Qt::WA_DeleteOnClose);
+        dialog->show();
+    } else if (chosen == generateThumbsRecA && folderId > 0) {
+        auto *dialog = new ThumbnailGeneratorDialog(folderId, true, this, true);
+        dialog->setAttribute(Qt::WA_DeleteOnClose);
+        dialog->show();
+    }
+}
 
 
 void MainWindow::setupConnections()
@@ -5021,17 +7344,7 @@ void MainWindow::dropEvent(QDropEvent *event)
         QStringList filePaths;
         QStringList folderPaths;
         QList<QUrl> urls = mimeData->urls();
-
-        // Get currently selected folder ID
-        QModelIndex currentFolderIndex = folderTreeView->currentIndex();
-        int parentFolderId = 0;
-        if (currentFolderIndex.isValid()) {
-            parentFolderId = folderModel->data(currentFolderIndex, VirtualFolderTreeModel::IdRole).toInt();
-        }
-        if (parentFolderId <= 0) {
-            parentFolderId = folderModel->rootId();
-        }
-
+        
         for (const QUrl &url : urls) {
             if (url.isLocalFile()) {
                 QString path = url.toLocalFile();
@@ -5044,6 +7357,37 @@ void MainWindow::dropEvent(QDropEvent *event)
                     folderPaths.append(path);
                 }
             }
+        }
+
+        // Check if we're on the Project Manager tab
+        if (mainTabs && mainTabs->currentWidget() == projectManagerPage) {
+            // Handle Project Manager drops - only folders make sense here
+            if (folderPaths.size() == 1) {
+                QString folderPath = folderPaths.first();
+                QString folderName = QDir(folderPath).dirName();
+                pmImportToProject(folderName, folderPath);
+                event->acceptProposedAction();
+                return;
+            } else if (folderPaths.size() > 1) {
+                statusBar()->showMessage("Please drop only one folder at a time for Project Manager", 3000);
+                event->ignore();
+                return;
+            } else {
+                statusBar()->showMessage("Drop a folder to create a project", 3000);
+                event->ignore();
+                return;
+            }
+        }
+
+        // Asset Manager drop handling
+        // Get currently selected folder ID
+        QModelIndex currentFolderIndex = folderTreeView->currentIndex();
+        int parentFolderId = 0;
+        if (currentFolderIndex.isValid()) {
+            parentFolderId = folderModel->data(currentFolderIndex, VirtualFolderTreeModel::IdRole).toInt();
+        }
+        if (parentFolderId <= 0) {
+            parentFolderId = folderModel->rootId();
         }
 
         int totalImported = 0;
@@ -7476,6 +9820,7 @@ void MainWindow::closeEvent(QCloseEvent* event)
             s.setValue(QString("FileManager/Tree/Col%1").arg(c), th->sectionSize(c));
         }
     }
+    saveProjectManagerState(s);
 
     s.sync();
     QMainWindow::closeEvent(event);

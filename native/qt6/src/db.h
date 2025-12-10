@@ -11,6 +11,8 @@
 
 #include <QHash>
 
+#include "i_asset_database.h"
+
 // Version history row for an asset
 struct AssetVersionRow {
     int id = 0;
@@ -24,7 +26,7 @@ struct AssetVersionRow {
     QString notes;              // optional user notes
 };
 
-class DB : public QObject {
+class DB : public QObject, public IAssetDatabase {
     Q_OBJECT
 public:
     static DB& instance();
@@ -32,11 +34,15 @@ public:
     // Initialize SQLite DB in given path (directory is created by caller if needed)
     bool init(const QString& dbFilePath);
 
-    QSqlDatabase database() const { return m_db; }
+    // IAssetDatabase interface implementation
+    QSqlDatabase database() const override { return m_db; }
+    int ensureRootFolder() override;
+    int createFolder(const QString& name, int parentId) override;
+    int insertAssetMetadataFast(const QString& filePath, int folderId) override;
+    int upsertSequenceInFolderFast(const QString& sequencePattern, int startFrame, int endFrame, int frameCount, const QString& firstFramePath, int folderId, bool hasGaps = false, int gapCount = 0, const QString& version = QString()) override;
+    void notifyAssetsChanged(int folderId) override;
 
-    // Folder ops
-    int ensureRootFolder();
-    int createFolder(const QString& name, int parentId);
+    // Folder ops (additional, non-interface)
     bool renameFolder(int id, const QString& name);
     bool deleteFolder(int id);
     bool moveFolder(int id, int newParentId);
@@ -52,10 +58,6 @@ public:
     // Asset ops
     int upsertAsset(const QString& filePath);
     int upsertSequence(const QString& sequencePattern, int startFrame, int endFrame, int frameCount, const QString& firstFramePath);
-    // Fast path for bulk imports: metadata only (no checksum, no versioning, no signals)
-    int insertAssetMetadataFast(const QString& filePath, int folderId);
-    // Fast path for image sequences during bulk import (no signals)
-    int upsertSequenceInFolderFast(const QString& sequencePattern, int startFrame, int endFrame, int frameCount, const QString& firstFramePath, int folderId, bool hasGaps = false, int gapCount = 0, const QString& version = QString());
     bool setAssetFolder(int assetId, int folderId);
     bool removeAssets(const QList<int>& assetIds);
     bool setAssetsRating(const QList<int>& assetIds, int rating); // 0-5, -1 to clear
@@ -86,7 +88,7 @@ public:
     bool clearAllData();
 
     // Explicit notification helpers (safe wrappers for emitting signals)
-    void notifyAssetsChanged(int folderId);
+    // notifyAssetsChanged is declared above with override (from IAssetDatabase)
     void notifyFoldersChanged();
     void notifyTagsChanged();
     void notifyProjectFoldersChanged();

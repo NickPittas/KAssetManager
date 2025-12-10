@@ -31,6 +31,7 @@ SettingsDialog::SettingsDialog(QWidget* parent)
     setupCacheTab();
     setupViewTab();
     setupShortcutsTab();
+    setupExternalAppsTab();
     setupAboutTab();
 
     mainLayout->addWidget(tabWidget);
@@ -486,6 +487,107 @@ void SettingsDialog::setupShortcutsTab()
     tabWidget->addTab(shortcutsTab, "Shortcuts");
 }
 
+void SettingsDialog::setupExternalAppsTab()
+{
+    QWidget* extAppsTab = new QWidget();
+    QVBoxLayout* layout = new QVBoxLayout(extAppsTab);
+    layout->setContentsMargins(20, 20, 20, 20);
+    layout->setSpacing(15);
+
+    // Info label
+    QLabel* infoLabel = new QLabel(
+        "Configure external applications used to open project files.\n"
+        "These paths are used when double-clicking .aep, .aepx, or .nk files in the Project Manager.",
+        extAppsTab);
+    infoLabel->setStyleSheet("color: #999; font-size: 11px;");
+    infoLabel->setWordWrap(true);
+    layout->addWidget(infoLabel);
+
+    // Load settings
+    QSettings s("AugmentCode", "KAssetManager");
+
+    // After Effects group
+    QGroupBox* aeGroup = new QGroupBox("Adobe After Effects", extAppsTab);
+    aeGroup->setStyleSheet(ThemeManager::instance().groupBoxStyleSheet());
+    QVBoxLayout* aeLayout = new QVBoxLayout(aeGroup);
+
+    QLabel* aeLabel = new QLabel("After Effects executable path:", aeGroup);
+    aeLabel->setStyleSheet(ThemeManager::instance().labelStyleSheet());
+    aeLayout->addWidget(aeLabel);
+
+    QHBoxLayout* aePathLayout = new QHBoxLayout();
+    afterEffectsPathEdit = new QLineEdit(aeGroup);
+    afterEffectsPathEdit->setText(s.value("ExternalApps/AfterEffectsPath", "").toString());
+    afterEffectsPathEdit->setPlaceholderText("e.g., C:\\Program Files\\Adobe\\Adobe After Effects 2024\\Support Files\\AfterFX.exe");
+    afterEffectsPathEdit->setStyleSheet(ThemeManager::instance().lineEditStyleSheet());
+    aePathLayout->addWidget(afterEffectsPathEdit);
+
+    QPushButton* aeBrowseBtn = new QPushButton("Browse...", aeGroup);
+    aeBrowseBtn->setStyleSheet(ThemeManager::instance().buttonStyleSheet());
+    connect(aeBrowseBtn, &QPushButton::clicked, this, [this]() {
+        QString path = QFileDialog::getOpenFileName(
+            this,
+            "Select After Effects Executable",
+            "C:/Program Files/Adobe",
+            "Executables (*.exe);;All Files (*.*)"
+        );
+        if (!path.isEmpty()) {
+            afterEffectsPathEdit->setText(path);
+        }
+    });
+    aePathLayout->addWidget(aeBrowseBtn);
+    aeLayout->addLayout(aePathLayout);
+
+    QLabel* aeHintLabel = new QLabel("Supported file types: .aep, .aepx", aeGroup);
+    aeHintLabel->setStyleSheet("color: #666; font-size: 10px;");
+    aeLayout->addWidget(aeHintLabel);
+
+    layout->addWidget(aeGroup);
+
+    // Nuke group
+    QGroupBox* nukeGroup = new QGroupBox("Foundry NukeX", extAppsTab);
+    nukeGroup->setStyleSheet(ThemeManager::instance().groupBoxStyleSheet());
+    QVBoxLayout* nukeLayout = new QVBoxLayout(nukeGroup);
+
+    QLabel* nukeLabel = new QLabel("NukeX executable path:", nukeGroup);
+    nukeLabel->setStyleSheet(ThemeManager::instance().labelStyleSheet());
+    nukeLayout->addWidget(nukeLabel);
+
+    QHBoxLayout* nukePathLayout = new QHBoxLayout();
+    nukeXPathEdit = new QLineEdit(nukeGroup);
+    nukeXPathEdit->setText(s.value("ExternalApps/NukeXPath", "").toString());
+    nukeXPathEdit->setPlaceholderText("e.g., C:\\Program Files\\Nuke15.1v1\\Nuke15.1.exe");
+    nukeXPathEdit->setStyleSheet(ThemeManager::instance().lineEditStyleSheet());
+    nukePathLayout->addWidget(nukeXPathEdit);
+
+    QPushButton* nukeBrowseBtn = new QPushButton("Browse...", nukeGroup);
+    nukeBrowseBtn->setStyleSheet(ThemeManager::instance().buttonStyleSheet());
+    connect(nukeBrowseBtn, &QPushButton::clicked, this, [this]() {
+        QString path = QFileDialog::getOpenFileName(
+            this,
+            "Select NukeX Executable",
+            "C:/Program Files",
+            "Executables (*.exe);;All Files (*.*)"
+        );
+        if (!path.isEmpty()) {
+            nukeXPathEdit->setText(path);
+        }
+    });
+    nukePathLayout->addWidget(nukeBrowseBtn);
+    nukeLayout->addLayout(nukePathLayout);
+
+    QLabel* nukeHintLabel = new QLabel("Supported file types: .nk", nukeGroup);
+    nukeHintLabel->setStyleSheet("color: #666; font-size: 10px;");
+    nukeLayout->addWidget(nukeHintLabel);
+
+    layout->addWidget(nukeGroup);
+
+    // Add stretch to push content to top
+    layout->addStretch();
+
+    tabWidget->addTab(extAppsTab, "External Apps");
+}
+
 void SettingsDialog::setupAboutTab()
 {
     QWidget* aboutTab = new QWidget();
@@ -648,6 +750,14 @@ void SettingsDialog::saveSettings()
     }
     if (sequenceCacheSizeSpin) {
         s.setValue("SequenceCache/ManualSize", sequenceCacheSizeSpin->value());
+    }
+
+    // Save external application paths
+    if (afterEffectsPathEdit) {
+        s.setValue("ExternalApps/AfterEffectsPath", afterEffectsPathEdit->text());
+    }
+    if (nukeXPathEdit) {
+        s.setValue("ExternalApps/NukeXPath", nukeXPathEdit->text());
     }
 
     // Persist File Manager shortcuts

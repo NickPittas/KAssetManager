@@ -1,5 +1,6 @@
 #include "importer.h"
 #include "db.h"
+#include "i_asset_database.h"
 #include "log_manager.h"
 #include <QFileInfo>
 #include <QDir>
@@ -12,7 +13,18 @@
 
 #include "file_utils.h"
 
-Importer::Importer(QObject* parent): QObject(parent) {}
+Importer::Importer(QObject* parent, IAssetDatabase* db)
+    : QObject(parent)
+    , m_db(db ? *db : static_cast<IAssetDatabase&>(DB::instance()))
+{
+    // ⚠️ CRITICAL: m_db defaults to DB::instance() for backward compatibility
+    // with existing Asset Manager code. For Project Manager, pass ProjectDB::instance().
+}
+
+void Importer::setSequenceDetectionEnabled(bool enabled)
+{
+    m_sequenceDetectionEnabled = enabled;
+}
 
 static QString norm(const QString& p){ return QFileInfo(p).absoluteFilePath(); }
 
@@ -27,7 +39,9 @@ bool Importer::isMediaFile(const QString& path){
         // HDR/EXR formats
         ".exr",".hdr",".pic",
         // Adobe formats
-        ".psd",".psb",
+        ".psd",".psb",".aep",".aepx",
+        // Nuke formats
+        ".nk",
         // Other formats
         ".tga",".pcx",".pbm",".pgm",".ppm",".pnm",".avif",".jxl"
     };
@@ -61,8 +75,8 @@ bool Importer::importFile(const QString& filePath, int parentFolderId){
     if (!isMediaFile(filePath)) {
         return false;
     }
-    if (parentFolderId<=0) parentFolderId = DB::instance().ensureRootFolder();
-    int assetId = DB::instance().insertAssetMetadataFast(norm(filePath), parentFolderId);
+    if (parentFolderId<=0) parentFolderId = m_db.ensureRootFolder();
+    int assetId = m_db.insertAssetMetadataFast(norm(filePath), parentFolderId);
     if (assetId<=0) {
         return false;
     }
@@ -72,9 +86,9 @@ bool Importer::importFile(const QString& filePath, int parentFolderId){
 
 bool Importer::importFolder(const QString& dirPath, int parentFolderId){
     QDir dir(dirPath); if (!dir.exists()) return false;
-    if (parentFolderId<=0) parentFolderId = DB::instance().ensureRootFolder();
+    if (parentFolderId<=0) parentFolderId = m_db.ensureRootFolder();
     QString topName = QFileInfo(dirPath).fileName(); if (topName.isEmpty()) topName = dir.dirName();
-    int topId = DB::instance().createFolder(topName, parentFolderId);
+    int topId = m_db.createFolder(topName, parentFolderId);
     if (topId<=0) return false;
 
     // Emit folder name for progress dialog
@@ -91,7 +105,7 @@ bool Importer::importFolder(const QString& dirPath, int parentFolderId){
         auto folders = d.entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
         for (const auto& f: folders){
             QString sub = QDir(cur).filePath(f);
-            int id = DB::instance().createFolder(f, curId);
+            int id = m_db.createFolder(f, curId);
             folderIds.insert(sub, id);
             pending.push_back(sub);
         }
@@ -110,7 +124,7 @@ bool Importer::importFolder(const QString& dirPath, int parentFolderId){
     }
 
     // Begin a single transaction for bulk import
-    QSqlDatabase sdb = DB::instance().database();
+    QSqlDatabase sdb = m_db.database();
     bool inTx = sdb.transaction();
     if (!inTx) {
         qWarning() << "Importer::importFolder: failed to start transaction";
@@ -126,27 +140,29 @@ bool Importer::importFolder(const QString& dirPath, int parentFolderId){
         int fid = folderIds.value(folderPath, topId);
         changedFolders.insert(fid);
 
-        // Detect sequences in this directory
-        QVector<ImageSequence> sequences = SequenceDetector::detectSequences(files);
         QSet<QString> sequenceFiles;
 
-        // Import sequences (fast path: metadata only, assign folder in insert)
-        for (const ImageSequence& seq : sequences) {
-            emit currentFileChanged(seq.pattern);
+        if (m_sequenceDetectionEnabled) {
+            QVector<ImageSequence> sequences = SequenceDetector::detectSequences(files);
 
-            int seqId = DB::instance().upsertSequenceInFolderFast(seq.pattern, seq.startFrame, seq.endFrame, seq.frameCount, seq.firstFramePath, fid, seq.hasGaps, seq.gapCount, seq.version);
-            if (seqId > 0) {
-                qDebug() << "Imported sequence:" << seq.pattern << "frames:" << seq.startFrame << "-" << seq.endFrame;
-                if (seq.hasGaps) {
-                    qDebug() << "  WARNING: Sequence has" << seq.gapCount << "gap(s)," << seq.missingFrames.size() << "missing frames";
+            // Import sequences (fast path: metadata only, assign folder in insert)
+            for (const ImageSequence& seq : sequences) {
+                emit currentFileChanged(seq.pattern);
+
+                int seqId = m_db.upsertSequenceInFolderFast(seq.pattern, seq.startFrame, seq.endFrame, seq.frameCount, seq.firstFramePath, fid, seq.hasGaps, seq.gapCount, seq.version);
+                if (seqId > 0) {
+                    qDebug() << "Imported sequence:" << seq.pattern << "frames:" << seq.startFrame << "-" << seq.endFrame;
+                    if (seq.hasGaps) {
+                        qDebug() << "  WARNING: Sequence has" << seq.gapCount << "gap(s)," << seq.missingFrames.size() << "missing frames";
+                    }
                 }
-            }
 
-            // Mark all sequence files as processed and update progress for each frame
-            for (const QString& framePath : seq.framePaths) {
-                sequenceFiles.insert(framePath);
-                currentFile++;
-                emit progressChanged(currentFile, totalFiles);
+                // Mark all sequence files as processed and update progress for each frame
+                for (const QString& framePath : seq.framePaths) {
+                    sequenceFiles.insert(framePath);
+                    currentFile++;
+                    emit progressChanged(currentFile, totalFiles);
+                }
             }
         }
 
@@ -159,7 +175,7 @@ bool Importer::importFolder(const QString& dirPath, int parentFolderId){
             emit currentFileChanged(fileName);
             emit progressChanged(currentFile, totalFiles);
 
-            DB::instance().insertAssetMetadataFast(fp, fid);
+            m_db.insertAssetMetadataFast(fp, fid);
         }
     }
 
@@ -170,10 +186,120 @@ bool Importer::importFolder(const QString& dirPath, int parentFolderId){
 
     // Emit a single assetsChanged per touched folder
     for (int fid : std::as_const(changedFolders)) {
-        DB::instance().notifyAssetsChanged(fid);
+        m_db.notifyAssetsChanged(fid);
     }
 
     LogManager::instance().addLog(QString("Imported folder %1").arg(topName));
+    return true;
+}
+
+bool Importer::importFolderContents(const QString& dirPath, int targetFolderId) {
+    QDir dir(dirPath); 
+    if (!dir.exists()) return false;
+    if (targetFolderId <= 0) targetFolderId = m_db.ensureRootFolder();
+
+    emit currentFolderChanged(QFileInfo(dirPath).fileName());
+    LogManager::instance().addLog(QString("Importing folder contents from %1").arg(dirPath));
+
+    // Helper to normalize paths for consistent comparison
+    auto normalizePath = [](const QString& p) -> QString {
+        return QDir::cleanPath(p).toLower();
+    };
+
+    // Build subfolders directly under target folder (breadth-first)
+    QHash<QString, int> folderIds;  // normalized path -> folder ID
+    folderIds.insert(normalizePath(dirPath), targetFolderId);
+    QList<QString> pending; 
+    pending.push_back(dirPath);
+    
+    while (!pending.isEmpty()) {
+        QString cur = pending.front(); 
+        pending.pop_front(); 
+        int curId = folderIds.value(normalizePath(cur));
+        QDir d(cur);
+        auto folders = d.entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
+        for (const auto& f : folders) {
+            QString sub = QDir(cur).filePath(f);
+            int id = m_db.createFolder(f, curId);
+            folderIds.insert(normalizePath(sub), id);
+            pending.push_back(sub);
+        }
+    }
+
+    // Single-pass directory iteration: collect files by directory and count total
+    // Import ALL files, not just media files - PM should work like a file manager
+    int totalFiles = 0;
+    QHash<QString, QStringList> filesByDir;  // normalized path -> files
+    QDirIterator it(dirPath, QDir::Files, QDirIterator::Subdirectories);
+    while (it.hasNext()) {
+        QString fp = it.next();
+        ++totalFiles;
+        const QString folderPath = normalizePath(QFileInfo(fp).absolutePath());
+        filesByDir[folderPath].append(fp);
+    }
+
+    // Begin a single transaction for bulk import
+    QSqlDatabase sdb = m_db.database();
+    bool inTx = sdb.transaction();
+    if (!inTx) {
+        qWarning() << "Importer::importFolderContents: failed to start transaction";
+    }
+
+    QSet<int> changedFolders;
+
+    // Process each directory's files, detecting sequences
+    int currentFile = 0;
+    for (auto dirIt = filesByDir.begin(); dirIt != filesByDir.end(); ++dirIt) {
+        QString folderPath = dirIt.key();
+        QStringList files = dirIt.value();
+        int fid = folderIds.value(folderPath, targetFolderId);
+        
+        // Debug: log folder path to ID mapping
+        if (fid == targetFolderId && folderPath != normalizePath(dirPath)) {
+            qWarning() << "[Importer] Folder path not found in map:" << folderPath << "- using target folder" << targetFolderId;
+        }
+        
+        changedFolders.insert(fid);
+
+        QSet<QString> sequenceFiles;
+        if (m_sequenceDetectionEnabled) {
+            QVector<ImageSequence> sequences = SequenceDetector::detectSequences(files);
+
+            // Import sequences
+            for (const ImageSequence& seq : sequences) {
+                emit currentFileChanged(seq.pattern);
+                int seqId = m_db.upsertSequenceInFolderFast(seq.pattern, seq.startFrame, seq.endFrame, seq.frameCount, seq.firstFramePath, fid, seq.hasGaps, seq.gapCount, seq.version);
+                if (seqId > 0) {
+                    qDebug() << "Imported sequence:" << seq.pattern << "frames:" << seq.startFrame << "-" << seq.endFrame;
+                }
+                for (const QString& framePath : seq.framePaths) {
+                    sequenceFiles.insert(framePath);
+                    currentFile++;
+                    emit progressChanged(currentFile, totalFiles);
+                }
+            }
+        }
+
+        // Import remaining non-sequence files
+        for (const QString& fp : files) {
+            if (sequenceFiles.contains(fp)) continue;
+            emit currentFileChanged(QFileInfo(fp).fileName());
+            m_db.insertAssetMetadataFast(fp, fid);
+            currentFile++;
+            emit progressChanged(currentFile, totalFiles);
+        }
+    }
+
+    bool commitOk = inTx ? sdb.commit() : true;
+    if (!commitOk) {
+        qWarning() << "Importer::importFolderContents: commit failed";
+    }
+
+    for (int fid : std::as_const(changedFolders)) {
+        m_db.notifyAssetsChanged(fid);
+    }
+
+    LogManager::instance().addLog(QString("Imported folder contents from %1").arg(dirPath));
     return true;
 }
 
@@ -222,12 +348,12 @@ void Importer::importFiles(const QStringList& filePaths, int parentFolderId)
     qDebug() << "Importer::importFiles() called with" << filePaths.size() << "files, folderId:" << parentFolderId;
     LogManager::instance().addLog(QString("Importing %1 file%2...").arg(filePaths.size()).arg(filePaths.size()==1?"":"s"));
 
-    if (parentFolderId<=0) parentFolderId = DB::instance().ensureRootFolder();
+    if (parentFolderId<=0) parentFolderId = m_db.ensureRootFolder();
 
     int imported = 0;
     int total = filePaths.size();
 
-    QSqlDatabase sdb = DB::instance().database();
+    QSqlDatabase sdb = m_db.database();
     bool inTx = sdb.transaction();
     if (!inTx) qWarning() << "Importer::importFiles: failed to start transaction";
 
@@ -244,7 +370,7 @@ void Importer::importFiles(const QStringList& filePaths, int parentFolderId)
         // Throttle event pumping to every 200 files
 
         // Import the file (fast metadata-only)
-        if (isMediaFile(filePath) && DB::instance().insertAssetMetadataFast(filePath, parentFolderId) > 0) {
+        if (isMediaFile(filePath) && m_db.insertAssetMetadataFast(filePath, parentFolderId) > 0) {
             ++imported;
         }
     }
@@ -253,7 +379,7 @@ void Importer::importFiles(const QStringList& filePaths, int parentFolderId)
     if (!commitOk) qWarning() << "Importer::importFiles: commit failed";
 
     // Notify view once for the target folder
-    DB::instance().notifyAssetsChanged(parentFolderId);
+    m_db.notifyAssetsChanged(parentFolderId);
 
     qDebug() << "Importer::importFiles() completed, imported" << imported << "of" << total << "files";
     LogManager::instance().addLog(QString("Import completed: %1 of %2 file%3").arg(imported).arg(total).arg(total==1?"":"s"));

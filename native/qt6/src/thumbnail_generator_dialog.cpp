@@ -1,6 +1,7 @@
 #include "thumbnail_generator_dialog.h"
 #include "thumbnail_cache_manager.h"
 #include "db.h"
+#include "project_db.h"
 #include "file_utils.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -12,10 +13,11 @@
 #include <QDir>
 #include <QRegularExpression>
 
-ThumbnailGeneratorDialog::ThumbnailGeneratorDialog(int folderId, bool recursive, QWidget* parent)
+ThumbnailGeneratorDialog::ThumbnailGeneratorDialog(int folderId, bool recursive, QWidget* parent, bool useProjectDb)
     : QDialog(parent)
     , m_folderId(folderId)
     , m_recursive(recursive)
+    , m_useProjectDb(useProjectDb)
 {
     setWindowTitle("Generate Thumbnails");
     setWindowFlag(Qt::WindowStaysOnTopHint);
@@ -106,12 +108,14 @@ void ThumbnailGeneratorDialog::collectFiles()
     m_tasks.clear();
 
     // Get all assets in the folder (and subfolders if recursive)
-    QList<int> assetIds = DB::instance().getAssetIdsInFolder(m_folderId, m_recursive);
+    QList<int> assetIds = m_useProjectDb
+        ? ProjectDB::instance().getAssetIdsInFolder(m_folderId, m_recursive)
+        : DB::instance().getAssetIdsInFolder(m_folderId, m_recursive);
 
     m_log->appendPlainText(QString("Scanning folder (recursive: %1)...").arg(m_recursive ? "yes" : "no"));
 
     // Query database for asset information
-    QSqlQuery q(DB::instance().database());
+    QSqlQuery q(m_useProjectDb ? ProjectDB::instance().database() : DB::instance().database());
 
     // Build task list
     for (int assetId : assetIds) {
@@ -350,4 +354,3 @@ QStringList ThumbnailGeneratorDialog::reconstructSequenceFramePaths(const QStrin
 
     return framePaths;
 }
-

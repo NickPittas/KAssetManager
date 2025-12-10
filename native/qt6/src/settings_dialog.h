@@ -34,6 +34,7 @@ private:
     void setupCacheTab();
     void setupViewTab();
     void setupShortcutsTab();
+    void setupExternalAppsTab();
     void setupAboutTab();
     void loadSettings();
 
@@ -62,6 +63,10 @@ private:
     // Shortcuts tab (editable)
     QTableWidget* fmShortcutsTable;
     QPushButton* fmResetAllBtn;
+
+    // External Applications tab
+    QLineEdit* nukeXPathEdit;
+    QLineEdit* afterEffectsPathEdit;
 
     // About tab
     QLabel* versionLabel;

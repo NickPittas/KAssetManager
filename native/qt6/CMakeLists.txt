@@ -14,7 +14,7 @@ if(NOT DEFINED CMAKE_TOOLCHAIN_FILE)
     endif()
 endif()
 
-project(KAssetManagerQt VERSION 1.4.5 LANGUAGES CXX)
+project(KAssetManagerQt VERSION 1.5.0 LANGUAGES CXX)
 # Optional static analysis / sanitizers
 option(ENABLE_ASAN "Enable AddressSanitizer (Clang/GCC only)" OFF)
 if(ENABLE_ASAN)
@@ -213,6 +213,23 @@ qt_add_executable(kassetmanagerqt WIN32
     src/virtual_drag.h
     src/db.cpp
     src/db.h
+    src/i_asset_database.h
+    src/project_db.h
+    src/project_db.cpp
+    src/project_version_detector.h
+    src/project_version_detector.cpp
+    src/projects_model.h
+    src/projects_model.cpp
+    src/project_assets_model.h
+    src/project_assets_model.cpp
+    src/project_folders_model.h
+    src/project_folders_model.cpp
+    src/project_sequence_grouping_proxy_model.h
+    src/project_sequence_grouping_proxy_model.cpp
+    src/project_item_delegate.h
+    src/project_item_delegate.cpp
+    src/project_manager_watcher.h
+    src/project_manager_watcher.cpp
     src/drag_utils.h
     src/drag_utils.cpp
     src/virtual_folders.h

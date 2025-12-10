@@ -29,6 +29,7 @@
 
 #include <QToolButton>
 
+class QSettings;
 class VirtualFolderTreeModel;
 class AssetsModel;
 class TagsModel;
@@ -39,6 +40,10 @@ class GridScrubController;
 class ImportProgressDialog;
 class ProjectFolderWatcher;
 class EverythingFolderModel;
+class ProjectsModel;
+class ProjectAssetsModel;
+class ProjectItemDelegate;
+class ProjectManagerWatcher;
 
 class MainWindow : public QMainWindow
 {
@@ -112,6 +117,41 @@ private slots:
 
     // Main tabs
     void onTabChanged(int index);
+
+    // Project Manager slots
+    void onPmProjectSelected(const QModelIndex &index);
+    void onPmFolderSelected(const QModelIndex &index);
+    void onPmAssetSelectionChanged();
+    void onPmAssetDoubleClicked(const QModelIndex &index);
+    void onPmAssetContextMenu(const QPoint &pos);
+    void onPmProjectContextMenu(const QPoint &pos);
+    void onPmFolderContextMenu(const QPoint &pos);
+    void onPmCreateProject();
+    void pmImportToProject(const QString& name, const QString& watchPath);
+    void onPmRenameProject();
+    void onPmDeleteProject();
+    void onPmAddWatchFolder();
+    void onPmViewModeToggled();
+    void onPmThumbnailSizeChanged(int size);
+    void onPmToggleShowAllVersions(bool checked);
+    void onPmVersionSelected(qint64 assetId, const QString &versionPath);
+    void onPmRefresh();
+    void onPmMarkNotificationsRead();
+    void onPmShowNotifications();
+    void onPmNewFilesDetected(int projectId, const QStringList &newFiles);
+    void onPmOpenOverlay();
+    void changePmPreview(int delta);
+    void onPmNavigateBack();
+    void onPmNavigateUp();
+    void onPmCopy();
+    void onPmCut();
+    void onPmPaste();
+    void onPmDelete();
+    void onPmRename();
+    void onPmNewFolder();
+    void onPmOpenExternal();
+    void onPmTogglePreview(bool checked);
+    void onPmGroupSequencesToggled(bool checked);
 
     // Help menu
     void onShowUserGuide();
@@ -197,6 +237,7 @@ private:
     void setupUi();
     void setupConnections();
     void setupFileManagerUi();
+    void setupProjectManagerUi();
     void updateInfoPanel();
     void updateSelectionInfo();
     void reloadVersionHistory();
@@ -231,6 +272,7 @@ private:
     QTabWidget *mainTabs;
     QWidget *assetManagerPage;
     QWidget *fileManagerPage;
+    QWidget *projectManagerPage;
 
 
     // UI Components
@@ -483,7 +525,123 @@ private:
     // Helpers
     void updateFmPreviewForIndex(const QModelIndex &idx);
     void clearFmPreview();
+
+    // Project Manager members - mirrors File Manager structure
+    QSplitter *pmSplitter = nullptr;
+    QSplitter *pmRightSplitter = nullptr;
+    QSplitter *pmLeftSplitter = nullptr;
+    QSplitter *pmPreviewInfoSplitter = nullptr;
+    
+    // Project list
+    QListView *pmProjectsListView = nullptr;
+    class ProjectsModel *pmProjectsModel = nullptr;
+    
+    // Folder tree for selected project
+    class QTreeView *pmFolderTree = nullptr;
+    class ProjectFoldersModel *pmFoldersModel = nullptr;
+    int pmCurrentFolderId = -1;
+    QList<int> pmFolderHistory;
+    int pmFolderHistoryIndex = -1;
+    
+    // Assets views
+    QListView *pmAssetsGridView = nullptr;
+    class QTableView *pmAssetsTableView = nullptr;
+    class QStackedWidget *pmViewStack = nullptr;
+    class ProjectAssetsModel *pmAssetsModel = nullptr;
+    class ProjectSequenceGroupingProxyModel *pmSequenceProxy = nullptr;
+    class ProjectItemDelegate *pmItemDelegate = nullptr;
+    
+    // Toolbar and buttons (mirrors FM)
+    QWidget *pmToolbar = nullptr;
+    QToolButton *pmBackButton = nullptr;
+    QToolButton *pmUpButton = nullptr;
+    QToolButton *pmNewFolderBtn = nullptr;
+    QToolButton *pmCopyBtn = nullptr;
+    QToolButton *pmCutBtn = nullptr;
+    QToolButton *pmPasteBtn = nullptr;
+    QToolButton *pmDeleteBtn = nullptr;
+    QToolButton *pmRenameBtn = nullptr;
+    QToolButton *pmOpenExternalBtn = nullptr;
+    QToolButton *pmViewModeButton = nullptr;
+    class QSlider *pmThumbnailSizeSlider = nullptr;
+    QLabel *pmSizeLabel = nullptr;
+    QToolButton *pmRefreshButton = nullptr;
+    QToolButton *pmShowAllVersionsButton = nullptr;
+    QToolButton *pmPreviewToggleButton = nullptr;
+    QToolButton *pmGroupSequencesBtn = nullptr;
+    
+    bool pmIsGridMode = true;
+    int pmCurrentProjectId = -1;
+    QString pmCurrentPreviewPath;  // Track current preview for async updates
+    QStringList pmClipboard;
+    bool pmClipboardCutMode = false;
+    
+    // Project Manager preview panel (full FM-style)
+    QWidget *pmPreviewPanel = nullptr;
+    class QGraphicsView *pmImageView = nullptr;
+    class QGraphicsScene *pmImageScene = nullptr;
+    class QGraphicsPixmapItem *pmImageItem = nullptr;
+    QWidget *pmVideoWidget = nullptr;
+    class GStreamerPlayer *pmGStreamerPlayer = nullptr;
+    
+    // Media controls
+    QPushButton *pmPlayPauseBtn = nullptr;
+    QPushButton *pmPrevFrameBtn = nullptr;
+    QPushButton *pmNextFrameBtn = nullptr;
+    class QSlider *pmPositionSlider = nullptr;
+    QLabel *pmTimeLabel = nullptr;
+    class QSlider *pmVolumeSlider = nullptr;
+    QPushButton *pmMuteBtn = nullptr;
+    
+    // PM sequence playback state
+    QTimer *pmSequenceTimer = nullptr;
+    bool pmIsSequence = false;
+    bool pmSequencePlaying = false;
+    QStringList pmSequenceFramePaths;
+    int pmSequenceCurrentIndex = 0;
+    
+    // PM scrub controller
+    GridScrubController *pmScrubController = nullptr;
+    
+    // Project Manager info panel (full FM-style with metadata)
+    QWidget *pmInfoPanel = nullptr;
+    QLabel *pmInfoFileName = nullptr;
+    QLabel *pmInfoFilePath = nullptr;
+    QLabel *pmInfoFileSize = nullptr;
+    QLabel *pmInfoFileType = nullptr;
+    QLabel *pmInfoDimensions = nullptr;
+    QLabel *pmInfoCreated = nullptr;
+    QLabel *pmInfoModified = nullptr;
+    QLabel *pmInfoPermissions = nullptr;
+    QLabel *pmInfoVersions = nullptr;
+    
+    // Notification badge
+    class QPushButton *pmNotificationBadge = nullptr;
+    int pmUnreadNotificationCount = 0;
+    ProjectManagerWatcher *pmWatcher = nullptr;
+    
+    // PM helper functions (mirrors FM)
+    void updatePmNotificationBadge();
+    void updatePmInfoPanel();
+    void updatePmPreviewForIndex(const QModelIndex &idx);
+    void clearPmPreview();
+    void pmNavigateToFolder(int folderId);
+    void pmNavigateBack();
+    void pmNavigateUp();
+    QStringList getSelectedPmAssetPaths() const;
+    void restoreProjectManagerState();
+    void saveProjectManagerState(QSettings& s);
+    QModelIndex pmIndexForProjectId(int projectId) const;
+    void navigateToProjectAsset(int projectId, int assetId, const QString& filePath);
+    
+    // PM sequence/video playback helpers
+    void playPmSequence();
+    void pausePmSequence();
+    void stepPmSequence(int delta);
+    void loadPmSequenceFrame(int index);
+    void showPmVideo(const QString &filePath);
+    void showPmImage(const QString &filePath);
+    void showPmSequence(const QStringList &framePaths);
 };
 
 #endif // MAINWINDOW_H
-

@@ -18,7 +18,7 @@ class ThumbnailGeneratorDialog : public QDialog
     Q_OBJECT
 
 public:
-    explicit ThumbnailGeneratorDialog(int folderId, bool recursive, QWidget* parent = nullptr);
+    explicit ThumbnailGeneratorDialog(int folderId, bool recursive, QWidget* parent = nullptr, bool useProjectDb = false);
     ~ThumbnailGeneratorDialog();
 
 private slots:
@@ -40,6 +40,7 @@ private:
 
     int m_folderId;
     bool m_recursive;
+    bool m_useProjectDb = false;
     
     QVector<ThumbnailGeneratorWorker::Task> m_tasks;
     
@@ -61,4 +62,3 @@ private:
     int m_generatedCount = 0;
     bool m_running = false;
 };
-
