@@ -7,6 +7,7 @@
 #include <QDirIterator>
 #include <QDebug>
 #include <QApplication>
+#include <QElapsedTimer>
 
 #include <QSet>
 #include <QSqlDatabase>
@@ -134,6 +135,14 @@ bool Importer::importFolder(const QString& dirPath, int parentFolderId){
 
     // Process each directory's files, detecting sequences
     int currentFile = 0;
+    QElapsedTimer uiTimer;
+    uiTimer.start();
+    const int UI_UPDATE_INTERVAL_MS = 50;  // Update UI every 50ms
+    
+    // Emit initial progress to show dialog is working
+    emit progressChanged(0, totalFiles);
+    QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+    
     for (auto dirIt = filesByDir.begin(); dirIt != filesByDir.end(); ++dirIt) {
         QString folderPath = dirIt.key();
         QStringList files = dirIt.value();
@@ -162,6 +171,12 @@ bool Importer::importFolder(const QString& dirPath, int parentFolderId){
                     sequenceFiles.insert(framePath);
                     currentFile++;
                     emit progressChanged(currentFile, totalFiles);
+                    
+                    // Periodically update UI
+                    if (uiTimer.elapsed() >= UI_UPDATE_INTERVAL_MS) {
+                        QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+                        uiTimer.restart();
+                    }
                 }
             }
         }
@@ -170,14 +185,22 @@ bool Importer::importFolder(const QString& dirPath, int parentFolderId){
         for (const QString& fp : files) {
             if (sequenceFiles.contains(fp)) continue; // Skip files that are part of sequences
 
-            currentFile++;
-            QString fileName = QFileInfo(fp).fileName();
-            emit currentFileChanged(fileName);
-            emit progressChanged(currentFile, totalFiles);
-
+            // Insert into database
             m_db.insertAssetMetadataFast(fp, fid);
+            currentFile++;
+
+            // Throttle UI updates - emit signal and process events periodically
+            if (uiTimer.elapsed() >= UI_UPDATE_INTERVAL_MS) {
+                emit currentFileChanged(QFileInfo(fp).fileName());
+                emit progressChanged(currentFile, totalFiles);
+                QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+                uiTimer.restart();
+            }
         }
     }
+    
+    // Final progress update
+    emit progressChanged(totalFiles, totalFiles);
 
     bool commitOk = inTx ? sdb.commit() : true;
     if (!commitOk) {
@@ -195,9 +218,13 @@ bool Importer::importFolder(const QString& dirPath, int parentFolderId){
 
 bool Importer::importFolderContents(const QString& dirPath, int targetFolderId) {
     QDir dir(dirPath); 
-    if (!dir.exists()) return false;
+    if (!dir.exists()) {
+        LogManager::instance().addLog(QString("[PM Import] Directory does not exist: %1").arg(dirPath), "ERROR");
+        return false;
+    }
     if (targetFolderId <= 0) targetFolderId = m_db.ensureRootFolder();
 
+    LogManager::instance().addLog(QString("[PM Import] Starting import from %1 into folder %2").arg(dirPath).arg(targetFolderId), "INFO");
     emit currentFolderChanged(QFileInfo(dirPath).fileName());
     LogManager::instance().addLog(QString("Importing folder contents from %1").arg(dirPath));
 
@@ -237,6 +264,9 @@ bool Importer::importFolderContents(const QString& dirPath, int targetFolderId) 
         const QString folderPath = normalizePath(QFileInfo(fp).absolutePath());
         filesByDir[folderPath].append(fp);
     }
+    
+    LogManager::instance().addLog(QString("[PM Import] Found %1 files in %2 directories, sequenceDetection=%3")
+        .arg(totalFiles).arg(filesByDir.count()).arg(m_sequenceDetectionEnabled ? "ON" : "OFF"), "INFO");
 
     // Begin a single transaction for bulk import
     QSqlDatabase sdb = m_db.database();
@@ -249,6 +279,14 @@ bool Importer::importFolderContents(const QString& dirPath, int targetFolderId) 
 
     // Process each directory's files, detecting sequences
     int currentFile = 0;
+    QElapsedTimer uiTimer;
+    uiTimer.start();
+    const int UI_UPDATE_INTERVAL_MS = 50;  // Update UI every 50ms
+    
+    // Emit initial progress to show dialog is working
+    emit progressChanged(0, totalFiles);
+    QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+    
     for (auto dirIt = filesByDir.begin(); dirIt != filesByDir.end(); ++dirIt) {
         QString folderPath = dirIt.key();
         QStringList files = dirIt.value();
@@ -264,18 +302,27 @@ bool Importer::importFolderContents(const QString& dirPath, int targetFolderId) 
         QSet<QString> sequenceFiles;
         if (m_sequenceDetectionEnabled) {
             QVector<ImageSequence> sequences = SequenceDetector::detectSequences(files);
+            LogManager::instance().addLog(QString("[PM Import] Folder %1: detected %2 sequences from %3 files")
+                .arg(folderPath).arg(sequences.size()).arg(files.size()), "DEBUG");
 
             // Import sequences
             for (const ImageSequence& seq : sequences) {
                 emit currentFileChanged(seq.pattern);
                 int seqId = m_db.upsertSequenceInFolderFast(seq.pattern, seq.startFrame, seq.endFrame, seq.frameCount, seq.firstFramePath, fid, seq.hasGaps, seq.gapCount, seq.version);
                 if (seqId > 0) {
-                    qDebug() << "Imported sequence:" << seq.pattern << "frames:" << seq.startFrame << "-" << seq.endFrame;
+                    LogManager::instance().addLog(QString("[PM Import] Imported sequence: %1 [%2-%3] -> id %4")
+                        .arg(seq.pattern).arg(seq.startFrame).arg(seq.endFrame).arg(seqId), "DEBUG");
                 }
                 for (const QString& framePath : seq.framePaths) {
                     sequenceFiles.insert(framePath);
                     currentFile++;
                     emit progressChanged(currentFile, totalFiles);
+                    
+                    // Periodically update UI
+                    if (uiTimer.elapsed() >= UI_UPDATE_INTERVAL_MS) {
+                        QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+                        uiTimer.restart();
+                    }
                 }
             }
         }
@@ -283,12 +330,23 @@ bool Importer::importFolderContents(const QString& dirPath, int targetFolderId) 
         // Import remaining non-sequence files
         for (const QString& fp : files) {
             if (sequenceFiles.contains(fp)) continue;
-            emit currentFileChanged(QFileInfo(fp).fileName());
+            
+            // Insert into database
             m_db.insertAssetMetadataFast(fp, fid);
             currentFile++;
-            emit progressChanged(currentFile, totalFiles);
+            
+            // Throttle UI updates - emit signal and process events periodically
+            if (uiTimer.elapsed() >= UI_UPDATE_INTERVAL_MS) {
+                emit currentFileChanged(QFileInfo(fp).fileName());
+                emit progressChanged(currentFile, totalFiles);
+                QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+                uiTimer.restart();
+            }
         }
     }
+    
+    // Final progress update
+    emit progressChanged(totalFiles, totalFiles);
 
     bool commitOk = inTx ? sdb.commit() : true;
     if (!commitOk) {
@@ -299,7 +357,7 @@ bool Importer::importFolderContents(const QString& dirPath, int targetFolderId) 
         m_db.notifyAssetsChanged(fid);
     }
 
-    LogManager::instance().addLog(QString("Imported folder contents from %1").arg(dirPath));
+    LogManager::instance().addLog(QString("[PM Import] Completed import of %1 files from %2").arg(currentFile).arg(dirPath), "INFO");
     return true;
 }
 

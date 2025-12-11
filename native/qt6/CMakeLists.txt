@@ -216,6 +216,8 @@ qt_add_executable(kassetmanagerqt WIN32
     src/i_asset_database.h
     src/project_db.h
     src/project_db.cpp
+    src/project_import_worker.h
+    src/project_import_worker.cpp
     src/project_version_detector.h
     src/project_version_detector.cpp
     src/projects_model.h

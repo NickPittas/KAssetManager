@@ -5,7 +5,18 @@
 #include <QDir>
 #include <QDirIterator>
 #include <QFileInfo>
+#include <QDateTime>
 #include <QDebug>
+
+// Supported file extensions for watching
+static const QSet<QString> s_supportedExtensions = {
+    // Images
+    "jpg", "jpeg", "png", "tif", "tiff", "exr", "dpx", "bmp", "gif",
+    // Videos
+    "mov", "mp4", "avi", "mkv", "mxf", "r3d",
+    // Project files
+    "aep", "aepx", "nk"
+};
 
 ProjectManagerWatcher::ProjectManagerWatcher(QObject* parent)
     : QObject(parent)
@@ -15,7 +26,7 @@ ProjectManagerWatcher::ProjectManagerWatcher(QObject* parent)
             this, &ProjectManagerWatcher::onDirectoryChanged);
     
     m_debounceTimer.setSingleShot(true);
-    m_debounceTimer.setInterval(1000); // 1 second debounce
+    m_debounceTimer.setInterval(2000); // 2 second debounce
     connect(&m_debounceTimer, &QTimer::timeout,
             this, &ProjectManagerWatcher::onProcessChanges);
 }
@@ -42,27 +53,40 @@ void ProjectManagerWatcher::watchProject(int projectId, const QString& watchPath
     m_projectPaths[projectId] = watchPath;
     m_pathToProject[watchPath] = projectId;
     
-    // Add to watcher
-    if (m_watcher->addPath(watchPath)) {
+    // Build the list of all directories to watch (recursive)
+    QStringList dirsToWatch;
+    dirsToWatch.append(watchPath);
+    
+    QDirIterator it(watchPath, QDir::Dirs | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
+    while (it.hasNext()) {
+        dirsToWatch.append(it.next());
+    }
+    
+    // Watch all directories (QFileSystemWatcher only watches specific dirs, not recursively)
+    QStringList added = m_watcher->addPaths(dirsToWatch);
+    
+    if (!added.isEmpty()) {
         LogManager::instance().addLog(
-            QString("[ProjectManagerWatcher] Watching project %1 at: %2").arg(projectId).arg(watchPath), "INFO");
+            QString("[ProjectManagerWatcher] Watching project %1 at: %2 (%3 directories)")
+                .arg(projectId).arg(watchPath).arg(added.size()), "INFO");
         
-        // Also watch subdirectories
-        QDirIterator it(watchPath, QDir::Dirs | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
-        while (it.hasNext()) {
-            QString subDir = it.next();
-            if (m_watcher->addPath(subDir)) {
-                m_pathToProject[subDir] = projectId;
-            }
+        // Map all watched directories to this project
+        for (const QString& dir : added) {
+            m_pathToProject[dir] = projectId;
         }
         
-        // Initial scan to build known files list
-        QStringList initialFilesList = scanDirectory(watchPath);
-        QSet<QString> initialFiles(initialFilesList.begin(), initialFilesList.end());
-        m_knownFiles[projectId] = initialFiles;
+        // Build initial directory cache (stores mod times and file lists per directory)
+        buildDirectoryCache(projectId, watchPath);
+        
+        int totalFiles = 0;
+        const auto& dirFiles = m_dirFiles[projectId];
+        for (const auto& files : dirFiles) {
+            totalFiles += files.size();
+        }
         
         LogManager::instance().addLog(
-            QString("[ProjectManagerWatcher] Initial scan found %1 files").arg(initialFiles.count()), "DEBUG");
+            QString("[ProjectManagerWatcher] Initial scan cached %1 directories, %2 files")
+                .arg(dirFiles.size()).arg(totalFiles), "DEBUG");
     } else {
         LogManager::instance().addLog(
             QString("[ProjectManagerWatcher] Failed to watch: %1").arg(watchPath), "ERROR");
@@ -77,155 +101,275 @@ void ProjectManagerWatcher::unwatchProject(int projectId)
     
     QString watchPath = m_projectPaths[projectId];
     
-    // Remove all paths for this project
-    QStringList toRemove;
+    // Remove all watched paths for this project
+    QStringList pathsToRemove;
     for (auto it = m_pathToProject.begin(); it != m_pathToProject.end(); ++it) {
         if (it.value() == projectId) {
-            toRemove.append(it.key());
+            pathsToRemove.append(it.key());
         }
     }
     
-    for (const QString& path : toRemove) {
-        m_watcher->removePath(path);
+    if (!pathsToRemove.isEmpty()) {
+        m_watcher->removePaths(pathsToRemove);
+    }
+    
+    // Clean up mappings
+    for (const QString& path : pathsToRemove) {
         m_pathToProject.remove(path);
     }
     
     m_projectPaths.remove(projectId);
-    m_knownFiles.remove(projectId);
-    m_pendingScans.remove(projectId);
+    m_dirFiles.remove(projectId);
+    m_dirModTimes.remove(projectId);
+    m_pendingChangedDirs.remove(projectId);
+    m_pendingFullScans.remove(projectId);
     
     LogManager::instance().addLog(
-        QString("[ProjectManagerWatcher] Stopped watching project %1").arg(projectId), "INFO");
+        QString("[ProjectManagerWatcher] Stopped watching project %1 (%2 paths)")
+            .arg(projectId).arg(pathsToRemove.size()), "INFO");
 }
 
 void ProjectManagerWatcher::rescan(int projectId)
 {
-    m_pendingScans.insert(projectId);
+    m_pendingFullScans.insert(projectId);
     m_debounceTimer.start();
 }
 
 QSet<QString> ProjectManagerWatcher::knownFiles(int projectId) const
 {
-    return m_knownFiles.value(projectId);
+    QSet<QString> allFiles;
+    const auto& dirFiles = m_dirFiles.value(projectId);
+    for (const auto& files : dirFiles) {
+        allFiles.unite(files);
+    }
+    return allFiles;
 }
 
-QStringList ProjectManagerWatcher::scanDirectory(const QString& path) const
+QStringList ProjectManagerWatcher::scanSingleDirectory(const QString& dirPath) const
 {
     QStringList files;
-    QDirIterator it(path, QDir::Files, QDirIterator::Subdirectories);
+    QDir dir(dirPath);
+    if (!dir.exists()) return files;
     
-    while (it.hasNext()) {
-        QString filePath = it.next();
-        QFileInfo fi(filePath);
-        QString suffix = fi.suffix().toLower();
-        
-        // Filter to relevant file types (images, videos, project files)
-        static const QSet<QString> supportedExtensions = {
-            // Images
-            "jpg", "jpeg", "png", "tif", "tiff", "exr", "dpx", "bmp", "gif",
-            // Videos
-            "mov", "mp4", "avi", "mkv", "mxf", "r3d",
-            // Project files
-            "aep", "aepx", "nk"
-        };
-        
-        if (supportedExtensions.contains(suffix)) {
-            files.append(filePath);
+    const QFileInfoList entries = dir.entryInfoList(QDir::Files | QDir::NoDotAndDotDot);
+    for (const QFileInfo& fi : entries) {
+        if (s_supportedExtensions.contains(fi.suffix().toLower())) {
+            files.append(fi.absoluteFilePath());
         }
     }
-    
     return files;
+}
+
+void ProjectManagerWatcher::buildDirectoryCache(int projectId, const QString& rootPath)
+{
+    m_dirFiles[projectId].clear();
+    m_dirModTimes[projectId].clear();
+    
+    // Iterate all directories
+    QDirIterator it(rootPath, QDir::Dirs | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
+    
+    // Process root directory first
+    {
+        QFileInfo rootInfo(rootPath);
+        m_dirModTimes[projectId][rootPath] = rootInfo.lastModified();
+        QStringList rootFiles = scanSingleDirectory(rootPath);
+        m_dirFiles[projectId][rootPath] = QSet<QString>(rootFiles.begin(), rootFiles.end());
+    }
+    
+    // Process subdirectories
+    while (it.hasNext()) {
+        QString dirPath = it.next();
+        QFileInfo dirInfo(dirPath);
+        
+        // Store modification time
+        m_dirModTimes[projectId][dirPath] = dirInfo.lastModified();
+        
+        // Scan files in this directory only (non-recursive)
+        QStringList dirFilesList = scanSingleDirectory(dirPath);
+        m_dirFiles[projectId][dirPath] = QSet<QString>(dirFilesList.begin(), dirFilesList.end());
+    }
 }
 
 void ProjectManagerWatcher::onDirectoryChanged(const QString& path)
 {
+    // Direct lookup since we watch all subdirectories now
     int projectId = m_pathToProject.value(path, -1);
+    
     if (projectId < 0) {
-        // Try to find parent project
+        // Fallback: Try to find parent project by checking if path starts with any watched root
         for (auto it = m_projectPaths.begin(); it != m_projectPaths.end(); ++it) {
             if (path.startsWith(it.value())) {
                 projectId = it.key();
+                // Add this new subdirectory to watch list
+                if (m_watcher->addPath(path)) {
+                    m_pathToProject[path] = projectId;
+                }
                 break;
             }
         }
     }
     
     if (projectId >= 0) {
-        LogManager::instance().addLog(
-            QString("[ProjectManagerWatcher] Directory changed: %1 (project %2)").arg(path).arg(projectId), "DEBUG");
-        m_pendingScans.insert(projectId);
-        m_debounceTimer.start();
+        // Throttle logging
+        qint64 now = QDateTime::currentMSecsSinceEpoch();
+        if (now - m_lastLogTime > 5000) {
+            LogManager::instance().addLog(
+                QString("[ProjectManagerWatcher] Directory changed: %1 (project %2)").arg(path).arg(projectId), "DEBUG");
+            m_lastLogTime = now;
+        }
         
-        // Check for new subdirectories to watch
-        if (QDir(path).exists()) {
-            QDir d(path);
-            const QFileInfoList subdirs = d.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot);
-            for (const QFileInfo& fi : subdirs) {
-                const QString subDir = fi.absoluteFilePath();
-                if (!m_pathToProject.contains(subDir)) {
-                    if (m_watcher->addPath(subDir)) {
-                        m_pathToProject[subDir] = projectId;
-                    }
+        // Add to pending changed directories (not full rescan)
+        m_pendingChangedDirs[projectId].insert(path);
+        
+        // Start debounce timer if not running
+        if (!m_debounceTimer.isActive()) {
+            m_debounceTimer.start();
+        }
+    }
+}
+
+void ProjectManagerWatcher::processChangedDirectories(int projectId)
+{
+    if (!m_projectPaths.contains(projectId)) return;
+    
+    QString rootPath = m_projectPaths[projectId];
+    QSet<QString> changedDirs = m_pendingChangedDirs.take(projectId);
+    
+    QStringList newFilesList;
+    QStringList removedFilesList;
+    QSet<int> changedFolders;
+    
+    // For each changed directory, check if it actually changed
+    for (const QString& dirPath : changedDirs) {
+        QFileInfo dirInfo(dirPath);
+        if (!dirInfo.exists()) {
+            // Directory was removed - mark all files as removed
+            if (m_dirFiles[projectId].contains(dirPath)) {
+                const QSet<QString>& oldFiles = m_dirFiles[projectId][dirPath];
+                for (const QString& f : oldFiles) {
+                    removedFilesList.append(f);
                 }
+                m_dirFiles[projectId].remove(dirPath);
+                m_dirModTimes[projectId].remove(dirPath);
+            }
+            continue;
+        }
+        
+        QDateTime currentModTime = dirInfo.lastModified();
+        QDateTime cachedModTime = m_dirModTimes[projectId].value(dirPath);
+        
+        // Skip if modification time hasn't changed (spurious notification)
+        if (cachedModTime.isValid() && currentModTime == cachedModTime) {
+            continue;
+        }
+        
+        // Directory actually changed - scan it
+        QStringList currentFilesList = scanSingleDirectory(dirPath);
+        QSet<QString> currentFiles(currentFilesList.begin(), currentFilesList.end());
+        QSet<QString> oldFiles = m_dirFiles[projectId].value(dirPath);
+        
+        // Find new files in this directory
+        QSet<QString> newInDir = currentFiles - oldFiles;
+        for (const QString& f : newInDir) {
+            newFilesList.append(f);
+        }
+        
+        // Find removed files in this directory
+        QSet<QString> removedInDir = oldFiles - currentFiles;
+        for (const QString& f : removedInDir) {
+            removedFilesList.append(f);
+        }
+        
+        // Update cache
+        m_dirFiles[projectId][dirPath] = currentFiles;
+        m_dirModTimes[projectId][dirPath] = currentModTime;
+    }
+    
+    // Also check for new subdirectories that appeared
+    QDirIterator it(rootPath, QDir::Dirs | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
+    while (it.hasNext()) {
+        QString dirPath = it.next();
+        if (!m_dirModTimes[projectId].contains(dirPath)) {
+            // New directory - scan it
+            QFileInfo dirInfo(dirPath);
+            m_dirModTimes[projectId][dirPath] = dirInfo.lastModified();
+            
+            QStringList dirFilesList = scanSingleDirectory(dirPath);
+            m_dirFiles[projectId][dirPath] = QSet<QString>(dirFilesList.begin(), dirFilesList.end());
+            
+            for (const QString& f : dirFilesList) {
+                newFilesList.append(f);
             }
         }
+    }
+    
+    // Process new files
+    if (!newFilesList.isEmpty()) {
+        LogManager::instance().addLog(
+            QString("[ProjectManagerWatcher] %1 new file(s) in project %2")
+                .arg(newFilesList.count()).arg(projectId), "INFO");
+
+        for (const QString& filePath : newFilesList) {
+            QFileInfo info(filePath);
+            if (!info.exists()) continue;
+
+            const QString dirPath = info.absolutePath();
+            int folderId = ProjectDB::instance().ensureFolderForPath(projectId, dirPath);
+            if (folderId <= 0) folderId = ProjectDB::instance().getProjectRootFolderId(projectId);
+            changedFolders.insert(folderId);
+
+            int assetId = ProjectDB::instance().insertAssetMetadataFast(filePath, folderId);
+            ProjectDB::instance().addNotification(projectId, assetId, filePath);
+        }
+
+        for (int folderId : std::as_const(changedFolders)) {
+            ProjectDB::instance().notifyAssetsChanged(folderId);
+        }
+        
+        emit newFilesDetected(projectId, newFilesList);
+    }
+    
+    // Process removed files
+    if (!removedFilesList.isEmpty()) {
+        LogManager::instance().addLog(
+            QString("[ProjectManagerWatcher] %1 file(s) removed from project %2")
+                .arg(removedFilesList.count()).arg(projectId), "INFO");
+        emit filesRemoved(projectId, removedFilesList);
     }
 }
 
 void ProjectManagerWatcher::onProcessChanges()
 {
-    for (int projectId : m_pendingScans) {
+    // Process full rescans first (manual trigger)
+    for (int projectId : m_pendingFullScans) {
         if (!m_projectPaths.contains(projectId)) continue;
         
         QString watchPath = m_projectPaths[projectId];
-        QStringList currentFilesList = scanDirectory(watchPath);
-        QSet<QString> currentFiles(currentFilesList.begin(), currentFilesList.end());
-        QSet<QString> knownFiles = m_knownFiles.value(projectId);
+        LogManager::instance().addLog(
+            QString("[ProjectManagerWatcher] Full rescan for project %1").arg(projectId), "INFO");
         
-        // Find new files
-        QSet<QString> newFiles = currentFiles - knownFiles;
+        // Rebuild entire cache
+        QSet<QString> oldFiles = knownFiles(projectId);
+        buildDirectoryCache(projectId, watchPath);
+        QSet<QString> newFiles = knownFiles(projectId);
         
-        // Find removed files
-        QSet<QString> removedFiles = knownFiles - currentFiles;
+        QSet<QString> added = newFiles - oldFiles;
+        QSet<QString> removed = oldFiles - newFiles;
         
-        if (!newFiles.isEmpty()) {
-            QStringList newFilesList = newFiles.values();
-            LogManager::instance().addLog(
-                QString("[ProjectManagerWatcher] %1 new file(s) in project %2")
-                    .arg(newFilesList.count()).arg(projectId), "INFO");
-
-            QSet<int> changedFolders;
-            for (const QString& filePath : newFilesList) {
-                QFileInfo info(filePath);
-                if (!info.exists()) continue;
-
-                const QString dirPath = info.absolutePath();
-                int folderId = ProjectDB::instance().ensureFolderForPath(projectId, dirPath);
-                if (folderId <= 0) folderId = ProjectDB::instance().getProjectRootFolderId(projectId);
-                changedFolders.insert(folderId);
-
-                int assetId = ProjectDB::instance().insertAssetMetadataFast(filePath, folderId);
-                ProjectDB::instance().addNotification(projectId, assetId, filePath);
-            }
-
-            for (int folderId : std::as_const(changedFolders)) {
-                ProjectDB::instance().notifyAssetsChanged(folderId);
-            }
-            
-            emit newFilesDetected(projectId, newFilesList);
+        if (!added.isEmpty()) {
+            QStringList addedList = added.values();
+            emit newFilesDetected(projectId, addedList);
         }
-        
-        if (!removedFiles.isEmpty()) {
-            QStringList removedList = removedFiles.values();
-            LogManager::instance().addLog(
-                QString("[ProjectManagerWatcher] %1 file(s) removed from project %2")
-                    .arg(removedList.count()).arg(projectId), "INFO");
+        if (!removed.isEmpty()) {
+            QStringList removedList = removed.values();
             emit filesRemoved(projectId, removedList);
         }
-        
-        // Update known files
-        m_knownFiles[projectId] = currentFiles;
     }
+    m_pendingFullScans.clear();
     
-    m_pendingScans.clear();
+    // Process changed directories (incremental updates)
+    QList<int> projectIds = m_pendingChangedDirs.keys();
+    for (int projectId : projectIds) {
+        processChangedDirectories(projectId);
+    }
 }

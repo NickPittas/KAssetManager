@@ -14,6 +14,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Collection sharing and export
 - Crash reporting
 
+## [1.5.0] - 2025-12-11
+
+### Added
+- **Project Manager**: Complete VFX/post-production project tracking system
+  - Project creation from any folder with automatic asset import
+  - Real-time folder watching with recursive subdirectory monitoring
+  - Smart directory caching—only rescans changed directories
+  - Debounced updates (2s) prevent excessive rescans during bulk operations
+- **Project File Version Detection**
+  - After Effects (`.aep`, `.aepx`) support with version pattern extraction
+  - Nuke (`.nk`) support with version grouping
+  - Clickable version badge to switch between versions
+- **File Manager Path Bar**: Editable address bar for direct navigation
+  - Type or paste paths and press Enter to navigate
+  - Shows current path with native Windows separators
+  - Validates paths and shows errors for invalid entries
+- **Window Title Version Display**: Shows "KAsset Manager 1.5.0" in title bar
+
+### Changed
+- **Import Throttling**: Progress dialog updates every 50ms instead of per-file
+- **Background Resync**: "Re-sync Asset Folders" runs on background thread using `QtConcurrent::run()`
+- **Removed processEvents()**: Eliminated reentrancy issues in `ImportProgressDialog`
+
+### Fixed
+- **Watch Folder Not Detecting Changes**: Now watches all subdirectories recursively (not just root)
+- **Resync Freezing UI**: Operations run on background thread
+- **File Operations Not Updating Database**: Delete, rename, move now update Project Manager database
+- **Sequence Frame Paths**: Fixed path reconstruction using `filePath` instead of pattern-only
+- **Version Badge Click Detection**: Moved to `MainWindow::eventFilter` for reliability
+- **Import Progress Dialog Crashes**: Fixed reentrancy from `processEvents()` calls
+
+### Technical
+- New `project_import_worker.h/.cpp` for background imports with cancellation
+- Added `ProjectDB::removeAssetsByPath()` for bulk path deletion
+- Added `ProjectDB::updateAssetPath()` for rename operations
+- Complete rewrite of `project_manager_watcher.cpp` for smart caching
+- Added `ProjectItemDelegate::setSelectedVersions()` and `isPointOnVersionBadge()`
+
 ## [1.3.8] - 2025-11-23
 
 ### Added

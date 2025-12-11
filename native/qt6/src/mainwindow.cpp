@@ -100,6 +100,7 @@ static size_t currentWorkingSetMB() {
 #include <algorithm>
 #include <QMenu>
 #include <QAction>
+#include <QActionGroup>
 
 #include <QFutureWatcher>
 #include <QFileSystemWatcher>
@@ -263,7 +264,7 @@ MainWindow::MainWindow(QWidget *parent)
 #endif
 #endif
 
-    setWindowTitle("KAsset Manager");
+    setWindowTitle(QString("KAsset Manager %1").arg(QCoreApplication::applicationVersion()));
     resize(1400, 900);
 
     // Enable drag and drop
@@ -1584,6 +1585,52 @@ void MainWindow::setupFileManagerUi()
     connect(fmPreviewToggleButton, &QToolButton::toggled, this, &MainWindow::onFmTogglePreview);
     tb->addWidget(fmPreviewToggleButton);
     rightLayout->addWidget(fmToolbar);
+
+    // Editable path bar (like Windows Explorer)
+    fmPathBar = new QLineEdit(right);
+    fmPathBar->setPlaceholderText("Enter path...");
+    fmPathBar->setClearButtonEnabled(true);
+    fmPathBar->setStyleSheet(
+        "QLineEdit {"
+        "  background-color: #1a1a1a;"
+        "  color: #e0e0e0;"
+        "  border: 1px solid #333;"
+        "  border-radius: 4px;"
+        "  padding: 4px 8px;"
+        "  font-size: 12px;"
+        "  selection-background-color: #58a6ff;"
+        "}"
+        "QLineEdit:focus {"
+        "  border-color: #58a6ff;"
+        "}"
+    );
+    connect(fmPathBar, &QLineEdit::returnPressed, this, [this]() {
+        QString path = fmPathBar->text().trimmed();
+        if (path.isEmpty()) return;
+        
+        // Expand environment variables like %USERPROFILE%
+        path = QDir::fromNativeSeparators(path);
+        
+        // Check if path exists
+        QFileInfo fi(path);
+        if (!fi.exists()) {
+            QMessageBox::warning(this, "Invalid Path", 
+                QString("The path '%1' does not exist.").arg(path));
+            // Restore the current path
+            if (fmDirModel) {
+                fmPathBar->setText(QDir::toNativeSeparators(fmDirModel->rootPath()));
+            }
+            return;
+        }
+        
+        // If it's a file, navigate to its parent directory
+        if (fi.isFile()) {
+            path = fi.absolutePath();
+        }
+        
+        fmNavigateToPath(path, true);
+    });
+    rightLayout->addWidget(fmPathBar);
 
     // Models/views
     fmViewStack = new QStackedWidget(right);
@@ -3582,6 +3629,7 @@ void MainWindow::setupProjectManagerUi()
     pmSequenceProxy->setSourceModel(pmAssetsModel);
     pmSequenceProxy->setGroupingEnabled(true); // Default to grouped
     pmItemDelegate = new ProjectItemDelegate(this);
+    pmItemDelegate->setSelectedVersions(&pmSelectedVersions);
     
     // Grid view
     pmAssetsGridView = new QListView(pmViewStack);
@@ -3595,6 +3643,7 @@ void MainWindow::setupProjectManagerUi()
     pmAssetsGridView->setContextMenuPolicy(Qt::CustomContextMenu);
     pmAssetsGridView->setStyleSheet("QListView { background-color: #0a0a0a; border: none; }");
     pmAssetsGridView->setDragEnabled(true);
+    pmAssetsGridView->viewport()->installEventFilter(this);  // For version badge click detection
     connect(pmAssetsGridView, &QListView::doubleClicked, this, &MainWindow::onPmAssetDoubleClicked);
     connect(pmAssetsGridView, &QListView::customContextMenuRequested, this, &MainWindow::onPmAssetContextMenu);
     connect(pmAssetsGridView->selectionModel(), &QItemSelectionModel::selectionChanged, this, &MainWindow::onPmAssetSelectionChanged);
@@ -3950,10 +3999,12 @@ void MainWindow::setupProjectManagerUi()
     
     // Connect version selection from delegate
     connect(pmItemDelegate, &ProjectItemDelegate::versionSelected, this, &MainWindow::onPmVersionSelected);
+    connect(pmItemDelegate, &ProjectItemDelegate::versionDropdownRequested, this, &MainWindow::onPmVersionDropdownRequested);
     
     // Initialize project watcher
     pmWatcher = new ProjectManagerWatcher(this);
     connect(pmWatcher, &ProjectManagerWatcher::newFilesDetected, this, &MainWindow::onPmNewFilesDetected);
+    connect(pmWatcher, &ProjectManagerWatcher::filesRemoved, this, &MainWindow::onPmFilesRemoved);
     connect(&ProjectDB::instance(), &ProjectDB::projectFoldersChanged, this, [this](int projectId) {
         if (pmFoldersModel && pmFoldersModel->projectId() == projectId) {
             pmFoldersModel->setProjectId(projectId);
@@ -4110,6 +4161,24 @@ void MainWindow::onPmAssetDoubleClicked(const QModelIndex &index)
     }
     
     QString filePath = index.data(ProjectAssetsModel::FilePathRole).toString();
+    qint64 assetId = index.data(ProjectAssetsModel::IdRole).toLongLong();
+    
+    // Check if user has selected a different version for this asset
+    if (pmSelectedVersions.contains(assetId)) {
+        QString selectedVersion = pmSelectedVersions.value(assetId);
+        QString currentVersion = index.data(ProjectAssetsModel::VersionStringRole).toString();
+        
+        // If selected version differs from the default (highest), find the file path for selected version
+        if (selectedVersion != currentVersion && pmAssetsModel) {
+            int versionAssetId = pmAssetsModel->getAssetIdForVersion(static_cast<int>(assetId), selectedVersion);
+            if (versionAssetId > 0 && versionAssetId != assetId) {
+                QString versionPath = ProjectDB::instance().getAssetFilePath(versionAssetId);
+                if (!versionPath.isEmpty()) {
+                    filePath = versionPath;
+                }
+            }
+        }
+    }
     
     // Check if it's a project file that should open in external app
     if (ProjectVersionDetector::isProjectFile(filePath)) {
@@ -4172,30 +4241,12 @@ void MainWindow::onPmOpenOverlay()
         int startFrame = idx.data(ProjectAssetsModel::SequenceStartFrameRole).toInt();
         int endFrame = idx.data(ProjectAssetsModel::SequenceEndFrameRole).toInt();
         
-        // Reconstruct frame paths
-        QStringList frames;
-        QFileInfo fi(pattern);
-        QString base = fi.completeBaseName();
-        QString ext = fi.suffix();
-        QString dir = fi.absolutePath();
-        int hashCount = base.count('#');
-        
-        if (hashCount > 0) {
-            int hashStart = base.indexOf('#');
-            QString prefix = base.left(hashStart);
-            QString suffix = base.mid(hashStart + hashCount);
-            
-            for (int f = startFrame; f <= endFrame; ++f) {
-                QString frameStr = QString("%1").arg(f, hashCount, 10, QLatin1Char('0'));
-                QString framePath = dir + "/" + prefix + frameStr + suffix + "." + ext;
-                if (QFileInfo::exists(framePath)) {
-                    frames.append(framePath);
-                }
-            }
-        }
+        // Use reconstructSequenceFramePaths which uses filePath (first frame) for directory
+        // The pattern is just a filename like "render.####.exr", not a full path
+        QStringList frames = reconstructSequenceFramePaths(filePath, startFrame, endFrame);
         
         if (!frames.isEmpty()) {
-            QString seqName = QFileInfo(pattern).fileName();
+            QString seqName = pattern.isEmpty() ? QFileInfo(filePath).fileName() : pattern;
             previewOverlay->showSequence(frames, seqName, startFrame, endFrame);
             return;
         }
@@ -4397,16 +4448,23 @@ void MainWindow::onPmProjectContextMenu(const QPoint &pos)
             int projectId = index.data(ProjectsModel::IdRole).toInt();
             if (projectId <= 0) return;
             
-            statusBar()->showMessage("Re-syncing asset folders...");
-            int fixed = ProjectDB::instance().resyncAssetFolders(projectId);
-            statusBar()->showMessage(QString("Re-sync complete: %1 assets updated").arg(fixed), 5000);
+            statusBar()->showMessage("Re-syncing asset folders (background)...");
             
-            if (fixed > 0 && pmAssetsModel && pmAssetsModel->projectId() == projectId) {
-                pmAssetsModel->reload();
-            }
-            if (pmFoldersModel) {
-                pmFoldersModel->setProjectId(pmFoldersModel->projectId()); // Force refresh
-            }
+            // Run resync on background thread to avoid UI freeze
+            QPointer<MainWindow> self = this;
+            QtConcurrent::run([projectId]() {
+                return ProjectDB::instance().resyncAssetFolders(projectId);
+            }).then(this, [self, projectId](int fixed) {
+                if (!self) return;
+                self->statusBar()->showMessage(QString("Re-sync complete: %1 assets updated").arg(fixed), 5000);
+                
+                if (fixed > 0 && self->pmAssetsModel && self->pmAssetsModel->projectId() == projectId) {
+                    self->pmAssetsModel->reload();
+                }
+                if (self->pmFoldersModel) {
+                    self->pmFoldersModel->setProjectId(self->pmFoldersModel->projectId()); // Force refresh
+                }
+            });
         });
         menu.addSeparator();
         menu.addAction("Delete Project", this, &MainWindow::onPmDeleteProject);
@@ -4459,18 +4517,72 @@ void MainWindow::pmImportToProject(const QString& name, const QString& watchPath
         return;
     }
     
-    // Create importer targeting ProjectDB
-    Importer projectImporter(this, &ProjectDB::instance());
-    projectImporter.setSequenceDetectionEnabled(false);
-    connect(&projectImporter, &Importer::currentFileChanged, this, [this](const QString& file) {
-        statusBar()->showMessage("Importing: " + QFileInfo(file).fileName(), 2000);
-    });
+    // Create importer if needed - uses same proven Importer as Asset Manager
+    if (!pmImporter) {
+        pmImporter = new Importer(this, &ProjectDB::instance());
+        pmImporter->setSequenceDetectionEnabled(true);  // Enable sequence detection like Asset Manager
+        connect(pmImporter, &Importer::progressChanged, this, &MainWindow::onPmImportProgress);
+        connect(pmImporter, &Importer::currentFileChanged, this, &MainWindow::onPmImportFileChanged);
+        connect(pmImporter, &Importer::currentFolderChanged, this, &MainWindow::onPmImportFolderChanged);
+        connect(pmImporter, &Importer::importFinished, this, &MainWindow::onPmImportFinished);
+    }
     
-    LogManager::instance().addLog(QString("[ProjectManager] Importing folder contents from %1 into folder id %2").arg(watchPath).arg(folderId), "INFO");
+    // Show progress dialog
+    if (!pmImportProgressDialog) {
+        pmImportProgressDialog = new ImportProgressDialog(this);
+    }
+    pmImportProgressDialog->setWindowTitle("Importing Project Assets");
+    pmImportProgressDialog->show();
+    pmImportProgressDialog->raise();
+    pmImportProgressDialog->activateWindow();
     
-    // Import the folder contents directly into the project root (no wrapper folder)
-    if (projectImporter.importFolderContents(watchPath, folderId)) {
-        LogManager::instance().addLog("[ProjectManager] Import completed successfully", "INFO");
+    // Store project ID for refresh after import
+    pmPendingImportProjectId = projectId;
+    
+    LogManager::instance().addLog(QString("[ProjectManager] Starting import from %1 into folder id %2").arg(watchPath).arg(folderId), "INFO");
+    
+    // Use Importer::importFolderContents - same approach as Asset Manager
+    // Progress updates are throttled (every 50ms) to keep UI responsive
+    pmImporter->importFolderContents(watchPath, folderId);
+    
+    // Import is synchronous but with throttled UI updates - call finished handler
+    onPmImportFinished();
+}
+
+void MainWindow::onPmImportProgress(int current, int total)
+{
+    if (pmImportProgressDialog) {
+        pmImportProgressDialog->setProgress(current, total);
+    }
+}
+
+void MainWindow::onPmImportFileChanged(const QString& fileName)
+{
+    if (pmImportProgressDialog) {
+        pmImportProgressDialog->setCurrentFile(fileName);
+    }
+}
+
+void MainWindow::onPmImportFolderChanged(const QString& folderName)
+{
+    if (pmImportProgressDialog) {
+        pmImportProgressDialog->setCurrentFolder(folderName);
+    }
+}
+
+void MainWindow::onPmImportFinished()
+{
+    LogManager::instance().addLog("[ProjectManager] Import finished", "INFO");
+    
+    if (pmImportProgressDialog) {
+        pmImportProgressDialog->setComplete();
+    }
+    
+    // Refresh views with the new project data
+    int projectId = pmPendingImportProjectId;
+    pmPendingImportProjectId = -1;
+    
+    if (projectId > 0) {
         // Refresh the assets view
         if (pmAssetsModel) {
             pmAssetsModel->setProjectId(projectId);
@@ -4479,8 +4591,8 @@ void MainWindow::pmImportToProject(const QString& name, const QString& watchPath
         if (pmFoldersModel) {
             pmFoldersModel->setProjectId(projectId);
         }
-    } else {
-        LogManager::instance().addLog("[ProjectManager] Import failed", "ERROR");
+        
+        statusBar()->showMessage("Import completed successfully", 5000);
     }
 }
 
@@ -4583,13 +4695,86 @@ void MainWindow::onPmToggleShowAllVersions(bool checked)
     }
 }
 
-void MainWindow::onPmVersionSelected(qint64 assetId, const QString &versionPath)
+void MainWindow::onPmVersionSelected(qint64 assetId, const QString &versionString)
 {
-    Q_UNUSED(assetId);
-    Q_UNUSED(versionPath);
-    // TODO: Handle version selection - possibly switch displayed version
+    // Store the selected version for this asset
+    pmSelectedVersions[assetId] = versionString;
     LogManager::instance().addLog(QString("[ProjectManager] Version selected for asset %1: %2")
-        .arg(assetId).arg(versionPath), "DEBUG");
+        .arg(assetId).arg(versionString), "DEBUG");
+    
+    // Update the preview if this asset is currently selected
+    QModelIndex currentIdx;
+    if (pmIsGridMode && pmAssetsGridView) {
+        currentIdx = pmAssetsGridView->currentIndex();
+    } else if (pmAssetsTableView) {
+        currentIdx = pmAssetsTableView->currentIndex();
+    }
+    
+    if (currentIdx.isValid()) {
+        qint64 currentAssetId = currentIdx.data(ProjectAssetsModel::IdRole).toLongLong();
+        if (currentAssetId == assetId) {
+            // Refresh the preview with the new version
+            updatePmPreviewForIndex(currentIdx);
+        }
+    }
+    
+    // Update the view to reflect the version change
+    if (pmAssetsGridView) {
+        pmAssetsGridView->viewport()->update();
+    }
+    if (pmAssetsTableView) {
+        pmAssetsTableView->viewport()->update();
+    }
+}
+
+void MainWindow::onPmVersionDropdownRequested(const QModelIndex &index, const QPoint &globalPos)
+{
+    if (!index.isValid()) return;
+    
+    // Get version info from the model
+    QStringList versions = index.data(ProjectAssetsModel::VersionListRole).toStringList();
+    QList<int> versionAssetIds = index.data(ProjectAssetsModel::VersionAssetIdsRole).value<QList<int>>();
+    QString currentVersion = index.data(ProjectAssetsModel::VersionStringRole).toString();
+    qint64 assetId = index.data(ProjectAssetsModel::IdRole).toLongLong();
+    
+    if (versions.isEmpty()) return;
+    
+    // Check if we have a previously selected version
+    QString selectedVersion = pmSelectedVersions.value(assetId, currentVersion);
+    
+    // Create popup menu
+    QMenu menu(this);
+    menu.setStyleSheet(
+        "QMenu { background-color: #1a1a1a; color: #ffffff; border: 1px solid #333; }"
+        "QMenu::item { padding: 6px 20px; }"
+        "QMenu::item:selected { background-color: #2f3a4a; }"
+        "QMenu::item:checked { background-color: #3a4a5a; font-weight: bold; }"
+    );
+    
+    QActionGroup *actionGroup = new QActionGroup(&menu);
+    actionGroup->setExclusive(true);
+    
+    for (int i = 0; i < versions.size(); ++i) {
+        const QString &version = versions[i];
+        QAction *action = menu.addAction(version);
+        action->setCheckable(true);
+        action->setChecked(version == selectedVersion);
+        actionGroup->addAction(action);
+        
+        // Store version asset ID as action data if available
+        if (i < versionAssetIds.size()) {
+            action->setData(versionAssetIds[i]);
+        }
+    }
+    
+    // Show menu and handle selection
+    QAction *selected = menu.exec(globalPos);
+    if (selected) {
+        QString chosenVersion = selected->text();
+        if (chosenVersion != selectedVersion) {
+            onPmVersionSelected(assetId, chosenVersion);
+        }
+    }
 }
 
 void MainWindow::onPmRefresh()
@@ -4701,6 +4886,23 @@ void MainWindow::onPmNewFilesDetected(int projectId, const QStringList &newFiles
     // Refresh the current view if viewing this project
     if (projectId == pmCurrentProjectId && pmAssetsModel) {
         pmAssetsModel->setProjectId(pmCurrentProjectId);
+    }
+}
+
+void MainWindow::onPmFilesRemoved(int projectId, const QStringList &removedFiles)
+{
+    LogManager::instance().addLog(QString("[ProjectManager] Files removed: %1").arg(removedFiles.join(", ")), "INFO");
+    
+    // Remove assets from database
+    int removed = ProjectDB::instance().removeAssetsByPath(removedFiles);
+    
+    if (removed > 0) {
+        statusBar()->showMessage(QString("%1 file(s) removed from project").arg(removed), 3000);
+        
+        // Refresh the current view if viewing this project
+        if (projectId == pmCurrentProjectId && pmAssetsModel) {
+            pmAssetsModel->setProjectId(pmCurrentProjectId);
+        }
     }
 }
 
@@ -4851,12 +5053,12 @@ void MainWindow::updatePmPreviewForIndex(const QModelIndex &idx)
     
     // Handle sequences
     if (isSequenceFlag) {
-        QString pattern = idx.data(ProjectAssetsModel::SequencePatternRole).toString();
+        // Note: filePath points to the first frame, pattern is just the filename with ### placeholders
         int startFrame = idx.data(ProjectAssetsModel::SequenceStartFrameRole).toInt();
         int endFrame = idx.data(ProjectAssetsModel::SequenceEndFrameRole).toInt();
         
-        // Reconstruct sequence frame paths
-        QStringList framePaths = reconstructSequenceFramePaths(pattern, startFrame, endFrame);
+        // Reconstruct sequence frame paths using filePath (full path to first frame)
+        QStringList framePaths = reconstructSequenceFramePaths(filePath, startFrame, endFrame);
         if (!framePaths.isEmpty()) {
             showPmSequence(framePaths);
             return;
@@ -5112,10 +5314,11 @@ void MainWindow::changePmPreview(int delta)
                 int endFrame = newIdx.data(ProjectAssetsModel::SequenceEndFrameRole).toInt();
                 
                 QStringList frames;
+                // Pattern is just the filename (e.g. "render.####.exr"), get directory from filePath
                 QFileInfo fi(pattern);
                 QString base = fi.completeBaseName();
                 QString ext = fi.suffix();
-                QString dir = fi.absolutePath();
+                QString dir = QFileInfo(filePath).absolutePath();  // Use filePath for directory!
                 int hashCount = base.count('#');
                 
                 if (hashCount > 0) {
@@ -5436,9 +5639,16 @@ void MainWindow::onPmPaste()
     
     auto &q = FileOpsQueue::instance();
     if (pmClipboardCutMode) {
+        // For move operations, remove from database first (will be re-added by watcher at new location)
+        ProjectDB::instance().removeAssetsByPath(pmClipboard);
         q.enqueueMove(pmClipboard, destDir);
     } else {
         q.enqueueCopy(pmClipboard, destDir);
+    }
+    
+    // Refresh view immediately for cut operations
+    if (pmClipboardCutMode && pmAssetsModel && pmCurrentProjectId > 0) {
+        pmAssetsModel->setProjectId(pmCurrentProjectId);
     }
     
     if (!fileOpsDialog) fileOpsDialog = new FileOpsProgressDialog(this);
@@ -5460,6 +5670,14 @@ void MainWindow::onPmDelete()
     
     if (ret != QMessageBox::Yes) return;
     
+    // Remove from database first (files will be moved to recycle bin)
+    ProjectDB::instance().removeAssetsByPath(paths);
+    
+    // Refresh the view immediately
+    if (pmAssetsModel && pmCurrentProjectId > 0) {
+        pmAssetsModel->setProjectId(pmCurrentProjectId);
+    }
+    
     FileOpsQueue::instance().enqueueDelete(paths);
     if (!fileOpsDialog) fileOpsDialog = new FileOpsProgressDialog(this);
     fileOpsDialog->show();
@@ -5475,10 +5693,18 @@ void MainWindow::onPmRename()
     QString newName = QInputDialog::getText(this, "Rename", "New name:", QLineEdit::Normal, fi.fileName(), &ok);
     if (!ok || newName.trimmed().isEmpty() || newName == fi.fileName()) return;
     
+    QString oldPath = paths.first();
+    QString newPath = fi.absolutePath() + "/" + newName.trimmed();
+    
     QDir parent(fi.absolutePath());
     if (parent.rename(fi.fileName(), newName.trimmed())) {
+        // Update database with new path
+        ProjectDB::instance().updateAssetPath(oldPath, newPath);
+        
         statusBar()->showMessage("Renamed successfully", 2000);
-        onPmRefresh();
+        if (pmAssetsModel && pmCurrentProjectId > 0) {
+            pmAssetsModel->setProjectId(pmCurrentProjectId);
+        }
     } else {
         QMessageBox::warning(this, "Rename", "Failed to rename file");
     }
@@ -7531,6 +7757,38 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
     if (m_initializing) {
         return false; // do not intercept; let normal processing continue
     }
+    
+    // Handle version badge clicks on Project Manager grid view
+    if (pmAssetsGridView && watched == pmAssetsGridView->viewport()) {
+        if (event->type() == QEvent::MouseButtonPress) {
+            QMouseEvent *mouseEvent = static_cast<QMouseEvent*>(event);
+            if (mouseEvent->button() == Qt::LeftButton) {
+                QPoint pos = mouseEvent->pos();
+                QModelIndex index = pmAssetsGridView->indexAt(pos);
+                if (index.isValid() && pmItemDelegate) {
+                    QRect itemRect = pmAssetsGridView->visualRect(index);
+                    if (pmItemDelegate->isPointOnVersionBadge(itemRect, pos, index)) {
+                        // Show version dropdown
+                        onPmVersionDropdownRequested(index, mouseEvent->globalPosition().toPoint());
+                        return true;  // Event handled
+                    }
+                }
+            }
+        }
+        // Block double-click on version badge
+        if (event->type() == QEvent::MouseButtonDblClick) {
+            QMouseEvent *mouseEvent = static_cast<QMouseEvent*>(event);
+            QPoint pos = mouseEvent->pos();
+            QModelIndex index = pmAssetsGridView->indexAt(pos);
+            if (index.isValid() && pmItemDelegate) {
+                QRect itemRect = pmAssetsGridView->visualRect(index);
+                if (pmItemDelegate->isPointOnVersionBadge(itemRect, pos, index)) {
+                    return true;  // Block the double-click
+                }
+            }
+        }
+    }
+    
     // Update visible-only progress when asset or File Manager viewports resize
     if ((assetGridView && watched == assetGridView->viewport()) ||
         (assetTableView && watched == assetTableView->viewport()) ||
@@ -10171,6 +10429,11 @@ void MainWindow::fmNavigateToPath(const QString& path, bool addToHistory)
 
     // Navigate to the new path
     fmDirModel->setRootPath(path);
+
+    // Update path bar
+    if (fmPathBar) {
+        fmPathBar->setText(QDir::toNativeSeparators(path));
+    }
 
     // Update directory watcher to current path
     if (fmDirectoryWatcher) {

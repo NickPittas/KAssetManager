@@ -793,6 +793,58 @@ bool ProjectDB::removeAssets(const QList<int>& assetIds) {
     return true;
 }
 
+int ProjectDB::removeAssetsByPath(const QStringList& filePaths) {
+    if (filePaths.isEmpty()) return 0;
+    
+    int removed = 0;
+    QSet<int> affectedFolders;
+    QSqlQuery q(m_db);
+    
+    for (const QString& path : filePaths) {
+        // First get the folder ID so we can notify
+        q.prepare("SELECT id, virtual_folder_id FROM assets WHERE file_path = ?");
+        q.addBindValue(path);
+        if (q.exec() && q.next()) {
+            int assetId = q.value(0).toInt();
+            int folderId = q.value(1).toInt();
+            affectedFolders.insert(folderId);
+            
+            // Delete the asset
+            QSqlQuery delQ(m_db);
+            delQ.prepare("DELETE FROM assets WHERE id = ?");
+            delQ.addBindValue(assetId);
+            if (delQ.exec()) {
+                removed++;
+            }
+        }
+    }
+    
+    // Notify about changes
+    for (int folderId : affectedFolders) {
+        notifyAssetsChanged(folderId);
+    }
+    
+    if (removed > 0) {
+        qDebug() << "[ProjectDB] removeAssetsByPath: removed" << removed << "assets";
+    }
+    
+    return removed;
+}
+
+bool ProjectDB::updateAssetPath(const QString& oldPath, const QString& newPath) {
+    QSqlQuery q(m_db);
+    q.prepare("UPDATE assets SET file_path = ?, display_name = ? WHERE file_path = ?");
+    q.addBindValue(newPath);
+    q.addBindValue(QFileInfo(newPath).fileName());
+    q.addBindValue(oldPath);
+    
+    if (q.exec() && q.numRowsAffected() > 0) {
+        qDebug() << "[ProjectDB] updateAssetPath:" << oldPath << "->" << newPath;
+        return true;
+    }
+    return false;
+}
+
 int ProjectDB::resyncAssetFolders(int projectId) {
     // Get the project's watch path (root directory)
     Project proj = getProject(projectId);

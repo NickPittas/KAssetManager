@@ -7,12 +7,18 @@
 #include <QTimer>
 #include <QSet>
 #include <QStringList>
+#include <QDateTime>
 
 /**
  * @brief Watches project folders for new files and manages notifications.
  * 
  * This is specifically for the Project Manager feature, separate from the
  * Asset Manager's ProjectFolderWatcher.
+ * 
+ * Uses smart caching to avoid re-scanning unchanged directories:
+ * - Caches directory modification times
+ * - Only scans directories that have actually changed
+ * - Tracks pending changed directories instead of full rescans
  */
 class ProjectManagerWatcher : public QObject
 {
@@ -36,7 +42,7 @@ public:
     void unwatchProject(int projectId);
 
     /**
-     * @brief Re-scan a project folder for changes.
+     * @brief Re-scan a project folder for changes (full rescan).
      * @param projectId The project's database ID
      */
     void rescan(int projectId);
@@ -66,21 +72,38 @@ private slots:
     void onProcessChanges();
 
 private:
-    QStringList scanDirectory(const QString& path) const;
-    void updateKnownFiles(int projectId, const QSet<QString>& files);
+    // Scan a single directory (non-recursive) - returns files in that dir only
+    QStringList scanSingleDirectory(const QString& dirPath) const;
+    
+    // Build initial cache with directory mod times
+    void buildDirectoryCache(int projectId, const QString& rootPath);
+    
+    // Process only changed directories efficiently
+    void processChangedDirectories(int projectId);
 
     QFileSystemWatcher* m_watcher;
     
-    // Project ID -> watch path
+    // Project ID -> root watch path
     QHash<int, QString> m_projectPaths;
     
-    // Watch path -> project ID
+    // Watch path -> project ID (for quick lookup)
     QHash<QString, int> m_pathToProject;
     
-    // Project ID -> known files
-    QHash<int, QSet<QString>> m_knownFiles;
+    // Project ID -> directory path -> set of files in that directory
+    QHash<int, QHash<QString, QSet<QString>>> m_dirFiles;
+    
+    // Project ID -> directory path -> last modification time
+    QHash<int, QHash<QString, QDateTime>> m_dirModTimes;
+    
+    // Pending changed directories per project
+    QHash<int, QSet<QString>> m_pendingChangedDirs;
     
     // Debounce timer
     QTimer m_debounceTimer;
-    QSet<int> m_pendingScans;
+    
+    // Full rescan requests (manual trigger)
+    QSet<int> m_pendingFullScans;
+    
+    // Throttle logging to prevent spam
+    qint64 m_lastLogTime = 0;
 };

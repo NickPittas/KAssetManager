@@ -14,6 +14,9 @@ public:
 
     void setThumbnailSize(int size);
     int thumbnailSize() const;
+    
+    // Set the map of selected versions (assetId -> versionString) for display
+    void setSelectedVersions(const QHash<qint64, QString> *versions);
 
     void paint(QPainter *painter, const QStyleOptionViewItem &option, const QModelIndex &index) const override;
     QSize sizeHint(const QStyleOptionViewItem &option, const QModelIndex &index) const override;
@@ -26,10 +29,18 @@ public:
 
     // Check if click is on version dropdown area
     bool editorEvent(QEvent* event, QAbstractItemModel* model, const QStyleOptionViewItem& option, const QModelIndex& index) override;
+    
+    // Check if a point (in item rect coordinates) is on the version dropdown
+    bool isPointOnVersionBadge(const QRect& itemRect, const QPoint& point, const QModelIndex& index) const;
+    
+    // Get the version dropdown rect for an item
+    QRect versionDropdownRect(const QRect& itemRect) const { return getVersionDropdownRect(itemRect); }
 
 signals:
     // Emitted when user selects a different version from dropdown
     void versionSelected(qint64 assetId, const QString& versionPath);
+    // Emitted when user clicks on the version dropdown area - view should show popup
+    void versionDropdownRequested(const QModelIndex& index, const QPoint& globalPos);
 
 private:
     QRect getVersionDropdownRect(const QRect& itemRect) const;
@@ -39,6 +50,7 @@ private:
     int m_thumbnailSize;
     mutable QModelIndex m_hoveredIndex;
     mutable QPoint m_lastMousePos;
+    const QHash<qint64, QString> *m_selectedVersions = nullptr;
 };
 
 #endif // PROJECT_ITEM_DELEGATE_H

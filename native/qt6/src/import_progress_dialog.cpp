@@ -65,17 +65,14 @@ void ImportProgressDialog::setProgress(int current, int total)
     progressBar->setMaximum(total);
     progressBar->setValue(current);
     progressBar->setFormat(QString("%1 / %2 files (%p%)").arg(current).arg(total));
-    
-    // Process events with timeout to keep UI responsive while limiting reentrancy
-    QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
+    // Note: Do NOT call processEvents() here - it causes reentrancy issues
+    // The Qt event loop will naturally update the UI
 }
 
 void ImportProgressDialog::setCurrentFile(const QString& fileName)
 {
     fileLabel->setText(QString("Processing: %1").arg(fileName));
-
-    // Process events with timeout to keep UI responsive while limiting reentrancy
-    QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
+    // Note: Do NOT call processEvents() here - it causes reentrancy issues
 }
 
 void ImportProgressDialog::setCurrentFolder(const QString& folderName)
@@ -83,9 +80,7 @@ void ImportProgressDialog::setCurrentFolder(const QString& folderName)
     titleLabel->setText(QString("Importing folder: %1").arg(folderName));
     fileLabel->setText("");
     progressBar->setValue(0);
-
-    // Process events with timeout to keep UI responsive while limiting reentrancy
-    QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
+    // Note: Do NOT call processEvents() here - it causes reentrancy issues
 }
 
 void ImportProgressDialog::setComplete()

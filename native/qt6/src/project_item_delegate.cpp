@@ -58,6 +58,11 @@ int ProjectItemDelegate::thumbnailSize() const
     return m_thumbnailSize; 
 }
 
+void ProjectItemDelegate::setSelectedVersions(const QHash<qint64, QString> *versions)
+{
+    m_selectedVersions = versions;
+}
+
 QRect ProjectItemDelegate::getVersionDropdownRect(const QRect& itemRect) const
 {
     // Position the version dropdown at bottom-right of thumbnail area
@@ -283,6 +288,13 @@ void ProjectItemDelegate::paint(QPainter *painter, const QStyleOptionViewItem &o
         // Draw version badge for items with multiple versions
         bool hasMultipleVersions = index.data(ProjectAssetsModel::HasMultipleVersionsRole).toBool();
         QString versionString = index.data(ProjectAssetsModel::VersionStringRole).toString();
+        
+        // Check if user has selected a different version for this asset
+        qint64 assetId = index.data(ProjectAssetsModel::IdRole).toLongLong();
+        if (m_selectedVersions && m_selectedVersions->contains(assetId)) {
+            versionString = m_selectedVersions->value(assetId);
+        }
+        
         if (isProjectFile && !versionString.isEmpty()) {
             QRect versionRect = getVersionDropdownRect(option.rect);
             bool versionHovered = isHovered && versionRect.contains(m_lastMousePos);
@@ -320,20 +332,22 @@ bool ProjectItemDelegate::editorEvent(QEvent* event, QAbstractItemModel* model,
         m_lastMousePos = mouseEvent->pos();
     }
     
-    if (event->type() == QEvent::MouseButtonPress || event->type() == QEvent::MouseButtonDblClick) {
-        QMouseEvent* mouseEvent = static_cast<QMouseEvent*>(event);
-        
-        bool hasMultipleVersions = index.data(ProjectAssetsModel::HasMultipleVersionsRole).toBool();
-        if (hasMultipleVersions) {
-            QRect versionRect = getVersionDropdownRect(option.rect);
-            if (versionRect.contains(mouseEvent->pos())) {
-                // Show version dropdown - handled by view
-                return true; // Event handled
-            }
-        }
-    }
+    // Note: Version badge clicks are handled by MainWindow's eventFilter for more reliable detection
+    // editorEvent coordinates can be tricky, so we use the view's visualRect instead
     
     return QStyledItemDelegate::editorEvent(event, model, option, index);
+}
+
+bool ProjectItemDelegate::isPointOnVersionBadge(const QRect& itemRect, const QPoint& point, const QModelIndex& index) const
+{
+    bool hasMultipleVersions = index.data(ProjectAssetsModel::HasMultipleVersionsRole).toBool();
+    if (!hasMultipleVersions) return false;
+    
+    QString filePath = index.data(ProjectAssetsModel::FilePathRole).toString();
+    if (!ProjectVersionDetector::isProjectFile(filePath)) return false;
+    
+    QRect versionRect = getVersionDropdownRect(itemRect);
+    return versionRect.contains(point);
 }
 
 QWidget* ProjectItemDelegate::createEditor(QWidget* parent, const QStyleOptionViewItem& option, 

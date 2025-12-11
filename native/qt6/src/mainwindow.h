@@ -44,6 +44,7 @@ class ProjectsModel;
 class ProjectAssetsModel;
 class ProjectItemDelegate;
 class ProjectManagerWatcher;
+class ProjectImportController;
 
 class MainWindow : public QMainWindow
 {
@@ -135,10 +136,12 @@ private slots:
     void onPmThumbnailSizeChanged(int size);
     void onPmToggleShowAllVersions(bool checked);
     void onPmVersionSelected(qint64 assetId, const QString &versionPath);
+    void onPmVersionDropdownRequested(const QModelIndex &index, const QPoint &globalPos);
     void onPmRefresh();
     void onPmMarkNotificationsRead();
     void onPmShowNotifications();
     void onPmNewFilesDetected(int projectId, const QStringList &newFiles);
+    void onPmFilesRemoved(int projectId, const QStringList &removedFiles);
     void onPmOpenOverlay();
     void changePmPreview(int delta);
     void onPmNavigateBack();
@@ -406,6 +409,7 @@ private:
     QFileSystemModel *fmDirModel;
     bool fmSuppressTreeSync = false;
     QWidget *fmToolbar;
+    QLineEdit *fmPathBar = nullptr;  // Editable path bar like Windows Explorer
     QToolButton *fmBackButton;
     QToolButton *fmUpButton;
     QToolButton *fmViewModeButton;
@@ -575,6 +579,7 @@ private:
     QString pmCurrentPreviewPath;  // Track current preview for async updates
     QStringList pmClipboard;
     bool pmClipboardCutMode = false;
+    QHash<qint64, QString> pmSelectedVersions;  // asset ID -> selected version string
     
     // Project Manager preview panel (full FM-style)
     QWidget *pmPreviewPanel = nullptr;
@@ -620,6 +625,11 @@ private:
     int pmUnreadNotificationCount = 0;
     ProjectManagerWatcher *pmWatcher = nullptr;
     
+    // PM import - uses Importer with ProjectDB (same as Asset Manager)
+    Importer *pmImporter = nullptr;
+    ImportProgressDialog *pmImportProgressDialog = nullptr;
+    int pmPendingImportProjectId = -1;
+    
     // PM helper functions (mirrors FM)
     void updatePmNotificationBadge();
     void updatePmInfoPanel();
@@ -633,6 +643,10 @@ private:
     void saveProjectManagerState(QSettings& s);
     QModelIndex pmIndexForProjectId(int projectId) const;
     void navigateToProjectAsset(int projectId, int assetId, const QString& filePath);
+    void onPmImportProgress(int current, int total);
+    void onPmImportFileChanged(const QString& fileName);
+    void onPmImportFolderChanged(const QString& folderName);
+    void onPmImportFinished();
     
     // PM sequence/video playback helpers
     void playPmSequence();

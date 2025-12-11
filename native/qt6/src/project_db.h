@@ -96,6 +96,8 @@ public:
     QString getAssetFilePath(int assetId) const;
     int getAssetFolderId(int assetId) const;
     bool removeAssets(const QList<int>& assetIds);
+    int removeAssetsByPath(const QStringList& filePaths);  // Remove assets by file path
+    bool updateAssetPath(const QString& oldPath, const QString& newPath);  // Update asset file path
     int resyncAssetFolders(int projectId);  // Fix folder associations based on file paths
 
 signals:
