@@ -107,7 +107,9 @@ void DatabaseHealthDialog::setupUI() {
     // Status and close
     QHBoxLayout* bottomLayout = new QHBoxLayout();
     m_statusLabel = new QLabel(this);
-    m_statusLabel->setStyleSheet("color: #666;");
+    QPalette statusPal = m_statusLabel->palette();
+    statusPal.setColor(QPalette::WindowText, QColor(102, 102, 102));
+    m_statusLabel->setPalette(statusPal);
     bottomLayout->addWidget(m_statusLabel);
     bottomLayout->addStretch();
     

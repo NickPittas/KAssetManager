@@ -30,7 +30,9 @@ ImportProgressDialog::ImportProgressDialog(QWidget* parent)
     // Current file label
     fileLabel = new QLabel("", this);
     fileLabel->setWordWrap(true);
-    fileLabel->setStyleSheet("color: #666;");
+    QPalette filePal = fileLabel->palette();
+    filePal.setColor(QPalette::WindowText, QColor(102, 102, 102));
+    fileLabel->setPalette(filePal);
     mainLayout->addWidget(fileLabel);
     
     // Progress bar

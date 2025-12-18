@@ -10,24 +10,12 @@ StarRatingWidget::StarRatingWidget(QWidget *parent)
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(2);
     
-    // Create 5 star buttons
+    // Create 5 star buttons (styling via global stylesheet)
     for (int i = 0; i < 5; i++) {
         QPushButton *btn = new QPushButton(this);
         btn->setFixedSize(24, 24);
         btn->setFlat(true);
         btn->setCursor(Qt::PointingHandCursor);
-        btn->setStyleSheet(
-            "QPushButton { "
-            "  background: transparent; "
-            "  border: none; "
-            "  font-size: 18px; "
-            "  color: #FFD700; "
-            "} "
-            "QPushButton:hover { "
-            "  background: rgba(255, 255, 255, 0.1); "
-            "  border-radius: 3px; "
-            "}"
-        );
         
         // Connect click
         connect(btn, &QPushButton::clicked, this, [this, i]() {
@@ -42,25 +30,13 @@ StarRatingWidget::StarRatingWidget(QWidget *parent)
         layout->addWidget(btn);
     }
     
-    // Add clear button
+    // Add clear button (styling via global stylesheet with class="clear")
     QPushButton *clearBtn = new QPushButton("✕", this);
     clearBtn->setFixedSize(24, 24);
     clearBtn->setFlat(true);
     clearBtn->setCursor(Qt::PointingHandCursor);
     clearBtn->setToolTip("Clear rating");
-    clearBtn->setStyleSheet(
-        "QPushButton { "
-        "  background: transparent; "
-        "  border: none; "
-        "  font-size: 14px; "
-        "  color: #999; "
-        "} "
-        "QPushButton:hover { "
-        "  background: rgba(255, 255, 255, 0.1); "
-        "  border-radius: 3px; "
-        "  color: #fff; "
-        "}"
-    );
+    clearBtn->setProperty("class", "clear");
     connect(clearBtn, &QPushButton::clicked, this, [this]() {
         onStarClicked(0);
     });

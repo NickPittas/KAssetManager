@@ -25,7 +25,6 @@ SettingsDialog::SettingsDialog(QWidget* parent)
     QVBoxLayout* mainLayout = new QVBoxLayout(this);
 
     tabWidget = new QTabWidget(this);
-    tabWidget->setStyleSheet(ThemeManager::instance().tabWidgetStyleSheet());
 
     setupGeneralTab();
     setupCacheTab();
@@ -41,18 +40,15 @@ SettingsDialog::SettingsDialog(QWidget* parent)
     buttonLayout->addStretch();
 
     QPushButton* saveBtn = new QPushButton("Save", this);
-    saveBtn->setStyleSheet(ThemeManager::instance().accentButtonStyleSheet());
+    saveBtn->setProperty("class", "accent");
     connect(saveBtn, &QPushButton::clicked, this, &SettingsDialog::saveSettings);
     buttonLayout->addWidget(saveBtn);
 
     QPushButton* closeBtn = new QPushButton("Close", this);
-    closeBtn->setStyleSheet(ThemeManager::instance().buttonStyleSheet());
     connect(closeBtn, &QPushButton::clicked, this, &QDialog::accept);
     buttonLayout->addWidget(closeBtn);
 
     mainLayout->addLayout(buttonLayout);
-
-    setStyleSheet(ThemeManager::instance().dialogStyleSheet());
 }
 
 void SettingsDialog::setupGeneralTab()
@@ -64,16 +60,13 @@ void SettingsDialog::setupGeneralTab()
 
     // Theme selection
     QGroupBox* themeGroup = new QGroupBox("Appearance", generalTab);
-    themeGroup->setStyleSheet(ThemeManager::instance().groupBoxStyleSheet());
     QVBoxLayout* themeLayout = new QVBoxLayout(themeGroup);
 
     QLabel* themeLabel = new QLabel("Theme:", themeGroup);
-    themeLabel->setStyleSheet(ThemeManager::instance().labelStyleSheet());
     themeLayout->addWidget(themeLabel);
 
     themeCombo = new QComboBox(themeGroup);
     themeCombo->addItems({"Dark", "Light"});
-    themeCombo->setStyleSheet(ThemeManager::instance().comboBoxStyleSheet());
 
     // Load current theme selection
     int currentThemeIndex = (ThemeManager::instance().currentTheme() == ThemeManager::Light) ? 1 : 0;
@@ -98,17 +91,14 @@ void SettingsDialog::setupCacheTab()
 
     // Cache info
     QGroupBox* cacheGroup = new QGroupBox("Live Preview Cache", cacheTab);
-    cacheGroup->setStyleSheet("QGroupBox { color: #ffffff; border: 1px solid #333; padding: 10px; margin-top: 10px; } QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; }");
     QVBoxLayout* cacheLayout = new QVBoxLayout(cacheGroup);
 
     cacheSizeLabel = new QLabel(QString("Cached previews: %1 entries").arg(LivePreviewManager::instance().cacheEntryCount()), cacheGroup);
-    cacheSizeLabel->setStyleSheet("color: #ffffff;");
     cacheLayout->addWidget(cacheSizeLabel);
 
     // Cache size configuration
     QHBoxLayout* cacheSizeLayout = new QHBoxLayout();
     QLabel* maxCacheLabel = new QLabel("Maximum cache size:", cacheGroup);
-    maxCacheLabel->setStyleSheet("color: #ffffff;");
     cacheSizeLayout->addWidget(maxCacheLabel);
 
     maxCacheSizeSpin = new QSpinBox(cacheGroup);
@@ -116,20 +106,15 @@ void SettingsDialog::setupCacheTab()
     maxCacheSizeSpin->setMaximum(2048);
     maxCacheSizeSpin->setSingleStep(64);
     maxCacheSizeSpin->setValue(LivePreviewManager::instance().maxCacheEntries());
-    maxCacheSizeSpin->setStyleSheet("QSpinBox { background-color: #1e1e1e; color: #ffffff; border: 1px solid #333; padding: 4px; }");
     cacheSizeLayout->addWidget(maxCacheSizeSpin);
 
     QLabel* entriesLabel = new QLabel("entries", cacheGroup);
-    entriesLabel->setStyleSheet("color: #ffffff;");
     cacheSizeLayout->addWidget(entriesLabel);
     cacheSizeLayout->addStretch();
     cacheLayout->addLayout(cacheSizeLayout);
 
     clearCacheBtn = new QPushButton("Clear Preview Cache", cacheGroup);
-    clearCacheBtn->setStyleSheet(
-        "QPushButton { background-color: #d73a49; color: #ffffff; border: none; padding: 8px 16px; border-radius: 4px; }"
-        "QPushButton:hover { background-color: #b52a3a; }"
-    );
+    clearCacheBtn->setProperty("class", "danger");
     connect(clearCacheBtn, &QPushButton::clicked, this, &SettingsDialog::onClearCache);
     cacheLayout->addWidget(clearCacheBtn);
 
@@ -137,7 +122,6 @@ void SettingsDialog::setupCacheTab()
 
     // Persistent Thumbnail Cache settings
     QGroupBox* thumbCacheGroup = new QGroupBox("Persistent Thumbnail Cache", cacheTab);
-    thumbCacheGroup->setStyleSheet("QGroupBox { color: #ffffff; border: 1px solid #333; padding: 10px; margin-top: 10px; } QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; }");
     QVBoxLayout* thumbCacheLayout = new QVBoxLayout(thumbCacheGroup);
 
     // Cache info
@@ -147,22 +131,18 @@ void SettingsDialog::setupCacheTab()
     QString cacheSizeStr = QString::number(cacheSize / (1024.0 * 1024.0), 'f', 2) + " MB";
 
     QLabel* thumbCacheInfoLabel = new QLabel(QString("Cached files: %1 (%2)").arg(cachedFiles).arg(cacheSizeStr), thumbCacheGroup);
-    thumbCacheInfoLabel->setStyleSheet("color: #ffffff;");
     thumbCacheLayout->addWidget(thumbCacheInfoLabel);
 
     // Cache directory
     QHBoxLayout* cacheDirLayout = new QHBoxLayout();
     QLabel* cacheDirLabel = new QLabel("Cache directory:", thumbCacheGroup);
-    cacheDirLabel->setStyleSheet("color: #ffffff;");
     cacheDirLayout->addWidget(cacheDirLabel);
 
     QLineEdit* cacheDirEdit = new QLineEdit(thumbCache.getCacheDirectory(), thumbCacheGroup);
     cacheDirEdit->setReadOnly(true);
-    cacheDirEdit->setStyleSheet("QLineEdit { background-color: #1e1e1e; color: #ffffff; border: 1px solid #333; padding: 4px; }");
     cacheDirLayout->addWidget(cacheDirEdit);
 
     QPushButton* browseCacheDirBtn = new QPushButton("Browse...", thumbCacheGroup);
-    browseCacheDirBtn->setStyleSheet("QPushButton { background-color: #21262d; color: #ffffff; border: 1px solid #333; padding: 6px 12px; } QPushButton:hover { background-color: #30363d; }");
     connect(browseCacheDirBtn, &QPushButton::clicked, this, [this, cacheDirEdit]() {
         QString dir = QFileDialog::getExistingDirectory(this, "Select Thumbnail Cache Directory", cacheDirEdit->text());
         if (!dir.isEmpty()) {
@@ -176,7 +156,6 @@ void SettingsDialog::setupCacheTab()
     // Thumbnail size
     QHBoxLayout* thumbSizeLayout = new QHBoxLayout();
     QLabel* thumbSizeLabel = new QLabel("Generated thumbnail size:", thumbCacheGroup);
-    thumbSizeLabel->setStyleSheet("color: #ffffff;");
     thumbSizeLayout->addWidget(thumbSizeLabel);
 
     QSpinBox* thumbWidthSpin = new QSpinBox(thumbCacheGroup);
@@ -184,11 +163,9 @@ void SettingsDialog::setupCacheTab()
     thumbWidthSpin->setMaximum(1024);
     thumbWidthSpin->setSingleStep(64);
     thumbWidthSpin->setValue(thumbCache.getThumbnailSize().width());
-    thumbWidthSpin->setStyleSheet("QSpinBox { background-color: #1e1e1e; color: #ffffff; border: 1px solid #333; padding: 4px; }");
     thumbSizeLayout->addWidget(thumbWidthSpin);
 
     QLabel* xLabel = new QLabel("x", thumbCacheGroup);
-    xLabel->setStyleSheet("color: #ffffff;");
     thumbSizeLayout->addWidget(xLabel);
 
     QSpinBox* thumbHeightSpin = new QSpinBox(thumbCacheGroup);
@@ -196,11 +173,9 @@ void SettingsDialog::setupCacheTab()
     thumbHeightSpin->setMaximum(1024);
     thumbHeightSpin->setSingleStep(64);
     thumbHeightSpin->setValue(thumbCache.getThumbnailSize().height());
-    thumbHeightSpin->setStyleSheet("QSpinBox { background-color: #1e1e1e; color: #ffffff; border: 1px solid #333; padding: 4px; }");
     thumbSizeLayout->addWidget(thumbHeightSpin);
 
     QLabel* pxLabel = new QLabel("pixels", thumbCacheGroup);
-    pxLabel->setStyleSheet("color: #ffffff;");
     thumbSizeLayout->addWidget(pxLabel);
     thumbSizeLayout->addStretch();
     thumbCacheLayout->addLayout(thumbSizeLayout);
@@ -215,10 +190,7 @@ void SettingsDialog::setupCacheTab()
 
     // Clear cache button
     QPushButton* clearThumbCacheBtn = new QPushButton("Clear Thumbnail Cache", thumbCacheGroup);
-    clearThumbCacheBtn->setStyleSheet(
-        "QPushButton { background-color: #d73a49; color: #ffffff; border: none; padding: 8px 16px; border-radius: 4px; }"
-        "QPushButton:hover { background-color: #b52a3a; }"
-    );
+    clearThumbCacheBtn->setProperty("class", "danger");
     connect(clearThumbCacheBtn, &QPushButton::clicked, this, [this, thumbCacheInfoLabel]() {
         QMessageBox::StandardButton reply = QMessageBox::question(
             this, "Clear Thumbnail Cache",
@@ -237,7 +209,6 @@ void SettingsDialog::setupCacheTab()
 
     // Sequence Cache settings
     QGroupBox* seqCacheGroup = new QGroupBox("Image Sequence Cache", cacheTab);
-    seqCacheGroup->setStyleSheet("QGroupBox { color: #ffffff; border: 1px solid #333; padding: 10px; margin-top: 10px; } QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; }");
     QVBoxLayout* seqCacheLayout = new QVBoxLayout(seqCacheGroup);
 
     // Auto cache size checkbox
@@ -248,13 +219,11 @@ void SettingsDialog::setupCacheTab()
 
     autoSequenceCacheCheck = new QCheckBox("Automatically calculate cache size based on available RAM", seqCacheGroup);
     autoSequenceCacheCheck->setChecked(autoCache);
-    autoSequenceCacheCheck->setStyleSheet("QCheckBox { color: #ffffff; }");
     seqCacheLayout->addWidget(autoSequenceCacheCheck);
 
     // Auto cache percentage
     QHBoxLayout* autoPercentLayout = new QHBoxLayout();
     QLabel* autoPercentLabel = new QLabel("Use", seqCacheGroup);
-    autoPercentLabel->setStyleSheet("color: #ffffff;");
     autoPercentLayout->addWidget(autoPercentLabel);
 
     autoSequenceCachePercentSpin = new QSpinBox(seqCacheGroup);
@@ -264,11 +233,9 @@ void SettingsDialog::setupCacheTab()
     autoSequenceCachePercentSpin->setValue(autoPercent);
     autoSequenceCachePercentSpin->setSuffix("%");
     autoSequenceCachePercentSpin->setEnabled(autoCache);
-    autoSequenceCachePercentSpin->setStyleSheet("QSpinBox { background-color: #1e1e1e; color: #ffffff; border: 1px solid #333; padding: 4px; }");
     autoPercentLayout->addWidget(autoSequenceCachePercentSpin);
 
     QLabel* autoPercentLabel2 = new QLabel("of available RAM", seqCacheGroup);
-    autoPercentLabel2->setStyleSheet("color: #ffffff;");
     autoPercentLayout->addWidget(autoPercentLabel2);
     autoPercentLayout->addStretch();
     seqCacheLayout->addLayout(autoPercentLayout);
@@ -276,7 +243,6 @@ void SettingsDialog::setupCacheTab()
     // Manual cache size
     QHBoxLayout* manualSizeLayout = new QHBoxLayout();
     QLabel* manualSizeLabel = new QLabel("Manual cache size:", seqCacheGroup);
-    manualSizeLabel->setStyleSheet("color: #ffffff;");
     manualSizeLayout->addWidget(manualSizeLabel);
 
     sequenceCacheSizeSpin = new QSpinBox(seqCacheGroup);
@@ -285,18 +251,18 @@ void SettingsDialog::setupCacheTab()
     sequenceCacheSizeSpin->setSingleStep(10);
     sequenceCacheSizeSpin->setValue(manualSize);
     sequenceCacheSizeSpin->setEnabled(!autoCache);
-    sequenceCacheSizeSpin->setStyleSheet("QSpinBox { background-color: #1e1e1e; color: #ffffff; border: 1px solid #333; padding: 4px; }");
     manualSizeLayout->addWidget(sequenceCacheSizeSpin);
 
     QLabel* framesLabel = new QLabel("frames", seqCacheGroup);
-    framesLabel->setStyleSheet("color: #ffffff;");
     manualSizeLayout->addWidget(framesLabel);
     manualSizeLayout->addStretch();
     seqCacheLayout->addLayout(manualSizeLayout);
 
     // Memory usage label
     sequenceCacheMemoryLabel = new QLabel("Estimated memory usage: calculating...", seqCacheGroup);
-    sequenceCacheMemoryLabel->setStyleSheet("color: #aaaaaa; font-style: italic;");
+    QFont italicFont = sequenceCacheMemoryLabel->font();
+    italicFont.setItalic(true);
+    sequenceCacheMemoryLabel->setFont(italicFont);
     seqCacheLayout->addWidget(sequenceCacheMemoryLabel);
 
     // Connect signals to update UI
@@ -318,30 +284,20 @@ void SettingsDialog::setupCacheTab()
 
     // Database management
     QGroupBox* dbGroup = new QGroupBox("Database", cacheTab);
-    dbGroup->setStyleSheet("QGroupBox { color: #ffffff; border: 1px solid #333; padding: 10px; margin-top: 10px; } QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; }");
     QVBoxLayout* dbLayout = new QVBoxLayout(dbGroup);
 
     QPushButton* exportDbBtn = new QPushButton("Export Database", dbGroup);
-    exportDbBtn->setStyleSheet(
-        "QPushButton { background-color: #58a6ff; color: #ffffff; border: none; padding: 8px 16px; border-radius: 4px; }"
-        "QPushButton:hover { background-color: #4a8fd9; }"
-    );
+    exportDbBtn->setProperty("class", "accent");
     connect(exportDbBtn, &QPushButton::clicked, this, &SettingsDialog::onExportDatabase);
     dbLayout->addWidget(exportDbBtn);
 
     QPushButton* importDbBtn = new QPushButton("Import Database", dbGroup);
-    importDbBtn->setStyleSheet(
-        "QPushButton { background-color: #58a6ff; color: #ffffff; border: none; padding: 8px 16px; border-radius: 4px; }"
-        "QPushButton:hover { background-color: #4a8fd9; }"
-    );
+    importDbBtn->setProperty("class", "accent");
     connect(importDbBtn, &QPushButton::clicked, this, &SettingsDialog::onImportDatabase);
     dbLayout->addWidget(importDbBtn);
 
     QPushButton* clearDbBtn = new QPushButton("Clear Database (Danger!)", dbGroup);
-    clearDbBtn->setStyleSheet(
-        "QPushButton { background-color: #d73a49; color: #ffffff; border: none; padding: 8px 16px; border-radius: 4px; }"
-        "QPushButton:hover { background-color: #b52a3a; }"
-    );
+    clearDbBtn->setProperty("class", "danger");
     connect(clearDbBtn, &QPushButton::clicked, this, &SettingsDialog::onClearDatabase);
     dbLayout->addWidget(clearDbBtn);
 
@@ -360,30 +316,23 @@ void SettingsDialog::setupViewTab()
 
     // View options
     QGroupBox* viewGroup = new QGroupBox("View Options", viewTab);
-    viewGroup->setStyleSheet("QGroupBox { color: #ffffff; border: 1px solid #333; padding: 10px; margin-top: 10px; } QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; }");
     QVBoxLayout* viewLayout = new QVBoxLayout(viewGroup);
 
     QLabel* thumbnailLabel = new QLabel("Thumbnail Size:", viewGroup);
-    thumbnailLabel->setStyleSheet("color: #ffffff;");
     viewLayout->addWidget(thumbnailLabel);
 
     thumbnailSizeSpin = new QSpinBox(viewGroup);
     thumbnailSizeSpin->setRange(64, 512);
     thumbnailSizeSpin->setValue(200);
     thumbnailSizeSpin->setSuffix(" px");
-    thumbnailSizeSpin->setStyleSheet(
-        "QSpinBox { background-color: #2a2a2a; color: #ffffff; border: 1px solid #333; padding: 6px; border-radius: 4px; }"
-    );
     viewLayout->addWidget(thumbnailSizeSpin);
 
     showFileExtensionsCheck = new QCheckBox("Show file extensions", viewGroup);
     showFileExtensionsCheck->setChecked(true);
-    showFileExtensionsCheck->setStyleSheet("QCheckBox { color: #ffffff; }");
     viewLayout->addWidget(showFileExtensionsCheck);
 
     showSequenceOverlayCheck = new QCheckBox("Show sequence overlay badges", viewGroup);
     showSequenceOverlayCheck->setChecked(true);
-    showSequenceOverlayCheck->setStyleSheet("QCheckBox { color: #ffffff; }");
     viewLayout->addWidget(showSequenceOverlayCheck);
 
     layout->addWidget(viewGroup);
@@ -400,7 +349,10 @@ void SettingsDialog::setupShortcutsTab()
     layout->setSpacing(10);
 
     QLabel* title = new QLabel("File Manager Keyboard Shortcuts", shortcutsTab);
-    title->setStyleSheet("font-size: 14px; font-weight: bold; color: #ffffff;");
+    QFont titleFont = title->font();
+    titleFont.setPointSize(14);
+    titleFont.setBold(true);
+    title->setFont(titleFont);
     layout->addWidget(title);
 
     // Table: Action | Shortcut | Reset
@@ -414,7 +366,6 @@ void SettingsDialog::setupShortcutsTab()
     fmShortcutsTable->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
     fmShortcutsTable->verticalHeader()->setVisible(false);
     fmShortcutsTable->setAlternatingRowColors(true);
-    fmShortcutsTable->setStyleSheet("QTableWidget { background-color:#1a1a1a; color:#fff; border:1px solid #333; } QHeaderView::section { background:#222; color:#fff; }");
 
     struct Row { const char* name; QKeySequence def; const char* label; };
     const Row rows[] = {
@@ -499,7 +450,9 @@ void SettingsDialog::setupExternalAppsTab()
         "Configure external applications used to open project files.\n"
         "These paths are used when double-clicking .aep, .aepx, or .nk files in the Project Manager.",
         extAppsTab);
-    infoLabel->setStyleSheet("color: #999; font-size: 11px;");
+    QPalette infoPal = infoLabel->palette();
+    infoPal.setColor(QPalette::WindowText, QApplication::palette().color(QPalette::PlaceholderText));
+    infoLabel->setPalette(infoPal);
     infoLabel->setWordWrap(true);
     layout->addWidget(infoLabel);
 
@@ -508,22 +461,18 @@ void SettingsDialog::setupExternalAppsTab()
 
     // After Effects group
     QGroupBox* aeGroup = new QGroupBox("Adobe After Effects", extAppsTab);
-    aeGroup->setStyleSheet(ThemeManager::instance().groupBoxStyleSheet());
     QVBoxLayout* aeLayout = new QVBoxLayout(aeGroup);
 
     QLabel* aeLabel = new QLabel("After Effects executable path:", aeGroup);
-    aeLabel->setStyleSheet(ThemeManager::instance().labelStyleSheet());
     aeLayout->addWidget(aeLabel);
 
     QHBoxLayout* aePathLayout = new QHBoxLayout();
     afterEffectsPathEdit = new QLineEdit(aeGroup);
     afterEffectsPathEdit->setText(s.value("ExternalApps/AfterEffectsPath", "").toString());
     afterEffectsPathEdit->setPlaceholderText("e.g., C:\\Program Files\\Adobe\\Adobe After Effects 2024\\Support Files\\AfterFX.exe");
-    afterEffectsPathEdit->setStyleSheet(ThemeManager::instance().lineEditStyleSheet());
     aePathLayout->addWidget(afterEffectsPathEdit);
 
     QPushButton* aeBrowseBtn = new QPushButton("Browse...", aeGroup);
-    aeBrowseBtn->setStyleSheet(ThemeManager::instance().buttonStyleSheet());
     connect(aeBrowseBtn, &QPushButton::clicked, this, [this]() {
         QString path = QFileDialog::getOpenFileName(
             this,
@@ -539,29 +488,27 @@ void SettingsDialog::setupExternalAppsTab()
     aeLayout->addLayout(aePathLayout);
 
     QLabel* aeHintLabel = new QLabel("Supported file types: .aep, .aepx", aeGroup);
-    aeHintLabel->setStyleSheet("color: #666; font-size: 10px;");
+    QPalette aeHintPal = aeHintLabel->palette();
+    aeHintPal.setColor(QPalette::WindowText, QApplication::palette().color(QPalette::Disabled, QPalette::WindowText));
+    aeHintLabel->setPalette(aeHintPal);
     aeLayout->addWidget(aeHintLabel);
 
     layout->addWidget(aeGroup);
 
     // Nuke group
     QGroupBox* nukeGroup = new QGroupBox("Foundry NukeX", extAppsTab);
-    nukeGroup->setStyleSheet(ThemeManager::instance().groupBoxStyleSheet());
     QVBoxLayout* nukeLayout = new QVBoxLayout(nukeGroup);
 
     QLabel* nukeLabel = new QLabel("NukeX executable path:", nukeGroup);
-    nukeLabel->setStyleSheet(ThemeManager::instance().labelStyleSheet());
     nukeLayout->addWidget(nukeLabel);
 
     QHBoxLayout* nukePathLayout = new QHBoxLayout();
     nukeXPathEdit = new QLineEdit(nukeGroup);
     nukeXPathEdit->setText(s.value("ExternalApps/NukeXPath", "").toString());
     nukeXPathEdit->setPlaceholderText("e.g., C:\\Program Files\\Nuke15.1v1\\Nuke15.1.exe");
-    nukeXPathEdit->setStyleSheet(ThemeManager::instance().lineEditStyleSheet());
     nukePathLayout->addWidget(nukeXPathEdit);
 
     QPushButton* nukeBrowseBtn = new QPushButton("Browse...", nukeGroup);
-    nukeBrowseBtn->setStyleSheet(ThemeManager::instance().buttonStyleSheet());
     connect(nukeBrowseBtn, &QPushButton::clicked, this, [this]() {
         QString path = QFileDialog::getOpenFileName(
             this,
@@ -577,7 +524,9 @@ void SettingsDialog::setupExternalAppsTab()
     nukeLayout->addLayout(nukePathLayout);
 
     QLabel* nukeHintLabel = new QLabel("Supported file types: .nk", nukeGroup);
-    nukeHintLabel->setStyleSheet("color: #666; font-size: 10px;");
+    QPalette nukeHintPal = nukeHintLabel->palette();
+    nukeHintPal.setColor(QPalette::WindowText, QApplication::palette().color(QPalette::Disabled, QPalette::WindowText));
+    nukeHintLabel->setPalette(nukeHintPal);
     nukeLayout->addWidget(nukeHintLabel);
 
     layout->addWidget(nukeGroup);
@@ -596,29 +545,36 @@ void SettingsDialog::setupAboutTab()
     layout->setSpacing(15);
 
     QLabel* appName = new QLabel("KAsset Manager", aboutTab);
-    appName->setStyleSheet("font-size: 18px; font-weight: bold; color: #ffffff;");
+    QFont appNameFont = appName->font();
+    appNameFont.setPointSize(18);
+    appNameFont.setBold(true);
+    appName->setFont(appNameFont);
     appName->setAlignment(Qt::AlignCenter);
     layout->addWidget(appName);
 
     versionLabel = new QLabel(QString("Version %1").arg(QCoreApplication::applicationVersion()), aboutTab);
-    versionLabel->setStyleSheet("color: #999; font-size: 12px;");
+    QPalette versionPal = versionLabel->palette();
+    versionPal.setColor(QPalette::WindowText, QApplication::palette().color(QPalette::PlaceholderText));
+    versionLabel->setPalette(versionPal);
     versionLabel->setAlignment(Qt::AlignCenter);
     layout->addWidget(versionLabel);
 
     qtVersionLabel = new QLabel(QString("Built with Qt %1").arg(QT_VERSION_STR), aboutTab);
-    qtVersionLabel->setStyleSheet("color: #999; font-size: 12px;");
+    QPalette qtVersionPal = qtVersionLabel->palette();
+    qtVersionPal.setColor(QPalette::WindowText, QApplication::palette().color(QPalette::PlaceholderText));
+    qtVersionLabel->setPalette(qtVersionPal);
     qtVersionLabel->setAlignment(Qt::AlignCenter);
     layout->addWidget(qtVersionLabel);
 
     QLabel* licensesTitle = new QLabel("Third-Party Licenses", aboutTab);
-    licensesTitle->setStyleSheet("font-size: 14px; font-weight: bold; color: #ffffff; margin-top: 20px;");
+    QFont licensesTitleFont = licensesTitle->font();
+    licensesTitleFont.setPointSize(14);
+    licensesTitleFont.setBold(true);
+    licensesTitle->setFont(licensesTitleFont);
     layout->addWidget(licensesTitle);
 
     licensesText = new QTextEdit(aboutTab);
     licensesText->setReadOnly(true);
-    licensesText->setStyleSheet(
-        "QTextEdit { background-color: #1a1a1a; color: #ffffff; border: 1px solid #333; padding: 10px; }"
-    );
     licensesText->setHtml(
         "<h3>Qt Framework</h3>"
         "<p>Licensed under LGPL v3</p>"

@@ -105,8 +105,8 @@ void AssetItemDelegate::paint(QPainter *painter, const QStyleOptionViewItem &opt
                     painter->save();
                     QRect previewRect = insetPreviewRect(thumbRect);
                     painter->setClipRect(previewRect);
-                    // Scale the cached thumbnail to fit the display size
-                    QPixmap scaled = cachedThumb.scaled(previewRect.size(), Qt::KeepAspectRatio, Qt::SmoothTransformation);
+                    // Use FastTransformation for responsive resize - thumbnails are already decent quality
+                    QPixmap scaled = cachedThumb.scaled(previewRect.size(), Qt::KeepAspectRatio, Qt::FastTransformation);
                     int x = previewRect.x() + (previewRect.width() - scaled.width()) / 2;
                     int y = previewRect.y() + (previewRect.height() - scaled.height()) / 2;
                     painter->drawPixmap(x, y, scaled);
@@ -126,7 +126,8 @@ void AssetItemDelegate::paint(QPainter *painter, const QStyleOptionViewItem &opt
                 painter->save();
                 QRect previewRect = insetPreviewRect(thumbRect);
                 painter->setClipRect(previewRect);
-                QPixmap scaled = handle.pixmap.scaled(previewRect.size(), Qt::KeepAspectRatio, Qt::SmoothTransformation);
+                // Use FastTransformation for responsive resize
+                QPixmap scaled = handle.pixmap.scaled(previewRect.size(), Qt::KeepAspectRatio, Qt::FastTransformation);
                 int x = previewRect.x() + (previewRect.width() - scaled.width()) / 2;
                 int y = previewRect.y() + (previewRect.height() - scaled.height()) / 2;
                 painter->drawPixmap(x, y, scaled);

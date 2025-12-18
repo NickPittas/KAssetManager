@@ -31,31 +31,12 @@ void UserGuideDialog::setupUi()
     textBrowser->setOpenExternalLinks(true);
     textBrowser->setReadOnly(true);
 
-    // Apply theme-aware styling
+    // Apply theme-aware document styling for markdown rendering
+    // Document CSS is required for proper rendering of HTML content inside QTextBrowser
     bool isDark = ThemeManager::instance().currentTheme() == ThemeManager::Dark;
-    QString bgColor = isDark ? "#2b2b2b" : "#ffffff";
     QString textColor = isDark ? "#e0e0e0" : "#000000";
-    QString linkColor = isDark ? "#4a9eff" : "#0066cc";
     QString codeBlockBg = isDark ? "#1e1e1e" : "#f5f5f5";
     QString codeBorder = isDark ? "#404040" : "#d0d0d0";
-    
-    textBrowser->setStyleSheet(QString(
-        "QTextBrowser {"
-        "    background-color: %1;"
-        "    color: %2;"
-        "    border: none;"
-        "    padding: 20px;"
-        "    font-size: 11pt;"
-        "    line-height: 1.6;"
-        "}"
-        "QTextBrowser a {"
-        "    color: %3;"
-        "    text-decoration: none;"
-        "}"
-        "QTextBrowser a:hover {"
-        "    text-decoration: underline;"
-        "}"
-    ).arg(bgColor, textColor, linkColor));
 
     // Set document CSS for better markdown rendering
     textBrowser->document()->setDefaultStyleSheet(QString(
@@ -95,7 +76,6 @@ void UserGuideDialog::setupUi()
     
     QPushButton* closeButton = new QPushButton("Close", this);
     closeButton->setMinimumWidth(100);
-    closeButton->setStyleSheet(ThemeManager::instance().buttonStyleSheet());
     connect(closeButton, &QPushButton::clicked, this, &QDialog::accept);
     
     buttonLayout->addWidget(closeButton);

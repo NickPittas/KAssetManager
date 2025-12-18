@@ -7,6 +7,17 @@
 #include <QApplication>
 #include <QStyle>
 
+namespace {
+    // Cached folder icon - standardIcon() is expensive (shell calls on Windows)
+    static QIcon& cachedFolderIcon() {
+        static QIcon icon;
+        if (icon.isNull()) {
+            icon = QApplication::style()->standardIcon(QStyle::SP_DirIcon);
+        }
+        return icon;
+    }
+}
+
 ProjectFoldersModel::ProjectFoldersModel(QObject *parent)
     : QAbstractItemModel(parent)
 {
@@ -184,7 +195,7 @@ QVariant ProjectFoldersModel::data(const QModelIndex &index, int role) const
     case NameRole:
         return f.name;
     case Qt::DecorationRole:
-        return QApplication::style()->standardIcon(QStyle::SP_DirIcon);
+        return cachedFolderIcon();
     case IdRole:
         return f.id;
     case ParentIdRole:

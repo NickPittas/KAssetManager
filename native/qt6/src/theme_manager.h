@@ -21,11 +21,14 @@ public:
     Theme currentTheme() const { return m_currentTheme; }
     void setTheme(Theme theme);
     
-    // Load theme from settings
+    // Load theme from settings and apply it
     void loadTheme();
     
     // Save theme to settings
     void saveTheme();
+    
+    // Apply the current theme (palette + minimal global stylesheet)
+    void applyTheme();
 
     // Color getters
     QColor backgroundColor() const;
@@ -46,24 +49,6 @@ public:
     QColor cardHoverColor() const;
     QColor cardSelectedColor() const;
     QColor toolbarColor() const;
-
-    // Stylesheet getters
-    QString dialogStyleSheet() const;
-    QString tabWidgetStyleSheet() const;
-    QString menuStyleSheet() const;
-    QString buttonStyleSheet() const;
-    QString accentButtonStyleSheet() const;
-    QString dangerButtonStyleSheet() const;
-    QString groupBoxStyleSheet() const;
-    QString comboBoxStyleSheet() const;
-    QString checkBoxStyleSheet() const;
-    QString treeViewStyleSheet() const;
-    QString tableViewStyleSheet() const;
-    QString listViewStyleSheet() const;
-    QString textEditStyleSheet() const;
-    QString labelStyleSheet() const;
-    QString lineEditStyleSheet() const;
-    QString spinBoxStyleSheet() const;
 
     // Icon color getter - returns appropriate color for icons based on theme
     QColor iconColor() const;

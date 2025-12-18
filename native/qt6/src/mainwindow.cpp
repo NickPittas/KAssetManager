@@ -323,6 +323,10 @@ MainWindow::MainWindow(QWidget *parent)
     m_resizeSettleTimer.setInterval(50); // Short delay to batch rapid events
     connect(&m_resizeSettleTimer, &QTimer::timeout, this, [this]() {
         m_windowResizing = false;
+        // Re-enable updates on FM views that were disabled during resize
+        if (fmGridView) fmGridView->setUpdatesEnabled(true);
+        if (fmListView) fmListView->setUpdatesEnabled(true);
+        if (fmTree) fmTree->setUpdatesEnabled(true);
         // Resume thumbnail requests now that resize is done
         LivePreviewManager::instance().resumeRequests();
         // Trigger a single viewport update
@@ -332,14 +336,50 @@ MainWindow::MainWindow(QWidget *parent)
         scheduleVisibleThumbProgressUpdate();
     });
 
+    // Debounce timer for splitter state persistence (avoids disk I/O during resize)
+    m_splitterSaveTimer.setSingleShot(true);
+    m_splitterSaveTimer.setInterval(300); // Save after 300ms of no splitter movement
+    connect(&m_splitterSaveTimer, &QTimer::timeout, this, [this]() {
+        QSettings s("AugmentCode", "KAssetManager");
+        // Save all splitter states at once
+        if (fmSplitter) {
+            s.setValue("FileManager/MainSplitter", fmSplitter->saveState());
+            QVariantList sizes; for (int v : fmSplitter->sizes()) sizes << v;
+            s.setValue("FileManager/MainSplitterSizes", sizes);
+        }
+        if (fmLeftSplitter) {
+            s.setValue("FileManager/LeftSplitter", fmLeftSplitter->saveState());
+            QVariantList sizes; for (int v : fmLeftSplitter->sizes()) sizes << v;
+            s.setValue("FileManager/LeftSplitterSizes", sizes);
+        }
+        if (fmRightSplitter) {
+            s.setValue("FileManager/RightSplitter", fmRightSplitter->saveState());
+            QVariantList sizes; for (int v : fmRightSplitter->sizes()) sizes << v;
+            s.setValue("FileManager/RightSplitterSizes", sizes);
+        }
+        if (fmPreviewInfoSplitter) {
+            s.setValue("FileManager/PreviewInfoSplitter", fmPreviewInfoSplitter->saveState());
+            QVariantList sizes; for (int v : fmPreviewInfoSplitter->sizes()) sizes << v;
+            s.setValue("FileManager/PreviewInfoSplitterSizes", sizes);
+        }
+        if (pmSplitter) s.setValue("ProjectManager/MainSplitter", pmSplitter->saveState());
+        if (pmLeftSplitter) s.setValue("ProjectManager/LeftSplitter", pmLeftSplitter->saveState());
+        if (pmRightSplitter) s.setValue("ProjectManager/RightSplitter", pmRightSplitter->saveState());
+        if (pmPreviewInfoSplitter) s.setValue("ProjectManager/PreviewInfoSplitter", pmPreviewInfoSplitter->saveState());
+        s.sync();
+    });
+
     // Update views when live preview frames arrive
     connect(&LivePreviewManager::instance(), &LivePreviewManager::frameReady,
             this, [this](const QString& filePath, qreal, QSize, const QPixmap& pixmap) {
         g_lastPreviewError.remove(filePath);
-        if (assetGridView && assetGridView->viewport()) assetGridView->viewport()->update();
-        if (fmGridView && fmGridView->viewport()) fmGridView->viewport()->update();
-        if (pmAssetsGridView && pmAssetsGridView->viewport()) pmAssetsGridView->viewport()->update();
-        if (pmAssetsTableView && pmAssetsTableView->viewport()) pmAssetsTableView->viewport()->update();
+        // Skip viewport updates during resize to avoid UI lag
+        if (!m_windowResizing) {
+            if (assetGridView && assetGridView->viewport()) assetGridView->viewport()->update();
+            if (fmGridView && fmGridView->viewport()) fmGridView->viewport()->update();
+            if (pmAssetsGridView && pmAssetsGridView->viewport()) pmAssetsGridView->viewport()->update();
+            if (pmAssetsTableView && pmAssetsTableView->viewport()) pmAssetsTableView->viewport()->update();
+        }
         versionPreviewCache[filePath] = pixmap;
         if (versionTable) {
             for (int row = 0; row < versionTable->rowCount(); ++row) {
@@ -421,7 +461,6 @@ void MainWindow::setupUi()
     setMenuBar(menuBar);
 
     QMenu* fileMenu = menuBar->addMenu("&File");
-    fileMenu->setStyleSheet(ThemeManager::instance().menuStyleSheet());
 
     QAction* addProjectFolderAction = fileMenu->addAction("Add &Project Folder...");
     addProjectFolderAction->setShortcut(QKeySequence("Ctrl+P"));
@@ -441,7 +480,6 @@ void MainWindow::setupUi()
 
     // View menu
     QMenu* viewMenu = menuBar->addMenu("&View");
-    viewMenu->setStyleSheet(ThemeManager::instance().menuStyleSheet());
 
     toggleLogViewerAction = viewMenu->addAction("Show &Log Viewer");
     toggleLogViewerAction->setShortcut(QKeySequence("Ctrl+L"));
@@ -451,7 +489,6 @@ void MainWindow::setupUi()
 
     // Tools menu
     QMenu* toolsMenu = menuBar->addMenu("&Tools");
-    toolsMenu->setStyleSheet(ThemeManager::instance().menuStyleSheet());
 
     QAction* dbHealthAction = toolsMenu->addAction("Database &Health...");
     dbHealthAction->setShortcut(QKeySequence("Ctrl+H"));
@@ -459,7 +496,6 @@ void MainWindow::setupUi()
 
     // Help menu
     QMenu* helpMenu = menuBar->addMenu("&Help");
-    helpMenu->setStyleSheet(ThemeManager::instance().menuStyleSheet());
 
     QAction* userGuideAction = helpMenu->addAction("&User Guide...");
     userGuideAction->setShortcut(QKeySequence::HelpContents);
@@ -508,17 +544,11 @@ void MainWindow::setupUi()
     // Allow normal expand/collapse behavior like Windows Explorer
     folderTreeView->setExpandsOnDoubleClick(false);
 
-    folderTreeView->setStyleSheet(ThemeManager::instance().treeViewStyleSheet());
-
 
     leftLayout->addWidget(folderTreeView);
 
     // Recursive checkbox at bottom of folder pane
     recursiveCheckBox = new QCheckBox("Include subfolder contents", leftPanel);
-    QString recursiveStyle = ThemeManager::instance().checkBoxStyleSheet();
-    recursiveStyle += QString(" QCheckBox { font-size: 11px; padding: 4px 8px; background-color: %1; }")
-        .arg(ThemeManager::instance().backgroundColorAlt().name());
-    recursiveCheckBox->setStyleSheet(recursiveStyle);
     recursiveCheckBox->setToolTip("When checked, shows assets from selected folder and all its subfolders");
     {
         QSettings s("AugmentCode","KAssetManager");
@@ -542,7 +572,6 @@ void MainWindow::setupUi()
 
     // Toolbar for view controls
     amToolbar = new QWidget(centerPanel);
-    amToolbar->setStyleSheet("QWidget { background-color: #1a1a1a; border-bottom: 1px solid #333; }");
     QHBoxLayout* toolbarLayout = new QHBoxLayout(amToolbar);
     toolbarLayout->setContentsMargins(8, 4, 8, 4);
     toolbarLayout->setSpacing(6);
@@ -587,7 +616,6 @@ void MainWindow::setupUi()
 
     // Thumbnail size label
     amSizeLabel = new QLabel("Size:", amToolbar);
-    amSizeLabel->setStyleSheet("color: #ffffff; font-size: 12px;");
     toolbarLayout->addWidget(amSizeLabel);
 
     // Thumbnail size slider
@@ -595,18 +623,13 @@ void MainWindow::setupUi()
     thumbnailSizeSlider->setRange(100, 400);
     thumbnailSizeSlider->setValue(180);
     thumbnailSizeSlider->setFixedWidth(150);
-    thumbnailSizeSlider->setStyleSheet(
-        "QSlider::groove:horizontal { background: #333; height: 4px; border-radius: 2px; }"
-        "QSlider::handle:horizontal { background: #58a6ff; width: 14px; height: 14px; margin: -5px 0; border-radius: 7px; }"
-        "QSlider::handle:horizontal:hover { background: #4a8fd9; }"
-    );
     thumbnailSizeSlider->setToolTip("Adjust thumbnail size");
     connect(thumbnailSizeSlider, &QSlider::valueChanged, this, &MainWindow::onThumbnailSizeChanged);
     toolbarLayout->addWidget(thumbnailSizeSlider);
 
     // Size value label
     amSizeValueLabel = new QLabel("180px", amToolbar);
-    amSizeValueLabel->setStyleSheet("color: #999; font-size: 11px; min-width: 45px;");
+    amSizeValueLabel->setMinimumWidth(45);
     connect(thumbnailSizeSlider, &QSlider::valueChanged, [this](int value) {
         if (amSizeValueLabel) amSizeValueLabel->setText(QString("%1px").arg(value));
     });
@@ -621,23 +644,13 @@ void MainWindow::setupUi()
     amGroupSequencesButton->setCheckable(true);
     amGroupSequencesButton->setAutoRaise(true);
     amGroupSequencesButton->setIconSize(QSize(20, 20));
-    amGroupSequencesButton->setStyleSheet(
-        "QToolButton { background-color: transparent; border: none; border-radius: 4px; padding: 4px; }"
-        "QToolButton:checked { background-color: #58a6ff; }"
-        "QToolButton:hover { background-color: #2a2a2a; }"
-        "QToolButton:checked:hover { background-color: #4a8fd9; }"
-    );
+    amGroupSequencesButton->setProperty("class", "toggle");
     connect(amGroupSequencesButton, &QToolButton::toggled, this, &MainWindow::onAssetGroupSequencesToggled);
     toolbarLayout->addWidget(amGroupSequencesButton);
 
     // Lock checkbox for project folders
     lockCheckBox = new QCheckBox("🔒 Lock Assets", amToolbar);
     lockCheckBox->setChecked(true); // Locked by default
-    QString lockStyle = ThemeManager::instance().checkBoxStyleSheet();
-    lockStyle += " QCheckBox { color: #ff4444; font-size: 12px; font-weight: bold; }"
-                 " QCheckBox::indicator { width: 16px; height: 16px; }"
-                 " QCheckBox::indicator:checked { background-color: #ff4444; border: 1px solid #ff4444; }";
-    lockCheckBox->setStyleSheet(lockStyle);
     lockCheckBox->setToolTip("When locked, assets can only be moved within their project folder");
     connect(lockCheckBox, &QCheckBox::toggled, this, &MainWindow::onLockToggled);
     toolbarLayout->addWidget(lockCheckBox);
@@ -668,7 +681,6 @@ void MainWindow::setupUi()
     refreshButton->setToolTip("Refresh assets from project folders");
     refreshButton->setFixedSize(28, 28);
     refreshButton->setFlat(true);
-    refreshButton->setStyleSheet("QPushButton{background:transparent;border:none;}");
     connect(refreshButton, &QPushButton::clicked, this, &MainWindow::onRefreshAssets);
     toolbarLayout->addWidget(refreshButton);
 
@@ -678,7 +690,6 @@ void MainWindow::setupUi()
     searchButton->setToolTip("Everything Search - Search entire disk");
     searchButton->setFixedSize(28, 28);
     searchButton->setFlat(true);
-    searchButton->setStyleSheet("QPushButton{background:transparent;border:none;}");
     connect(searchButton, &QPushButton::clicked, this, &MainWindow::onEverythingSearchAssetManager);
     toolbarLayout->addWidget(searchButton);
 
@@ -707,7 +718,9 @@ void MainWindow::setupUi()
     assetGridView->setItemDelegate(new AssetItemDelegate(viewStack));
 
     assetGridView->setIconSize(QSize(180, 180));
-    assetGridView->setStyleSheet(ThemeManager::instance().listViewStyleSheet());
+    // Batched layout mode for better resize performance
+    assetGridView->setLayoutMode(QListView::Batched);
+    assetGridView->setBatchSize(100);
     viewStack->addWidget(assetGridView); // Index 0
 
     // Asset table view for list mode
@@ -731,7 +744,6 @@ void MainWindow::setupUi()
         s.setValue(QString("AssetManager/AssetTable/Col%1").arg(logical), newSize);
     });
 
-    assetTableView->setStyleSheet(ThemeManager::instance().tableViewStyleSheet());
     // Set column widths
     assetTableView->setColumnWidth(AssetsTableModel::NameColumn, 300);
     assetTableView->setColumnWidth(AssetsTableModel::ExtensionColumn, 80);
@@ -801,7 +813,10 @@ void MainWindow::setupUi()
     filtersLayout->setContentsMargins(8, 8, 8, 8);
 
     QLabel *filtersTitle = new QLabel("Filters", this);
-    filtersTitle->setStyleSheet("font-size: 14px; font-weight: bold; color: #ffffff;");
+    QFont filtersTitleFont = filtersTitle->font();
+    filtersTitleFont.setPointSize(14);
+    filtersTitleFont.setBold(true);
+    filtersTitle->setFont(filtersTitleFont);
     filtersLayout->addWidget(filtersTitle);
 
     // Search box with button
@@ -809,19 +824,13 @@ void MainWindow::setupUi()
 
     searchBox = new QLineEdit(this);
     searchBox->setPlaceholderText("Search... (Press Enter)");
-    searchBox->setStyleSheet(
-        "QLineEdit { background-color: #1a1a1a; color: #ffffff; border: 1px solid #333; padding: 6px; border-radius: 4px; }"
-    );
     searchLayout->addWidget(searchBox);
 
     filterSearchButton = new QPushButton(this);
     filterSearchButton->setIcon(icoSearch());
     filterSearchButton->setToolTip("Search assets");
     filterSearchButton->setFixedSize(28, 28);
-    filterSearchButton->setStyleSheet(
-        "QPushButton { background-color: #58a6ff; color: #ffffff; border: none; border-radius: 4px; }"
-        "QPushButton:hover { background-color: #4a8fd9; }"
-    );
+    filterSearchButton->setProperty("class", "accent");
     connect(filterSearchButton, &QPushButton::clicked, this, [this]() {
         onSearchTextChanged(searchBox->text());
     });
@@ -831,14 +840,6 @@ void MainWindow::setupUi()
 
     // Search scope override: Search Entire Database
     searchEntireDbCheckBox = new QCheckBox("Search Entire Database", filtersPanel);
-    searchEntireDbCheckBox->setStyleSheet(
-        "QCheckBox { color: #ffffff; font-size: 11px; padding: 4px 2px; }"
-        "QCheckBox:disabled { color: #7f7f7f; }"
-        "QCheckBox::indicator { width: 16px; height: 16px; border-radius: 3px; }"
-        "QCheckBox::indicator:unchecked { background-color: #1e1e1e; border: 1px solid #666; }"
-        "QCheckBox::indicator:checked { background-color: #58a6ff; border: 1px solid #58a6ff; }"
-        "QCheckBox::indicator:disabled { background-color: #2a2a2a; border: 1px solid #555; }"
-    );
     searchEntireDbCheckBox->setCheckable(true);
     searchEntireDbCheckBox->setEnabled(true);
     searchEntireDbCheckBox->setAttribute(Qt::WA_TransparentForMouseEvents, false);
@@ -860,14 +861,10 @@ void MainWindow::setupUi()
     searchEntireDbCheckBox->setEnabled(true);
 
     QLabel *ratingLabel = new QLabel("Rating:", this);
-    ratingLabel->setStyleSheet("color: #ffffff; margin-top: 8px;");
     filtersLayout->addWidget(ratingLabel);
 
     ratingFilter = new QComboBox(this);
     ratingFilter->addItems({"All", "5 Stars", "4+ Stars", "3+ Stars", "Unrated"});
-    ratingFilter->setStyleSheet(
-        "QComboBox { background-color: #1a1a1a; color: #ffffff; border: 1px solid #333; padding: 6px; border-radius: 4px; }"
-    );
     connect(ratingFilter, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int index) {
         assetsModel->setRatingFilter(index);
     });
@@ -876,16 +873,12 @@ void MainWindow::setupUi()
     // Tags section with + button
     QHBoxLayout *tagsHeaderLayout = new QHBoxLayout();
     QLabel *tagsLabel = new QLabel("Tags:", this);
-    tagsLabel->setStyleSheet("color: #ffffff; margin-top: 8px;");
     tagsHeaderLayout->addWidget(tagsLabel);
     tagsHeaderLayout->addStretch();
 
     QPushButton *addTagBtn = new QPushButton("+", this);
     addTagBtn->setFixedSize(24, 24);
-    addTagBtn->setStyleSheet(
-        "QPushButton { background-color: #58a6ff; color: #ffffff; border: none; border-radius: 12px; font-size: 16px; font-weight: bold; }"
-        "QPushButton:hover { background-color: #4a8fd9; }"
-    );
+    addTagBtn->setProperty("class", "accent");
     addTagBtn->setToolTip("Create new tag");
     connect(addTagBtn, &QPushButton::clicked, this, &MainWindow::onCreateTag);
     tagsHeaderLayout->addWidget(addTagBtn);
@@ -896,22 +889,14 @@ void MainWindow::setupUi()
     QHBoxLayout *tagButtonsLayout = new QHBoxLayout();
 
     applyTagsBtn = new QPushButton("Apply", this);
-    applyTagsBtn->setStyleSheet(
-        "QPushButton { background-color: #58a6ff; color: #ffffff; border: none; padding: 6px 12px; border-radius: 4px; }"
-        "QPushButton:hover { background-color: #4a8fd9; }"
-        "QPushButton:disabled { background-color: #333; color: #666; }"
-    );
+    applyTagsBtn->setProperty("class", "accent");
     applyTagsBtn->setToolTip("Apply selected tags to selected assets");
     applyTagsBtn->setEnabled(false);
     connect(applyTagsBtn, &QPushButton::clicked, this, &MainWindow::onApplyTags);
     tagButtonsLayout->addWidget(applyTagsBtn);
 
     filterByTagsBtn = new QPushButton("Filter", this);
-    filterByTagsBtn->setStyleSheet(
-        "QPushButton { background-color: #58a6ff; color: #ffffff; border: none; padding: 6px 12px; border-radius: 4px; }"
-        "QPushButton:hover { background-color: #4a8fd9; }"
-        "QPushButton:disabled { background-color: #333; color: #666; }"
-    );
+    filterByTagsBtn->setProperty("class", "accent");
     filterByTagsBtn->setToolTip("Filter assets by selected tags");
     filterByTagsBtn->setEnabled(false);
     connect(filterByTagsBtn, &QPushButton::clicked, this, &MainWindow::onFilterByTags);
@@ -921,9 +906,6 @@ void MainWindow::setupUi()
     tagFilterModeCombo = new QComboBox(this);
     tagFilterModeCombo->addItems({"AND", "OR"});
     tagFilterModeCombo->setCurrentIndex(0); // Default to AND
-    tagFilterModeCombo->setStyleSheet(
-        "QComboBox { background-color: #1a1a1a; color: #ffffff; border: 1px solid #333; padding: 4px 8px; border-radius: 4px; }"
-    );
     qDebug() << "[INIT] Tag buttons and mode added";
     tagFilterModeCombo->setToolTip("AND: Assets must have ALL selected tags\nOR: Assets must have ANY selected tag");
     tagButtonsLayout->addWidget(tagFilterModeCombo);
@@ -936,7 +918,6 @@ void MainWindow::setupUi()
     tagsListView->setModel(tagsModel);
     tagsListView->setSelectionMode(QAbstractItemView::MultiSelection);
     tagsListView->setContextMenuPolicy(Qt::CustomContextMenu);
-    tagsListView->setStyleSheet("");
     tagsListView->setMaximumHeight(150);
 
     // Enable drops on tags list for assigning tags to assets
@@ -947,23 +928,15 @@ void MainWindow::setupUi()
     filtersLayout->addWidget(tagsListView);
 
     QPushButton *applyFiltersBtn = new QPushButton("Apply Filters", this);
-    applyFiltersBtn->setStyleSheet(
-        "QPushButton { background-color: #58a6ff; color: #ffffff; border: none; padding: 8px; border-radius: 4px; }"
-        "QPushButton:hover { background-color: #4a8fd9; }"
-    );
+    applyFiltersBtn->setProperty("class", "accent");
     connect(applyFiltersBtn, &QPushButton::clicked, this, &MainWindow::applyFilters);
     filtersLayout->addWidget(applyFiltersBtn);
 
     QPushButton *clearFiltersBtn = new QPushButton("Clear Filters", this);
-    clearFiltersBtn->setStyleSheet(
-        "QPushButton { background-color: #333; color: #ffffff; border: none; padding: 8px; border-radius: 4px; }"
-        "QPushButton:hover { background-color: #444; }"
-    );
     connect(clearFiltersBtn, &QPushButton::clicked, this, &MainWindow::clearFilters);
     filtersLayout->addWidget(clearFiltersBtn);
 
     filtersLayout->addStretch();
-    filtersPanel->setStyleSheet("background-color: #121212;");
 
     // Info panel with scrollable area for all metadata
     infoPanel = new QWidget(this);
@@ -972,14 +945,16 @@ void MainWindow::setupUi()
     infoPanelLayout->setSpacing(0);
 
     QLabel *infoTitle = new QLabel("Asset Info", this);
-    infoTitle->setStyleSheet("font-size: 14px; font-weight: bold; color: #ffffff; padding: 8px; background-color: #1a1a1a;");
+    QFont infoTitleFont = infoTitle->font();
+    infoTitleFont.setPointSize(14);
+    infoTitleFont.setBold(true);
+    infoTitle->setFont(infoTitleFont);
     infoPanelLayout->addWidget(infoTitle);
 
     // Scrollable area for metadata
     QScrollArea *infoScrollArea = new QScrollArea(this);
     infoScrollArea->setWidgetResizable(true);
     infoScrollArea->setFrameShape(QFrame::NoFrame);
-    infoScrollArea->setStyleSheet("QScrollArea { background-color: #121212; border: none; }");
 
     QWidget *infoScrollWidget = new QWidget();
     QVBoxLayout *infoLayout = new QVBoxLayout(infoScrollWidget);
@@ -987,61 +962,53 @@ void MainWindow::setupUi()
     infoLayout->setSpacing(4);
 
     infoFileName = new QLabel("No selection", this);
-    infoFileName->setStyleSheet("color: #ffffff; margin-top: 4px; font-weight: bold;");
+    QFont infoFileNameFont = infoFileName->font();
+    infoFileNameFont.setBold(true);
+    infoFileName->setFont(infoFileNameFont);
     infoFileName->setWordWrap(true);
     infoLayout->addWidget(infoFileName);
 
     infoFilePath = new QLabel("", this);
-    infoFilePath->setStyleSheet("color: #999; font-size: 10px;");
     infoFilePath->setWordWrap(true);
     infoLayout->addWidget(infoFilePath);
 
     // Add separator
     QFrame *separator1 = new QFrame(this);
     separator1->setFrameShape(QFrame::HLine);
-    separator1->setStyleSheet("background-color: #333;");
     separator1->setFixedHeight(1);
     infoLayout->addWidget(separator1);
 
     infoFileSize = new QLabel("", this);
-    infoFileSize->setStyleSheet("color: #ccc; font-size: 11px;");
     infoFileSize->setWordWrap(true);
     infoLayout->addWidget(infoFileSize);
 
     infoFileType = new QLabel("", this);
-    infoFileType->setStyleSheet("color: #ccc; font-size: 11px;");
     infoFileType->setWordWrap(true);
     infoLayout->addWidget(infoFileType);
 
     infoDimensions = new QLabel("", this);
-    infoDimensions->setStyleSheet("color: #ccc; font-size: 11px;");
     infoDimensions->setWordWrap(true);
     infoLayout->addWidget(infoDimensions);
 
     infoCreated = new QLabel("", this);
-    infoCreated->setStyleSheet("color: #ccc; font-size: 11px;");
     infoCreated->setWordWrap(true);
     infoLayout->addWidget(infoCreated);
 
     infoModified = new QLabel("", this);
-    infoModified->setStyleSheet("color: #ccc; font-size: 11px;");
     infoModified->setWordWrap(true);
     infoLayout->addWidget(infoModified);
 
     infoPermissions = new QLabel("", this);
-    infoPermissions->setStyleSheet("color: #ccc; font-size: 11px;");
     infoPermissions->setWordWrap(true);
     infoLayout->addWidget(infoPermissions);
 
     // Rating widget
     QFrame *separator2 = new QFrame(this);
     separator2->setFrameShape(QFrame::HLine);
-    separator2->setStyleSheet("background-color: #333;");
     separator2->setFixedHeight(1);
     infoLayout->addWidget(separator2);
 
     infoRatingLabel = new QLabel("Rating:", this);
-    infoRatingLabel->setStyleSheet("color: #ccc; margin-top: 4px; font-size: 11px;");
     infoLayout->addWidget(infoRatingLabel);
 
     infoRatingWidget = new StarRatingWidget(this);
@@ -1049,20 +1016,21 @@ void MainWindow::setupUi()
     connect(infoRatingWidget, &StarRatingWidget::ratingChanged, this, &MainWindow::onRatingChanged);
 
     infoTags = new QLabel("", this);
-    infoTags->setStyleSheet("color: #ccc; margin-top: 4px; font-size: 11px;");
     infoTags->setWordWrap(true);
     infoLayout->addWidget(infoTags);
 
     // Separator before versions
     QFrame *separator3 = new QFrame(this);
     separator3->setFrameShape(QFrame::HLine);
-    separator3->setStyleSheet("background-color: #333;");
     separator3->setFixedHeight(1);
     infoLayout->addWidget(separator3);
 
     // Version history section
     versionsTitleLabel = new QLabel("Version History", this);
-    versionsTitleLabel->setStyleSheet("font-size: 13px; font-weight: bold; color: #ffffff; margin-top: 6px;");
+    QFont versionsTitleFont = versionsTitleLabel->font();
+    versionsTitleFont.setPointSize(13);
+    versionsTitleFont.setBold(true);
+    versionsTitleLabel->setFont(versionsTitleFont);
     infoLayout->addWidget(versionsTitleLabel);
 
     versionTable = new QTableWidget(this);
@@ -1074,10 +1042,6 @@ void MainWindow::setupUi()
     versionTable->setSelectionMode(QAbstractItemView::SingleSelection);
     versionTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
     versionTable->setShowGrid(false);
-    versionTable->setStyleSheet(
-        "QTableWidget { background-color: #1a1a1a; color: #ffffff; border: 1px solid #333; }"
-        "QHeaderView::section { background-color: #1a1a1a; color: #ffffff; border: none; padding: 4px; }"
-    );
     versionTable->setIconSize(QSize(48, 48));
     // Persist versionTable column widths immediately when resized
     connect(versionTable->horizontalHeader(), &QHeaderView::sectionResized, this, [this](int logical, int /*oldSize*/, int newSize){
@@ -1096,13 +1060,8 @@ void MainWindow::setupUi()
     QHBoxLayout *versionButtonsLayout = new QHBoxLayout();
     backupVersionCheck = new QCheckBox("Backup current version", this);
     backupVersionCheck->setChecked(true);
-    backupVersionCheck->setStyleSheet("color: #ccc;");
     revertVersionButton = new QPushButton("Revert to Selected", this);
-    revertVersionButton->setStyleSheet(
-        "QPushButton { background-color: #d9534f; color: #ffffff; border: none; padding: 6px 12px; border-radius: 4px; }"
-        "QPushButton:hover { background-color: #c9302c; }"
-        "QPushButton:disabled { background-color: #333; color: #666; }"
-    );
+    revertVersionButton->setProperty("class", "danger");
     revertVersionButton->setEnabled(false);
     connect(revertVersionButton, &QPushButton::clicked, this, &MainWindow::onRevertSelectedVersion);
     connect(versionTable->selectionModel(), &QItemSelectionModel::selectionChanged, this, [this](const QItemSelection&, const QItemSelection&){
@@ -1117,7 +1076,6 @@ void MainWindow::setupUi()
     infoScrollWidget->setLayout(infoLayout);
     infoScrollArea->setWidget(infoScrollWidget);
     infoPanelLayout->addWidget(infoScrollArea);
-    infoPanel->setStyleSheet("background-color: #121212;");
 
     rightLayout->addWidget(filtersPanel, 1);
     rightLayout->addWidget(infoPanel, 1);
@@ -1157,10 +1115,6 @@ void MainWindow::setupUi()
     logDock->setFeatures(QDockWidget::DockWidgetClosable);
     logViewerWidget = new LogViewerWidget(logDock);
     logDock->setWidget(logViewerWidget);
-    logDock->setStyleSheet(
-        "QDockWidget { background-color: #121212; color: #ffffff; }"
-        "QDockWidget::title { background-color: #1a1a1a; padding: 4px; }"
-    );
     addDockWidget(Qt::BottomDockWidgetArea, logDock);
     logDock->hide(); // Hidden by default
     LogManager::instance().addLog("[TRACE] logDock initialised", "DEBUG");
@@ -1422,12 +1376,13 @@ void MainWindow::setupFileManagerUi()
     favLayout->setSpacing(0);
     LogManager::instance().addLog("[TRACE] favorites layout ready", "DEBUG");
     QLabel *favHeader = new QLabel("★ Favorites", favContainer);
-    favHeader->setStyleSheet("color:#9aa0a6; font-weight:bold; padding:6px 4px;");
+    QFont favHeaderFont = favHeader->font();
+    favHeaderFont.setBold(true);
+    favHeader->setFont(favHeaderFont);
     favLayout->addWidget(favHeader);
     LogManager::instance().addLog("[TRACE] favorites header added", "DEBUG");
 
     fmFavoritesList = new QListWidget(favContainer);
-    fmFavoritesList->setStyleSheet("QListWidget{background:#0a0a0a; border:none; color:#fff;} QListWidget::item:selected{background:#2f3a4a;}");
     fmFavoritesList->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(fmFavoritesList, &QListWidget::itemDoubleClicked, this, &MainWindow::onFmFavoriteActivated);
     connect(fmFavoritesList, &QListWidget::customContextMenuRequested, this, [this](const QPoint &pos){
@@ -1464,7 +1419,6 @@ void MainWindow::setupFileManagerUi()
     fmTree->setContextMenuPolicy(Qt::CustomContextMenu);
     fmTree->setExpandsOnDoubleClick(true);
     fmTree->setSelectionMode(QAbstractItemView::SingleSelection);
-    fmTree->setStyleSheet(ThemeManager::instance().treeViewStyleSheet());
     // set root to the "Computer" level
     connect(fmTree, &QTreeView::customContextMenuRequested, this, &MainWindow::onFmTreeContextMenu);
     // Enable drag and drop on folder tree
@@ -1547,7 +1501,7 @@ void MainWindow::setupFileManagerUi()
     tb->addWidget(fmViewModeButton);
 
     // Thumbnail size slider (File Manager)
-    fmSizeLabel = new QLabel("Size:", fmToolbar); fmSizeLabel->setStyleSheet("color:#9aa0a6;"); tb->addWidget(fmSizeLabel);
+    fmSizeLabel = new QLabel("Size:", fmToolbar); tb->addWidget(fmSizeLabel);
     fmThumbnailSizeSlider = new QSlider(Qt::Horizontal, fmToolbar);
     fmThumbnailSizeSlider->setRange(64, 320);
     fmThumbnailSizeSlider->setFixedWidth(140);
@@ -1564,12 +1518,7 @@ void MainWindow::setupFileManagerUi()
     fmGroupSequencesCheckBox->setCheckable(true);
     fmGroupSequencesCheckBox->setAutoRaise(true);
     fmGroupSequencesCheckBox->setIconSize(QSize(28,28));
-    fmGroupSequencesCheckBox->setStyleSheet(
-        "QToolButton { background-color: transparent; border: none; border-radius: 4px; padding: 4px; }"
-        "QToolButton:checked { background-color: #58a6ff; }"
-        "QToolButton:hover { background-color: #2a2a2a; }"
-        "QToolButton:checked:hover { background-color: #4a8fd9; }"
-    );
+    fmGroupSequencesCheckBox->setProperty("class", "toggle");
     connect(fmGroupSequencesCheckBox, &QToolButton::toggled, this, &MainWindow::onFmGroupSequencesToggled);
     tb->addWidget(fmGroupSequencesCheckBox);
 
@@ -1606,20 +1555,6 @@ void MainWindow::setupFileManagerUi()
     fmPathBar = new QLineEdit(right);
     fmPathBar->setPlaceholderText("Enter path...");
     fmPathBar->setClearButtonEnabled(true);
-    fmPathBar->setStyleSheet(
-        "QLineEdit {"
-        "  background-color: #1a1a1a;"
-        "  color: #e0e0e0;"
-        "  border: 1px solid #333;"
-        "  border-radius: 4px;"
-        "  padding: 4px 8px;"
-        "  font-size: 12px;"
-        "  selection-background-color: #58a6ff;"
-        "}"
-        "QLineEdit:focus {"
-        "  border-color: #58a6ff;"
-        "}"
-    );
     connect(fmPathBar, &QLineEdit::returnPressed, this, [this]() {
         QString path = fmPathBar->text().trimmed();
         if (path.isEmpty()) return;
@@ -1674,8 +1609,11 @@ void MainWindow::setupFileManagerUi()
     fmGridView->setViewMode(QListView::IconMode);
     fmGridView->setResizeMode(QListView::Adjust);
     fmGridView->setSpacing(1); // minimize empty space between thumbnails
-    // Don't use uniform item sizes since text wrapping creates variable heights
-    fmGridView->setUniformItemSizes(false);
+    // Use uniform item sizes for much better resize performance (avoids per-item sizeHint calls)
+    fmGridView->setUniformItemSizes(true);
+    // Batched layout mode for better resize performance
+    fmGridView->setLayoutMode(QListView::Batched);
+    fmGridView->setBatchSize(100);
     fmGridView->setSelectionMode(QAbstractItemView::ExtendedSelection);
     fmGridView->setContextMenuPolicy(Qt::CustomContextMenu);
 
@@ -1691,12 +1629,14 @@ void MainWindow::setupFileManagerUi()
         fmGridView->setGridSize(QSize(fmThumb + 8, fmThumb + 36));
         if (fmThumbnailSizeSlider) fmThumbnailSizeSlider->setValue(fmThumb);
     }
-    fmGridView->setStyleSheet("QListView { background-color: #0a0a0a; border: none; }");
     fmGridView->setDragEnabled(true);
     fmGridView->setAcceptDrops(true);
     fmGridView->setDropIndicatorShown(true);
     fmGridView->setDragDropMode(QAbstractItemView::DragDrop);
     fmGridView->setDefaultDropAction(Qt::CopyAction);
+    // Batched layout mode for better resize performance
+    fmGridView->setLayoutMode(QListView::Batched);
+    fmGridView->setBatchSize(100);
     if (fmGridView->viewport()) fmGridView->viewport()->installEventFilter(this);
     if (fmGridView->verticalScrollBar())
         connect(fmGridView->verticalScrollBar(), &QScrollBar::valueChanged,
@@ -1751,7 +1691,6 @@ void MainWindow::setupFileManagerUi()
     fmListView->horizontalHeader()->setStretchLastSection(true);
     // Set default sort: column 0 (Name), ascending order, folders first
     fmListView->sortByColumn(0, Qt::AscendingOrder);
-    fmListView->setStyleSheet(ThemeManager::instance().tableViewStyleSheet());
     fmListView->setDragEnabled(true);
     fmListView->setAcceptDrops(true);
     fmListView->setDropIndicatorShown(true);
@@ -1778,12 +1717,13 @@ void MainWindow::setupFileManagerUi()
     // Preview panel (embedded)
     fmPreviewPanel = new QWidget(fmRightSplitter);
     fmPreviewPanel->setMinimumWidth(260);
-    fmPreviewPanel->setStyleSheet("background-color:#0e0e0e; border-left:1px solid #222;");
     QVBoxLayout *pv = new QVBoxLayout(fmPreviewPanel);
     pv->setContentsMargins(8,8,8,8);
     pv->setSpacing(6);
     QLabel *pvTitle = new QLabel("Preview", fmPreviewPanel);
-    pvTitle->setStyleSheet("color:#9aa0a6; font-weight:bold;");
+    QFont pvTitleFont = pvTitle->font();
+    pvTitleFont.setBold(true);
+    pvTitle->setFont(pvTitleFont);
     pv->addWidget(pvTitle);
     LogManager::instance().addLog("[TRACE] fm preview header ready", "DEBUG");
 
@@ -1795,7 +1735,6 @@ void MainWindow::setupFileManagerUi()
     fmImageView->setDragMode(QGraphicsView::ScrollHandDrag);
     fmImageView->setRenderHints(QPainter::Antialiasing | QPainter::SmoothPixmapTransform);
     fmImageView->setMinimumHeight(160);
-    fmImageView->setStyleSheet("background:#090909; border:1px solid #222;");
     fmImageView->setTransformationAnchor(QGraphicsView::AnchorUnderMouse);
     fmImageView->setResizeAnchor(QGraphicsView::AnchorUnderMouse);
     fmImageView->setAlignment(Qt::AlignCenter);
@@ -1973,7 +1912,6 @@ void MainWindow::setupFileManagerUi()
     fmVideoWidget = new QWidget(fmPreviewPanel);
     fmVideoWidget->setMinimumHeight(160);
     fmVideoWidget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    fmVideoWidget->setStyleSheet("QWidget { background-color: #000000; }");
 
     // CRITICAL: Set widget attributes for native window embedding
     // These attributes tell Qt to create a native window that GStreamer can render into
@@ -2117,20 +2055,21 @@ void MainWindow::setupFileManagerUi()
     // Info panel (similar to Asset Manager's info panel)
     fmInfoPanel = new QWidget(fmRightSplitter);
     fmInfoPanel->setMinimumWidth(260);
-    fmInfoPanel->setStyleSheet("background-color:#121212; border-left:1px solid #222;");
     QVBoxLayout *infoPanelLayout = new QVBoxLayout(fmInfoPanel);
     infoPanelLayout->setContentsMargins(0, 0, 0, 0);
     infoPanelLayout->setSpacing(0);
 
     QLabel *infoTitle = new QLabel("File Info", fmInfoPanel);
-    infoTitle->setStyleSheet("font-size: 14px; font-weight: bold; color: #ffffff; padding: 8px; background-color: #1a1a1a;");
+    QFont fmInfoTitleFont = infoTitle->font();
+    fmInfoTitleFont.setPointSize(14);
+    fmInfoTitleFont.setBold(true);
+    infoTitle->setFont(fmInfoTitleFont);
     infoPanelLayout->addWidget(infoTitle);
 
     // Scrollable area for metadata
     QScrollArea *infoScrollArea = new QScrollArea(fmInfoPanel);
     infoScrollArea->setWidgetResizable(true);
     infoScrollArea->setFrameShape(QFrame::NoFrame);
-    infoScrollArea->setStyleSheet("QScrollArea { background-color: #121212; border: none; }");
 
     QWidget *infoScrollWidget = new QWidget();
     QVBoxLayout *infoLayout = new QVBoxLayout(infoScrollWidget);
@@ -2138,49 +2077,43 @@ void MainWindow::setupFileManagerUi()
     infoLayout->setSpacing(4);
 
     fmInfoFileName = new QLabel("No selection", fmInfoPanel);
-    fmInfoFileName->setStyleSheet("color: #ffffff; margin-top: 4px; font-weight: bold;");
+    QFont fmInfoFileNameFont = fmInfoFileName->font();
+    fmInfoFileNameFont.setBold(true);
+    fmInfoFileName->setFont(fmInfoFileNameFont);
     fmInfoFileName->setWordWrap(true);
     infoLayout->addWidget(fmInfoFileName);
 
     fmInfoFilePath = new QLabel("", fmInfoPanel);
-    fmInfoFilePath->setStyleSheet("color: #999; font-size: 10px;");
     fmInfoFilePath->setWordWrap(true);
     infoLayout->addWidget(fmInfoFilePath);
 
     // Add separator
     QFrame *separator1 = new QFrame(fmInfoPanel);
     separator1->setFrameShape(QFrame::HLine);
-    separator1->setStyleSheet("background-color: #333;");
     separator1->setFixedHeight(1);
     infoLayout->addWidget(separator1);
 
     fmInfoFileSize = new QLabel("", fmInfoPanel);
-    fmInfoFileSize->setStyleSheet("color: #ccc; font-size: 11px;");
     fmInfoFileSize->setWordWrap(true);
     infoLayout->addWidget(fmInfoFileSize);
 
     fmInfoFileType = new QLabel("", fmInfoPanel);
-    fmInfoFileType->setStyleSheet("color: #ccc; font-size: 11px;");
     fmInfoFileType->setWordWrap(true);
     infoLayout->addWidget(fmInfoFileType);
 
     fmInfoDimensions = new QLabel("", fmInfoPanel);
-    fmInfoDimensions->setStyleSheet("color: #ccc; font-size: 11px;");
     fmInfoDimensions->setWordWrap(true);
     infoLayout->addWidget(fmInfoDimensions);
 
     fmInfoCreated = new QLabel("", fmInfoPanel);
-    fmInfoCreated->setStyleSheet("color: #ccc; font-size: 11px;");
     fmInfoCreated->setWordWrap(true);
     infoLayout->addWidget(fmInfoCreated);
 
     fmInfoModified = new QLabel("", fmInfoPanel);
-    fmInfoModified->setStyleSheet("color: #ccc; font-size: 11px;");
     fmInfoModified->setWordWrap(true);
     infoLayout->addWidget(fmInfoModified);
 
     fmInfoPermissions = new QLabel("", fmInfoPanel);
-    fmInfoPermissions->setStyleSheet("color: #ccc; font-size: 11px;");
     fmInfoPermissions->setWordWrap(true);
     infoLayout->addWidget(fmInfoPermissions);
 
@@ -2314,41 +2247,25 @@ void MainWindow::setupFileManagerUi()
     pageLayout->setContentsMargins(0,0,0,0);
     pageLayout->addWidget(fmSplitter);
 
-    // Persist splitter positions immediately when moved
+    // Persist splitter positions with debouncing (avoid disk I/O during drag)
     if (fmSplitter) {
         connect(fmSplitter, &QSplitter::splitterMoved, this, [this](int, int){
-            QSettings s("AugmentCode", "KAssetManager");
-            s.setValue("FileManager/MainSplitter", fmSplitter->saveState());
-            QVariantList sizes; for (int v : fmSplitter->sizes()) sizes << v;
-            s.setValue("FileManager/MainSplitterSizes", sizes);
-            s.sync();
+            m_splitterSaveTimer.start();
         });
     }
     if (fmLeftSplitter) {
         connect(fmLeftSplitter, &QSplitter::splitterMoved, this, [this](int, int){
-            QSettings s("AugmentCode", "KAssetManager");
-            s.setValue("FileManager/LeftSplitter", fmLeftSplitter->saveState());
-            QVariantList sizes; for (int v : fmLeftSplitter->sizes()) sizes << v;
-            s.setValue("FileManager/LeftSplitterSizes", sizes);
-            s.sync();
+            m_splitterSaveTimer.start();
         });
     }
     if (fmRightSplitter) {
         connect(fmRightSplitter, &QSplitter::splitterMoved, this, [this](int, int){
-            QSettings s("AugmentCode", "KAssetManager");
-            s.setValue("FileManager/RightSplitter", fmRightSplitter->saveState());
-            QVariantList sizes; for (int v : fmRightSplitter->sizes()) sizes << v;
-            s.setValue("FileManager/RightSplitterSizes", sizes);
-            s.sync();
+            m_splitterSaveTimer.start();
         });
     }
     if (fmPreviewInfoSplitter) {
         connect(fmPreviewInfoSplitter, &QSplitter::splitterMoved, this, [this](int, int){
-            QSettings s("AugmentCode", "KAssetManager");
-            s.setValue("FileManager/PreviewInfoSplitter", fmPreviewInfoSplitter->saveState());
-            QVariantList sizes; for (int v : fmPreviewInfoSplitter->sizes()) sizes << v;
-            s.setValue("FileManager/PreviewInfoSplitterSizes", sizes);
-            s.sync();
+            m_splitterSaveTimer.start();
         });
     }
 
@@ -3430,7 +3347,10 @@ void MainWindow::setupProjectManagerUi()
     headerLayout->setContentsMargins(8, 8, 8, 8);
     
     QLabel *projectsLabel = new QLabel("Projects", projectHeader);
-    projectsLabel->setStyleSheet("font-weight: bold; color: #fff; font-size: 14px;");
+    QFont projectsLabelFont = projectsLabel->font();
+    projectsLabelFont.setPointSize(14);
+    projectsLabelFont.setBold(true);
+    projectsLabel->setFont(projectsLabelFont);
     headerLayout->addWidget(projectsLabel);
     headerLayout->addStretch();
     
@@ -3445,10 +3365,7 @@ void MainWindow::setupProjectManagerUi()
     // Notification badge button
     pmNotificationBadge = new QPushButton("0", projectHeader);
     pmNotificationBadge->setFixedSize(28, 28);
-    pmNotificationBadge->setStyleSheet(
-        "QPushButton { background-color: #d73a49; color: white; border-radius: 14px; font-weight: bold; font-size: 11px; }"
-        "QPushButton:hover { background-color: #e34856; }"
-    );
+    pmNotificationBadge->setProperty("class", "danger");
     pmNotificationBadge->setToolTip("New files detected - click to view");
     pmNotificationBadge->hide();
     connect(pmNotificationBadge, &QPushButton::clicked, this, &MainWindow::onPmShowNotifications);
@@ -3460,7 +3377,6 @@ void MainWindow::setupProjectManagerUi()
     pmProjectsListView = new QListView(projectsContainer);
     pmProjectsModel = new ProjectsModel(this);
     pmProjectsListView->setModel(pmProjectsModel);
-    pmProjectsListView->setStyleSheet(ThemeManager::instance().listViewStyleSheet());
     pmProjectsListView->setContextMenuPolicy(Qt::CustomContextMenu);
     pmProjectsListView->setMaximumHeight(200);
     connect(pmProjectsListView, &QListView::clicked, this, &MainWindow::onPmProjectSelected);
@@ -3476,7 +3392,10 @@ void MainWindow::setupProjectManagerUi()
     foldersLayout->setSpacing(0);
     
     QLabel *foldersLabel = new QLabel("Folders", foldersContainer);
-    foldersLabel->setStyleSheet("font-weight: bold; color: #fff; font-size: 13px; padding: 8px;");
+    QFont foldersLabelFont = foldersLabel->font();
+    foldersLabelFont.setPointSize(13);
+    foldersLabelFont.setBold(true);
+    foldersLabel->setFont(foldersLabelFont);
     foldersLayout->addWidget(foldersLabel);
     
     pmFolderTree = new QTreeView(foldersContainer);
@@ -3484,7 +3403,6 @@ void MainWindow::setupProjectManagerUi()
     pmFolderTree->setModel(pmFoldersModel);
     pmFolderTree->setHeaderHidden(true);
     pmFolderTree->setExpandsOnDoubleClick(true);
-    pmFolderTree->setStyleSheet(ThemeManager::instance().treeViewStyleSheet());
     pmFolderTree->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(pmFolderTree, &QTreeView::clicked, this, &MainWindow::onPmFolderSelected);
     connect(pmFolderTree, &QTreeView::customContextMenuRequested, this, &MainWindow::onPmFolderContextMenu);
@@ -3577,7 +3495,6 @@ void MainWindow::setupProjectManagerUi()
     
     // Thumbnail size slider
     pmSizeLabel = new QLabel("Size:", pmToolbar);
-    pmSizeLabel->setStyleSheet("color: #9aa0a6;");
     tb->addWidget(pmSizeLabel);
     
     pmThumbnailSizeSlider = new QSlider(Qt::Horizontal, pmToolbar);
@@ -3598,11 +3515,7 @@ void MainWindow::setupProjectManagerUi()
     pmGroupSequencesBtn->setChecked(true);  // Default to grouped
     pmGroupSequencesBtn->setAutoRaise(true);
     pmGroupSequencesBtn->setIconSize(QSize(28, 28));
-    pmGroupSequencesBtn->setStyleSheet(
-        "QToolButton { background-color: transparent; border: none; border-radius: 4px; padding: 4px; }"
-        "QToolButton:checked { background-color: #58a6ff; }"
-        "QToolButton:hover { background-color: #2a2a2a; }"
-    );
+    pmGroupSequencesBtn->setProperty("class", "toggle");
     connect(pmGroupSequencesBtn, &QToolButton::toggled, this, &MainWindow::onPmGroupSequencesToggled);
     tb->addWidget(pmGroupSequencesBtn);
     
@@ -3612,10 +3525,7 @@ void MainWindow::setupProjectManagerUi()
     pmShowAllVersionsButton->setCheckable(true);
     pmShowAllVersionsButton->setChecked(false);
     pmShowAllVersionsButton->setToolTip("Show all versions instead of grouping by highest version");
-    pmShowAllVersionsButton->setStyleSheet(
-        "QToolButton { color: #9aa0a6; padding: 4px 8px; }"
-        "QToolButton:checked { color: #58a6ff; background-color: #21262d; border-radius: 4px; }"
-    );
+    pmShowAllVersionsButton->setProperty("class", "toggle");
     connect(pmShowAllVersionsButton, &QToolButton::toggled, this, &MainWindow::onPmToggleShowAllVersions);
     tb->addWidget(pmShowAllVersionsButton);
     
@@ -3654,11 +3564,14 @@ void MainWindow::setupProjectManagerUi()
     pmAssetsGridView->setViewMode(QListView::IconMode);
     pmAssetsGridView->setResizeMode(QListView::Adjust);
     pmAssetsGridView->setSpacing(1);
-    pmAssetsGridView->setUniformItemSizes(false);
+    // Use uniform item sizes for much better resize performance
+    pmAssetsGridView->setUniformItemSizes(true);
     pmAssetsGridView->setSelectionMode(QAbstractItemView::ExtendedSelection);
     pmAssetsGridView->setContextMenuPolicy(Qt::CustomContextMenu);
-    pmAssetsGridView->setStyleSheet("QListView { background-color: #0a0a0a; border: none; }");
     pmAssetsGridView->setDragEnabled(true);
+    // Batched layout mode for better resize performance
+    pmAssetsGridView->setLayoutMode(QListView::Batched);
+    pmAssetsGridView->setBatchSize(100);
     pmAssetsGridView->viewport()->installEventFilter(this);  // For version badge click detection
     connect(pmAssetsGridView, &QListView::doubleClicked, this, &MainWindow::onPmAssetDoubleClicked);
     connect(pmAssetsGridView, &QListView::customContextMenuRequested, this, &MainWindow::onPmAssetContextMenu);
@@ -3695,7 +3608,6 @@ void MainWindow::setupProjectManagerUi()
     pmAssetsTableView->verticalHeader()->setDefaultSectionSize(22);
     pmAssetsTableView->setIconSize(QSize(18, 18));
     pmAssetsTableView->horizontalHeader()->setStretchLastSection(true);
-    pmAssetsTableView->setStyleSheet(ThemeManager::instance().tableViewStyleSheet());
     pmAssetsTableView->setContextMenuPolicy(Qt::CustomContextMenu);
     pmAssetsTableView->setDragEnabled(true);
     connect(pmAssetsTableView, &QTableView::doubleClicked, this, &MainWindow::onPmAssetDoubleClicked);
@@ -3711,13 +3623,14 @@ void MainWindow::setupProjectManagerUi()
     // Preview panel
     pmPreviewPanel = new QWidget(pmPreviewInfoSplitter);
     pmPreviewPanel->setMinimumWidth(260);
-    pmPreviewPanel->setStyleSheet("background-color:#0e0e0e; border-left:1px solid #222;");
     QVBoxLayout *pv = new QVBoxLayout(pmPreviewPanel);
     pv->setContentsMargins(8, 8, 8, 8);
     pv->setSpacing(6);
     
     QLabel *pvTitle = new QLabel("Preview", pmPreviewPanel);
-    pvTitle->setStyleSheet("color:#9aa0a6; font-weight:bold;");
+    QFont pmPvTitleFont = pvTitle->font();
+    pmPvTitleFont.setBold(true);
+    pvTitle->setFont(pmPvTitleFont);
     pv->addWidget(pvTitle);
     
     // Image view with zoom/pan
@@ -3728,7 +3641,6 @@ void MainWindow::setupProjectManagerUi()
     pmImageView->setDragMode(QGraphicsView::ScrollHandDrag);
     pmImageView->setRenderHints(QPainter::Antialiasing | QPainter::SmoothPixmapTransform);
     pmImageView->setMinimumHeight(160);
-    pmImageView->setStyleSheet("background:#090909; border:1px solid #222;");
     pmImageView->setTransformationAnchor(QGraphicsView::AnchorUnderMouse);
     pmImageView->setResizeAnchor(QGraphicsView::AnchorUnderMouse);
     pmImageView->setAlignment(Qt::AlignCenter);
@@ -3737,7 +3649,12 @@ void MainWindow::setupProjectManagerUi()
     // Video widget (hidden by default)
     pmVideoWidget = new QWidget(pmPreviewPanel);
     pmVideoWidget->setMinimumHeight(160);
-    pmVideoWidget->setStyleSheet("background:#000;");
+    pmVideoWidget->setAutoFillBackground(true);
+    {
+        QPalette vPal = pmVideoWidget->palette();
+        vPal.setColor(QPalette::Window, Qt::black);
+        pmVideoWidget->setPalette(vPal);
+    }
     pmVideoWidget->hide();
     
     // Preview content container
@@ -3780,7 +3697,11 @@ void MainWindow::setupProjectManagerUi()
     mc->addWidget(pmPositionSlider, 1);
     
     pmTimeLabel = new QLabel("00:00 / 00:00", pmPreviewPanel);
-    pmTimeLabel->setStyleSheet("color:#9aa0a6; font-size:11px;");
+    {
+        QFont f = pmTimeLabel->font();
+        f.setPointSize(9);
+        pmTimeLabel->setFont(f);
+    }
     pmTimeLabel->hide();
     mc->addWidget(pmTimeLabel);
     
@@ -3886,20 +3807,24 @@ void MainWindow::setupProjectManagerUi()
     // ===== INFO PANEL (mirrors FM info panel) =====
     pmInfoPanel = new QWidget(pmPreviewInfoSplitter);
     pmInfoPanel->setMinimumWidth(260);
-    pmInfoPanel->setStyleSheet("background-color:#121212; border-left:1px solid #222;");
     QVBoxLayout *infoPanelLayout = new QVBoxLayout(pmInfoPanel);
     infoPanelLayout->setContentsMargins(0, 0, 0, 0);
     infoPanelLayout->setSpacing(0);
     
     QLabel *infoTitle = new QLabel("File Info", pmInfoPanel);
-    infoTitle->setStyleSheet("font-size: 14px; font-weight: bold; color: #ffffff; padding: 8px; background-color: #1a1a1a;");
+    {
+        QFont f = infoTitle->font();
+        f.setBold(true);
+        f.setPointSize(11);
+        infoTitle->setFont(f);
+    }
+    infoTitle->setContentsMargins(8, 8, 8, 8);
     infoPanelLayout->addWidget(infoTitle);
     
     // Scrollable area for metadata
     QScrollArea *infoScrollArea = new QScrollArea(pmInfoPanel);
     infoScrollArea->setWidgetResizable(true);
     infoScrollArea->setFrameShape(QFrame::NoFrame);
-    infoScrollArea->setStyleSheet("QScrollArea { background-color: #121212; border: none; }");
     
     QWidget *infoScrollWidget = new QWidget();
     QVBoxLayout *infoLayout = new QVBoxLayout(infoScrollWidget);
@@ -3907,12 +3832,21 @@ void MainWindow::setupProjectManagerUi()
     infoLayout->setSpacing(4);
     
     pmInfoFileName = new QLabel("No selection", pmInfoPanel);
-    pmInfoFileName->setStyleSheet("color: #ffffff; margin-top: 4px; font-weight: bold;");
+    {
+        QFont f = pmInfoFileName->font();
+        f.setBold(true);
+        pmInfoFileName->setFont(f);
+    }
     pmInfoFileName->setWordWrap(true);
+    pmInfoFileName->setContentsMargins(0, 4, 0, 0);
     infoLayout->addWidget(pmInfoFileName);
     
     pmInfoFilePath = new QLabel("", pmInfoPanel);
-    pmInfoFilePath->setStyleSheet("color: #999; font-size: 10px;");
+    {
+        QFont f = pmInfoFilePath->font();
+        f.setPointSize(8);
+        pmInfoFilePath->setFont(f);
+    }
     pmInfoFilePath->setWordWrap(true);
     infoLayout->addWidget(pmInfoFilePath);
     
@@ -3924,37 +3858,68 @@ void MainWindow::setupProjectManagerUi()
     infoLayout->addWidget(separator1);
     
     pmInfoFileSize = new QLabel("", pmInfoPanel);
-    pmInfoFileSize->setStyleSheet("color: #ccc; font-size: 11px;");
+    {
+        QFont f = pmInfoFileSize->font();
+        f.setPointSize(9);
+        pmInfoFileSize->setFont(f);
+    }
     pmInfoFileSize->setWordWrap(true);
     infoLayout->addWidget(pmInfoFileSize);
     
     pmInfoFileType = new QLabel("", pmInfoPanel);
-    pmInfoFileType->setStyleSheet("color: #ccc; font-size: 11px;");
+    {
+        QFont f = pmInfoFileType->font();
+        f.setPointSize(9);
+        pmInfoFileType->setFont(f);
+    }
     pmInfoFileType->setWordWrap(true);
     infoLayout->addWidget(pmInfoFileType);
     
     pmInfoDimensions = new QLabel("", pmInfoPanel);
-    pmInfoDimensions->setStyleSheet("color: #ccc; font-size: 11px;");
+    {
+        QFont f = pmInfoDimensions->font();
+        f.setPointSize(9);
+        pmInfoDimensions->setFont(f);
+    }
     pmInfoDimensions->setWordWrap(true);
     infoLayout->addWidget(pmInfoDimensions);
     
     pmInfoCreated = new QLabel("", pmInfoPanel);
-    pmInfoCreated->setStyleSheet("color: #ccc; font-size: 11px;");
+    {
+        QFont f = pmInfoCreated->font();
+        f.setPointSize(9);
+        pmInfoCreated->setFont(f);
+    }
     pmInfoCreated->setWordWrap(true);
     infoLayout->addWidget(pmInfoCreated);
     
     pmInfoModified = new QLabel("", pmInfoPanel);
-    pmInfoModified->setStyleSheet("color: #ccc; font-size: 11px;");
+    {
+        QFont f = pmInfoModified->font();
+        f.setPointSize(9);
+        pmInfoModified->setFont(f);
+    }
     pmInfoModified->setWordWrap(true);
     infoLayout->addWidget(pmInfoModified);
     
     pmInfoPermissions = new QLabel("", pmInfoPanel);
-    pmInfoPermissions->setStyleSheet("color: #ccc; font-size: 11px;");
+    {
+        QFont f = pmInfoPermissions->font();
+        f.setPointSize(9);
+        pmInfoPermissions->setFont(f);
+    }
     pmInfoPermissions->setWordWrap(true);
     infoLayout->addWidget(pmInfoPermissions);
     
     pmInfoVersions = new QLabel("", pmInfoPanel);
-    pmInfoVersions->setStyleSheet("color: #58a6ff; font-size: 11px;");
+    {
+        QFont f = pmInfoVersions->font();
+        f.setPointSize(9);
+        pmInfoVersions->setFont(f);
+        QPalette p = pmInfoVersions->palette();
+        p.setColor(QPalette::WindowText, QColor("#58a6ff"));
+        pmInfoVersions->setPalette(p);
+    }
     pmInfoVersions->setWordWrap(true);
     infoLayout->addWidget(pmInfoVersions);
     
@@ -3983,33 +3948,25 @@ void MainWindow::setupProjectManagerUi()
     pmSplitter->setStretchFactor(0, 1);
     pmSplitter->setStretchFactor(1, 4);
 
-    // Persist Project Manager splitter positions immediately when moved
+    // Persist Project Manager splitter positions with debouncing
     if (pmSplitter) {
         connect(pmSplitter, &QSplitter::splitterMoved, this, [this](int, int){
-            QSettings s("AugmentCode", "KAssetManager");
-            s.setValue("ProjectManager/MainSplitter", pmSplitter->saveState());
-            s.sync();
+            m_splitterSaveTimer.start();
         });
     }
     if (pmLeftSplitter) {
         connect(pmLeftSplitter, &QSplitter::splitterMoved, this, [this](int, int){
-            QSettings s("AugmentCode", "KAssetManager");
-            s.setValue("ProjectManager/LeftSplitter", pmLeftSplitter->saveState());
-            s.sync();
+            m_splitterSaveTimer.start();
         });
     }
     if (pmRightSplitter) {
         connect(pmRightSplitter, &QSplitter::splitterMoved, this, [this](int, int){
-            QSettings s("AugmentCode", "KAssetManager");
-            s.setValue("ProjectManager/RightSplitter", pmRightSplitter->saveState());
-            s.sync();
+            m_splitterSaveTimer.start();
         });
     }
     if (pmPreviewInfoSplitter) {
         connect(pmPreviewInfoSplitter, &QSplitter::splitterMoved, this, [this](int, int){
-            QSettings s("AugmentCode", "KAssetManager");
-            s.setValue("ProjectManager/PreviewInfoSplitter", pmPreviewInfoSplitter->saveState());
-            s.sync();
+            m_splitterSaveTimer.start();
         });
     }
     
@@ -4760,12 +4717,6 @@ void MainWindow::onPmVersionDropdownRequested(const QModelIndex &index, const QP
     
     // Create popup menu
     QMenu menu(this);
-    menu.setStyleSheet(
-        "QMenu { background-color: #1a1a1a; color: #ffffff; border: 1px solid #333; }"
-        "QMenu::item { padding: 6px 20px; }"
-        "QMenu::item:selected { background-color: #2f3a4a; }"
-        "QMenu::item:checked { background-color: #3a4a5a; font-weight: bold; }"
-    );
     
     QActionGroup *actionGroup = new QActionGroup(&menu);
     actionGroup->setExclusive(true);
@@ -4827,7 +4778,6 @@ void MainWindow::onPmShowNotifications()
     QVBoxLayout *layout = new QVBoxLayout(&dialog);
 
     QLabel *hint = new QLabel("Click 'Go To Asset' to jump directly to the file inside the Project Manager.", &dialog);
-    hint->setStyleSheet("color: #9aa0a6;");
     layout->addWidget(hint);
 
     QTableWidget *table = new QTableWidget(notifications.size(), 4, &dialog);
@@ -6187,10 +6137,6 @@ void MainWindow::onAssetContextMenu(const QPoint &pos)
         return;
 
     QMenu menu(this);
-    menu.setStyleSheet(
-        "QMenu { background-color: #1a1a1a; color: #ffffff; border: 1px solid #333; }"
-        "QMenu::item:selected { background-color: #2f3a4a; }"
-    );
 
     if (index.isValid()) {
         // Asset context menu
@@ -6201,7 +6147,6 @@ void MainWindow::onAssetContextMenu(const QPoint &pos)
 
         // Assign Tag submenu
         QMenu *assignTagMenu = menu.addMenu("Assign Tag");
-        assignTagMenu->setStyleSheet(menu.styleSheet());
 
         QVector<QPair<int, QString>> tags = DB::instance().listTags();
         for (const auto& tag : tags) {
@@ -6215,7 +6160,6 @@ void MainWindow::onAssetContextMenu(const QPoint &pos)
 
         // Set Rating submenu
         QMenu *setRatingMenu = menu.addMenu("Set Rating");
-        setRatingMenu->setStyleSheet(menu.styleSheet());
 
         QAction *rating0 = setRatingMenu->addAction("☆☆☆☆☆ (Clear rating)");
         rating0->setData(-1);
@@ -9992,6 +9936,10 @@ void MainWindow::resizeEvent(QResizeEvent *event)
         m_windowResizing = true;
         // Suspend new thumbnail decode requests for fluid resizing
         LivePreviewManager::instance().suspendRequests();
+        // Disable updates on FM views during resize to prevent expensive relayout
+        if (fmGridView) fmGridView->setUpdatesEnabled(false);
+        if (fmListView) fmListView->setUpdatesEnabled(false);
+        if (fmTree) fmTree->setUpdatesEnabled(false);
     }
     m_resizeSettleTimer.start(); // Restart timer - will fire when resize stops
 
@@ -10005,6 +9953,10 @@ void MainWindow::moveEvent(QMoveEvent *event)
         m_windowResizing = true;
         // Suspend new thumbnail decode requests for fluid moving
         LivePreviewManager::instance().suspendRequests();
+        // Disable updates on FM views during move to prevent expensive relayout
+        if (fmGridView) fmGridView->setUpdatesEnabled(false);
+        if (fmListView) fmListView->setUpdatesEnabled(false);
+        if (fmTree) fmTree->setUpdatesEnabled(false);
     }
     m_resizeSettleTimer.start(); // Restart timer - will fire when move stops
 
@@ -10619,216 +10571,11 @@ void MainWindow::onFmNavigateBack()
 void MainWindow::applyTheme()
 {
     // Apply theme to main window and all child widgets
-    // This method is called when the theme changes
+    // Most styling is handled by the global stylesheet in ThemeManager
+    // This method updates icons and special palette cases
 
     // Get icon color for current theme
     QColor iconColor = ThemeManager::instance().iconColor();
-    QColor bgColor = ThemeManager::instance().backgroundColor();
-    QColor bgColorAlt = ThemeManager::instance().backgroundColorAlt();
-    QColor bgColorDark = ThemeManager::instance().backgroundColorDark();
-    QColor textColor = ThemeManager::instance().textColor();
-    QColor textColorSecondary = ThemeManager::instance().textColorSecondary();
-    QColor borderColor = ThemeManager::instance().borderColor();
-    QColor toolbarColor = ThemeManager::instance().toolbarColor();
-    QColor accentColor = ThemeManager::instance().accentColor();
-    QColor hoverColor = ThemeManager::instance().hoverColor();
-
-    // Update main window background
-    setStyleSheet(QString("QMainWindow { background-color: %1; }")
-        .arg(bgColor.name()));
-
-    // Update menu bar with proper text color
-    if (menuBar()) {
-        menuBar()->setStyleSheet(QString(
-            "QMenuBar { background-color: %1; color: %2; border-bottom: 1px solid %3; }"
-            "QMenuBar::item { background-color: transparent; padding: 4px 8px; }"
-            "QMenuBar::item:selected { background-color: %4; }"
-        ).arg(bgColorAlt.name())
-         .arg(textColor.name())
-         .arg(borderColor.name())
-         .arg(hoverColor.name()));
-
-        for (QAction* action : menuBar()->actions()) {
-            if (QMenu* menu = action->menu()) {
-                menu->setStyleSheet(ThemeManager::instance().menuStyleSheet());
-            }
-        }
-    }
-
-    // Update folder tree view
-    if (folderTreeView) {
-        folderTreeView->setStyleSheet(ThemeManager::instance().treeViewStyleSheet());
-    }
-
-    // Update asset grid view
-    if (assetGridView) {
-        assetGridView->setStyleSheet(ThemeManager::instance().listViewStyleSheet());
-    }
-
-    // Update asset table view
-    if (assetTableView) {
-        assetTableView->setStyleSheet(ThemeManager::instance().tableViewStyleSheet());
-    }
-
-    // Update File Manager tree
-    if (fmTree) {
-        fmTree->setStyleSheet(ThemeManager::instance().treeViewStyleSheet());
-    }
-
-    // Update File Manager list view
-    if (fmListView) {
-        fmListView->setStyleSheet(ThemeManager::instance().tableViewStyleSheet());
-    }
-
-    // Update File Manager grid view
-    if (fmGridView) {
-        fmGridView->setStyleSheet(ThemeManager::instance().listViewStyleSheet());
-    }
-
-    // Update recursive checkbox
-    if (recursiveCheckBox) {
-        recursiveCheckBox->setStyleSheet(ThemeManager::instance().checkBoxStyleSheet());
-    }
-
-    // Update lock checkbox
-    if (lockCheckBox) {
-        QString lockStyle = ThemeManager::instance().checkBoxStyleSheet();
-        lockStyle += QString(" QCheckBox { color: #ff4444; font-size: 12px; font-weight: bold; }");
-        lockCheckBox->setStyleSheet(lockStyle);
-    }
-
-    // Update main tab widget (File Manager / Asset Manager tabs)
-    if (mainTabs) {
-        mainTabs->setStyleSheet(ThemeManager::instance().tabWidgetStyleSheet());
-    }
-
-    // Update Asset Manager panels
-    if (filtersPanel) {
-        filtersPanel->setStyleSheet(QString("background-color: %1;").arg(bgColor.name()));
-    }
-
-    if (infoPanel) {
-        infoPanel->setStyleSheet(QString("background-color: %1;").arg(bgColor.name()));
-
-        // Update info panel labels
-        QList<QLabel*> infoLabels = infoPanel->findChildren<QLabel*>();
-        for (QLabel* label : infoLabels) {
-            QString objName = label->objectName();
-            if (objName.contains("Title") || label->text().contains("Asset Info")) {
-                label->setStyleSheet(QString("font-size: 14px; font-weight: bold; color: %1; padding: 8px; background-color: %2;")
-                    .arg(textColor.name())
-                    .arg(bgColorAlt.name()));
-            } else if (objName.contains("Path") || label->styleSheet().contains("font-size: 10px")) {
-                label->setStyleSheet(QString("color: %1; font-size: 10px;").arg(textColorSecondary.name()));
-            } else if (objName.contains("FileName") || label->styleSheet().contains("font-weight: bold")) {
-                label->setStyleSheet(QString("color: %1; margin-top: 4px; font-weight: bold;").arg(textColor.name()));
-            } else {
-                label->setStyleSheet(QString("color: %1; font-size: 11px;").arg(textColor.name()));
-            }
-        }
-
-        // Update scroll areas in info panel
-        QList<QScrollArea*> scrollAreas = infoPanel->findChildren<QScrollArea*>();
-        for (QScrollArea* scrollArea : scrollAreas) {
-            scrollArea->setStyleSheet(QString("QScrollArea { background-color: %1; border: none; }").arg(bgColor.name()));
-        }
-    }
-
-    // Update Asset Manager toolbar background
-    if (amToolbar) {
-        amToolbar->setStyleSheet(QString("background-color: %1; border-bottom: 1px solid %2;")
-            .arg(toolbarColor.name())
-            .arg(borderColor.name()));
-    }
-
-    // Update File Manager toolbar background
-    if (fmToolbar) {
-        fmToolbar->setStyleSheet(QString("background-color: %1; border-bottom: 1px solid %2;")
-            .arg(toolbarColor.name())
-            .arg(borderColor.name()));
-    }
-
-    // Update File Manager info panel
-    if (fmInfoPanel) {
-        fmInfoPanel->setStyleSheet(QString("background-color: %1; border-left: 1px solid %2;")
-            .arg(bgColor.name())
-            .arg(borderColor.name()));
-
-        // Update File Manager info panel labels
-        QList<QLabel*> fmInfoLabels = fmInfoPanel->findChildren<QLabel*>();
-        for (QLabel* label : fmInfoLabels) {
-            if (label->text().contains("File Info")) {
-                label->setStyleSheet(QString("font-size: 14px; font-weight: bold; color: %1; padding: 8px; background-color: %2;")
-                    .arg(textColor.name())
-                    .arg(bgColorAlt.name()));
-            } else if (label == fmInfoFilePath) {
-                label->setStyleSheet(QString("color: %1; font-size: 10px;").arg(textColorSecondary.name()));
-            } else if (label == fmInfoFileName) {
-                label->setStyleSheet(QString("color: %1; margin-top: 4px; font-weight: bold;").arg(textColor.name()));
-            } else {
-                label->setStyleSheet(QString("color: %1; font-size: 11px;").arg(textColor.name()));
-            }
-        }
-
-        // Update scroll areas in File Manager info panel
-        QList<QScrollArea*> fmScrollAreas = fmInfoPanel->findChildren<QScrollArea*>();
-        for (QScrollArea* scrollArea : fmScrollAreas) {
-            scrollArea->setStyleSheet(QString("QScrollArea { background-color: %1; border: none; }").arg(bgColor.name()));
-        }
-
-        // Update separators in File Manager info panel
-        QList<QFrame*> fmSeparators = fmInfoPanel->findChildren<QFrame*>();
-        for (QFrame* separator : fmSeparators) {
-            if (separator->frameShape() == QFrame::HLine) {
-                separator->setStyleSheet(QString("background-color: %1;").arg(borderColor.name()));
-            }
-        }
-    }
-
-    // Update search entire database checkbox styling
-    if (searchEntireDbCheckBox) {
-        QString checkboxBg = ThemeManager::instance().currentTheme() == ThemeManager::Dark ? "#1e1e1e" : "#ffffff";
-        QString checkboxBorder = ThemeManager::instance().currentTheme() == ThemeManager::Dark ? "#666" : "#999";
-        QString checkboxDisabledBg = ThemeManager::instance().currentTheme() == ThemeManager::Dark ? "#2a2a2a" : "#e0e0e0";
-        QString checkboxDisabledBorder = ThemeManager::instance().currentTheme() == ThemeManager::Dark ? "#555" : "#aaa";
-        QString checkboxDisabledText = ThemeManager::instance().currentTheme() == ThemeManager::Dark ? "#7f7f7f" : "#999";
-
-        searchEntireDbCheckBox->setStyleSheet(QString(
-            "QCheckBox { color: %1; font-size: 11px; padding: 4px 2px; }"
-            "QCheckBox:disabled { color: %2; }"
-            "QCheckBox::indicator { width: 16px; height: 16px; border-radius: 3px; }"
-            "QCheckBox::indicator:unchecked { background-color: %3; border: 1px solid %4; }"
-            "QCheckBox::indicator:checked { background-color: %5; border: 1px solid %5; }"
-            "QCheckBox::indicator:disabled { background-color: %6; border: 1px solid %7; }"
-        ).arg(textColor.name())
-         .arg(checkboxDisabledText)
-         .arg(checkboxBg)
-         .arg(checkboxBorder)
-         .arg(accentColor.name())
-         .arg(checkboxDisabledBg)
-         .arg(checkboxDisabledBorder));
-    }
-
-    // Update tags list view
-    if (tagsListView) {
-        tagsListView->setStyleSheet(ThemeManager::instance().listViewStyleSheet());
-    }
-
-    // Update File Manager group sequences and hide folders checkboxes
-    if (fmGroupSequencesCheckBox) {
-        QString checkedBg = ThemeManager::instance().currentTheme() == ThemeManager::Dark ? "#58a6ff" : accentColor.name();
-        QString checkedHoverBg = ThemeManager::instance().currentTheme() == ThemeManager::Dark ? "#4a8fd9" : "#0066cc";
-        QString uncheckedHoverBg = ThemeManager::instance().currentTheme() == ThemeManager::Dark ? "#2a2a2a" : hoverColor.name();
-
-        fmGroupSequencesCheckBox->setStyleSheet(QString(
-            "QToolButton { background-color: transparent; border: none; border-radius: 4px; padding: 4px; }"
-            "QToolButton:checked { background-color: %1; }"
-            "QToolButton:hover { background-color: %2; }"
-            "QToolButton:checked:hover { background-color: %3; }"
-        ).arg(checkedBg)
-         .arg(uncheckedHoverBg)
-         .arg(checkedHoverBg));
-    }
 
     // Update all toolbar button icons with theme-appropriate colors
     if (amBackButton) amBackButton->setIcon(icoBack(iconColor));
@@ -10859,92 +10606,19 @@ void MainWindow::applyTheme()
     if (fmAddToLibraryBtn) fmAddToLibraryBtn->setIcon(icoAdd(iconColor));
     if (fmSearchButton) fmSearchButton->setIcon(icoSearch(iconColor));
 
-    // Update Asset Manager size label colors
-    if (amSizeLabel) {
-        amSizeLabel->setStyleSheet(QString("color: %1; font-size: 12px;").arg(textColor.name()));
-    }
-    if (amSizeValueLabel) {
-        amSizeValueLabel->setStyleSheet(QString("color: %1; font-size: 11px; min-width: 45px;").arg(textColorSecondary.name()));
-    }
+    // Update Project Manager icons
+    if (pmPrevFrameBtn) pmPrevFrameBtn->setIcon(icoMediaPrevFrame(iconColor));
+    if (pmPlayPauseBtn) pmPlayPauseBtn->setIcon(icoMediaPlay(iconColor));
+    if (pmNextFrameBtn) pmNextFrameBtn->setIcon(icoMediaNextFrame(iconColor));
+    if (pmMuteBtn) pmMuteBtn->setIcon(icoMediaAudio(iconColor));
+    if (pmGroupSequencesBtn) pmGroupSequencesBtn->setIcon(icoGroup(iconColor));
+    // pmShowAllVersionsButton uses text, no icon
 
-    // Update File Manager size label color
-    if (fmSizeLabel) {
-        fmSizeLabel->setStyleSheet(QString("color: %1;").arg(textColorSecondary.name()));
-    }
-
-    // Update Asset Manager search bar styling
-    if (searchBox) {
-        searchBox->setStyleSheet(QString(
-            "QLineEdit { background-color: %1; color: %2; border: 1px solid %3; padding: 6px; border-radius: 4px; }"
-            "QLineEdit:focus { border: 1px solid %4; }"
-        ).arg(bgColorAlt.name())
-         .arg(textColor.name())
-         .arg(borderColor.name())
-         .arg(accentColor.name()));
-    }
-
-    // Update search button styling
-    if (filterSearchButton) {
-        filterSearchButton->setStyleSheet(QString(
-            "QPushButton { background-color: %1; color: #ffffff; border: none; border-radius: 4px; }"
-            "QPushButton:hover { background-color: %2; }"
-        ).arg(accentColor.name())
-         .arg(hoverColor.name()));
-    }
-
-    // Update version history table styling
-    if (versionTable) {
-        versionTable->setStyleSheet(QString(
-            "QTableWidget { background-color: %1; color: %2; border: 1px solid %3; }"
-            "QHeaderView::section { background-color: %1; color: %2; border: none; padding: 4px; }"
-        ).arg(bgColorAlt.name())
-         .arg(textColor.name())
-         .arg(borderColor.name()));
-    }
-
-    // Update version history title label
-    if (versionsTitleLabel) {
-        versionsTitleLabel->setStyleSheet(QString("font-size: 13px; font-weight: bold; color: %1; margin-top: 6px;").arg(textColor.name()));
-    }
-
-    // Update backup version checkbox
-    if (backupVersionCheck) {
-        backupVersionCheck->setStyleSheet(QString("color: %1;").arg(textColorSecondary.name()));
-    }
-
-    // Update QSplitter handle styling for all splitters
-    QString splitterStyle = QString(
-        "QSplitter::handle { background-color: %1; }"
-        "QSplitter::handle:horizontal { width: 2px; }"
-        "QSplitter::handle:vertical { height: 2px; }"
-        "QSplitter::handle:hover { background-color: %2; }"
-    ).arg(borderColor.name())
-     .arg(accentColor.name());
-
-    if (mainSplitter) mainSplitter->setStyleSheet(splitterStyle);
-    if (rightSplitter) rightSplitter->setStyleSheet(splitterStyle);
-    if (fmSplitter) fmSplitter->setStyleSheet(splitterStyle);
-    if (fmLeftSplitter) fmLeftSplitter->setStyleSheet(splitterStyle);
-    if (fmRightSplitter) fmRightSplitter->setStyleSheet(splitterStyle);
-    if (fmPreviewInfoSplitter) fmPreviewInfoSplitter->setStyleSheet(splitterStyle);
-
-    // Update Favorites panel styling
-    if (fmFavoritesList) {
-        fmFavoritesList->setStyleSheet(QString(
-            "QListWidget { background-color: %1; border: none; color: %2; }"
-            "QListWidget::item:selected { background-color: %3; }"
-            "QListWidget::item:hover { background-color: %4; }"
-        ).arg(bgColorDark.name())
-         .arg(textColor.name())
-         .arg(accentColor.name())
-         .arg(hoverColor.name()));
-    }
-
-    // Update File Manager preview pane styling
-    if (fmPreviewPanel) {
-        fmPreviewPanel->setStyleSheet(QString("background-color: %1; border-left: 1px solid %2;")
-            .arg(bgColorDark.name())
-            .arg(borderColor.name()));
+    // Update pmInfoVersions label with accent color (special case for link-style text)
+    if (pmInfoVersions) {
+        QPalette p = pmInfoVersions->palette();
+        p.setColor(QPalette::WindowText, QColor("#58a6ff"));
+        pmInfoVersions->setPalette(p);
     }
 
     // Force repaint

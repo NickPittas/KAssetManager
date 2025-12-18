@@ -119,7 +119,9 @@ void EverythingSearchDialog::setupUI() {
     
     // Status label
     m_statusLabel = new QLabel("Enter a search query to begin", this);
-    m_statusLabel->setStyleSheet("color: #666; font-size: 10pt;");
+    QPalette statusPal = m_statusLabel->palette();
+    statusPal.setColor(QPalette::WindowText, QColor(102, 102, 102));
+    m_statusLabel->setPalette(statusPal);
     m_mainLayout->addWidget(m_statusLabel);
     
     // Action buttons

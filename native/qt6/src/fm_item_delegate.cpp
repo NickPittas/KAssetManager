@@ -4,8 +4,10 @@
 #include "theme_manager.h"
 #include "file_utils.h"
 #include "icon_utils.h"
+#include <QApplication>
 #include <QFileInfo>
 #include <QFileSystemModel>
+#include <QAbstractProxyModel>
 #include <QStyle>
 
 namespace {
@@ -21,6 +23,15 @@ namespace {
     static const QFontMetrics& nameFontMetrics() {
         static QFontMetrics fm(nameFont());
         return fm;
+    }
+    
+    // Cached folder icon - standardIcon() is expensive (shell calls on Windows)
+    static QIcon& cachedFolderIcon() {
+        static QIcon icon;
+        if (icon.isNull()) {
+            icon = QApplication::style()->standardIcon(QStyle::SP_DirIcon);
+        }
+        return icon;
     }
 
     QRect insetPreviewRect(const QRect &source)
@@ -69,26 +80,42 @@ void FmItemDelegate::paint(QPainter *painter, const QStyleOptionViewItem &option
     QRect thumbRect(option.rect.x() + (option.rect.width()-thumbSide)/2, option.rect.y() + margin, thumbSide, thumbSide);
     const QString filePath = index.data(QFileSystemModel::FilePathRole).toString();
 
-    // Check if this is a folder by examining the path
-    // QFileSystemModel doesn't have FileTypeRole, so we check if it's a directory via the model
-    // The model knows this already from its internal cache, avoiding extra disk I/O
-    const QFileSystemModel *fsModel = qobject_cast<const QFileSystemModel*>(index.model());
+    // Check if this is a folder - get the source model through proxy if needed
+    // This avoids expensive QFileInfo::isDir() disk I/O on every paint
+    const QFileSystemModel *fsModel = nullptr;
+    QModelIndex sourceIndex = index;
+    
+    // Try direct cast first (works if model is QFileSystemModel)
+    fsModel = qobject_cast<const QFileSystemModel*>(index.model());
+    
+    // If that fails, try to get source model through proxy chain
+    if (!fsModel) {
+        const QAbstractProxyModel *proxy = qobject_cast<const QAbstractProxyModel*>(index.model());
+        while (proxy) {
+            fsModel = qobject_cast<const QFileSystemModel*>(proxy->sourceModel());
+            if (fsModel) {
+                sourceIndex = proxy->mapToSource(index);
+                break;
+            }
+            proxy = qobject_cast<const QAbstractProxyModel*>(proxy->sourceModel());
+        }
+    }
+    
     bool isFolder = false;
-    if (fsModel) {
-        // Use isDir() method which uses cached data
-        isFolder = fsModel->isDir(index);
+    if (fsModel && sourceIndex.isValid()) {
+        // Use isDir() method which uses cached data - no disk I/O
+        isFolder = fsModel->isDir(sourceIndex);
     } else {
-        // Fallback: check if path ends with separator or use filename heuristic
-        // This is rare (proxy model case) - check via QFileInfo only in this case
-        QFileInfo fi(filePath);
-        isFolder = fi.isDir();
+        // Last resort fallback - check file path pattern (still avoids disk I/O)
+        // Folders typically don't have extensions, but this is imperfect
+        isFolder = !filePath.isEmpty() && !filePath.contains(QLatin1Char('.'));
     }
 
     bool drewPreview = false;
 
     if (isFolder) {
-        // Draw folder icon using Qt's standard folder icon
-        QIcon folderIcon = option.widget->style()->standardIcon(QStyle::SP_DirIcon);
+        // Draw folder icon using cached standard icon (avoids shell calls per-paint)
+        const QIcon& folderIcon = cachedFolderIcon();
         QRect iconRect = insetPreviewRect(thumbRect);
         // Scale icon to fit within the preview area with minimal padding
         int iconSize = qMin(iconRect.width(), iconRect.height());
@@ -122,7 +149,8 @@ void FmItemDelegate::paint(QPainter *painter, const QStyleOptionViewItem &option
                 painter->save();
                 QRect previewRect = insetPreviewRect(thumbRect);
                 painter->setClipRect(previewRect);
-                QPixmap scaled = handle.pixmap.scaled(previewRect.size(), Qt::KeepAspectRatio, Qt::SmoothTransformation);
+                // Use FastTransformation for responsive resize
+                QPixmap scaled = handle.pixmap.scaled(previewRect.size(), Qt::KeepAspectRatio, Qt::FastTransformation);
                 int x = previewRect.x() + (previewRect.width() - scaled.width()) / 2;
                 int y = previewRect.y() + (previewRect.height() - scaled.height()) / 2;
                 painter->drawPixmap(x, y, scaled);
@@ -172,17 +200,10 @@ void FmItemDelegate::paint(QPainter *painter, const QStyleOptionViewItem &option
 QSize FmItemDelegate::sizeHint(const QStyleOptionViewItem &option, const QModelIndex &index) const
 {
     Q_UNUSED(option);
-    // Calculate height needed for wrapped text
-    QString name = index.data(Qt::DisplayRole).toString();
-
-    // Calculate text area width (cell width minus margins)
-    int textWidth = m_thumbnailSize + 8 - 4; // grid width minus horizontal margins
-
-    // Calculate how many lines the text will need using cached font metrics
-    QRect boundingRect = nameFontMetrics().boundingRect(QRect(0, 0, textWidth, 1000),
-                                         Qt::AlignHCenter | Qt::AlignTop | Qt::TextWordWrap,
-                                         name);
-    int textHeight = boundingRect.height();
+    Q_UNUSED(index);
+    // Use fixed height for uniform item sizes (much better resize performance)
+    // Allow space for 2 lines of wrapped text at most
+    int textHeight = nameFontMetrics().lineSpacing() * 2;
 
     // Total height: thumbnail + gap(3) + text + bottom padding(4)
     int totalHeight = m_thumbnailSize + 3 + textHeight + 4;

@@ -12,20 +12,20 @@ LogViewerWidget::LogViewerWidget(QWidget* parent)
 
     // Toolbar
     QWidget* toolbar = new QWidget(this);
-    toolbar->setStyleSheet("QWidget { background-color: #1a1a1a; border-bottom: 1px solid #333; }");
     QHBoxLayout* toolbarLayout = new QHBoxLayout(toolbar);
     toolbarLayout->setContentsMargins(8, 4, 8, 4);
     toolbarLayout->setSpacing(8);
 
     QLabel* titleLabel = new QLabel("Application Log", toolbar);
-    titleLabel->setStyleSheet("color: #ffffff; font-size: 12px; font-weight: bold;");
+    QFont titleFont = titleLabel->font();
+    titleFont.setBold(true);
+    titleLabel->setFont(titleFont);
     toolbarLayout->addWidget(titleLabel);
 
     toolbarLayout->addStretch();
 
     // Filter dropdown
     QLabel* filterLabel = new QLabel("Level:", toolbar);
-    filterLabel->setStyleSheet("color: #ffffff; font-size: 11px;");
     toolbarLayout->addWidget(filterLabel);
 
     m_filterCombo = new QComboBox(toolbar);
@@ -35,22 +35,12 @@ LogViewerWidget::LogViewerWidget(QWidget* parent)
     m_filterCombo->addItem("Warning+", LogLevel::Warning);
     m_filterCombo->addItem("Error+", LogLevel::Error);
     m_filterCombo->setCurrentIndex(2); // Default to Info+
-    m_filterCombo->setStyleSheet(
-        "QComboBox { background-color: #2a2a2a; color: #ffffff; border: 1px solid #333; border-radius: 3px; padding: 2px 8px; font-size: 11px; }"
-        "QComboBox::drop-down { border: none; }"
-        "QComboBox::down-arrow { image: none; border: none; }"
-        "QComboBox QAbstractItemView { background-color: #2a2a2a; color: #ffffff; selection-background-color: #58a6ff; }"
-    );
     connect(m_filterCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &LogViewerWidget::onFilterChanged);
     toolbarLayout->addWidget(m_filterCombo);
 
     // Clear button
     m_clearButton = new QPushButton("Clear", toolbar);
     m_clearButton->setFixedSize(60, 24);
-    m_clearButton->setStyleSheet(
-        "QPushButton { background-color: #2a2a2a; color: #ffffff; border: 1px solid #333; border-radius: 3px; font-size: 11px; }"
-        "QPushButton:hover { background-color: #333; }"
-    );
     connect(m_clearButton, &QPushButton::clicked, this, &LogViewerWidget::onClearLogs);
     toolbarLayout->addWidget(m_clearButton);
 
@@ -59,9 +49,9 @@ LogViewerWidget::LogViewerWidget(QWidget* parent)
     // Log text area
     m_logTextEdit = new QTextEdit(this);
     m_logTextEdit->setReadOnly(true);
-    m_logTextEdit->setStyleSheet(
-        "QTextEdit { background-color: #0a0a0a; color: #cccccc; border: none; font-family: 'Consolas', 'Courier New', monospace; font-size: 10px; }"
-    );
+    QFont monoFont("Consolas", 9);
+    monoFont.setStyleHint(QFont::Monospace);
+    m_logTextEdit->setFont(monoFont);
     mainLayout->addWidget(m_logTextEdit);
 
     // Connect to log manager

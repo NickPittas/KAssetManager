@@ -82,7 +82,8 @@ void GridScrubOverlay::paintEvent(QPaintEvent *)
     if (!m_frame.isNull()) {
         QSize targetSize = bounds.size().toSize();
         if (!targetSize.isEmpty()) {
-            QPixmap scaled = m_frame.scaled(targetSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+            // Use FastTransformation for responsive scrubbing
+            QPixmap scaled = m_frame.scaled(targetSize, Qt::KeepAspectRatio, Qt::FastTransformation);
             const qreal x = bounds.left() + (bounds.width() - scaled.width()) / 2.0;
             const qreal y = bounds.top() + (bounds.height() - scaled.height()) / 2.0;
             painter.drawPixmap(QPointF(x, y), scaled);

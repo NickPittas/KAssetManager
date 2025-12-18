@@ -76,7 +76,11 @@ void BulkRenameDialog::setupUI() {
         "Tokens: {###} = counter with padding, {original} = original name, {date} = YYYYMMDD, {ext} = extension",
         this
     );
-    m_patternHelpLabel->setStyleSheet("color: #666; font-size: 10pt;");
+    {
+        QFont f = m_patternHelpLabel->font();
+        f.setPointSize(8);
+        m_patternHelpLabel->setFont(f);
+    }
     m_patternHelpLabel->setWordWrap(true);
     patternLayout->addWidget(m_patternHelpLabel);
 
@@ -142,7 +146,6 @@ void BulkRenameDialog::setupUI() {
     previewLayout->addWidget(m_previewTable);
 
     m_statusLabel = new QLabel(this);
-    m_statusLabel->setStyleSheet("color: #666;");
     previewLayout->addWidget(m_statusLabel);
 
     m_mainLayout->addWidget(m_previewGroup);

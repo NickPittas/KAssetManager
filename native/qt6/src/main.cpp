@@ -12,6 +12,7 @@
 #include "db.h"
 #include "log_manager.h"
 #include "progress_manager.h"
+#include "theme_manager.h"
 
 #ifdef Q_OS_WIN
 #include <windows.h>
@@ -42,6 +43,10 @@ int main(int argc, char *argv[])
     QGuiApplication::setHighDpiScaleFactorRoundingPolicy(
         Qt::HighDpiScaleFactorRoundingPolicy::PassThrough);
 
+    // Enable hardware-accelerated OpenGL rendering for smooth window resize/move
+    // This uses the system's native OpenGL driver for widget compositing
+    QApplication::setAttribute(Qt::AA_UseDesktopOpenGL);
+
     // Suppress FFmpeg error messages to prevent console spam
 #ifdef HAVE_FFMPEG_LOG
     av_log_set_level(AV_LOG_QUIET);
@@ -54,6 +59,9 @@ int main(int argc, char *argv[])
     QCoreApplication::setOrganizationDomain("kasset.local");
     QCoreApplication::setApplicationName("KAsset Manager Qt");
     QCoreApplication::setApplicationVersion(QStringLiteral(KAM_APP_VERSION));
+
+    // Load and apply theme (palette + minimal stylesheet) before any widgets are created
+    ThemeManager::instance().loadTheme();
 
     // Install centralized message handler that logs via LogManager to app.log
     QString appDir = QCoreApplication::applicationDirPath();

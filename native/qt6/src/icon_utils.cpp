@@ -9,6 +9,7 @@
 #include <QPainterPath>
 #include <QScreen>
 #include <QGuiApplication>
+#include <QHash>
 
 // Icon generation helpers
 // Creates DPI-aware icons that render crisply on High DPI displays
@@ -279,45 +280,85 @@ QIcon icoFileGeneric(const QColor& color) { return mkIcon([](QPainter& p, const 
 }, color); }
 
 QIcon getFileTypeIcon(const QString &ext, const QColor& color) {
+    // Cache icons by extension+color to avoid regenerating on every paint
+    // This is critical for resize performance - icons were being regenerated thousands of times
+    static QHash<QPair<QString, QRgb>, QIcon> iconCache;
+    
     QString lower = ext.toLower();
-    if (lower == "pdf") return icoFilePdf(color);
-    if (lower == "csv") return icoFileCsv(color);
-    if (lower == "doc" || lower == "docx") return icoFileDoc(color);
-    if (lower == "xls" || lower == "xlsx") return icoFileXls(color);
-    if (lower == "txt" || lower == "log" || lower == "md") return icoFileTxt(color);
-    if (lower == "ai" || lower == "eps") return icoFileAi(color);
-    return icoFileGeneric(color);
+    QRgb colorKey = color.rgba();
+    auto cacheKey = qMakePair(lower, colorKey);
+    
+    auto it = iconCache.find(cacheKey);
+    if (it != iconCache.end()) {
+        return it.value();
+    }
+    
+    QIcon icon;
+    if (lower == "pdf") icon = icoFilePdf(color);
+    else if (lower == "csv") icon = icoFileCsv(color);
+    else if (lower == "doc" || lower == "docx") icon = icoFileDoc(color);
+    else if (lower == "xls" || lower == "xlsx") icon = icoFileXls(color);
+    else if (lower == "txt" || lower == "log" || lower == "md") icon = icoFileTxt(color);
+    else if (lower == "ai" || lower == "eps") icon = icoFileAi(color);
+    else icon = icoFileGeneric(color);
+    
+    iconCache.insert(cacheKey, icon);
+    return icon;
 }
 
 // Icon providers
 
+// Cached standard icons - standardIcon() is expensive (shell calls on Windows)
+namespace {
+    static QIcon& cachedDirIcon() {
+        static QIcon icon;
+        if (icon.isNull()) icon = QApplication::style()->standardIcon(QStyle::SP_DirIcon);
+        return icon;
+    }
+    static QIcon& cachedDriveIcon() {
+        static QIcon icon;
+        if (icon.isNull()) icon = QApplication::style()->standardIcon(QStyle::SP_DriveHDIcon);
+        return icon;
+    }
+    static QIcon& cachedComputerIcon() {
+        static QIcon icon;
+        if (icon.isNull()) icon = QApplication::style()->standardIcon(QStyle::SP_ComputerIcon);
+        return icon;
+    }
+    static QIcon& cachedFileIcon() {
+        static QIcon icon;
+        if (icon.isNull()) icon = QApplication::style()->standardIcon(QStyle::SP_FileIcon);
+        return icon;
+    }
+}
+
 QIcon FmTreeIconProvider::icon(IconType type) const {
     switch (type) {
     case QFileIconProvider::Folder:
-        return QApplication::style()->standardIcon(QStyle::SP_DirIcon);
+        return cachedDirIcon();
     case QFileIconProvider::Drive:
-        return QApplication::style()->standardIcon(QStyle::SP_DriveHDIcon);
+        return cachedDriveIcon();
     case QFileIconProvider::Computer:
-        return QApplication::style()->standardIcon(QStyle::SP_ComputerIcon);
+        return cachedComputerIcon();
     default:
-        return QApplication::style()->standardIcon(QStyle::SP_FileIcon);
+        return cachedFileIcon();
     }
 }
 
 QIcon FmTreeIconProvider::icon(const QFileInfo &info) const {
     if (info.isDir()) {
         if (info.isRoot()) {
-            return QApplication::style()->standardIcon(QStyle::SP_DriveHDIcon);
+            return cachedDriveIcon();
         }
-        return QApplication::style()->standardIcon(QStyle::SP_DirIcon);
+        return cachedDirIcon();
     }
-    return QApplication::style()->standardIcon(QStyle::SP_FileIcon);
+    return cachedFileIcon();
 }
 
 QIcon FmIconProvider::icon(const QFileInfo &info) const {
     // Always keep folders lightweight and immediate
     if (info.isDir()) {
-        return QApplication::style()->standardIcon(QStyle::SP_DirIcon);
+        return cachedDirIcon();
     }
 
     const QString suffix = info.suffix().toLower();

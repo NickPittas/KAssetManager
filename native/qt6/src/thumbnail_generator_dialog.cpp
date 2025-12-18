@@ -42,16 +42,16 @@ void ThumbnailGeneratorDialog::buildUi()
     
     // Status and file counts
     m_statusLabel = new QLabel("Ready to generate thumbnails", this);
-    m_statusLabel->setStyleSheet("QLabel { color: #ffffff; font-weight: bold; }");
+    QFont boldFont = m_statusLabel->font();
+    boldFont.setBold(true);
+    m_statusLabel->setFont(boldFont);
     mainLayout->addWidget(m_statusLabel);
     
     QHBoxLayout* countsLayout = new QHBoxLayout();
     m_totalFilesLabel = new QLabel("Total Files: 0", this);
-    m_totalFilesLabel->setStyleSheet("QLabel { color: #ffffff; }");
     countsLayout->addWidget(m_totalFilesLabel);
     
     m_generatedLabel = new QLabel("Generated: 0", this);
-    m_generatedLabel->setStyleSheet("QLabel { color: #ffffff; }");
     countsLayout->addWidget(m_generatedLabel);
     countsLayout->addStretch();
     mainLayout->addLayout(countsLayout);
@@ -60,37 +60,31 @@ void ThumbnailGeneratorDialog::buildUi()
     m_progressBar = new QProgressBar(this);
     m_progressBar->setRange(0, 100);
     m_progressBar->setValue(0);
-    m_progressBar->setStyleSheet(
-        "QProgressBar { background-color: #1e1e1e; border: 1px solid #333; color: #ffffff; text-align: center; }"
-        "QProgressBar::chunk { background-color: #58a6ff; }"
-    );
     mainLayout->addWidget(m_progressBar);
     
     // Console output
     QLabel* outputLabel = new QLabel("Output:", this);
-    outputLabel->setStyleSheet("QLabel { color: #ffffff; }");
     mainLayout->addWidget(outputLabel);
     
     m_log = new QPlainTextEdit(this);
     m_log->setReadOnly(true);
-    m_log->setStyleSheet(
-        "QPlainTextEdit { background-color: #0d1117; color: #c9d1d9; border: 1px solid #333; font-family: 'Consolas', 'Courier New', monospace; }"
-    );
+    QFont monoFont("Consolas", 9);
+    monoFont.setStyleHint(QFont::Monospace);
+    m_log->setFont(monoFont);
     mainLayout->addWidget(m_log, 1);
     
     // Buttons
     QHBoxLayout* btnLayout = new QHBoxLayout();
     m_startBtn = new QPushButton(style()->standardIcon(QStyle::SP_MediaPlay), "Start", this);
-    m_startBtn->setStyleSheet("QPushButton { background-color: #238636; color: #ffffff; padding: 6px 12px; border: none; } QPushButton:hover { background-color: #2ea043; }");
+    m_startBtn->setProperty("class", "accent");
     connect(m_startBtn, &QPushButton::clicked, this, &ThumbnailGeneratorDialog::onStart);
     
     m_cancelBtn = new QPushButton("Cancel", this);
     m_cancelBtn->setEnabled(false);
-    m_cancelBtn->setStyleSheet("QPushButton { background-color: #da3633; color: #ffffff; padding: 6px 12px; border: none; } QPushButton:hover { background-color: #f85149; }");
+    m_cancelBtn->setProperty("class", "danger");
     connect(m_cancelBtn, &QPushButton::clicked, this, &ThumbnailGeneratorDialog::onCancel);
     
     m_closeBtn = new QPushButton("Close", this);
-    m_closeBtn->setStyleSheet("QPushButton { background-color: #21262d; color: #ffffff; padding: 6px 12px; border: 1px solid #333; } QPushButton:hover { background-color: #30363d; }");
     connect(m_closeBtn, &QPushButton::clicked, this, &QDialog::accept);
     
     btnLayout->addWidget(m_startBtn);
@@ -98,9 +92,6 @@ void ThumbnailGeneratorDialog::buildUi()
     btnLayout->addStretch();
     btnLayout->addWidget(m_closeBtn);
     mainLayout->addLayout(btnLayout);
-    
-    // Apply dark theme
-    setStyleSheet("QDialog { background-color: #0d1117; }");
 }
 
 void ThumbnailGeneratorDialog::collectFiles()

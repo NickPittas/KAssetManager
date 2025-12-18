@@ -32,6 +32,15 @@ namespace {
         static QFont font("Segoe UI", 8, QFont::Bold);
         return font;
     }
+    
+    // Cached folder icon - standardIcon() is expensive (shell calls on Windows)
+    static QIcon& cachedFolderIcon() {
+        static QIcon icon;
+        if (icon.isNull()) {
+            icon = QApplication::style()->standardIcon(QStyle::SP_DirIcon);
+        }
+        return icon;
+    }
 
     QRect insetPreviewRect(const QRect &source)
     {
@@ -182,8 +191,8 @@ void ProjectItemDelegate::paint(QPainter *painter, const QStyleOptionViewItem &o
             QRect placeholderRect = insetPreviewRect(thumbRect);
             painter->drawRoundedRect(placeholderRect, 6, 6);
             
-            // Draw folder icon using system style
-            QIcon folderIcon = QApplication::style()->standardIcon(QStyle::SP_DirIcon);
+            // Draw folder icon using cached system style icon
+            const QIcon& folderIcon = cachedFolderIcon();
             int iconSize = thumbSide / 2;
             QRect iconRect(thumbRect.center().x() - iconSize / 2, 
                            thumbRect.center().y() - iconSize / 2, 
@@ -220,7 +229,8 @@ void ProjectItemDelegate::paint(QPainter *painter, const QStyleOptionViewItem &o
                     painter->save();
                     QRect previewRect = insetPreviewRect(thumbRect);
                     painter->setClipRect(previewRect);
-                    QPixmap scaled = cachedThumb.scaled(previewRect.size(), Qt::KeepAspectRatio, Qt::SmoothTransformation);
+                    // Use FastTransformation for responsive resize
+                    QPixmap scaled = cachedThumb.scaled(previewRect.size(), Qt::KeepAspectRatio, Qt::FastTransformation);
                     int x = previewRect.x() + (previewRect.width() - scaled.width()) / 2;
                     int y = previewRect.y() + (previewRect.height() - scaled.height()) / 2;
                     painter->drawPixmap(x, y, scaled);
@@ -240,7 +250,8 @@ void ProjectItemDelegate::paint(QPainter *painter, const QStyleOptionViewItem &o
                 painter->save();
                 QRect previewRect = insetPreviewRect(thumbRect);
                 painter->setClipRect(previewRect);
-                QPixmap scaled = handle.pixmap.scaled(previewRect.size(), Qt::KeepAspectRatio, Qt::SmoothTransformation);
+                // Use FastTransformation for responsive resize
+                QPixmap scaled = handle.pixmap.scaled(previewRect.size(), Qt::KeepAspectRatio, Qt::FastTransformation);
                 int x = previewRect.x() + (previewRect.width() - scaled.width()) / 2;
                 int y = previewRect.y() + (previewRect.height() - scaled.height()) / 2;
                 painter->drawPixmap(x, y, scaled);
@@ -361,7 +372,6 @@ QWidget* ProjectItemDelegate::createEditor(QWidget* parent, const QStyleOptionVi
     }
     
     QComboBox* combo = new QComboBox(parent);
-    combo->setStyleSheet(ThemeManager::instance().comboBoxStyleSheet());
     
     // Get version list
     QStringList versions = index.data(ProjectAssetsModel::VersionListRole).toStringList();
