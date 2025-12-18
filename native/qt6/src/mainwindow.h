@@ -233,9 +233,13 @@ private:
 
 protected:
     void closeEvent(QCloseEvent* event) override;
+    void resizeEvent(QResizeEvent* event) override;
+    void moveEvent(QMoveEvent* event) override;
 
 private:
     bool m_initializing = false; // guard for eventFilter during UI construction
+    bool m_windowResizing = false; // guard to skip heavy updates during resize/move
+    QTimer m_resizeSettleTimer; // fires after resize/move stops
 
     void setupUi();
     void setupConnections();

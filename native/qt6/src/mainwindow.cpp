@@ -92,6 +92,8 @@ static size_t currentWorkingSetMB() {
 #include <QStatusBar>
 #include <QDrag>
 #include <QMouseEvent>
+#include <QResizeEvent>
+#include <QMoveEvent>
 #include <QFuture>
 #include <QFutureWatcher>
 #include <QBrush>
@@ -315,6 +317,20 @@ MainWindow::MainWindow(QWidget *parent)
 
     visibleThumbTimer.setSingleShot(true);
     connect(&visibleThumbTimer, &QTimer::timeout, this, &MainWindow::updateVisibleThumbProgress);
+
+    // Timer to detect when window resize/move has stopped
+    m_resizeSettleTimer.setSingleShot(true);
+    m_resizeSettleTimer.setInterval(50); // Short delay to batch rapid events
+    connect(&m_resizeSettleTimer, &QTimer::timeout, this, [this]() {
+        m_windowResizing = false;
+        // Resume thumbnail requests now that resize is done
+        LivePreviewManager::instance().resumeRequests();
+        // Trigger a single viewport update
+        if (assetGridView && assetGridView->viewport()) assetGridView->viewport()->update();
+        if (fmGridView && fmGridView->viewport()) fmGridView->viewport()->update();
+        // Schedule progress update (debounced)
+        scheduleVisibleThumbProgressUpdate();
+    });
 
     // Update views when live preview frames arrive
     connect(&LivePreviewManager::instance(), &LivePreviewManager::frameReady,
@@ -7790,10 +7806,12 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
     }
     
     // Update visible-only progress when asset or File Manager viewports resize
-    if ((assetGridView && watched == assetGridView->viewport()) ||
+    // Skip during window resize/move to avoid cascading expensive updates
+    if (!m_windowResizing &&
+        ((assetGridView && watched == assetGridView->viewport()) ||
         (assetTableView && watched == assetTableView->viewport()) ||
         (fmGridView && watched == fmGridView->viewport()) ||
-        (fmListView && watched == fmListView->viewport())) {
+        (fmListView && watched == fmListView->viewport()))) {
         if (event->type() == QEvent::Resize) {
             scheduleVisibleThumbProgressUpdate();
         }
@@ -8688,6 +8706,8 @@ void MainWindow::onRefreshLivePreviewsRecursive()
 void MainWindow::scheduleVisibleThumbProgressUpdate()
 {
     if (m_initializing) return;
+    // Skip entirely during window resize/move to avoid sluggishness
+    if (m_windowResizing) return;
     // Do not show our visible-only progress while a global/import progress is active
     if (ProgressManager::instance().isActive()) {
         return;
@@ -8699,6 +8719,8 @@ void MainWindow::scheduleVisibleThumbProgressUpdate()
 void MainWindow::updateVisibleThumbProgress()
 {
     if (m_initializing) return;
+    // Skip during active window resize/move
+    if (m_windowResizing) return;
     if (ProgressManager::instance().isActive()) {
         if (thumbnailProgressLabel) thumbnailProgressLabel->setVisible(false);
         if (thumbnailProgressBar) thumbnailProgressBar->setVisible(false);
@@ -9962,6 +9984,32 @@ void MainWindow::onFmOpenOverlay()
     previewOverlay->showAsset(path, info.fileName(), info.suffix());
 }
 
+
+void MainWindow::resizeEvent(QResizeEvent *event)
+{
+    // Mark that we're in a resize operation to skip expensive updates
+    if (!m_windowResizing) {
+        m_windowResizing = true;
+        // Suspend new thumbnail decode requests for fluid resizing
+        LivePreviewManager::instance().suspendRequests();
+    }
+    m_resizeSettleTimer.start(); // Restart timer - will fire when resize stops
+
+    QMainWindow::resizeEvent(event);
+}
+
+void MainWindow::moveEvent(QMoveEvent *event)
+{
+    // Mark that we're in a move operation to skip expensive updates
+    if (!m_windowResizing) {
+        m_windowResizing = true;
+        // Suspend new thumbnail decode requests for fluid moving
+        LivePreviewManager::instance().suspendRequests();
+    }
+    m_resizeSettleTimer.start(); // Restart timer - will fire when move stops
+
+    QMainWindow::moveEvent(event);
+}
 
 
 void MainWindow::closeEvent(QCloseEvent* event)
