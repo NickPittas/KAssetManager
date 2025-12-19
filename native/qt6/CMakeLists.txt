@@ -275,6 +275,8 @@ qt_add_executable(kassetmanagerqt WIN32
     src/fm_item_delegate.cpp
     src/grid_scrub.h
     src/grid_scrub.cpp
+    src/scrub_frame_registry.h
+    src/scrub_frame_registry.cpp
     src/fm_views_ex.h
     src/fm_views_ex.cpp
     src/oiio_image_loader.h

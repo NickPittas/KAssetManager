@@ -3,12 +3,14 @@
 #include "project_version_detector.h"
 #include "thumbnail_cache_manager.h"
 #include "live_preview_manager.h"
+#include "scrub_frame_registry.h"
 #include "theme_manager.h"
 #include "file_utils.h"
 #include <QFileInfo>
 #include <QComboBox>
 #include <QMouseEvent>
 #include <QApplication>
+#include <QAbstractItemView>
 #include <QDebug>
 
 namespace {
@@ -70,6 +72,11 @@ int ProjectItemDelegate::thumbnailSize() const
 void ProjectItemDelegate::setSelectedVersions(const QHash<qint64, QString> *versions)
 {
     m_selectedVersions = versions;
+}
+
+void ProjectItemDelegate::setView(QAbstractItemView *view)
+{
+    m_view = view;
 }
 
 QRect ProjectItemDelegate::getVersionDropdownRect(const QRect& itemRect) const
@@ -219,8 +226,28 @@ void ProjectItemDelegate::paint(QPainter *painter, const QStyleOptionViewItem &o
         bool drewPreview = false;
         bool usedCachedThumbnail = false;
 
-        // Try cached thumbnail first
-        if (previewable) {
+        // Check if this item is being scrubbed - if so, draw the scrubbed frame instead
+        if (m_view && ScrubFrameRegistry::instance().isIndexBeingScrubbed(m_view, index)) {
+            QModelIndex scrubIndex;
+            QPixmap scrubFrame;
+            qreal scrubPosition;
+            if (ScrubFrameRegistry::instance().getScrubFrame(m_view, scrubIndex, scrubFrame, scrubPosition)) {
+                if (!scrubFrame.isNull()) {
+                    painter->save();
+                    QRect previewRect = insetPreviewRect(thumbRect);
+                    painter->setClipRect(previewRect);
+                    QPixmap scaled = scrubFrame.scaled(previewRect.size(), Qt::KeepAspectRatio, Qt::FastTransformation);
+                    int x = previewRect.x() + (previewRect.width() - scaled.width()) / 2;
+                    int y = previewRect.y() + (previewRect.height() - scaled.height()) / 2;
+                    painter->drawPixmap(x, y, scaled);
+                    painter->restore();
+                    drewPreview = true;
+                }
+            }
+        }
+
+        // Try cached thumbnail first (if not scrubbing)
+        if (!drewPreview && previewable) {
             ThumbnailCacheManager& cacheManager = ThumbnailCacheManager::instance();
             QSize cacheSize = cacheManager.getThumbnailSize();
             if (cacheManager.isCached(filePath, cacheSize, 0.0)) {

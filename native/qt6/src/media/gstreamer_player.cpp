@@ -12,6 +12,7 @@
 #include <QMutexLocker>
 #include <QApplication>
 #include <QScreen>
+#include <QElapsedTimer>
 
 #ifdef HAVE_GSTREAMER
 #include <gst/gst.h>
@@ -25,6 +26,304 @@
 #endif
 
 bool GStreamerPlayer::s_gstInitialized = false;
+
+// ========================================================================
+// Pipeline Cache for fast video thumbnail scrubbing
+// ========================================================================
+// Instead of creating a new pipeline for each frame, we cache pipelines
+// and just seek. This makes scrubbing much faster (no preroll needed).
+// ========================================================================
+
+#ifdef HAVE_GSTREAMER
+
+namespace {
+
+struct CachedPipeline {
+    GstElement* pipeline = nullptr;
+    GstElement* appsink = nullptr;
+    QString filePath;
+    qint64 lastUsed = 0;  // Timestamp for LRU eviction
+    bool valid = false;
+};
+
+class PipelineCache {
+public:
+    static PipelineCache& instance() {
+        static PipelineCache s_instance;
+        return s_instance;
+    }
+
+    // Get or create a pipeline for a file, returns nullptr if failed
+    CachedPipeline* getPipeline(const QString& filePath, const QSize& targetSize) {
+        QMutexLocker locker(&m_mutex);
+        
+        // Check if we have a cached pipeline for this file
+        auto it = m_cache.find(filePath);
+        if (it != m_cache.end() && it->valid) {
+            it->lastUsed = QDateTime::currentMSecsSinceEpoch();
+            return &(*it);
+        }
+        
+        // Create a new pipeline
+        locker.unlock();
+        CachedPipeline newPipeline = createPipeline(filePath, targetSize);
+        locker.relock();
+        
+        if (!newPipeline.valid) {
+            return nullptr;
+        }
+        
+        // Evict oldest if cache is full
+        evictOldest();
+        
+        m_cache[filePath] = newPipeline;
+        return &m_cache[filePath];
+    }
+    
+    // Release all pipelines (call on app shutdown or when switching files)
+    void clear() {
+        QMutexLocker locker(&m_mutex);
+        for (auto& entry : m_cache) {
+            destroyPipeline(entry);
+        }
+        m_cache.clear();
+    }
+    
+    // Remove a specific file's pipeline (call when file changes)
+    void invalidate(const QString& filePath) {
+        QMutexLocker locker(&m_mutex);
+        auto it = m_cache.find(filePath);
+        if (it != m_cache.end()) {
+            destroyPipeline(*it);
+            m_cache.erase(it);
+        }
+    }
+
+private:
+    PipelineCache() = default;
+    ~PipelineCache() { clear(); }
+    
+    static constexpr int kMaxCachedPipelines = 3;  // Keep max 3 pipelines warm
+    
+    CachedPipeline createPipeline(const QString& filePath, const QSize& targetSize) {
+        Q_UNUSED(targetSize);
+        CachedPipeline result;
+        result.filePath = filePath;
+        
+        QString uri = QUrl::fromLocalFile(filePath).toString();
+        result.pipeline = gst_element_factory_make("playbin", nullptr);
+        if (!result.pipeline) {
+            qWarning() << "[PipelineCache] Failed to create playbin for" << filePath;
+            return result;
+        }
+        
+        g_object_set(result.pipeline, "uri", uri.toUtf8().constData(), nullptr);
+        
+        // Create appsink for video frames
+        result.appsink = gst_element_factory_make("appsink", nullptr);
+        if (!result.appsink) {
+            qWarning() << "[PipelineCache] Failed to create appsink for" << filePath;
+            gst_object_unref(result.pipeline);
+            result.pipeline = nullptr;
+            return result;
+        }
+        
+        g_object_set(result.appsink,
+                     "emit-signals", FALSE,
+                     "drop", TRUE,
+                     "max-buffers", 1,
+                     nullptr);
+        
+        // Set caps to receive RGB frames
+        GstCaps* caps = gst_caps_new_simple("video/x-raw",
+                                            "format", G_TYPE_STRING, "RGB",
+                                            nullptr);
+        gst_app_sink_set_caps(GST_APP_SINK(result.appsink), caps);
+        gst_caps_unref(caps);
+        
+        g_object_set(result.pipeline, "video-sink", result.appsink, nullptr);
+        
+        // Set to PAUSED to preroll
+        GstStateChangeReturn stateRet = gst_element_set_state(result.pipeline, GST_STATE_PAUSED);
+        if (stateRet == GST_STATE_CHANGE_FAILURE) {
+            qWarning() << "[PipelineCache] Failed to set pipeline to PAUSED for" << filePath;
+            gst_object_unref(result.pipeline);
+            result.pipeline = nullptr;
+            result.appsink = nullptr;
+            return result;
+        }
+        
+        // Wait for preroll with timeout
+        GstBus* bus = gst_element_get_bus(result.pipeline);
+        bool prerollComplete = false;
+        GstClockTime timeout = 2 * GST_SECOND;
+        GstClockTime startTime = gst_util_get_timestamp();
+        
+        while (!prerollComplete && (gst_util_get_timestamp() - startTime) < timeout) {
+            GstMessage* msg = gst_bus_timed_pop_filtered(bus, 100 * GST_MSECOND,
+                static_cast<GstMessageType>(GST_MESSAGE_ASYNC_DONE | GST_MESSAGE_ERROR | GST_MESSAGE_EOS));
+            
+            if (msg) {
+                switch (GST_MESSAGE_TYPE(msg)) {
+                    case GST_MESSAGE_ASYNC_DONE:
+                        prerollComplete = true;
+                        break;
+                    case GST_MESSAGE_ERROR: {
+                        GError* err = nullptr;
+                        gst_message_parse_error(msg, &err, nullptr);
+                        qWarning() << "[PipelineCache] Pipeline error:" << (err ? err->message : "Unknown");
+                        if (err) g_error_free(err);
+                        break;
+                    }
+                    case GST_MESSAGE_EOS:
+                        prerollComplete = true;
+                        break;
+                    default:
+                        break;
+                }
+                gst_message_unref(msg);
+            }
+        }
+        
+        gst_object_unref(bus);
+        
+        if (!prerollComplete) {
+            qWarning() << "[PipelineCache] Preroll timeout for" << filePath;
+            gst_element_set_state(result.pipeline, GST_STATE_NULL);
+            gst_object_unref(result.pipeline);
+            result.pipeline = nullptr;
+            result.appsink = nullptr;
+            return result;
+        }
+        
+        result.valid = true;
+        result.lastUsed = QDateTime::currentMSecsSinceEpoch();
+        qDebug() << "[PipelineCache] Created pipeline for" << filePath;
+        return result;
+    }
+    
+    void destroyPipeline(CachedPipeline& pipeline) {
+        if (pipeline.pipeline) {
+            gst_element_set_state(pipeline.pipeline, GST_STATE_NULL);
+            gst_object_unref(pipeline.pipeline);
+            pipeline.pipeline = nullptr;
+            pipeline.appsink = nullptr;  // Owned by pipeline
+            pipeline.valid = false;
+        }
+    }
+    
+    void evictOldest() {
+        if (m_cache.size() < kMaxCachedPipelines) {
+            return;
+        }
+        
+        QString oldestKey;
+        qint64 oldestTime = (std::numeric_limits<qint64>::max)();  // Parentheses prevent Windows max macro
+        
+        for (auto it = m_cache.begin(); it != m_cache.end(); ++it) {
+            if (it->lastUsed < oldestTime) {
+                oldestTime = it->lastUsed;
+                oldestKey = it.key();
+            }
+        }
+        
+        if (!oldestKey.isEmpty()) {
+            destroyPipeline(m_cache[oldestKey]);
+            m_cache.remove(oldestKey);
+            qDebug() << "[PipelineCache] Evicted pipeline for" << oldestKey;
+        }
+    }
+    
+    QMutex m_mutex;
+    QHash<QString, CachedPipeline> m_cache;
+};
+
+// Fast frame extraction using cached pipeline
+QImage extractFrameCached(const QString& filePath, const QSize& targetSize, qint64 positionMs)
+{
+    CachedPipeline* cached = PipelineCache::instance().getPipeline(filePath, targetSize);
+    if (!cached || !cached->valid) {
+        return QImage();
+    }
+    
+    GstElement* pipeline = cached->pipeline;
+    GstElement* appsink = cached->appsink;
+    
+    // Seek to position (use KEY_UNIT for speed, ACCURATE only if needed)
+    // KEY_UNIT seeks to nearest keyframe - much faster but less precise
+    // ACCURATE decodes from keyframe to exact position - slow but precise
+    // For scrubbing, KEY_UNIT is usually acceptable and much faster
+    gint64 position = positionMs * GST_MSECOND;
+    
+    GstSeekFlags seekFlags = static_cast<GstSeekFlags>(GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_KEY_UNIT);
+    
+    if (!gst_element_seek_simple(pipeline, GST_FORMAT_TIME, seekFlags, position)) {
+        qWarning() << "[PipelineCache] Seek failed for" << filePath;
+        return QImage();
+    }
+    
+    // Wait for seek to complete - short timeout since pipeline is already prerolled
+    GstBus* bus = gst_element_get_bus(pipeline);
+    GstMessage* msg = gst_bus_timed_pop_filtered(bus, 200 * GST_MSECOND,
+        static_cast<GstMessageType>(GST_MESSAGE_ASYNC_DONE | GST_MESSAGE_ERROR));
+    
+    if (msg) {
+        if (GST_MESSAGE_TYPE(msg) == GST_MESSAGE_ERROR) {
+            gst_message_unref(msg);
+            gst_object_unref(bus);
+            return QImage();
+        }
+        gst_message_unref(msg);
+    }
+    gst_object_unref(bus);
+    
+    // Briefly set to PLAYING to push frame through
+    gst_element_set_state(pipeline, GST_STATE_PLAYING);
+    
+    // Small delay for frame to be pushed (much shorter than full preroll)
+    g_usleep(20000);  // 20ms
+    
+    // Pull sample
+    GstSample* sample = gst_app_sink_try_pull_sample(GST_APP_SINK(appsink), 100 * GST_MSECOND);
+    
+    // Return to PAUSED for next seek
+    gst_element_set_state(pipeline, GST_STATE_PAUSED);
+    
+    if (!sample) {
+        return QImage();
+    }
+    
+    QImage thumbnail;
+    GstCaps* sampleCaps = gst_sample_get_caps(sample);
+    GstBuffer* buffer = gst_sample_get_buffer(sample);
+    
+    if (sampleCaps && buffer) {
+        GstStructure* structure = gst_caps_get_structure(sampleCaps, 0);
+        int width = 0, height = 0;
+        gst_structure_get_int(structure, "width", &width);
+        gst_structure_get_int(structure, "height", &height);
+        
+        if (width > 0 && height > 0) {
+            GstMapInfo map;
+            if (gst_buffer_map(buffer, &map, GST_MAP_READ)) {
+                QImage image(map.data, width, height, width * 3, QImage::Format_RGB888);
+                thumbnail = image.copy();
+                gst_buffer_unmap(buffer, &map);
+                
+                if (targetSize.isValid()) {
+                    thumbnail = thumbnail.scaled(targetSize, Qt::KeepAspectRatio, Qt::FastTransformation);
+                }
+            }
+        }
+    }
+    
+    gst_sample_unref(sample);
+    return thumbnail;
+}
+
+} // anonymous namespace
+
+#endif // HAVE_GSTREAMER
 
 GStreamerPlayer::~GStreamerPlayer()
 {
@@ -1056,7 +1355,14 @@ QImage GStreamerPlayer::extractThumbnail(const QString& filePath, const QSize& t
         return QImage();
     }
 
-    // Create a temporary pipeline for thumbnail extraction
+    // Try fast cached extraction first
+    QImage result = extractFrameCached(filePath, targetSize, positionMs);
+    if (!result.isNull()) {
+        return result;
+    }
+
+    // Fallback: Create a temporary pipeline for thumbnail extraction
+    // (This path is used if cache creation failed)
     QString uri = QUrl::fromLocalFile(filePath).toString();
     GstElement* pipeline = gst_element_factory_make("playbin", "thumb-playbin");
     if (!pipeline) {
@@ -1097,8 +1403,7 @@ QImage GStreamerPlayer::extractThumbnail(const QString& filePath, const QSize& t
         return QImage();
     }
 
-    // CRITICAL: Wait for ASYNC_DONE message to ensure preroll is complete
-    // This is required before pulling samples from appsink
+    // Wait for preroll with timeout
     GstBus* bus = gst_element_get_bus(pipeline);
     bool prerollComplete = false;
     GstClockTime timeout = 2 * GST_SECOND;
@@ -1128,7 +1433,6 @@ QImage GStreamerPlayer::extractThumbnail(const QString& filePath, const QSize& t
                     return QImage();
                 }
                 case GST_MESSAGE_EOS:
-                    qWarning() << "[GStreamerPlayer] extractThumbnail: Unexpected EOS for" << filePath;
                     prerollComplete = true;
                     break;
                 default:
@@ -1152,9 +1456,9 @@ QImage GStreamerPlayer::extractThumbnail(const QString& filePath, const QSize& t
     // Seek to position if specified
     if (positionMs > 0) {
         gint64 position = positionMs * GST_MSECOND;
-        // Use ACCURATE seeking for smooth scrubbing (not KEY_UNIT which jumps to keyframes)
+        // Use KEY_UNIT for faster seeking (nearest keyframe)
         if (!gst_element_seek_simple(pipeline, GST_FORMAT_TIME,
-                               static_cast<GstSeekFlags>(GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_ACCURATE),
+                               static_cast<GstSeekFlags>(GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_KEY_UNIT),
                                position)) {
             qWarning() << "[GStreamerPlayer] extractThumbnail: Seek failed for" << filePath;
             gst_element_set_state(pipeline, GST_STATE_NULL);
@@ -1164,7 +1468,7 @@ QImage GStreamerPlayer::extractThumbnail(const QString& filePath, const QSize& t
 
         // Wait for seek to complete
         GstBus* seekBus = gst_element_get_bus(pipeline);
-        GstMessage* msg = gst_bus_timed_pop_filtered(seekBus, 1 * GST_SECOND,
+        GstMessage* msg = gst_bus_timed_pop_filtered(seekBus, 500 * GST_MSECOND,
             static_cast<GstMessageType>(GST_MESSAGE_ASYNC_DONE | GST_MESSAGE_ERROR));
         if (msg) {
             if (GST_MESSAGE_TYPE(msg) == GST_MESSAGE_ERROR) {
@@ -1180,8 +1484,7 @@ QImage GStreamerPlayer::extractThumbnail(const QString& filePath, const QSize& t
         gst_object_unref(seekBus);
     }
 
-    // CRITICAL: After seeking in PAUSED state, we need to briefly set to PLAYING
-    // to push the frame through the pipeline to appsink
+    // Set to PLAYING briefly to push frame through
     stateRet = gst_element_set_state(pipeline, GST_STATE_PLAYING);
     if (stateRet == GST_STATE_CHANGE_FAILURE) {
         qWarning() << "[GStreamerPlayer] extractThumbnail: Failed to set pipeline to PLAYING for" << filePath;
@@ -1190,11 +1493,10 @@ QImage GStreamerPlayer::extractThumbnail(const QString& filePath, const QSize& t
         return QImage();
     }
 
-    // Wait a bit for the frame to be pushed to appsink
-    // This is necessary because PAUSED state only prerolls but doesn't push data through
-    g_usleep(50000); // 50ms should be enough
+    // Wait briefly for frame
+    g_usleep(30000); // 30ms
 
-    // Now pull the sample from appsink
+    // Pull sample
     GstSample* sample = gst_app_sink_try_pull_sample(GST_APP_SINK(videoSink), 200 * GST_MSECOND);
     if (sample) {
         GstCaps* sampleCaps = gst_sample_get_caps(sample);

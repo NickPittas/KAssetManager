@@ -2,10 +2,12 @@
 #include "assets_model.h"
 #include "thumbnail_cache_manager.h"
 #include "live_preview_manager.h"
+#include "scrub_frame_registry.h"
 #include "theme_manager.h"
 #include "file_utils.h"
 #include <QFileInfo>
 #include <QDebug>
+#include <QAbstractItemView>
 
 namespace {
     constexpr int kPreviewInset = 1; // minimize border between thumbnail and preview
@@ -53,6 +55,11 @@ int AssetItemDelegate::thumbnailSize() const
     return m_thumbnailSize; 
 }
 
+void AssetItemDelegate::setView(QAbstractItemView *view)
+{
+    m_view = view;
+}
+
 void AssetItemDelegate::paint(QPainter *painter, const QStyleOptionViewItem &option, const QModelIndex &index) const
 {
     try {
@@ -94,9 +101,51 @@ void AssetItemDelegate::paint(QPainter *painter, const QStyleOptionViewItem &opt
         bool drewPreview = false;
         bool usedCachedThumbnail = false;
 
-        // First, try to load from persistent thumbnail cache
+        // Check if this item is being scrubbed - if so, draw the scrubbed frame instead
+        if (m_view && ScrubFrameRegistry::instance().isIndexBeingScrubbed(m_view, index)) {
+            QModelIndex scrubIndex;
+            QPixmap scrubFrame;
+            qreal scrubPosition;
+            if (ScrubFrameRegistry::instance().getScrubFrame(m_view, scrubIndex, scrubFrame, scrubPosition)) {
+                if (!scrubFrame.isNull()) {
+                    painter->save();
+                    QRect previewRect = insetPreviewRect(thumbRect);
+                    painter->setClipRect(previewRect);
+                    QPixmap scaled = scrubFrame.scaled(previewRect.size(), Qt::KeepAspectRatio, Qt::FastTransformation);
+                    int x = previewRect.x() + (previewRect.width() - scaled.width()) / 2;
+                    int y = previewRect.y() + (previewRect.height() - scaled.height()) / 2;
+                    painter->drawPixmap(x, y, scaled);
+                    painter->restore();
+                    drewPreview = true;
+                }
+            }
+        }
+
+        // First, try to load from persistent thumbnail cache (if not scrubbing)
         // IMPORTANT: Request thumbnails at the cache's native size (256x256), not the display size
-        if (previewable) {
+        if (!drewPreview && previewable) {
+            ThumbnailCacheManager& cacheManager = ThumbnailCacheManager::instance();
+            QSize cacheSize = cacheManager.getThumbnailSize(); // Get the cache's native size (256x256)
+            if (cacheManager.isCached(filePath, cacheSize, 0.0)) {
+                QPixmap cachedThumb = cacheManager.getCachedThumbnail(filePath, cacheSize, 0.0);
+                if (!cachedThumb.isNull()) {
+                    painter->save();
+                    QRect previewRect = insetPreviewRect(thumbRect);
+                    painter->setClipRect(previewRect);
+                    // Use FastTransformation for responsive resize - thumbnails are already decent quality
+                    QPixmap scaled = cachedThumb.scaled(previewRect.size(), Qt::KeepAspectRatio, Qt::FastTransformation);
+                    int x = previewRect.x() + (previewRect.width() - scaled.width()) / 2;
+                    int y = previewRect.y() + (previewRect.height() - scaled.height()) / 2;
+                    painter->drawPixmap(x, y, scaled);
+                    painter->restore();
+                    drewPreview = true;
+                    usedCachedThumbnail = true;
+                }
+            }
+        }
+
+        // Fall back to LivePreviewManager if no cached thumbnail
+        if (!drewPreview && previewable) {
             ThumbnailCacheManager& cacheManager = ThumbnailCacheManager::instance();
             QSize cacheSize = cacheManager.getThumbnailSize(); // Get the cache's native size (256x256)
             if (cacheManager.isCached(filePath, cacheSize, 0.0)) {

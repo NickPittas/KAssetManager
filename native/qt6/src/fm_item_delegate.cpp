@@ -1,6 +1,7 @@
 #include "fm_item_delegate.h"
 #include "live_preview_manager.h"
 #include "thumbnail_cache_manager.h"
+#include "scrub_frame_registry.h"
 #include "theme_manager.h"
 #include "file_utils.h"
 #include "icon_utils.h"
@@ -8,6 +9,7 @@
 #include <QFileInfo>
 #include <QFileSystemModel>
 #include <QAbstractProxyModel>
+#include <QAbstractItemView>
 #include <QStyle>
 
 namespace {
@@ -57,6 +59,11 @@ void FmItemDelegate::setThumbnailSize(int size)
 int FmItemDelegate::thumbnailSize() const 
 { 
     return m_thumbnailSize; 
+}
+
+void FmItemDelegate::setView(QAbstractItemView *view)
+{
+    m_view = view;
 }
 
 void FmItemDelegate::paint(QPainter *painter, const QStyleOptionViewItem &option, const QModelIndex &index) const
@@ -113,7 +120,27 @@ void FmItemDelegate::paint(QPainter *painter, const QStyleOptionViewItem &option
 
     bool drewPreview = false;
 
-    if (isFolder) {
+    // Check if this item is being scrubbed - if so, draw the scrubbed frame instead
+    if (!isFolder && m_view && ScrubFrameRegistry::instance().isIndexBeingScrubbed(m_view, index)) {
+        QModelIndex scrubIndex;
+        QPixmap scrubFrame;
+        qreal scrubPosition;
+        if (ScrubFrameRegistry::instance().getScrubFrame(m_view, scrubIndex, scrubFrame, scrubPosition)) {
+            if (!scrubFrame.isNull()) {
+                painter->save();
+                QRect previewRect = insetPreviewRect(thumbRect);
+                painter->setClipRect(previewRect);
+                QPixmap scaled = scrubFrame.scaled(previewRect.size(), Qt::KeepAspectRatio, Qt::FastTransformation);
+                int x = previewRect.x() + (previewRect.width() - scaled.width()) / 2;
+                int y = previewRect.y() + (previewRect.height() - scaled.height()) / 2;
+                painter->drawPixmap(x, y, scaled);
+                painter->restore();
+                drewPreview = true;
+            }
+        }
+    }
+
+    if (!drewPreview && isFolder) {
         // Draw folder icon using cached standard icon (avoids shell calls per-paint)
         const QIcon& folderIcon = cachedFolderIcon();
         QRect iconRect = insetPreviewRect(thumbRect);
@@ -127,8 +154,8 @@ void FmItemDelegate::paint(QPainter *painter, const QStyleOptionViewItem &option
         );
         folderIcon.paint(painter, centeredIconRect, Qt::AlignCenter);
         drewPreview = true;
-    } else {
-        // Handle file preview
+    } else if (!drewPreview) {
+        // Handle file preview (only if not already drawn via scrubbing)
         // IMPORTANT: Use ThumbnailCacheManager's native size (256x256) to avoid aspect ratio issues
         // Requesting square thumbnails at display size causes double-scaling artifacts
         LivePreviewManager &previewMgr = LivePreviewManager::instance();

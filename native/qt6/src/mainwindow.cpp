@@ -711,7 +711,11 @@ void MainWindow::setupUi()
     assetGridView->setUniformItemSizes(true);
     assetGridView->setSelectionMode(QAbstractItemView::ExtendedSelection);
     assetGridView->setContextMenuPolicy(Qt::CustomContextMenu);
-    assetGridView->setItemDelegate(new AssetItemDelegate(viewStack));
+    
+    // Create delegate and set the view for scrub frame support
+    auto *assetDelegate = new AssetItemDelegate(viewStack);
+    assetDelegate->setView(assetGridView);
+    assetGridView->setItemDelegate(assetDelegate);
 
     assetGridView->setIconSize(QSize(180, 180));
     // Batched layout mode for better resize performance
@@ -788,11 +792,10 @@ void MainWindow::setupUi()
 
     assetScrubController = new GridScrubController(
         assetGridView,
-        [this](const QModelIndex& idx) -> QString {
-            if (!assetsModel) {
-                return QString();
-            }
-            return assetsModel->data(idx, AssetsModel::FilePathRole).toString();
+        [](const QModelIndex& idx) -> QString {
+            // Use idx.data() which properly accesses data through the model hierarchy
+            // (works correctly with proxy models)
+            return idx.data(AssetsModel::FilePathRole).toString();
         },
         this);
     LogManager::instance().addLog("[TRACE] assetScrubController ready", "DEBUG");
@@ -1618,6 +1621,7 @@ void MainWindow::setupFileManagerUi()
     // Minimalist delegate to remove cell color separation
     {
         auto *d = new FmItemDelegate(fmGridView);
+        d->setView(fmGridView);  // Set view for scrub frame support
         fmGridView->setItemDelegate(d);
         // Restore thumbnail size from settings (default 120)
         QSettings s("AugmentCode", "KAssetManager");
@@ -3558,6 +3562,7 @@ void MainWindow::setupProjectManagerUi()
     // Grid view
     pmAssetsGridView = new QListView(pmViewStack);
     pmAssetsGridView->setModel(pmSequenceProxy);  // Use proxy model
+    pmItemDelegate->setView(pmAssetsGridView);  // Set view for scrub frame support
     pmAssetsGridView->setItemDelegate(pmItemDelegate);
     pmAssetsGridView->setViewMode(QListView::IconMode);
     pmAssetsGridView->setResizeMode(QListView::Adjust);

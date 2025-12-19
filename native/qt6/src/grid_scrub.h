@@ -9,6 +9,13 @@
 #include <QHash>
 #include <functional>
 
+/**
+ * @brief Minimal overlay for showing scrub progress indicator.
+ * 
+ * This overlay is now transparent and only draws a progress line
+ * on top of the thumbnail. The actual scrubbed frame is drawn
+ * by the item delegate using ScrubFrameRegistry.
+ */
 class GridScrubOverlay : public QWidget
 {
     Q_OBJECT
@@ -16,20 +23,15 @@ public:
     explicit GridScrubOverlay(QWidget *parent = nullptr);
 
     void setProgress(qreal value);
-    void setHintText(const QString &text);
-    void clearHintText();
-    void setFrame(const QPixmap &pixmap);
-    void clearFrame();
+    void setLoading(bool loading);
+    bool isLoading() const { return m_loading; }
 
 protected:
     void paintEvent(QPaintEvent *event) override;
 
 private:
     qreal m_progress = 0.0;
-    QString m_statusText = QStringLiteral("Ctrl + Move/Wheel to scrub");
-    const QString m_defaultHint = QStringLiteral("Ctrl + Move/Wheel to scrub");
-    bool m_hasCustomHint = false;
-    QPixmap m_frame;
+    bool m_loading = false;
 };
 
 class GridScrubController : public QObject
@@ -72,6 +74,7 @@ private:
     qreal m_position;
     QHash<QString, qreal> m_positions;
     qreal m_lastMouseX;
+    qreal m_requestedPosition = 0.0;  // Track the most recently requested position
     bool m_loadingFrame = false;
     bool m_scrubActive = false;
     bool m_mouseGrabbed = false;

@@ -1,5 +1,6 @@
 #include "grid_scrub.h"
 #include "live_preview_manager.h"
+#include "scrub_frame_registry.h"
 #include <QPainter>
 #include <QMouseEvent>
 #include <QWheelEvent>
@@ -15,7 +16,7 @@ namespace {
     constexpr qreal kScrubDefaultPosition = 0.0;
 }
 
-// GridScrubOverlay implementation
+// GridScrubOverlay implementation - now minimal, just draws progress line
 
 GridScrubOverlay::GridScrubOverlay(QWidget *parent)
     : QWidget(parent)
@@ -29,37 +30,12 @@ GridScrubOverlay::GridScrubOverlay(QWidget *parent)
 void GridScrubOverlay::setProgress(qreal value)
 {
     m_progress = std::clamp(value, 0.0, 1.0);
-    if (!m_hasCustomHint) {
-        m_statusText = QStringLiteral("%1%").arg(qRound(m_progress * 100.0));
-    }
     update();
 }
 
-void GridScrubOverlay::setHintText(const QString &text)
+void GridScrubOverlay::setLoading(bool loading)
 {
-    m_statusText = text;
-    m_hasCustomHint = true;
-    update();
-}
-
-void GridScrubOverlay::clearHintText()
-{
-    m_hasCustomHint = false;
-    m_statusText = m_defaultHint;
-    update();
-}
-
-void GridScrubOverlay::setFrame(const QPixmap &pixmap)
-{
-    m_frame = pixmap;
-    update();
-}
-
-void GridScrubOverlay::clearFrame()
-{
-    if (!m_frame.isNull()) {
-        m_frame = QPixmap();
-    }
+    m_loading = loading;
     update();
 }
 
@@ -69,45 +45,21 @@ void GridScrubOverlay::paintEvent(QPaintEvent *)
     painter.setRenderHint(QPainter::Antialiasing, true);
 
     const QRectF bounds = rect();
-    if (!bounds.isValid()) {
+    if (!bounds.isValid() || bounds.width() < 2) {
         return;
     }
 
-    painter.setPen(Qt::NoPen);
-    painter.setBrush(Qt::NoBrush);
-    painter.setClipRect(bounds.adjusted(0, 0, -0.5, -0.5));
-
-    painter.fillRect(bounds, QColor(0, 0, 0, 220));
-
-    if (!m_frame.isNull()) {
-        QSize targetSize = bounds.size().toSize();
-        if (!targetSize.isEmpty()) {
-            // Use FastTransformation for responsive scrubbing
-            QPixmap scaled = m_frame.scaled(targetSize, Qt::KeepAspectRatio, Qt::FastTransformation);
-            const qreal x = bounds.left() + (bounds.width() - scaled.width()) / 2.0;
-            const qreal y = bounds.top() + (bounds.height() - scaled.height()) / 2.0;
-            painter.drawPixmap(QPointF(x, y), scaled);
-
-            // Draw vertical scrubbing line on top of the frame
-            const qreal lineX = x + scaled.width() * m_progress;
-            const qreal lineTop = y;
-            const qreal lineBottom = y + scaled.height();
-
-            // Draw the main line (bright blue)
-            painter.setPen(QPen(QColor(88, 166, 255, 255), 2.0));
-            painter.drawLine(QPointF(lineX, lineTop), QPointF(lineX, lineBottom));
-
-            // Draw a subtle shadow line for better visibility
-            painter.setPen(QPen(QColor(0, 0, 0, 120), 1.0));
-            painter.drawLine(QPointF(lineX + 1, lineTop), QPointF(lineX + 1, lineBottom));
-        }
-    } else {
-        painter.setPen(QPen(QColor(80, 80, 80, 160), 1.0));
-        painter.drawRoundedRect(bounds.adjusted(1, 1, -1, -1), 6, 6);
-        painter.setPen(Qt::NoPen);
-    }
-
-    // Text and timeline display removed - keeping only the vertical line
+    // Draw progress bar background
+    painter.fillRect(bounds, QColor(0, 0, 0, 120));
+    
+    // Draw progress fill
+    QRectF progressRect(bounds.left(), bounds.top(), bounds.width() * m_progress, bounds.height());
+    painter.fillRect(progressRect, QColor(88, 166, 255, 200));
+    
+    // Draw position marker line
+    const qreal lineX = bounds.left() + bounds.width() * m_progress;
+    painter.setPen(QPen(QColor(255, 255, 255, 255), 2.0));
+    painter.drawLine(QPointF(lineX, bounds.top()), QPointF(lineX, bounds.bottom()));
 }
 
 // GridScrubController implementation
@@ -146,28 +98,43 @@ GridScrubController::GridScrubController(QAbstractItemView *view,
     LivePreviewManager &previewMgr = LivePreviewManager::instance();
     connect(&previewMgr, &LivePreviewManager::frameReady, this,
             [this](const QString &path, qreal position, QSize, const QPixmap &pixmap) {
-        if (path != m_currentPath || !m_overlay) {
+        if (path != m_currentPath || !m_view) {
             return;
         }
+        
+        // Only accept frames that match the most recently requested position
+        // This prevents older/stale frame requests from overwriting newer ones
+        // Use a small tolerance for floating point comparison
+        constexpr qreal kPositionTolerance = 0.001;
+        if (std::abs(position - m_requestedPosition) > kPositionTolerance) {
+            // This frame is for an old position request, ignore it
+            return;
+        }
+        
         m_loadingFrame = false;
         m_position = position;
         m_positions[m_currentPath] = position;
-        m_overlay->setProgress(m_position);
-        m_overlay->setFrame(pixmap);
-        if (QApplication::keyboardModifiers().testFlag(Qt::ControlModifier) || !qFuzzyIsNull(m_position)) {
-            m_overlay->setHintText(QStringLiteral("%1%").arg(qRound(m_position * 100.0)));
-        } else {
-            m_overlay->clearHintText();
+        
+        // Update the registry with the new frame - delegate will draw it
+        ScrubFrameRegistry::instance().setScrubFrame(m_view, m_currentIndex, pixmap, m_position);
+        
+        // Update overlay progress indicator
+        if (m_overlay) {
+            m_overlay->setProgress(m_position);
+            m_overlay->setLoading(false);
         }
     });
     connect(&previewMgr, &LivePreviewManager::frameFailed, this,
             [this](const QString &path, const QString &error) {
-        if (path != m_currentPath || !m_overlay) {
+        Q_UNUSED(error);
+        if (path != m_currentPath || !m_view) {
             return;
         }
         m_loadingFrame = false;
-        m_overlay->clearFrame();
-        m_overlay->setHintText(error);
+        if (m_overlay) {
+            m_overlay->setLoading(false);
+        }
+        ScrubFrameRegistry::instance().setLoading(m_view, false);
     });
 }
 
@@ -360,8 +327,7 @@ void GridScrubController::setCurrentIndex(const QModelIndex &idx)
     endScrub();
     if (m_overlay) {
         m_overlay->setProgress(m_position);
-        m_overlay->clearHintText();
-        m_overlay->clearFrame();
+        m_overlay->setLoading(false);
     }
     if (QApplication::keyboardModifiers().testFlag(Qt::ControlModifier)) {
         m_lastMouseX = m_view->viewport()->mapFromGlobal(QCursor::pos()).x();
@@ -390,23 +356,22 @@ void GridScrubController::requestPreview()
     QSize targetSize = currentTargetSize();
     if (m_overlay) {
         m_overlay->setProgress(m_position);
-        m_overlay->setHintText(QStringLiteral("Decoding..."));
+        m_overlay->setLoading(true);
     }
+    ScrubFrameRegistry::instance().setLoading(m_view, true);
     beginScrub();
     m_loadingFrame = true;
+    
+    // Track the requested position so we can ignore stale frame responses
+    m_requestedPosition = m_position;
+    
     LivePreviewManager::instance().requestFrame(m_currentPath, targetSize, m_position);
 }
 
 void GridScrubController::showOverlay()
 {
     if (!m_overlay || !m_currentIndex.isValid()) return;
-    if (m_loadingFrame) {
-        m_overlay->setHintText(QStringLiteral("Decoding..."));
-    } else if (qFuzzyCompare(m_position, kScrubDefaultPosition) && !QApplication::keyboardModifiers().testFlag(Qt::ControlModifier)) {
-        m_overlay->clearHintText();
-    } else {
-        m_overlay->setHintText(QStringLiteral("%1%").arg(qRound(m_position * 100.0)));
-    }
+    m_overlay->setLoading(m_loadingFrame);
     updateOverlayGeometry();
     m_overlay->setProgress(m_position);
     m_overlay->show();
@@ -417,8 +382,11 @@ void GridScrubController::hideOverlay()
 {
     if (m_overlay) {
         m_overlay->hide();
-        m_overlay->clearHintText();
-        m_overlay->clearFrame();
+        m_overlay->setLoading(false);
+    }
+    // Clear the scrub frame from registry so delegate goes back to normal thumbnail
+    if (m_view) {
+        ScrubFrameRegistry::instance().clearScrubFrame(m_view);
     }
     m_loadingFrame = false;
     endScrub();
@@ -433,7 +401,11 @@ void GridScrubController::updateOverlayGeometry()
         hideOverlay();
         return;
     }
-    m_overlay->setGeometry(thumbRect.adjusted(1, 1, -1, -1));
+    // Only cover a thin strip at bottom for progress indicator
+    // This prevents the overlay from potentially interfering with delegate painting
+    const int stripHeight = 6;
+    QRect stripRect(thumbRect.left(), thumbRect.bottom() - stripHeight, thumbRect.width(), stripHeight);
+    m_overlay->setGeometry(stripRect);
 }
 
 bool GridScrubController::handleCtrlScrub(const QPoint &pos)
