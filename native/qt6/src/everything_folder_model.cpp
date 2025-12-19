@@ -22,6 +22,23 @@
 
 namespace {
 constexpr int kMaxEverythingResults = 65535;
+
+// Cached icons - standardIcon() is very expensive (shell calls on Windows)
+static QIcon& cachedDriveIcon() {
+    static QIcon icon;
+    if (icon.isNull()) icon = QApplication::style()->standardIcon(QStyle::SP_DriveHDIcon);
+    return icon;
+}
+static QIcon& cachedNetworkIcon() {
+    static QIcon icon;
+    if (icon.isNull()) icon = QApplication::style()->standardIcon(QStyle::SP_DriveNetIcon);
+    return icon;
+}
+static QIcon& cachedFolderIcon() {
+    static QIcon icon;
+    if (icon.isNull()) icon = QApplication::style()->standardIcon(QStyle::SP_DirIcon);
+    return icon;
+}
 }
 
 EverythingFolderModel::EverythingFolderModel(QObject *parent)
@@ -144,10 +161,10 @@ QVariant EverythingFolderModel::data(const QModelIndex &index, int role) const
         if (index.column() == 0) {
             bool isDrive = node->parent == m_root && node->path.contains(QLatin1Char(':'));
             bool isNetwork = node->path.startsWith(QStringLiteral("\\\\"));
-            const QStyle::StandardPixmap pix = isDrive
-                ? QStyle::SP_DriveHDIcon
-                : (isNetwork ? QStyle::SP_DriveNetIcon : QStyle::SP_DirIcon);
-            return QApplication::style()->standardIcon(pix);
+            // Use cached icons to avoid expensive shell calls on every repaint
+            if (isDrive) return cachedDriveIcon();
+            if (isNetwork) return cachedNetworkIcon();
+            return cachedFolderIcon();
         }
         break;
     case Qt::ToolTipRole:
