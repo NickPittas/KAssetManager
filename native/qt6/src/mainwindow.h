@@ -99,13 +99,6 @@ private slots:
     void onPrefetchLivePreviewsRecursive();
     void onRefreshLivePreviewsRecursive();
 
-    // Project Manager thumbnail generation
-    void onPmPrefetchThumbnailsForFolder();
-    void onPmPrefetchThumbnailsRecursive();
-    void onPmRefreshThumbnailsForFolder();
-    void onPmRefreshThumbnailsRecursive();
-    void onPmPrefetchThumbnailsForProject(bool forceRefresh = false);
-
     // Project folder operations
     void onAddProjectFolder();
     void onRefreshAssets();
@@ -145,6 +138,7 @@ private slots:
     void onPmVersionSelected(qint64 assetId, const QString &versionPath);
     void onPmVersionDropdownRequested(const QModelIndex &index, const QPoint &globalPos);
     void onPmRefresh();
+    void generateProjectThumbnails(int projectId, bool forceRefresh);
     void onPmMarkNotificationsRead();
     void onPmShowNotifications();
     void onPmNewFilesDetected(int projectId, const QStringList &newFiles);
@@ -582,7 +576,6 @@ private:
     class QSlider *pmThumbnailSizeSlider = nullptr;
     QLabel *pmSizeLabel = nullptr;
     QToolButton *pmRefreshButton = nullptr;
-    QToolButton *pmThumbGenButton = nullptr;
     QToolButton *pmShowAllVersionsButton = nullptr;
     QToolButton *pmPreviewToggleButton = nullptr;
     QToolButton *pmGroupSequencesBtn = nullptr;

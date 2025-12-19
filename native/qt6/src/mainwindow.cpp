@@ -3534,27 +3534,6 @@ void MainWindow::setupProjectManagerUi()
     connect(pmPreviewToggleButton, &QToolButton::toggled, this, &MainWindow::onPmTogglePreview);
     tb->addWidget(pmPreviewToggleButton);
     
-    // Thumbnail generation button with menu
-    pmThumbGenButton = mkTb(icoGrid(ThemeManager::instance().iconColor()), "Generate Thumbnails");
-    QMenu *pmGenMenu = new QMenu(pmThumbGenButton);
-    QAction *pmActGen = pmGenMenu->addAction("Prefetch for this folder");
-    QAction *pmActRegen = pmGenMenu->addAction("Refresh for this folder");
-    pmGenMenu->addSeparator();
-    QAction *pmActGenRec = pmGenMenu->addAction("Prefetch recursive (current folder)");
-    QAction *pmActRegenRec = pmGenMenu->addAction("Refresh recursive (current folder)");
-    pmGenMenu->addSeparator();
-    QAction *pmActGenProject = pmGenMenu->addAction("Prefetch entire project");
-    QAction *pmActRegenProject = pmGenMenu->addAction("Refresh entire project");
-    connect(pmActGen, &QAction::triggered, this, &MainWindow::onPmPrefetchThumbnailsForFolder);
-    connect(pmActRegen, &QAction::triggered, this, &MainWindow::onPmRefreshThumbnailsForFolder);
-    connect(pmActGenRec, &QAction::triggered, this, &MainWindow::onPmPrefetchThumbnailsRecursive);
-    connect(pmActRegenRec, &QAction::triggered, this, &MainWindow::onPmRefreshThumbnailsRecursive);
-    connect(pmActGenProject, &QAction::triggered, this, [this]() { onPmPrefetchThumbnailsForProject(false); });
-    connect(pmActRegenProject, &QAction::triggered, this, [this]() { onPmPrefetchThumbnailsForProject(true); });
-    pmThumbGenButton->setMenu(pmGenMenu);
-    pmThumbGenButton->setPopupMode(QToolButton::MenuButtonPopup);
-    tb->addWidget(pmThumbGenButton);
-    
     // Refresh button
     pmRefreshButton = mkTb(icoRefresh(ThemeManager::instance().iconColor()), "Refresh");
     connect(pmRefreshButton, &QToolButton::clicked, this, &MainWindow::onPmRefresh);
@@ -4433,8 +4412,24 @@ void MainWindow::onPmProjectContextMenu(const QPoint &pos)
     QModelIndex index = pmProjectsListView->indexAt(pos);
     
     if (index.isValid()) {
+        int projectId = index.data(ProjectsModel::IdRole).toInt();
+        
         menu.addAction("Rename Project", this, &MainWindow::onPmRenameProject);
         menu.addAction("Change Watch Folder...", this, &MainWindow::onPmAddWatchFolder);
+        menu.addSeparator();
+        
+        // Generate Thumbnails submenu
+        QMenu *thumbMenu = menu.addMenu("Generate Thumbnails");
+        QAction *actPrefetch = thumbMenu->addAction("Prefetch (skip cached)");
+        QAction *actRefresh = thumbMenu->addAction("Refresh (regenerate all)");
+        
+        connect(actPrefetch, &QAction::triggered, this, [this, projectId]() {
+            generateProjectThumbnails(projectId, false);
+        });
+        connect(actRefresh, &QAction::triggered, this, [this, projectId]() {
+            generateProjectThumbnails(projectId, true);
+        });
+        
         menu.addSeparator();
         menu.addAction("Re-sync Asset Folders", this, [this, index]() {
             int projectId = index.data(ProjectsModel::IdRole).toInt();
@@ -4773,206 +4768,105 @@ void MainWindow::onPmRefresh()
     }
 }
 
-void MainWindow::onPmPrefetchThumbnailsForFolder()
+void MainWindow::generateProjectThumbnails(int projectId, bool forceRefresh)
 {
-    if (!pmAssetsModel || pmCurrentProjectId <= 0) return;
-    int folderId = pmAssetsModel->folderId();
-    
-    QList<int> ids;
-    if (folderId > 0) {
-        ids = ProjectDB::instance().getAssetIdsInFolder(folderId, false);
-    } else {
-        // Root level - get assets with no folder
-        ids = ProjectDB::instance().getAssetIdsInProject(pmCurrentProjectId);
-        // Filter to only root-level assets (folderId == 0 or the project's root folder)
-    }
-    
-    if (ids.isEmpty()) {
-        statusBar()->showMessage("No assets to prefetch in this folder", 2000);
-        return;
-    }
-    
-    LivePreviewManager &previewMgr = LivePreviewManager::instance();
-    QSize targetSize = pmAssetsGridView ? pmAssetsGridView->iconSize() : QSize(180, 180);
-    if (!targetSize.isValid()) targetSize = QSize(180, 180);
-    
-    int requested = 0;
-    for (int id : ids) {
-        const QString fp = ProjectDB::instance().getAssetFilePath(id);
-        if (fp.isEmpty()) continue;
-        auto handle = previewMgr.cachedFrame(fp, targetSize);
-        if (!handle.isValid()) {
-            previewMgr.requestFrame(fp, targetSize);
-            ++requested;
-        }
-    }
-    if (requested > 0) {
-        statusBar()->showMessage(QString("Prefetching %1 thumbnails...").arg(requested), 2000);
-    } else {
-        statusBar()->showMessage("All thumbnails already cached", 2000);
-    }
-}
-
-void MainWindow::onPmPrefetchThumbnailsRecursive()
-{
-    if (!pmAssetsModel || pmCurrentProjectId <= 0) return;
-    int folderId = pmAssetsModel->folderId();
-    
-    QList<int> ids;
-    if (folderId > 0) {
-        ids = ProjectDB::instance().getAssetIdsInFolder(folderId, true);
-    } else {
-        ids = ProjectDB::instance().getAssetIdsInProject(pmCurrentProjectId);
-    }
-    
-    if (ids.isEmpty()) {
-        statusBar()->showMessage("No assets to prefetch", 2000);
-        return;
-    }
-    
-    LivePreviewManager &previewMgr = LivePreviewManager::instance();
-    QSize targetSize = pmAssetsGridView ? pmAssetsGridView->iconSize() : QSize(180, 180);
-    if (!targetSize.isValid()) targetSize = QSize(180, 180);
-    
-    int requested = 0;
-    for (int id : ids) {
-        const QString fp = ProjectDB::instance().getAssetFilePath(id);
-        if (fp.isEmpty()) continue;
-        auto handle = previewMgr.cachedFrame(fp, targetSize);
-        if (!handle.isValid()) {
-            previewMgr.requestFrame(fp, targetSize);
-            ++requested;
-        }
-    }
-    if (requested > 0) {
-        statusBar()->showMessage(QString("Prefetching %1 thumbnails (recursive)...").arg(requested), 2000);
-    } else {
-        statusBar()->showMessage("All thumbnails already cached", 2000);
-    }
-}
-
-void MainWindow::onPmRefreshThumbnailsForFolder()
-{
-    if (!pmAssetsModel || pmCurrentProjectId <= 0) return;
-    int folderId = pmAssetsModel->folderId();
-    
-    QList<int> ids;
-    if (folderId > 0) {
-        ids = ProjectDB::instance().getAssetIdsInFolder(folderId, false);
-    } else {
-        ids = ProjectDB::instance().getAssetIdsInProject(pmCurrentProjectId);
-    }
-    
-    if (ids.isEmpty()) {
-        statusBar()->showMessage("No assets to refresh in this folder", 2000);
-        return;
-    }
-    
-    LivePreviewManager &previewMgr = LivePreviewManager::instance();
-    ThumbnailCacheManager &cacheManager = ThumbnailCacheManager::instance();
-    QSize targetSize = pmAssetsGridView ? pmAssetsGridView->iconSize() : QSize(180, 180);
-    if (!targetSize.isValid()) targetSize = QSize(180, 180);
-    
-    int requested = 0;
-    for (int id : ids) {
-        const QString fp = ProjectDB::instance().getAssetFilePath(id);
-        if (fp.isEmpty()) continue;
-        // Clear from both caches
-        previewMgr.invalidate(fp);
-        cacheManager.clearCacheForFile(fp);
-        // Request new
-        previewMgr.requestFrame(fp, targetSize);
-        ++requested;
-    }
-    if (requested > 0) {
-        statusBar()->showMessage(QString("Refreshing %1 thumbnails...").arg(requested), 2000);
-    }
-}
-
-void MainWindow::onPmRefreshThumbnailsRecursive()
-{
-    if (!pmAssetsModel || pmCurrentProjectId <= 0) return;
-    int folderId = pmAssetsModel->folderId();
-    
-    QList<int> ids;
-    if (folderId > 0) {
-        ids = ProjectDB::instance().getAssetIdsInFolder(folderId, true);
-    } else {
-        ids = ProjectDB::instance().getAssetIdsInProject(pmCurrentProjectId);
-    }
-    
-    if (ids.isEmpty()) {
-        statusBar()->showMessage("No assets to refresh", 2000);
-        return;
-    }
-    
-    LivePreviewManager &previewMgr = LivePreviewManager::instance();
-    ThumbnailCacheManager &cacheManager = ThumbnailCacheManager::instance();
-    QSize targetSize = pmAssetsGridView ? pmAssetsGridView->iconSize() : QSize(180, 180);
-    if (!targetSize.isValid()) targetSize = QSize(180, 180);
-    
-    int requested = 0;
-    for (int id : ids) {
-        const QString fp = ProjectDB::instance().getAssetFilePath(id);
-        if (fp.isEmpty()) continue;
-        // Clear from both caches
-        previewMgr.invalidate(fp);
-        cacheManager.clearCacheForFile(fp);
-        // Request new
-        previewMgr.requestFrame(fp, targetSize);
-        ++requested;
-    }
-    if (requested > 0) {
-        statusBar()->showMessage(QString("Refreshing %1 thumbnails (recursive)...").arg(requested), 2000);
-    }
-}
-
-void MainWindow::onPmPrefetchThumbnailsForProject(bool forceRefresh)
-{
-    if (pmCurrentProjectId <= 0) {
+    if (projectId <= 0) {
         statusBar()->showMessage("No project selected", 2000);
         return;
     }
     
-    QList<int> ids = ProjectDB::instance().getAssetIdsInProject(pmCurrentProjectId);
+    // Get all assets in the project
+    QList<int> assetIds = ProjectDB::instance().getAssetIdsInProject(projectId);
     
-    if (ids.isEmpty()) {
+    if (assetIds.isEmpty()) {
         statusBar()->showMessage("No assets in project", 2000);
         return;
     }
     
-    LivePreviewManager &previewMgr = LivePreviewManager::instance();
+    // Build task list for ThumbnailGeneratorWorker
     ThumbnailCacheManager &cacheManager = ThumbnailCacheManager::instance();
-    QSize targetSize = pmAssetsGridView ? pmAssetsGridView->iconSize() : QSize(180, 180);
-    if (!targetSize.isValid()) targetSize = QSize(180, 180);
+    const QSize thumbnailSize = cacheManager.getThumbnailSize();
     
-    int requested = 0;
-    for (int id : ids) {
-        const QString fp = ProjectDB::instance().getAssetFilePath(id);
-        if (fp.isEmpty()) continue;
+    static const QSet<QString> videoExts = {
+        "mov", "qt", "mp4", "m4v", "mxf", "avi", "mkv", "webm",
+        "mpg", "mpeg", "m2v", "m2ts", "mts", "wmv", "asf", "flv"
+    };
+    
+    QVector<ThumbnailGeneratorWorker::Task> tasks;
+    int skipped = 0;
+    
+    for (int assetId : assetIds) {
+        QString filePath = ProjectDB::instance().getAssetFilePath(assetId);
+        if (filePath.isEmpty()) continue;
         
-        if (forceRefresh) {
-            // Clear from both caches for refresh
-            previewMgr.invalidate(fp);
-            cacheManager.clearCacheForFile(fp);
-            previewMgr.requestFrame(fp, targetSize);
-            ++requested;
-        } else {
-            // Only request if not cached
-            auto handle = previewMgr.cachedFrame(fp, targetSize);
-            if (!handle.isValid()) {
-                previewMgr.requestFrame(fp, targetSize);
-                ++requested;
-            }
+        // Check if cached (skip if not forcing refresh)
+        if (!forceRefresh && cacheManager.isCached(filePath, thumbnailSize)) {
+            ++skipped;
+            continue;
         }
+        
+        // Clear cache if refreshing
+        if (forceRefresh) {
+            cacheManager.clearCacheForFile(filePath);
+            LivePreviewManager::instance().invalidate(filePath);
+        }
+        
+        ThumbnailGeneratorWorker::Task task;
+        task.filePath = filePath;
+        
+        // Determine if it's a video from extension
+        QString ext = QFileInfo(filePath).suffix().toLower();
+        if (videoExts.contains(ext)) {
+            task.isVideo = true;
+            task.isSequence = false;
+        } else {
+            // For images, we'll treat them as single files
+            // Sequences are harder to detect here without model data
+            task.isVideo = false;
+            task.isSequence = false;
+        }
+        
+        tasks.append(task);
     }
     
-    QString action = forceRefresh ? "Refreshing" : "Prefetching";
-    if (requested > 0) {
-        statusBar()->showMessage(QString("%1 %2 thumbnails for entire project...").arg(action).arg(requested), 3000);
-    } else {
-        statusBar()->showMessage("All project thumbnails already cached", 2000);
+    if (tasks.isEmpty()) {
+        statusBar()->showMessage(QString("All %1 thumbnails already cached").arg(skipped), 2000);
+        return;
     }
+    
+    // Create worker and thread
+    auto *worker = new ThumbnailGeneratorWorker();
+    auto *thread = new QThread(this);
+    
+    worker->moveToThread(thread);
+    connect(thread, &QThread::finished, worker, &QObject::deleteLater);
+    connect(this, &QObject::destroyed, thread, &QThread::quit);
+    
+    QString action = forceRefresh ? "Refreshing" : "Generating";
+    int totalTasks = tasks.size();
+    
+    connect(worker, &ThumbnailGeneratorWorker::queueStarted, this, [this, action, totalTasks](int) {
+        statusBar()->showMessage(QString("%1 thumbnails for %2 assets...").arg(action).arg(totalTasks));
+    });
+    
+    connect(worker, &ThumbnailGeneratorWorker::queueFinished, this, [this, thread, action, totalTasks](bool) {
+        if (pmAssetsGridView && pmAssetsGridView->viewport()) pmAssetsGridView->viewport()->update();
+        if (pmAssetsTableView && pmAssetsTableView->viewport()) pmAssetsTableView->viewport()->update();
+        statusBar()->showMessage(QString("%1 complete: %2 thumbnails processed").arg(action).arg(totalTasks), 5000);
+        thread->quit();
+    });
+    
+    connect(worker, &ThumbnailGeneratorWorker::logLine, this, [](const QString &line) {
+        qDebug() << "[ThumbnailGeneratorWorker]" << line;
+    });
+    
+    thread->start(QThread::LowPriority);
+    
+    QMetaObject::invokeMethod(worker, [worker, tasks, thumbnailSize]() {
+        worker->start(tasks, thumbnailSize);
+    }, Qt::QueuedConnection);
+    
+    statusBar()->showMessage(QString("%1 %2 thumbnails (skipped %3 cached)...").arg(action).arg(tasks.size()).arg(skipped), 3000);
 }
 
 void MainWindow::onPmMarkNotificationsRead()
