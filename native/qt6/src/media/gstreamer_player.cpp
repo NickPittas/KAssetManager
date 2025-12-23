@@ -265,8 +265,18 @@ private:
 };
 
 // Fast frame extraction using cached pipeline
+// DISABLED: Pipeline cache causes crashes when rapidly creating/destroying pipelines
+// for many videos. Return null to force fallback to one-shot extraction which is slower
+// but more stable.
 QImage extractFrameCached(const QString& filePath, const QSize& targetSize, qint64 positionMs)
 {
+    Q_UNUSED(filePath);
+    Q_UNUSED(targetSize);
+    Q_UNUSED(positionMs);
+    // Return null image to force fallback to stable one-shot extraction
+    return QImage();
+
+#if 0 // Original implementation disabled
     // Wrap entire GStreamer operation in try-catch to prevent crashes from
     // corrupted video files or GStreamer internal errors
     try {
@@ -375,6 +385,7 @@ QImage extractFrameCached(const QString& filePath, const QSize& targetSize, qint
         qWarning() << "[PipelineCache] Unknown exception extracting frame from" << filePath;
         return QImage();
     }
+#endif // disabled original implementation
 }
 
 } // anonymous namespace
