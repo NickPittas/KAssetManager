@@ -1,6 +1,7 @@
 #include "oiio_image_loader.h"
 #include <QFileInfo>
 #include <cmath>
+#include <stdexcept>
 
 
 
@@ -42,32 +43,54 @@ bool OIIOImageLoader::isOIIOSupported(const QString& filePath) {
 
 QImage OIIOImageLoader::loadImage(const QString& filePath, int maxWidth, int maxHeight, ColorSpace colorSpace) {
 #if defined(HAVE_OPENIMAGEIO) && HAVE_OPENIMAGEIO
-    qDebug() << "[OIIOImageLoader] Loading image:" << filePath;
-    qDebug() << "[OIIOImageLoader] Target size:" << maxWidth << "x" << maxHeight;
+    // Wrap entire OIIO operation in try-catch to prevent crashes from corrupted files
+    // or OIIO internal errors from propagating and terminating the application
+    try {
+        qDebug() << "[OIIOImageLoader] Loading image:" << filePath;
+        qDebug() << "[OIIOImageLoader] Target size:" << maxWidth << "x" << maxHeight;
 
-    // Use ImageBuf to manage the input resource (RAII) and avoid manual ImageInput handling
-    ImageBuf buf(filePath.toStdString());
-    if (!buf.read(0, 0, true, TypeDesc::FLOAT)) {
-        QString errorMsg = QString::fromStdString(buf.geterror());
-        qWarning() << "[OIIOImageLoader] Failed to read image data:" << errorMsg;
-        qWarning() << "[OIIOImageLoader] File:" << filePath;
-        return QImage();
-    }
+        // Validate file exists before attempting to load
+        if (filePath.isEmpty()) {
+            qWarning() << "[OIIOImageLoader] Empty file path";
+            return QImage();
+        }
 
-    const ImageSpec &spec = buf.spec();
-    int width = spec.width;
-    int height = spec.height;
-    int channels = spec.nchannels;
+        // Use ImageBuf to manage the input resource (RAII) and avoid manual ImageInput handling
+        ImageBuf buf(filePath.toStdString());
+        if (!buf.read(0, 0, true, TypeDesc::FLOAT)) {
+            QString errorMsg = QString::fromStdString(buf.geterror());
+            qWarning() << "[OIIOImageLoader] Failed to read image data:" << errorMsg;
+            qWarning() << "[OIIOImageLoader] File:" << filePath;
+            return QImage();
+        }
 
-    qDebug() << "[OIIOImageLoader] Image info:" << width << "x" << height << "channels:" << channels;
-    qDebug() << "[OIIOImageLoader] Format:" << QString::fromStdString(spec.format.c_str());
+        const ImageSpec &spec = buf.spec();
+        int width = spec.width;
+        int height = spec.height;
+        int channels = spec.nchannels;
 
-    // Check if we need to resize for thumbnail
-    bool needsResize = false;
-    int targetWidth = width;
-    int targetHeight = height;
+        // Validate dimensions to prevent crashes from corrupted files
+        if (width <= 0 || height <= 0 || channels <= 0) {
+            qWarning() << "[OIIOImageLoader] Invalid image dimensions:" << width << "x" << height << "channels:" << channels;
+            return QImage();
+        }
 
-    if (maxWidth > 0 && maxHeight > 0) {
+        // Sanity check for extremely large images that could cause memory issues
+        constexpr qint64 kMaxPixels = 100000000; // 100 megapixels
+        if (static_cast<qint64>(width) * height > kMaxPixels) {
+            qWarning() << "[OIIOImageLoader] Image too large:" << width << "x" << height;
+            return QImage();
+        }
+
+        qDebug() << "[OIIOImageLoader] Image info:" << width << "x" << height << "channels:" << channels;
+        qDebug() << "[OIIOImageLoader] Format:" << QString::fromStdString(spec.format.c_str());
+
+        // Check if we need to resize for thumbnail
+        bool needsResize = false;
+        int targetWidth = width;
+        int targetHeight = height;
+
+        if (maxWidth > 0 && maxHeight > 0) {
         if (width > maxWidth || height > maxHeight) {
             needsResize = true;
             float scale = std::min(float(maxWidth) / width, float(maxHeight) / height);
@@ -168,6 +191,13 @@ QImage OIIOImageLoader::loadImage(const QString& filePath, int maxWidth, int max
 
         qDebug() << "[OIIOImageLoader] Successfully loaded LDR image";
         return image;
+    }
+    } catch (const std::exception& e) {
+        qWarning() << "[OIIOImageLoader] Exception loading image" << filePath << ":" << e.what();
+        return QImage();
+    } catch (...) {
+        qWarning() << "[OIIOImageLoader] Unknown exception loading image" << filePath;
+        return QImage();
     }
 #else
     Q_UNUSED(filePath);

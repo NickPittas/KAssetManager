@@ -1,14 +1,14 @@
 ## KAsset Manager - AI agent guide
 
-Native Windows asset manager built with Qt 6 (C++20). Keep changes minimal and aligned with existing patterns.
+Native Windows asset manager built with Qt 6 (C++20). Sources in `native/qt6/src/`. Keep changes minimal and aligned with existing patterns.
 
 ### Architecture
 - **UI thread only**: Qt Widgets (`mainwindow.*`, `*_model*.{h,cpp}`). Never block with I/O or heavy CPU work.
 - **Background work**: `QtConcurrent::run` / QThreadPool. Return results via queued signals (`Qt::QueuedConnection`).
-  - `live_preview_manager.*` - decodes off-UI via dedicated `m_decodePool`, uses `QCache` (LRU ~512MB), delivers via signals
+  - `live_preview_manager.*` - decodes off-UI via dedicated `m_decodePool`, uses `QCache` (LRU ~512MB), delivers via signals. Call `invalidate(filePath)` when assets change.
   - `importer.*` - batches DB inserts in transactions, emits progress (currently main-thread DB)
   - `file_ops.*` - `FileOpsQueue` singleton runs copy/move/delete in background with progress signals
-- **DB**: SQLite via QtSql (`db.{h,cpp}`). Single-threaded connection - never share QSqlDatabase/QSqlQuery across threads. Use transactions for bulk ops; prefer prepared statements (see `assets_model.cpp`).
+- **DB**: SQLite via QtSql (`db.{h,cpp}`). Single-threaded connection - never share QSqlDatabase/QSqlQuery across threads. Use transactions for bulk ops; prefer prepared statements. `IAssetDatabase` interface in `i_asset_database.h` for testability.
 - **Logging**: Single handler in `main.cpp` -> `LogManager`. Use `qDebug/qWarning/qCritical`; don't add handlers.
 - **Data path**: `QStandardPaths::AppDataLocation` (`%AppData%/KAsset/...`). Legacy migration in `main.cpp`.
 
@@ -20,7 +20,12 @@ Native Windows asset manager built with Qt 6 (C++20). Keep changes minimal and a
 | Conversion only | FFmpeg | `HAVE_FFMPEG` |
 | PDF viewing | Qt PDF | `HAVE_QT_PDF[_WIDGETS]` |
 
-Guard optional features: `#if defined(HAVE_...) && HAVE_...`
+Guard optional features with both defined check and value:
+```cpp
+#if defined(HAVE_OPENIMAGEIO) && HAVE_OPENIMAGEIO
+    // OpenImageIO-specific code
+#endif
+```
 
 ### Build (Windows)
 ```powershell
@@ -39,7 +44,7 @@ scripts/build-installer.ps1
 ### Tests
 - Framework: QtTest (`native/qt6/tests/`)
 - Pattern: `QTemporaryDir` for test DB/files, `QVERIFY`/`QCOMPARE` assertions, `QSignalSpy` for async
-- Run: after build, executables in `native/qt6/build/<gen>/install_run/bin`; use `ctest`
+- Run: `ctest --test-dir native/qt6/build/ninja --output-on-failure` after build
 - Some tests compile with `HAVE_OPENIMAGEIO=0`/`HAVE_FFMPEG=0` to skip heavy deps
 
 ### Key patterns

@@ -16,6 +16,7 @@
 #include <QDir>
 #include <algorithm>
 #include <cmath>
+#include <stdexcept>
 
 #include <memory>
 
@@ -462,17 +463,29 @@ void LivePreviewManager::startDecodeTask(const Request& request, const QString& 
         QString error;
         QImage image;
 
-        const bool treatAsSequence = fromSequenceQueue || (seqDetectionEnabled && isImageSequence(request.filePath));
-        if (treatAsSequence) {
-            image = loadSequenceFrame(request, error);
-        } else {
-            QFileInfo info(request.filePath);
-            const QString suffix = info.suffix().toLower();
-            if (isImageExtension(suffix) || isHdrExtension(suffix)) {
-                image = loadImageFrame(request, error);
+        // Wrap decode operations in try-catch to prevent crashes from OIIO/GStreamer
+        // propagating through the thread pool and terminating the application
+        try {
+            const bool treatAsSequence = fromSequenceQueue || (seqDetectionEnabled && isImageSequence(request.filePath));
+            if (treatAsSequence) {
+                image = loadSequenceFrame(request, error);
             } else {
-                image = loadVideoFrame(request, error);
+                QFileInfo info(request.filePath);
+                const QString suffix = info.suffix().toLower();
+                if (isImageExtension(suffix) || isHdrExtension(suffix)) {
+                    image = loadImageFrame(request, error);
+                } else {
+                    image = loadVideoFrame(request, error);
+                }
             }
+        } catch (const std::exception& e) {
+            qWarning() << "[LivePreview] Exception decoding" << request.filePath << ":" << e.what();
+            error = QString("Decode exception: %1").arg(e.what());
+            image = QImage(); // Ensure null
+        } catch (...) {
+            qWarning() << "[LivePreview] Unknown exception decoding" << request.filePath;
+            error = QStringLiteral("Unknown decode exception");
+            image = QImage(); // Ensure null
         }
         
         // Check again after decode - if cancelled, don't bother posting result

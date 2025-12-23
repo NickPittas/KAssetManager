@@ -10,6 +10,7 @@
 #include <QDir>
 #include <QtConcurrent>
 #include <QMetaObject>
+#include <stdexcept>
 
 ThumbnailGeneratorWorker::ThumbnailGeneratorWorker(QObject* parent)
     : QObject(parent)
@@ -95,12 +96,25 @@ void ThumbnailGeneratorWorker::processFile(int index, const Task& task)
 
     bool success = false;
 
-    if (task.isSequence) {
-        success = generateSequenceThumbnails(index, task, m_thumbnailSize);
-    } else if (task.isVideo) {
-        success = generateVideoThumbnails(index, task.filePath, m_thumbnailSize);
-    } else {
-        success = generateImageThumbnail(index, task.filePath, m_thumbnailSize);
+    // Wrap thumbnail generation in try-catch to prevent crashes from corrupted files
+    try {
+        if (task.isSequence) {
+            success = generateSequenceThumbnails(index, task, m_thumbnailSize);
+        } else if (task.isVideo) {
+            success = generateVideoThumbnails(index, task.filePath, m_thumbnailSize);
+        } else {
+            success = generateImageThumbnail(index, task.filePath, m_thumbnailSize);
+        }
+    } catch (const std::exception& e) {
+        QMetaObject::invokeMethod(this, [this, task, e]() {
+            emit logLine(QString("EXCEPTION: %1 - %2").arg(QFileInfo(task.filePath).fileName()).arg(e.what()));
+        }, Qt::QueuedConnection);
+        success = false;
+    } catch (...) {
+        QMetaObject::invokeMethod(this, [this, task]() {
+            emit logLine(QString("EXCEPTION: %1 - Unknown error").arg(QFileInfo(task.filePath).fileName()));
+        }, Qt::QueuedConnection);
+        success = false;
     }
 
     if (success) {
