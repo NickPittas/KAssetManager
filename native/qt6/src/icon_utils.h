@@ -28,6 +28,7 @@ QIcon icoUp(const QColor& color = QColor(255,255,255));
 QIcon icoRefresh(const QColor& color = QColor(255,255,255));
 QIcon icoHide(const QColor& color = QColor(255,255,255));
 QIcon icoSearch(const QColor& color = QColor(255,255,255));
+QIcon icoDualPane(const QColor& color = QColor(255,255,255));
 
 // Media icons
 QIcon icoMediaPlay(const QColor& color = QColor(255,255,255));

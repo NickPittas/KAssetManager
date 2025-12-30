@@ -652,7 +652,7 @@ public:
     void run() override;
 
 signals:
-    void frameLoaded(int frameIndex, QPixmap pixmap);
+    void frameLoaded(int frameIndex, QImage image);
 
 private:
     QPointer<SequenceFrameCache> m_cache;

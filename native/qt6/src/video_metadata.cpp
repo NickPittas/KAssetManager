@@ -73,80 +73,80 @@ bool probeVideoFile(const QString& filePath, VideoMetadata& out, QString* errorM
             }
 
             // Try to derive profile name for common professional codecs
-            if (vp->profile != FF_PROFILE_UNKNOWN) {
+            if (vp->profile != AV_PROFILE_UNKNOWN) {
                 switch (vp->codec_id) {
                     case AV_CODEC_ID_H264:
                         switch (vp->profile) {
-                            case FF_PROFILE_H264_BASELINE: out.videoProfile = "Baseline"; break;
-                            case FF_PROFILE_H264_MAIN:     out.videoProfile = "Main"; break;
-                            case FF_PROFILE_H264_HIGH:     out.videoProfile = "High"; break;
-                            case FF_PROFILE_H264_HIGH_10:  out.videoProfile = "High10"; break;
-                            case FF_PROFILE_H264_HIGH_422: out.videoProfile = "High 4:2:2"; break;
-                            case FF_PROFILE_H264_HIGH_444: out.videoProfile = "High 4:4:4"; break;
+                            case AV_PROFILE_H264_BASELINE: out.videoProfile = "Baseline"; break;
+                            case AV_PROFILE_H264_MAIN:     out.videoProfile = "Main"; break;
+                            case AV_PROFILE_H264_HIGH:     out.videoProfile = "High"; break;
+                            case AV_PROFILE_H264_HIGH_10:  out.videoProfile = "High10"; break;
+                            case AV_PROFILE_H264_HIGH_422: out.videoProfile = "High 4:2:2"; break;
+                            case AV_PROFILE_H264_HIGH_444_PREDICTIVE: out.videoProfile = "High 4:4:4"; break;
                             default: break;
                         }
                         break;
                     case AV_CODEC_ID_HEVC:
                         switch (vp->profile) {
-                            case FF_PROFILE_HEVC_MAIN:    out.videoProfile = "Main"; break;
-                            case FF_PROFILE_HEVC_MAIN_10: out.videoProfile = "Main 10"; break;
-                            case FF_PROFILE_HEVC_REXT:    out.videoProfile = "RExt"; break;
+                            case AV_PROFILE_HEVC_MAIN:    out.videoProfile = "Main"; break;
+                            case AV_PROFILE_HEVC_MAIN_10: out.videoProfile = "Main 10"; break;
+                            case AV_PROFILE_HEVC_REXT:    out.videoProfile = "RExt"; break;
                             default: break;
                         }
                         break;
                     case AV_CODEC_ID_PRORES:
                         switch (vp->profile) {
-                            case FF_PROFILE_PRORES_PROXY:    out.videoProfile = "Proxy"; break;
-                            case FF_PROFILE_PRORES_LT:       out.videoProfile = "LT"; break;
-                            case FF_PROFILE_PRORES_STANDARD: out.videoProfile = "422"; break;
-                            case FF_PROFILE_PRORES_HQ:       out.videoProfile = "422 HQ"; break;
-                            case FF_PROFILE_PRORES_4444:     out.videoProfile = "4444"; break;
-                            case FF_PROFILE_PRORES_XQ:       out.videoProfile = "4444 XQ"; break;
+                            case AV_PROFILE_PRORES_PROXY:    out.videoProfile = "Proxy"; break;
+                            case AV_PROFILE_PRORES_LT:       out.videoProfile = "LT"; break;
+                            case AV_PROFILE_PRORES_STANDARD: out.videoProfile = "422"; break;
+                            case AV_PROFILE_PRORES_HQ:       out.videoProfile = "422 HQ"; break;
+                            case AV_PROFILE_PRORES_4444:     out.videoProfile = "4444"; break;
+                            case AV_PROFILE_PRORES_XQ:       out.videoProfile = "4444 XQ"; break;
                             default: break;
                         }
                         break;
                     case AV_CODEC_ID_DNXHD:
                         switch (vp->profile) {
-                            case FF_PROFILE_DNXHD:       out.videoProfile = "DNxHD"; break;
-                            case FF_PROFILE_DNXHR_LB:    out.videoProfile = "DNxHR LB"; break;
-                            case FF_PROFILE_DNXHR_SQ:    out.videoProfile = "DNxHR SQ"; break;
-                            case FF_PROFILE_DNXHR_HQ:    out.videoProfile = "DNxHR HQ"; break;
-                            case FF_PROFILE_DNXHR_HQX:   out.videoProfile = "DNxHR HQX"; break;
-                            case FF_PROFILE_DNXHR_444:   out.videoProfile = "DNxHR 444"; break;
+                            case AV_PROFILE_DNXHD:       out.videoProfile = "DNxHD"; break;
+                            case AV_PROFILE_DNXHR_LB:    out.videoProfile = "DNxHR LB"; break;
+                            case AV_PROFILE_DNXHR_SQ:    out.videoProfile = "DNxHR SQ"; break;
+                            case AV_PROFILE_DNXHR_HQ:    out.videoProfile = "DNxHR HQ"; break;
+                            case AV_PROFILE_DNXHR_HQX:   out.videoProfile = "DNxHR HQX"; break;
+                            case AV_PROFILE_DNXHR_444:   out.videoProfile = "DNxHR 444"; break;
                             default: break;
                         }
                         break;
                     case AV_CODEC_ID_MPEG2VIDEO:
                         switch (vp->profile) {
-                            case FF_PROFILE_MPEG2_SIMPLE: out.videoProfile = "Simple"; break;
-                            case FF_PROFILE_MPEG2_MAIN:   out.videoProfile = "Main"; break;
-                            case FF_PROFILE_MPEG2_HIGH:   out.videoProfile = "High"; break;
-                            case FF_PROFILE_MPEG2_422:    out.videoProfile = "4:2:2"; break;
+                            case AV_PROFILE_MPEG2_SIMPLE: out.videoProfile = "Simple"; break;
+                            case AV_PROFILE_MPEG2_MAIN:   out.videoProfile = "Main"; break;
+                            case AV_PROFILE_MPEG2_HIGH:   out.videoProfile = "High"; break;
+                            case AV_PROFILE_MPEG2_422:    out.videoProfile = "4:2:2"; break;
                             default: break;
                         }
                         break;
                     case AV_CODEC_ID_MPEG4:
                         switch (vp->profile) {
-                            case FF_PROFILE_MPEG4_SIMPLE:          out.videoProfile = "Simple"; break;
-                            case FF_PROFILE_MPEG4_MAIN:            out.videoProfile = "Main"; break;
-                            case FF_PROFILE_MPEG4_ADVANCED_SIMPLE: out.videoProfile = "Advanced Simple"; break;
+                            case AV_PROFILE_MPEG4_SIMPLE:          out.videoProfile = "Simple"; break;
+                            case AV_PROFILE_MPEG4_MAIN:            out.videoProfile = "Main"; break;
+                            case AV_PROFILE_MPEG4_ADVANCED_SIMPLE: out.videoProfile = "Advanced Simple"; break;
                             default: break;
                         }
                         break;
                     case AV_CODEC_ID_VP9:
                         switch (vp->profile) {
-                            case FF_PROFILE_VP9_0: out.videoProfile = "Profile 0"; break;
-                            case FF_PROFILE_VP9_1: out.videoProfile = "Profile 1"; break;
-                            case FF_PROFILE_VP9_2: out.videoProfile = "Profile 2"; break;
-                            case FF_PROFILE_VP9_3: out.videoProfile = "Profile 3"; break;
+                            case AV_PROFILE_VP9_0: out.videoProfile = "Profile 0"; break;
+                            case AV_PROFILE_VP9_1: out.videoProfile = "Profile 1"; break;
+                            case AV_PROFILE_VP9_2: out.videoProfile = "Profile 2"; break;
+                            case AV_PROFILE_VP9_3: out.videoProfile = "Profile 3"; break;
                             default: break;
                         }
                         break;
                     case AV_CODEC_ID_AV1:
                         switch (vp->profile) {
-                            case FF_PROFILE_AV1_MAIN:         out.videoProfile = "Main"; break;
-                            case FF_PROFILE_AV1_HIGH:         out.videoProfile = "High"; break;
-                            case FF_PROFILE_AV1_PROFESSIONAL: out.videoProfile = "Professional"; break;
+                            case AV_PROFILE_AV1_MAIN:         out.videoProfile = "Main"; break;
+                            case AV_PROFILE_AV1_HIGH:         out.videoProfile = "High"; break;
+                            case AV_PROFILE_AV1_PROFESSIONAL: out.videoProfile = "Professional"; break;
                             default: break;
                         }
                         break;

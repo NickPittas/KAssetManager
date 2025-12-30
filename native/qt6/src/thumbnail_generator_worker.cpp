@@ -5,7 +5,6 @@
 #include <QFileInfo>
 #include <QImage>
 #include <QImageReader>
-#include <QPixmap>
 #include <QDebug>
 #include <QDir>
 #include <QtConcurrent>
@@ -201,11 +200,10 @@ bool ThumbnailGeneratorWorker::generateImageThumbnail(int index, const QString& 
     if (!size.isEmpty() && (image.width() > size.width() || image.height() > size.height())) {
         scaled = image.scaled(size, Qt::KeepAspectRatio, Qt::SmoothTransformation);
     }
-    QPixmap pixmap = QPixmap::fromImage(scaled);
 
     // Store in cache
     ThumbnailCacheManager& cache = ThumbnailCacheManager::instance();
-    if (!cache.storeThumbnail(filePath, size, 0.0, pixmap)) {
+    if (!cache.storeThumbnail(filePath, size, 0.0, scaled)) {
         emit logLine(QString("  ERROR: Failed to store thumbnail"));
         return false;
     }
@@ -254,8 +252,7 @@ bool ThumbnailGeneratorWorker::generateVideoThumbnails(int index, const QString&
             continue;
         }
 
-        QPixmap pixmap = QPixmap::fromImage(thumbnail);
-        if (!cache.storeThumbnail(filePath, size, pos, pixmap)) {
+        if (!cache.storeThumbnail(filePath, size, pos, thumbnail)) {
             emit logLine(QString("  WARNING: Failed to store thumbnail at position %1").arg(pos));
             continue;
         }
@@ -312,10 +309,9 @@ bool ThumbnailGeneratorWorker::generateSequenceThumbnails(int index, const Task&
 
         // Scale to thumbnail size
         QImage scaled = image.scaled(size, Qt::KeepAspectRatio, Qt::SmoothTransformation);
-        QPixmap pixmap = QPixmap::fromImage(scaled);
 
         // Store in cache (use sequence representative path)
-        if (!cache.storeThumbnail(task.filePath, size, pos, pixmap)) {
+        if (!cache.storeThumbnail(task.filePath, size, pos, scaled)) {
             emit logLine(QString("  WARNING: Failed to store thumbnail at position %1").arg(pos));
             continue;
         }

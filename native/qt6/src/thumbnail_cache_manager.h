@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QObject>
+#include <QImage>
 #include <QPixmap>
 #include <QString>
 #include <QSize>
@@ -24,7 +25,9 @@ public:
 
     // Cache operations
     QPixmap getCachedThumbnail(const QString& filePath, const QSize& size, qreal position = 0.0);
-    bool storeThumbnail(const QString& filePath, const QSize& size, qreal position, const QPixmap& pixmap);
+    // NOTE: This intentionally takes QImage so it can be called from worker threads.
+    // QPixmap is GUI-thread-only on Windows and can hard-crash if used in background threads.
+    bool storeThumbnail(const QString& filePath, const QSize& size, qreal position, const QImage& image);
     bool isCached(const QString& filePath, const QSize& size, qreal position = 0.0) const;
     bool isOutdated(const QString& filePath) const;
     

@@ -36,6 +36,7 @@ class TagsModel;
 class PreviewOverlay;
 class SequenceGroupingProxyModel;
 class GridScrubController;
+class FileManagerPane;
 
 class ImportProgressDialog;
 class ProjectFolderWatcher;
@@ -202,6 +203,8 @@ private slots:
     void onFmLightRefresh();
     void onFmGroupSequencesToggled(bool checked);
     void onFmHideFoldersToggled(bool checked);
+    void onFmToggleSecondPane(bool checked);  // Toggle dual-pane view
+    void onFmSyncNavToggled(bool checked);    // Toggle synced navigation
 
     // Everything Search
     void onEverythingSearchAssetManager();
@@ -531,10 +534,24 @@ private:
 
     // Overlay navigation context for File Manager
     QPersistentModelIndex fmOverlayCurrentIndex; QAbstractItemView* fmOverlaySourceView = nullptr; // grid or list
+    bool fmOverlayFromSecondaryPane = false;  // Track which pane opened the overlay
 
     // Helpers
     void updateFmPreviewForIndex(const QModelIndex &idx);
     void clearFmPreview();
+
+    // Dual-pane File Manager support
+    FileManagerPane *fmSecondaryPane = nullptr;  // Secondary pane (optional, togglable)
+    QSplitter *fmDualPaneSplitter = nullptr;     // Splitter holding both panes
+    QAction *fmToggleSecondPaneAction = nullptr; // Menu action to toggle second pane
+    QToolButton *fmSyncNavButton = nullptr;      // Synced navigation toggle
+    QToolButton *fmDualPaneToggle = nullptr;     // Dual-pane toggle button
+    bool fmSyncNavigation = false;               // When true, both panes navigate together
+    bool fmPrimaryPaneActive = true;             // Track which pane is active (true=primary, false=secondary)
+    void setActiveFmPane(bool primary);          // Set which pane is active
+    void onSecondaryPanePathChanged(const QString &path);  // Handle secondary pane navigation
+    void onSecondaryPaneActivated();             // Handle secondary pane focus
+    void onSecondaryPaneFileDoubleClicked(const QString &path);  // Handle double-click on file in secondary pane
 
     // Project Manager members - mirrors File Manager structure
     QSplitter *pmSplitter = nullptr;

@@ -2656,15 +2656,20 @@ void SequenceFrameCache::scheduleFrameIfNeeded(int frameIndex, quint64 epoch, bo
     
     // CRITICAL: Use Qt::QueuedConnection with context object to ensure auto-disconnect
     // This prevents crashes when SequenceFrameCache is destroyed while workers are running
-    connect(worker, &FrameLoaderWorker::frameLoaded, this, [this](int idx, QPixmap pixmap) {
+    connect(worker, &FrameLoaderWorker::frameLoaded, this, [this](int idx, QImage image) {
         // SAFETY: This lambda won't execute if 'this' is destroyed (Qt auto-disconnect)
         {
             QMutexLocker locker(&m_mutex);
             m_pendingFrames.remove(idx);
-            if (!pixmap.isNull() && m_prefetchActive) {
-                int cost = pixmap.width() * pixmap.height() * 4 / 1024; // KB
-                m_cache.insert(idx, new QPixmap(pixmap), cost);
-            } else if (pixmap.isNull()) {
+            if (!image.isNull() && m_prefetchActive) {
+                QPixmap pixmap = QPixmap::fromImage(image);
+                if (!pixmap.isNull()) {
+                    int cost = pixmap.width() * pixmap.height() * 4 / 1024; // KB
+                    m_cache.insert(idx, new QPixmap(pixmap), cost);
+                } else {
+                    qWarning() << "[SequenceFrameCache] Failed to convert image to pixmap for frame" << idx;
+                }
+            } else if (image.isNull()) {
                 qWarning() << "[SequenceFrameCache] Failed to load frame" << idx;
             }
         }
@@ -2765,17 +2770,16 @@ void FrameLoaderWorker::run()
     }
 
     if (!image.isNull()) {
-        QPixmap pixmap = QPixmap::fromImage(image);
         // Final check before emitting to avoid enqueuing into a stale cache
         if (cache->isEpochCurrent(m_epoch)) {
-            emit frameLoaded(m_frameIndex, pixmap);
+            emit frameLoaded(m_frameIndex, image);
         }
     } else {
         qWarning() << "[FrameLoaderWorker] Failed to load frame:" << m_framePath;
         // Only notify failure if still current; otherwise earlier stopPrefetch()
         // already cleared pending state for this frame.
         if (cache->isEpochCurrent(m_epoch)) {
-            emit frameLoaded(m_frameIndex, QPixmap());
+            emit frameLoaded(m_frameIndex, QImage());
         }
     }
 }

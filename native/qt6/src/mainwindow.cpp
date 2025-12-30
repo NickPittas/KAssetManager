@@ -37,7 +37,7 @@
 #include "project_manager_watcher.h"
 
 #include "office_preview.h"
-
+#include "file_manager_pane.h"
 
 #include "media_convert_dialog.h"
 #include "thumbnail_cache_manager.h"
@@ -357,6 +357,11 @@ MainWindow::MainWindow(QWidget *parent)
             s.setValue("FileManager/PreviewInfoSplitter", fmPreviewInfoSplitter->saveState());
             QVariantList sizes; for (int v : fmPreviewInfoSplitter->sizes()) sizes << v;
             s.setValue("FileManager/PreviewInfoSplitterSizes", sizes);
+        }
+        if (fmDualPaneSplitter && fmDualPaneSplitter->isVisible()) {
+            s.setValue("FileManager/DualPaneSplitter", fmDualPaneSplitter->saveState());
+            QVariantList sizes; for (int v : fmDualPaneSplitter->sizes()) sizes << v;
+            s.setValue("FileManager/DualPaneSplitterSizes", sizes);
         }
         if (pmSplitter) s.setValue("ProjectManager/MainSplitter", pmSplitter->saveState());
         if (pmLeftSplitter) s.setValue("ProjectManager/LeftSplitter", pmLeftSplitter->saveState());
@@ -1420,6 +1425,17 @@ void MainWindow::setupFileManagerUi()
     fmTree->setContextMenuPolicy(Qt::CustomContextMenu);
     fmTree->setExpandsOnDoubleClick(true);
     fmTree->setSelectionMode(QAbstractItemView::SingleSelection);
+    // Prevent auto-scrolling right for long folder names - keep horizontal scroll at left
+    connect(fmTree->horizontalScrollBar(), &QScrollBar::valueChanged, this, [this](int value) {
+        if (value != 0) {
+            // Reset to left edge whenever tree tries to auto-scroll horizontally
+            QTimer::singleShot(0, this, [this]() {
+                if (fmTree && fmTree->horizontalScrollBar()) {
+                    fmTree->horizontalScrollBar()->setValue(0);
+                }
+            });
+        }
+    });
     // set root to the "Computer" level
     connect(fmTree, &QTreeView::customContextMenuRequested, this, &MainWindow::onFmTreeContextMenu);
     // Enable drag and drop on folder tree
@@ -1449,17 +1465,17 @@ void MainWindow::setupFileManagerUi()
     // Toolbar
     fmToolbar = new QWidget(right);
     fmToolbar->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    fmToolbar->setFixedHeight(48);
+    fmToolbar->setFixedHeight(40);
 
     QHBoxLayout *tb = new QHBoxLayout(fmToolbar);
-    tb->setContentsMargins(8,6,8,6);
-    tb->setSpacing(8);
+    tb->setContentsMargins(4,4,4,4);
+    tb->setSpacing(4);
 
     fmIsGridMode = true;
 
     auto mkTb = [&](const QIcon &ic, const QString &tip) {
         QToolButton *b = new QToolButton(fmToolbar);
-        b->setIcon(ic); b->setToolTip(tip); b->setAutoRaise(true); b->setIconSize(QSize(28,28));
+        b->setIcon(ic); b->setToolTip(tip); b->setAutoRaise(true); b->setIconSize(QSize(20,20));
         return b;
     };
 
@@ -1497,7 +1513,7 @@ void MainWindow::setupFileManagerUi()
     fmViewModeButton->setIcon(icoGrid(ThemeManager::instance().iconColor()));
     fmViewModeButton->setToolTip("Toggle Grid/List");
     fmViewModeButton->setAutoRaise(true);
-    fmViewModeButton->setIconSize(QSize(28,28));
+    fmViewModeButton->setIconSize(QSize(20,20));
     connect(fmViewModeButton, &QToolButton::clicked, this, &MainWindow::onFmViewModeToggled);
     tb->addWidget(fmViewModeButton);
 
@@ -1505,7 +1521,7 @@ void MainWindow::setupFileManagerUi()
     fmSizeLabel = new QLabel("Size:", fmToolbar); tb->addWidget(fmSizeLabel);
     fmThumbnailSizeSlider = new QSlider(Qt::Horizontal, fmToolbar);
     fmThumbnailSizeSlider->setRange(64, 320);
-    fmThumbnailSizeSlider->setFixedWidth(140);
+    fmThumbnailSizeSlider->setFixedWidth(80);
     fmThumbnailSizeSlider->setToolTip("Adjust thumbnail size");
     tb->addWidget(fmThumbnailSizeSlider);
     connect(fmThumbnailSizeSlider, &QSlider::valueChanged, this, &MainWindow::onFmThumbnailSizeChanged);
@@ -1518,8 +1534,7 @@ void MainWindow::setupFileManagerUi()
     fmGroupSequencesCheckBox->setToolTip("Group image sequences into single entries");
     fmGroupSequencesCheckBox->setCheckable(true);
     fmGroupSequencesCheckBox->setAutoRaise(true);
-    fmGroupSequencesCheckBox->setIconSize(QSize(28,28));
-    fmGroupSequencesCheckBox->setProperty("class", "toggle");
+    fmGroupSequencesCheckBox->setIconSize(QSize(20,20));
     connect(fmGroupSequencesCheckBox, &QToolButton::toggled, this, &MainWindow::onFmGroupSequencesToggled);
     tb->addWidget(fmGroupSequencesCheckBox);
 
@@ -1528,7 +1543,7 @@ void MainWindow::setupFileManagerUi()
     fmHideFoldersCheckBox->setToolTip("Hide folders in Grid view (show files only)");
     fmHideFoldersCheckBox->setCheckable(true);
     fmHideFoldersCheckBox->setAutoRaise(true);
-    fmHideFoldersCheckBox->setIconSize(QSize(28,28));
+    fmHideFoldersCheckBox->setIconSize(QSize(20,20));
     connect(fmHideFoldersCheckBox, &QToolButton::toggled, this, &MainWindow::onFmHideFoldersToggled);
     tb->addWidget(fmHideFoldersCheckBox);
 
@@ -1537,7 +1552,7 @@ void MainWindow::setupFileManagerUi()
     fmSearchButton->setIcon(icoSearch(ThemeManager::instance().iconColor()));
     fmSearchButton->setToolTip("Everything Search - Search entire disk");
     fmSearchButton->setAutoRaise(true);
-    fmSearchButton->setIconSize(QSize(28,28));
+    fmSearchButton->setIconSize(QSize(20,20));
     connect(fmSearchButton, &QToolButton::clicked, this, &MainWindow::onEverythingSearchFileManager);
     tb->addWidget(fmSearchButton);
 
@@ -1547,9 +1562,27 @@ void MainWindow::setupFileManagerUi()
     fmPreviewToggleButton->setCheckable(true);
     fmPreviewToggleButton->setChecked(true);
     fmPreviewToggleButton->setAutoRaise(true);
-    fmPreviewToggleButton->setIconSize(QSize(28,28));
+    fmPreviewToggleButton->setIconSize(QSize(20,20));
     connect(fmPreviewToggleButton, &QToolButton::toggled, this, &MainWindow::onFmTogglePreview);
     tb->addWidget(fmPreviewToggleButton);
+
+    // Dual-pane toggle button
+    fmDualPaneToggle = mkTb(icoDualPane(ThemeManager::instance().iconColor()), "Show/Hide second pane (dual-pane mode)");
+    fmDualPaneToggle->setCheckable(true);
+    fmDualPaneToggle->setChecked(false);
+    connect(fmDualPaneToggle, &QToolButton::toggled, this, &MainWindow::onFmToggleSecondPane);
+    tb->addWidget(fmDualPaneToggle);
+
+    // Synced navigation toggle (hidden until dual-pane is enabled)
+    fmSyncNavButton = mkTb(QIcon(), "Sync navigation between panes");
+    fmSyncNavButton->setText("⇆");  // Unicode arrows
+    fmSyncNavButton->setCheckable(true);
+    fmSyncNavButton->setChecked(false);
+    fmSyncNavButton->setStyleSheet("QToolButton { font-size: 16px; }");
+    fmSyncNavButton->hide();  // Hidden until dual-pane enabled
+    connect(fmSyncNavButton, &QToolButton::toggled, this, &MainWindow::onFmSyncNavToggled);
+    tb->addWidget(fmSyncNavButton);
+
     rightLayout->addWidget(fmToolbar);
 
     // Editable path bar (like Windows Explorer)
@@ -2205,6 +2238,18 @@ void MainWindow::setupFileManagerUi()
     // Connect selection changes to preview
     connect(fmGridView->selectionModel(), &QItemSelectionModel::selectionChanged, this, &MainWindow::onFmSelectionChanged);
     connect(fmListView->selectionModel(), &QItemSelectionModel::selectionChanged, this, &MainWindow::onFmSelectionChanged);
+    
+    // Connect click signals for primary pane activation in dual-pane mode
+    connect(fmGridView, &QListView::clicked, this, [this](const QModelIndex &) {
+        if (fmSecondaryPane && fmSecondaryPane->isVisible()) {
+            setActiveFmPane(true);
+        }
+    });
+    connect(fmListView, &QTreeView::clicked, this, [this](const QModelIndex &) {
+        if (fmSecondaryPane && fmSecondaryPane->isVisible()) {
+            setActiveFmPane(true);
+        }
+    });
 
     // Wire splitter widgets
     fmSplitter->addWidget(left);
@@ -2217,8 +2262,8 @@ void MainWindow::setupFileManagerUi()
     connect(fmListView, &QWidget::customContextMenuRequested, this, &MainWindow::onFmShowContextMenu);
 
 
-    fmSplitter->setStretchFactor(0,1);
-    fmSplitter->setStretchFactor(1,3);
+    fmSplitter->setStretchFactor(0, 0);  // Tree pane: fixed size (doesn't grow with window)
+    fmSplitter->setStretchFactor(1, 1);  // Right pane: expands with window
 
     // Root: select first drive if exists
     QFileInfoList drives = QDir::drives();
@@ -2373,6 +2418,31 @@ void MainWindow::setupFileManagerUi()
                 fmNavigateToPath(savedPath, false);
             }
         }
+        
+        // Restore dual-pane state if it was enabled
+        if (s.value("FileManager/DualPane", false).toBool()) {
+            if (fmDualPaneToggle) {
+                fmDualPaneToggle->setChecked(true);  // This triggers onFmToggleSecondPane
+                
+                // Restore dual-pane splitter sizes after a short delay to ensure layout is ready
+                QTimer::singleShot(100, this, [this]() {
+                    QSettings s("AugmentCode", "KAssetManager");
+                    if (fmDualPaneSplitter && s.contains("FileManager/DualPaneSplitterSizes")) {
+                        QList<int> sizes;
+                        const auto list = s.value("FileManager/DualPaneSplitterSizes").toList();
+                        bool hasZero = false;
+                        for (const QVariant &x : list) {
+                            int sz = x.toInt();
+                            sizes << sz;
+                            if (sz < 10) hasZero = true;
+                        }
+                        if (!sizes.isEmpty() && !hasZero) {
+                            fmDualPaneSplitter->setSizes(sizes);
+                        }
+                    }
+                });
+            }
+        }
     });
 
     LogManager::instance().addLog("[TRACE] setupFileManagerUi exit", "DEBUG");
@@ -2407,7 +2477,12 @@ void MainWindow::onFmTreeCurrentChanged(const QModelIndex &current, const QModel
                 fmPendingNavigationPath.clear();
                 
                 fmSuppressTreeSync = true;
-                fmNavigateToPath(path, true);
+                // Navigate the active pane (primary or secondary)
+                if (fmSecondaryPane && fmSecondaryPane->isVisible() && !fmPrimaryPaneActive) {
+                    fmSecondaryPane->navigateToPath(path, true);
+                } else {
+                    fmNavigateToPath(path, true);
+                }
                 fmSuppressTreeSync = false;
             }
         });
@@ -2554,8 +2629,17 @@ void MainWindow::onFmCopy()
         QWidget* fw = QApplication::focusWidget();
         if (fw && (qobject_cast<QLineEdit*>(fw) || fw->inherits("QTextEdit") || fw->inherits("QPlainTextEdit"))) return;
     }
-    fmClipboard = getSelectedFileManagerPaths(fmDirModel, fmGridView, fmListView, fmViewStack);
-    fmClipboardCutMode = false;
+    
+    // In dual-pane mode, copy from the active pane
+    if (fmSecondaryPane && fmSecondaryPane->isVisible() && !fmPrimaryPaneActive) {
+        fmSecondaryPane->copySelectedToClipboard();
+        // Also store in MainWindow's clipboard for paste
+        fmClipboard = fmSecondaryPane->clipboardPaths();
+        fmClipboardCutMode = false;
+    } else {
+        fmClipboard = getSelectedFileManagerPaths(fmDirModel, fmGridView, fmListView, fmViewStack);
+        fmClipboardCutMode = false;
+    }
 }
 
 void MainWindow::onFmCut()
@@ -2564,8 +2648,17 @@ void MainWindow::onFmCut()
         QWidget* fw = QApplication::focusWidget();
         if (fw && (qobject_cast<QLineEdit*>(fw) || fw->inherits("QTextEdit") || fw->inherits("QPlainTextEdit"))) return;
     }
-    fmClipboard = getSelectedFileManagerPaths(fmDirModel, fmGridView, fmListView, fmViewStack);
-    fmClipboardCutMode = true;
+    
+    // In dual-pane mode, cut from the active pane
+    if (fmSecondaryPane && fmSecondaryPane->isVisible() && !fmPrimaryPaneActive) {
+        fmSecondaryPane->cutSelectedToClipboard();
+        // Also store in MainWindow's clipboard for paste
+        fmClipboard = fmSecondaryPane->clipboardPaths();
+        fmClipboardCutMode = true;
+    } else {
+        fmClipboard = getSelectedFileManagerPaths(fmDirModel, fmGridView, fmListView, fmViewStack);
+        fmClipboardCutMode = true;
+    }
 }
 
 void MainWindow::onFmPaste()
@@ -2575,7 +2668,14 @@ void MainWindow::onFmPaste()
         if (fw && (qobject_cast<QLineEdit*>(fw) || fw->inherits("QTextEdit") || fw->inherits("QPlainTextEdit"))) return;
     }
     if (fmClipboard.isEmpty()) return;
-    const QString destDir = fmDirModel->rootPath();
+    
+    // Determine destination directory based on active pane
+    QString destDir;
+    if (fmSecondaryPane && fmSecondaryPane->isVisible() && !fmPrimaryPaneActive) {
+        destDir = fmSecondaryPane->currentPath();
+    } else {
+        destDir = fmDirModel->rootPath();
+    }
 
     // Ensure any preview locks are released before file ops
     if (fmGStreamerPlayer) { fmGStreamerPlayer->stop(); }
@@ -3210,6 +3310,212 @@ void MainWindow::onFmThumbnailSizeChanged(int size)
     }
     QSettings s("AugmentCode", "KAssetManager");
     s.setValue("FileManager/GridThumbSize", size);
+}
+
+void MainWindow::onFmToggleSecondPane(bool checked)
+{
+    if (checked) {
+        // Create secondary pane if it doesn't exist
+        if (!fmSecondaryPane) {
+            fmSecondaryPane = new FileManagerPane(this);
+            
+            // Connect path changes for synced navigation and tree sync
+            connect(fmSecondaryPane, &FileManagerPane::pathChanged, this, &MainWindow::onSecondaryPanePathChanged);
+            
+            // Connect activated signal for active pane tracking
+            connect(fmSecondaryPane, &FileManagerPane::activated, this, &MainWindow::onSecondaryPaneActivated);
+            
+            // Connect filesDropped for copy/move operations
+            connect(fmSecondaryPane, &FileManagerPane::filesDropped, this, [this](const QStringList &paths, const QString &destDir) {
+                // Determine if this is a cut (move) or copy operation
+                bool isCut = fmSecondaryPane->isClipboardCutMode();
+                
+                // Use FileOpsQueue for the operation
+                FileOpsQueue &queue = FileOpsQueue::instance();
+                if (isCut) {
+                    queue.enqueueMove(paths, destDir);
+                } else {
+                    queue.enqueueCopy(paths, destDir);
+                }
+            });
+            
+            // Connect fileDoubleClicked to open preview overlay
+            connect(fmSecondaryPane, &FileManagerPane::fileDoubleClicked, this, &MainWindow::onSecondaryPaneFileDoubleClicked);
+            
+            // Navigate to same path as primary pane initially
+            QString currentPath = fmDirModel ? fmDirModel->rootPath() : QString();
+            if (!currentPath.isEmpty()) {
+                fmSecondaryPane->navigateToPath(currentPath, false);
+            }
+            
+            // Mark secondary pane as inactive initially
+            fmSecondaryPane->setActive(false);
+            
+            // Hide the preview panel by default for the secondary pane
+            fmSecondaryPane->setPreviewVisible(false);
+        }
+        
+        // Create the dual-pane splitter if it doesn't exist
+        if (!fmDualPaneSplitter) {
+            // Find the right widget in fmSplitter
+            if (fmSplitter && fmSplitter->count() >= 2) {
+                QWidget *right = fmSplitter->widget(1);
+                
+                // Create a new horizontal splitter for dual-pane
+                fmDualPaneSplitter = new QSplitter(Qt::Horizontal, this);
+                fmDualPaneSplitter->setChildrenCollapsible(true);  // Allow free resizing
+                
+                // Reparent the existing right widget to the dual-pane splitter
+                right->setParent(fmDualPaneSplitter);
+                fmDualPaneSplitter->addWidget(right);
+                fmDualPaneSplitter->addWidget(fmSecondaryPane);
+                fmDualPaneSplitter->setStretchFactor(0, 1);
+                fmDualPaneSplitter->setStretchFactor(1, 1);
+                
+                // Replace the right widget in fmSplitter with the dual-pane splitter
+                fmSplitter->insertWidget(1, fmDualPaneSplitter);
+            }
+        }
+        
+        // Show the secondary pane
+        if (fmSecondaryPane) {
+            fmSecondaryPane->show();
+        }
+        
+        // Show sync navigation button if not already present
+        if (fmSyncNavButton) {
+            fmSyncNavButton->show();
+        }
+    } else {
+        // Hide the secondary pane
+        if (fmSecondaryPane) {
+            fmSecondaryPane->hide();
+        }
+        
+        // Hide sync navigation button
+        if (fmSyncNavButton) {
+            fmSyncNavButton->hide();
+        }
+        
+        // Reset to primary pane active
+        setActiveFmPane(true);
+    }
+    
+    // Persist state
+    QSettings s("AugmentCode", "KAssetManager");
+    s.setValue("FileManager/DualPane", checked);
+}
+
+void MainWindow::onSecondaryPanePathChanged(const QString &path)
+{
+    // Handle synced navigation - only sync if explicitly enabled
+    if (fmSyncNavigation && fmDirModel) {
+        QString currentPrimaryPath = fmDirModel->rootPath();
+        if (currentPrimaryPath != path) {
+            fmSuppressTreeSync = true;
+            fmNavigateToPath(path, true);
+            fmSuppressTreeSync = false;
+        }
+    }
+    
+    // Update tree to show the secondary pane's current folder (if secondary is active)
+    // Use fmSuppressTreeSync to prevent the tree change from triggering navigation
+    if (!fmPrimaryPaneActive && fmTree) {
+        fmSuppressTreeSync = true;
+        QModelIndex idx = fmIndexForPath(path);
+        if (idx.isValid()) {
+            // Block signals to prevent tree selection from triggering another navigation
+            fmTree->blockSignals(true);
+            fmTree->setCurrentIndex(idx);
+            fmTree->expand(idx);
+            fmTree->blockSignals(false);
+            // Keep horizontal scroll at the left
+            if (fmTree->horizontalScrollBar()) {
+                fmTree->horizontalScrollBar()->setValue(0);
+            }
+        }
+        fmSuppressTreeSync = false;
+    }
+}
+
+void MainWindow::onSecondaryPaneActivated()
+{
+    setActiveFmPane(false);
+}
+
+void MainWindow::onSecondaryPaneFileDoubleClicked(const QString &path)
+{
+    // Open preview overlay for file double-clicked in secondary pane
+    QFileInfo info(path);
+    if (!info.exists() || info.isDir()) return;
+    
+    if (!previewOverlay) {
+        previewOverlay = new PreviewOverlay(this);
+        previewOverlay->setGeometry(geometry());
+        connect(previewOverlay, &PreviewOverlay::closed, this, &MainWindow::closePreview);
+        connect(previewOverlay, &PreviewOverlay::navigateRequested, this, &MainWindow::changeFmPreview);
+    } else {
+        previewOverlay->stopPlayback();
+    }
+    
+    // Mark that overlay was opened from secondary pane
+    fmOverlayFromSecondaryPane = true;
+    fmOverlayCurrentIndex = QPersistentModelIndex(fmSecondaryPane->currentIndex());
+    fmOverlaySourceView = nullptr;  // Will use secondary pane's view
+    
+    previewOverlay->showAsset(path, info.fileName(), info.suffix());
+}
+
+void MainWindow::setActiveFmPane(bool primary)
+{
+    if (fmPrimaryPaneActive == primary) return;  // No change
+    
+    fmPrimaryPaneActive = primary;
+    
+    // Update visual states
+    if (fmSecondaryPane) {
+        fmSecondaryPane->setActive(!primary);
+    }
+    
+    // Update primary pane visual state (using border on the view stack)
+    if (fmViewStack) {
+        if (primary) {
+            // Active: show blue border
+            fmViewStack->setStyleSheet(
+                "QStackedWidget { "
+                "   border: 2px solid #0078D4; "
+                "   border-radius: 4px; "
+                "}"
+            );
+        } else {
+            // Inactive: transparent border
+            fmViewStack->setStyleSheet(
+                "QStackedWidget { "
+                "   border: 2px solid transparent; "
+                "   border-radius: 4px; "
+                "}"
+            );
+        }
+    }
+    
+    LogManager::instance().addLog(
+        QString("[FileManager] Active pane: %1").arg(primary ? "Primary" : "Secondary"), "DEBUG");
+}
+
+void MainWindow::onFmSyncNavToggled(bool checked)
+{
+    fmSyncNavigation = checked;
+    
+    // If enabling sync, navigate secondary to match primary
+    if (checked && fmSecondaryPane && fmDirModel) {
+        QString currentPath = fmDirModel->rootPath();
+        if (!currentPath.isEmpty()) {
+            fmSecondaryPane->navigateToPath(currentPath, false);
+        }
+    }
+    
+    QSettings s("AugmentCode", "KAssetManager");
+    s.setValue("FileManager/SyncNav", checked);
 }
 
 
@@ -6980,6 +7286,48 @@ void MainWindow::changeFmPreview(int delta)
     // Stop playback ONCE before searching for next file
     previewOverlay->stopPlayback();
 
+    // If preview was opened from secondary pane, use its data for navigation
+    if (fmOverlayFromSecondaryPane && fmSecondaryPane) {
+        QModelIndex cur = fmOverlayCurrentIndex;
+        if (!cur.isValid()) {
+            cur = fmSecondaryPane->currentIndex();
+            if (!cur.isValid()) return;
+            fmOverlayCurrentIndex = QPersistentModelIndex(cur);
+        }
+        
+        // Get the model and navigate within secondary pane
+        QAbstractItemModel* model = const_cast<QAbstractItemModel*>(cur.model());
+        if (!model) return;
+        
+        int searchRow = cur.row() + delta;
+        const int rowCount = model->rowCount(cur.parent());
+        const int step = (delta > 0) ? 1 : -1;
+        
+        while (searchRow >= 0 && searchRow < rowCount) {
+            QModelIndex next = model->index(searchRow, 0, cur.parent());
+            if (!next.isValid()) {
+                searchRow += step;
+                continue;
+            }
+            
+            // Get file path from secondary pane
+            QString path = fmSecondaryPane->pathForIndex(next);
+            if (!path.isEmpty()) {
+                QFileInfo fi(path);
+                if (fi.exists() && fi.isFile() && isPreviewOverlayViewable(fi.suffix())) {
+                    // Found a viewable file - update context and show it
+                    fmOverlayCurrentIndex = QPersistentModelIndex(next);
+                    fmSecondaryPane->setCurrentIndex(next);
+                    previewOverlay->showAsset(path, fi.fileName(), fi.suffix());
+                    return;
+                }
+            }
+            searchRow += step;
+        }
+        return;  // No viewable file found
+    }
+
+    // Primary pane navigation (original logic)
     QModelIndex cur = fmOverlayCurrentIndex;
     if (!cur.isValid()) {
         // fallback: try current selection from focused view
@@ -9992,14 +10340,44 @@ void MainWindow::onFmOpenOverlay()
     // Toggle: if overlay is visible, close it
     if (previewOverlay && previewOverlay->isVisible()) { closePreview(); return; }
 
-    // Determine current selection in FM and open full-screen overlay
+    // Check if secondary pane is active and has focus
+    if (fmSecondaryPane && fmSecondaryPane->isVisible() && !fmPrimaryPaneActive) {
+        QModelIndex idx = fmSecondaryPane->currentIndex();
+        if (idx.isValid()) {
+            // Get the file path from secondary pane
+            QStringList paths = fmSecondaryPane->selectedPaths();
+            if (!paths.isEmpty()) {
+                QString path = paths.first();
+                QFileInfo info(path);
+                if (info.exists() && !info.isDir()) {
+                    if (!previewOverlay) {
+                        previewOverlay = new PreviewOverlay(this);
+                        previewOverlay->setGeometry(geometry());
+                        connect(previewOverlay, &PreviewOverlay::closed, this, &MainWindow::closePreview);
+                        connect(previewOverlay, &PreviewOverlay::navigateRequested, this, &MainWindow::changeFmPreview);
+                    } else {
+                        previewOverlay->stopPlayback();
+                    }
+                    // Mark that overlay was opened from secondary pane for navigation
+                    fmOverlayFromSecondaryPane = true;
+                    fmOverlayCurrentIndex = QPersistentModelIndex(idx);
+                    fmOverlaySourceView = nullptr;
+                    previewOverlay->showAsset(path, info.fileName(), info.suffix());
+                    return;
+                }
+            }
+        }
+    }
+
+    // Determine current selection in FM and open full-screen overlay (primary pane)
     QModelIndex idx;
     if (fmGridView && fmGridView->hasFocus()) idx = fmGridView->currentIndex();
     else if (fmListView && fmListView->hasFocus()) idx = fmListView->currentIndex();
     if (!idx.isValid()) return;
     idx = idx.sibling(idx.row(), 0);
 
-    // Record overlay navigation context
+    // Record overlay navigation context (primary pane)
+    fmOverlayFromSecondaryPane = false;  // Opening from primary pane
     fmOverlayCurrentIndex = QPersistentModelIndex(idx);
     fmOverlaySourceView = (fmGridView && fmGridView->hasFocus()) ? static_cast<QAbstractItemView*>(fmGridView) : static_cast<QAbstractItemView*>(fmListView);
 
@@ -10621,9 +10999,13 @@ void MainWindow::fmScrollTreeToPath(const QString& path)
             fmTree->expand(p);
             p = p.parent();
         }
-        // Select and scroll to the folder
+        // Select and scroll to the folder (vertically only)
         fmTree->setCurrentIndex(treeIdx);
         fmTree->scrollTo(treeIdx, QAbstractItemView::PositionAtCenter);
+        // Keep horizontal scroll at the left - user doesn't want auto-scroll right for long names
+        if (fmTree->horizontalScrollBar()) {
+            fmTree->horizontalScrollBar()->setValue(0);
+        }
     } else {
         // Index not valid - may need async fetch
         fmPendingTreeScrollPath = path;

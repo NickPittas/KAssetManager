@@ -145,6 +145,7 @@ QIcon icoUp(const QColor& color) { return loadPngIcon("Up.png", color); }
 QIcon icoRefresh(const QColor& color) { return loadPngIcon("Refresh.png", color); }
 QIcon icoHide(const QColor& color) { return loadPngIcon("Hide.png", color); }
 QIcon icoSearch(const QColor& color) { return loadPngIcon("Search.png", color); }
+QIcon icoDualPane(const QColor& color) { return loadPngIcon("DualPane.png", color); }
 
 // Media icons
 QIcon icoMediaPlay(const QColor& color) { return loadPngIcon("media/Play.png", color); }

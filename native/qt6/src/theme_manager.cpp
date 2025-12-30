@@ -156,6 +156,8 @@ void ThemeManager::applyTheme()
         "QToolButton { padding: 4px; border-radius: 4px; }"
         "QToolButton:hover { background: %3; }"
         "QToolButton:pressed { background: %9; }"
+        "QToolButton:checked { background: %4; }"
+        "QToolButton:checked:hover { background: %5; }"
         
         // Accent button class
         "QPushButton[class=\"accent\"] { background-color: %4; color: #ffffff; border: none; padding: 8px 24px; border-radius: 4px; }"

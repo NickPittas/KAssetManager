@@ -9,6 +9,8 @@
 #include <QStandardPaths>
 #include <QMutexLocker>
 #include <QDebug>
+#include <QCoreApplication>
+#include <QThread>
 
 ThumbnailCacheManager& ThumbnailCacheManager::instance()
 {
@@ -138,6 +140,13 @@ bool ThumbnailCacheManager::saveMetadata(const QString& filePath, const FileMeta
 
 QPixmap ThumbnailCacheManager::getCachedThumbnail(const QString& filePath, const QSize& size, qreal position)
 {
+    // QPixmap is GUI-thread-affine on Windows. If this is accidentally called
+    // from a worker thread, it can hard-crash the process with no Qt warning.
+    if (QCoreApplication::instance() && QThread::currentThread() != QCoreApplication::instance()->thread()) {
+        qWarning() << "[ThumbnailCache] getCachedThumbnail called from non-UI thread; returning null pixmap for" << filePath;
+        return QPixmap();
+    }
+
     QMutexLocker locker(&m_mutex);
     
     QString cachePath = getCachePath(filePath, size, position);
@@ -154,11 +163,11 @@ QPixmap ThumbnailCacheManager::getCachedThumbnail(const QString& filePath, const
     return pixmap;
 }
 
-bool ThumbnailCacheManager::storeThumbnail(const QString& filePath, const QSize& size, qreal position, const QPixmap& pixmap)
+bool ThumbnailCacheManager::storeThumbnail(const QString& filePath, const QSize& size, qreal position, const QImage& image)
 {
     QMutexLocker locker(&m_mutex);
 
-    if (pixmap.isNull()) {
+    if (image.isNull()) {
         return false;
     }
 
@@ -177,7 +186,8 @@ bool ThumbnailCacheManager::storeThumbnail(const QString& filePath, const QSize&
 #endif
 
     // Save thumbnail as JPEG (good compression for photos/videos)
-    if (!pixmap.save(cachePath, "JPG", 90)) {
+    // Use QImage here (thread-safe) instead of QPixmap (GUI-thread-only).
+    if (!image.save(cachePath, "JPG", 90)) {
         qWarning() << "[ThumbnailCache] Failed to save thumbnail:" << cachePath;
         return false;
     }

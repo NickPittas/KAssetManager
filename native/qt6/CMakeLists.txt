@@ -279,6 +279,8 @@ qt_add_executable(kassetmanagerqt WIN32
     src/scrub_frame_registry.cpp
     src/fm_views_ex.h
     src/fm_views_ex.cpp
+    src/file_manager_pane.h
+    src/file_manager_pane.cpp
     src/oiio_image_loader.h
     src/oiio_image_loader.cpp
     src/project_folder_watcher.h
