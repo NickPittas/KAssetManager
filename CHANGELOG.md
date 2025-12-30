@@ -7,12 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Planned Features
-- Keyboard shortcuts for common operations
-- Custom metadata fields
-- Smart folders with saved searches
-- Collection sharing and export
-- Crash reporting
+### Note
+This file now includes the 1.6.0 release notes below. Unreleased will contain future work.
+
+## [1.6.0] - 2025-12-30
+
+### Added
+- **Dual-pane File Manager: persistent split and sync enhancements**
+  - Dual-pane mode now persists across restarts (enabled/disabled state and splitter sizes saved)
+  - Synced navigation improvements: optional sync toggle to keep both panes in lock-step
+  - `FileManagerPane` now exposes `pathForIndex()` and `setCurrentIndex()` for robust pane-aware operations
+- **Full-screen Preview Improvements**
+  - Preview overlay now correctly tracks which pane opened it and navigates within that pane's file list
+  - Double-click and spacebar open preview from either pane and navigation (arrow/scroll) follows the originating pane
+  - Sequence handling improvements: sequence playback and representative-frame navigation work from both panes
+- **UI polish and toolbar consistency**
+  - Toolbars and buttons standardized (40px toolbar height, 20x20 tool buttons) for consistent appearance
+  - Dual-pane icon added to `icon_utils` and theme-aware styling for checked `QToolButton`
+
+### Changed
+- **Window & Splitter behavior**
+  - Folder tree pane is now locked during full-window resize (it keeps the user-set width); only file panes expand/contract
+  - Splitter stretch factors adjusted so primary tree does not auto-grow when resizing the app
+  - Dual-pane splitter sizes are saved to settings and restored on startup
+- **Tree auto-scroll suppression**
+  - The folder tree will no longer auto-scroll horizontally to reveal long names; horizontal scrollbar is kept at the left edge
+  - Asynchronous tree resolution still expands parents and selects the node without shifting horizontal offset
+- **FFmpeg compatibility**
+  - Video metadata code updated to use modern `AV_PROFILE_*` constants for newer FFmpeg headers
+
+### Fixed
+- **Preview navigation bug**: Scrolling in fullscreen preview opened from the secondary pane now shows files from the secondary pane instead of the primary
+- **Resize constraints**: Removed minimum width barriers and set appropriate size policies so panes can be resized freely
+- **Toolbar & button styling**: Fixed inconsistent button sizes and added checked styling to indicate toggle states
+
+### Technical
+- Refactored `mainwindow` preview overlay logic to track `fmOverlayFromSecondaryPane`, `fmOverlayCurrentIndex`, and `fmOverlaySourceView` so navigation behaves consistently
+- Added persistence for `FileManager/DualPane` and `FileManager/DualPaneSplitterSizes` in `QSettings`
+- Improved `fmScrollTreeToPath()` to avoid horizontal scrolling and to wait for async resolution when needed
+- Updated build CMake project version and Windows resource metadata to 1.6.0
 
 ## [1.5.0] - 2025-12-11
 
