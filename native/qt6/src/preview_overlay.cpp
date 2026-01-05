@@ -231,8 +231,10 @@ void PreviewOverlay::setupUi()
     setStyleSheet("QWidget { background-color: #000000; }");
     setAttribute(Qt::WA_StyledBackground, true);
 
-    // Set window flags to ensure overlay stays on top of parent window
-    setWindowFlags(Qt::Window | Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint);
+    // Set window flags - use normal window with title bar for proper move/resize support
+    // Removed FramelessWindowHint to fix HighDPI issues and enable window management
+    setWindowFlags(Qt::Window | Qt::WindowStaysOnTopHint);
+    setWindowTitle(tr("Preview"));
     setAttribute(Qt::WA_DeleteOnClose, false); // Don't auto-delete when closed
 
     QVBoxLayout *mainLayout = new QVBoxLayout(this);
@@ -709,6 +711,7 @@ void PreviewOverlay::showAsset(const QString &filePath, const QString &fileName,
     currentFilePath = filePath;
     currentFileType = fileType.toLower();
     fileNameLabel->setText(fileName);
+    setWindowTitle(tr("Preview - %1").arg(fileName));
 
     // Determine content type and route
     QStringList videoFormats = {"mp4", "avi", "mov", "mkv", "webm", "flv", "wmv", "m4v", "mxf"};
@@ -1571,17 +1574,25 @@ void PreviewOverlay::fitImageToView()
     if (originalPixmap.isNull()) return;
 
     // Calculate zoom to fit image in view
+    // Use the viewport's visible rect for proper HighDPI support
     QRectF viewRect = imageView->viewport()->rect();
     QRectF sceneRect = imageScene->sceneRect();
+
+    // Guard against empty rects
+    if (viewRect.isEmpty() || sceneRect.isEmpty()) return;
 
     double xRatio = viewRect.width() / sceneRect.width();
     double yRatio = viewRect.height() / sceneRect.height();
 
     currentZoom = qMin(xRatio, yRatio);
 
+    // Apply transform - fitInView handles HighDPI automatically
     imageView->resetTransform();
     imageView->scale(currentZoom, currentZoom);
     imageView->centerOn(imageItem);
+
+    // Ensure the view updates properly after transform
+    imageView->viewport()->update();
 }
 
 void PreviewOverlay::resetImageZoom()
@@ -1649,8 +1660,9 @@ void PreviewOverlay::showSequence(const QStringList &framePaths, const QString &
     // Stop video player if running
     m_gstreamerPlayer->stop();
 
-    // Update file name label
+    // Update file name label and window title
     fileNameLabel->setText(sequenceName);
+    setWindowTitle(tr("Preview - %1").arg(sequenceName));
 
     // Always show colorspace selector for image sequences.
     // Default: EXR -> Linear; others -> sRGB (user-changeable).
