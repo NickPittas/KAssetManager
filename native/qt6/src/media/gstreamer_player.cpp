@@ -12,6 +12,7 @@
 #include <QMutexLocker>
 #include <QApplication>
 #include <QScreen>
+#include <QWindow>
 #include <QElapsedTimer>
 #include <stdexcept>
 
@@ -763,9 +764,27 @@ void GStreamerPlayer::setWindowHandle()
 
         // Also set render rectangle to match widget size
         // CRITICAL: Use physical pixels (device pixel ratio) for HiDPI displays
-        qreal dpr = m_videoWidget->devicePixelRatio();
+        // Get DPR from the widget's window screen, with fallback to primary screen
+        qreal dpr = 1.0;
+        if (m_videoWidget->window() && m_videoWidget->window()->windowHandle()) {
+            QScreen* screen = m_videoWidget->window()->windowHandle()->screen();
+            if (screen) {
+                dpr = screen->devicePixelRatio();
+            }
+        }
+        if (dpr == 1.0) {
+            // Fallback to primary screen DPR if widget screen not available yet
+            QScreen* primaryScreen = QGuiApplication::primaryScreen();
+            if (primaryScreen) {
+                dpr = primaryScreen->devicePixelRatio();
+            }
+        }
         int physicalWidth = static_cast<int>(m_videoWidget->width() * dpr);
         int physicalHeight = static_cast<int>(m_videoWidget->height() * dpr);
+
+        qDebug() << "[GStreamerPlayer] setWindowHandle: DPR=" << dpr 
+                 << "logical=" << m_videoWidget->width() << "x" << m_videoWidget->height()
+                 << "physical=" << physicalWidth << "x" << physicalHeight;
 
         gst_video_overlay_set_render_rectangle(GST_VIDEO_OVERLAY(actualSink),
                                                 0, 0,
@@ -829,7 +848,21 @@ void GStreamerPlayer::updateRenderRectangle()
     // Update render rectangle to match current widget size
     // CRITICAL: Use physical pixels (device pixel ratio) for HiDPI displays
     if (GST_IS_VIDEO_OVERLAY(actualSink)) {
-        qreal dpr = m_videoWidget->devicePixelRatio();
+        // Get DPR from the widget's window screen, with fallback to primary screen
+        qreal dpr = 1.0;
+        if (m_videoWidget->window() && m_videoWidget->window()->windowHandle()) {
+            QScreen* screen = m_videoWidget->window()->windowHandle()->screen();
+            if (screen) {
+                dpr = screen->devicePixelRatio();
+            }
+        }
+        if (dpr == 1.0) {
+            // Fallback to primary screen DPR if widget screen not available yet
+            QScreen* primaryScreen = QGuiApplication::primaryScreen();
+            if (primaryScreen) {
+                dpr = primaryScreen->devicePixelRatio();
+            }
+        }
         int physicalWidth = static_cast<int>(m_videoWidget->width() * dpr);
         int physicalHeight = static_cast<int>(m_videoWidget->height() * dpr);
 
@@ -915,6 +948,10 @@ void GStreamerPlayer::play()
         m_playbackState = PlaybackState::Playing;
         emit playbackStateChanged(PlaybackState::Playing);
         m_positionTimer->start();
+
+        // Update render rectangle when playback starts to ensure correct HiDPI scaling
+        locker.unlock();
+        updateRenderRectangle();
 
         qDebug() << "[GStreamerPlayer] Playback started";
     }

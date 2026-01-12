@@ -74,8 +74,8 @@ endif()
 
 if(BUILD_APP)
 
-find_package(QT NAMES Qt6 REQUIRED COMPONENTS Widgets Multimedia MultimediaWidgets Sql Concurrent Svg SvgWidgets)
-find_package(Qt6 REQUIRED COMPONENTS Widgets Multimedia MultimediaWidgets Sql Concurrent Svg SvgWidgets)
+find_package(QT NAMES Qt6 REQUIRED COMPONENTS Widgets Multimedia MultimediaWidgets Sql Concurrent Svg SvgWidgets OpenGLWidgets)
+find_package(Qt6 REQUIRED COMPONENTS Widgets Multimedia MultimediaWidgets Sql Concurrent Svg SvgWidgets OpenGLWidgets)
 # Optional: Qt PDF (viewer) if available
 find_package(Qt6 QUIET COMPONENTS Pdf PdfWidgets)
 # ActiveQt (QAxObject) for Office-to-PDF conversion on Windows (optional)
@@ -102,97 +102,75 @@ if (WIN32)
   endif()
 endif()
 
-# Find OpenImageIO (optional - will use placeholders if not found)
-find_package(OpenImageIO CONFIG QUIET)
-if(OpenImageIO_FOUND)
-    message(STATUS "OpenImageIO found - advanced format support enabled")
-    add_compile_definitions(HAVE_OPENIMAGEIO)
-else()
-    message(WARNING "OpenImageIO not found - will use placeholder thumbnails for EXR/PSD/HDR formats. HINTS: ${_OIIO_HINTS}")
-endif()
-
 # OOXML ZIP reading (minizip-ng via vcpkg)
 find_package(minizip-ng CONFIG REQUIRED)
 
-# Find GStreamer (required for video/image sequence playback)
-find_package(PkgConfig QUIET)
-if(PkgConfig_FOUND)
-    pkg_check_modules(GSTREAMER QUIET gstreamer-1.0 gstreamer-video-1.0 gstreamer-audio-1.0 gstreamer-app-1.0)
-endif()
-if(NOT GSTREAMER_FOUND)
-    # Check for bundled GStreamer in third_party
-    set(_gstreamer_candidates
-        "${CMAKE_SOURCE_DIR}/../third_party/gstreamer"
-        "${CMAKE_SOURCE_DIR}/../../third_party/gstreamer"
-        "${CMAKE_CURRENT_LIST_DIR}/../third_party/gstreamer"
-        "${CMAKE_CURRENT_LIST_DIR}/../../third_party/gstreamer"
-    )
-    foreach(_candidate IN LISTS _gstreamer_candidates)
-        get_filename_component(_abs_candidate "${_candidate}" ABSOLUTE)
-        if(EXISTS "${_abs_candidate}/include" AND EXISTS "${_abs_candidate}/lib")
-            set(GSTREAMER_ROOT "${_abs_candidate}")
-            break()
-        endif()
-    endforeach()
+# =============================================================================
+# tlRender - Professional video/image sequence playback with OCIO color management
+# =============================================================================
+# tlRender provides:
+# - Image sequence playback (EXR, TIFF, DPX, etc.)
+# - Video playback (via FFmpeg)
+# - Full ACES/OpenColorIO color management pipeline
+# - Qt6 widgets for viewport and timeline
+#
+# The tlRender package includes all dependencies statically linked:
+# - OpenColorIO, OpenImageIO, OpenEXR, FFmpeg, etc.
+# - ftk (feather-tk) for UI/GL rendering
+# - Qt integration via tlQt and tlQtWidget libraries
 
-    if(GSTREAMER_ROOT AND EXISTS "${GSTREAMER_ROOT}")
-        set(GSTREAMER_INCLUDE_DIRS
-            "${GSTREAMER_ROOT}/include/gstreamer-1.0"
-            "${GSTREAMER_ROOT}/include/glib-2.0"
-            "${GSTREAMER_ROOT}/lib/glib-2.0/include"
-        )
-        set(GSTREAMER_LIBRARY_DIRS "${GSTREAMER_ROOT}/lib")
-        if(EXISTS "${GSTREAMER_ROOT}/include/gstreamer-1.0")
-            set(GSTREAMER_FOUND TRUE)
-            message(STATUS "Using bundled GStreamer from ${GSTREAMER_ROOT}")
-        endif()
+# Find tlRender installation
+set(_tlrender_candidates
+    "${CMAKE_SOURCE_DIR}/../third_party/tlRender-build/install-Release"
+    "${CMAKE_SOURCE_DIR}/../../third_party/tlRender-build/install-Release"
+    "${CMAKE_CURRENT_LIST_DIR}/../third_party/tlRender-build/install-Release"
+    "${CMAKE_CURRENT_LIST_DIR}/../../third_party/tlRender-build/install-Release"
+)
+foreach(_candidate IN LISTS _tlrender_candidates)
+    get_filename_component(_abs_candidate "${_candidate}" ABSOLUTE)
+    if(EXISTS "${_abs_candidate}/lib/cmake/tlRender")
+        set(TLRENDER_ROOT "${_abs_candidate}")
+        break()
     endif()
-endif()
-if(NOT GSTREAMER_FOUND)
-    message(FATAL_ERROR "GStreamer not found. Please install GStreamer 1.0 development packages.")
+endforeach()
+
+if(TLRENDER_ROOT)
+    # Add tlRender and ftk to prefix path
+    # ftk is in share/ftk, tlRender is in lib/cmake/tlRender
+    list(PREPEND CMAKE_PREFIX_PATH "${TLRENDER_ROOT}" "${TLRENDER_ROOT}/share/ftk")
+    message(STATUS "Using tlRender from ${TLRENDER_ROOT}")
+    
+    # Find tlRender package - this will find all dependencies automatically
+    # including ftk, OpenColorIO, OpenImageIO, OpenEXR, FFmpeg, etc.
+    find_package(tlRender CONFIG REQUIRED)
+    
+    # Check if Qt integration libraries are available
+    if(TARGET tlRender::tlQt AND TARGET tlRender::tlQtWidget)
+        set(TLRENDER_HAS_QT TRUE)
+        message(STATUS "tlRender Qt6 integration available (tlQt, tlQtWidget)")
+    else()
+        message(WARNING "tlRender Qt6 libraries not found. Rebuild with -DTLRENDER_QT6=ON")
+    endif()
+    
+    # tlRender found - all dependencies resolved via imported targets
+    message(STATUS "tlRender configured with OCIO and OIIO support")
+    
+    # OpenImageIO is provided by tlRender - add our define for code guards
+    add_compile_definitions(HAVE_OPENIMAGEIO)
+    
+    set(TLRENDER_FOUND TRUE)
+else()
+    message(FATAL_ERROR "tlRender not found! tlRender is required for video/image sequence playback.\n"
+        "Build tlRender by running:\n"
+        "  cd third_party/tlRender-build && .\\build-tlrender.ps1\n"
+        "This will build tlRender with all dependencies including OpenColorIO and OpenImageIO.")
 endif()
 
-# Find FFmpeg for conversion tool only (not for playback)
-find_package(PkgConfig QUIET)
-if(PkgConfig_FOUND)
-    pkg_check_modules(FFMPEG QUIET libavutil)
-endif()
-if(NOT FFMPEG_FOUND)
-    if(DEFINED ENV{FFMPEG_ROOT} AND NOT ENV{FFMPEG_ROOT} STREQUAL "")
-        set(FFMPEG_ROOT $ENV{FFMPEG_ROOT})
-    endif()
-    if(NOT FFMPEG_ROOT)
-        # Probe common in-repo locations (supports running CMake from native/qt6 or repo root)
-        set(_ffmpeg_candidates
-            "${CMAKE_SOURCE_DIR}/../third_party/ffmpeg"
-            "${CMAKE_SOURCE_DIR}/../../third_party/ffmpeg"
-            "${CMAKE_CURRENT_LIST_DIR}/../third_party/ffmpeg"
-            "${CMAKE_CURRENT_LIST_DIR}/../../third_party/ffmpeg"
-        )
-        foreach(_candidate IN LISTS _ffmpeg_candidates)
-            get_filename_component(_abs_candidate "${_candidate}" ABSOLUTE)
-            if(EXISTS "${_abs_candidate}/include" AND EXISTS "${_abs_candidate}/lib")
-                set(FFMPEG_ROOT "${_abs_candidate}")
-                break()
-            endif()
-        endforeach()
-    endif()
-    if(FFMPEG_ROOT AND EXISTS "${FFMPEG_ROOT}")
-        set(FFMPEG_INCLUDE_DIR "${FFMPEG_ROOT}/include")
-        set(FFMPEG_LIBRARY_DIRS "${FFMPEG_ROOT}/lib")
-        if(EXISTS "${FFMPEG_INCLUDE_DIR}")
-            set(FFMPEG_FOUND TRUE)
-            message(STATUS "Using custom FFmpeg from ${FFMPEG_ROOT}")
-        endif()
-    endif()
-endif()
-if(NOT FFMPEG_FOUND)
-    # Try vcpkg FFmpeg
-    find_path(FFMPEG_INCLUDE_DIR libavutil/log.h HINTS "$ENV{VCPKG_ROOT}/installed/${VCPKG_TARGET_TRIPLET}/include")
-    if(FFMPEG_INCLUDE_DIR)
-        set(FFMPEG_FOUND TRUE)
-        message(STATUS "FFmpeg headers found at ${FFMPEG_INCLUDE_DIR}")
-    endif()
+# FFmpeg is provided by tlRender - just set the HAVE_FFMPEG define
+# tlRender imports FFmpeg as transitive dependencies, so no separate linking needed
+if(TLRENDER_FOUND)
+    set(FFMPEG_FOUND TRUE)
+    message(STATUS "FFmpeg provided by tlRender (transitive dependency)")
 endif()
 
 # Standard Qt project setup (Qt6)
@@ -322,8 +300,14 @@ qt_add_executable(kassetmanagerqt WIN32
     src/thumbnail_generator_dialog.cpp
     src/thumbnail_generator_worker.h
     src/thumbnail_generator_worker.cpp
+    # GStreamer video player (legacy fallback)
     src/media/gstreamer_player.h
     src/media/gstreamer_player.cpp
+    # tlRender integration - professional video/sequence playback with OCIO
+    src/media/tlrender_player.h
+    src/media/tlrender_player.cpp
+    src/media/tlrender_widget.h
+    src/media/tlrender_widget.cpp
     src/theme_manager.h
     src/theme_manager.cpp
     src/annotation_items.h
@@ -339,86 +323,75 @@ target_include_directories(kassetmanagerqt PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
-# Add GStreamer include directories
-if(GSTREAMER_FOUND)
-    if(GSTREAMER_INCLUDE_DIRS)
-        target_include_directories(kassetmanagerqt PRIVATE ${GSTREAMER_INCLUDE_DIRS})
+# Add tlRender include directories
+if(TLRENDER_FOUND)
+    if(TLRENDER_INCLUDE_DIR)
+        target_include_directories(kassetmanagerqt PRIVATE ${TLRENDER_INCLUDE_DIR})
+    elseif(TLRENDER_ROOT)
+        target_include_directories(kassetmanagerqt PRIVATE "${TLRENDER_ROOT}/include")
     endif()
 endif()
 
-# Add FFmpeg include directory if found
-if(FFMPEG_FOUND)
-    if(FFMPEG_INCLUDE_DIR)
-        target_include_directories(kassetmanagerqt PRIVATE ${FFMPEG_INCLUDE_DIR})
-    elseif(FFMPEG_INCLUDE_DIRS)
-        target_include_directories(kassetmanagerqt PRIVATE ${FFMPEG_INCLUDE_DIRS})
-    endif()
-endif()
-# Link GStreamer libraries
-if(GSTREAMER_FOUND)
-    if(NOT DEFINED GSTREAMER_LIBRARY_DIRS)
-        if(GSTREAMER_ROOT)
-            set(GSTREAMER_LIBRARY_DIRS "${GSTREAMER_ROOT}/lib")
-        endif()
-    endif()
+# =============================================================================
+# Link tlRender using CMake imported targets
+# =============================================================================
+# The tlRender CMake package exports properly configured targets with all
+# INTERFACE_COMPILE_DEFINITIONS (TL_STATIC, FTK_STATIC, etc.) and
+# INTERFACE_LINK_LIBRARIES set up. This means we just link to the top-level
+# targets and everything else is resolved automatically.
 
-    find_library(GSTREAMER_LIB gstreamer-1.0 HINTS ${GSTREAMER_LIBRARY_DIRS})
-    find_library(GSTREAMER_VIDEO_LIB gstvideo-1.0 HINTS ${GSTREAMER_LIBRARY_DIRS})
-    find_library(GSTREAMER_AUDIO_LIB gstaudio-1.0 HINTS ${GSTREAMER_LIBRARY_DIRS})
-    find_library(GSTREAMER_APP_LIB gstapp-1.0 HINTS ${GSTREAMER_LIBRARY_DIRS})
-    find_library(GSTREAMER_BASE_LIB gstbase-1.0 HINTS ${GSTREAMER_LIBRARY_DIRS})
-    find_library(GLIB_LIB glib-2.0 HINTS ${GSTREAMER_LIBRARY_DIRS})
-    find_library(GOBJECT_LIB gobject-2.0 HINTS ${GSTREAMER_LIBRARY_DIRS})
-
-    if(GSTREAMER_LIB AND GSTREAMER_VIDEO_LIB AND GSTREAMER_AUDIO_LIB AND GSTREAMER_APP_LIB AND GLIB_LIB AND GOBJECT_LIB)
+if(TLRENDER_FOUND)
+    # Link tlRender core libraries via imported targets
+    # These targets bring in all transitive dependencies automatically
+    target_link_libraries(kassetmanagerqt PRIVATE
+        tlRender::tlTimeline    # Timeline/player functionality
+        tlRender::tlGL          # OpenGL rendering
+        tlRender::tlIO          # File I/O (EXR, TIFF, DPX, etc.)
+        tlRender::tlCore        # Core utilities
+        tlRender::tlUI          # UI widgets
+        tlRender::tlDevice      # Device handling
+    )
+    
+    # Link Qt integration libraries if available
+    if(TLRENDER_HAS_QT)
         target_link_libraries(kassetmanagerqt PRIVATE
-            ${GSTREAMER_LIB}
-            ${GSTREAMER_VIDEO_LIB}
-            ${GSTREAMER_AUDIO_LIB}
-            ${GSTREAMER_APP_LIB}
-            ${GSTREAMER_BASE_LIB}
-            ${GLIB_LIB}
-            ${GOBJECT_LIB}
+            tlRender::tlQt          # Qt object wrappers
+            tlRender::tlQtWidget    # Qt widget implementations (Viewport, etc.)
         )
-        target_compile_definitions(kassetmanagerqt PRIVATE HAVE_GSTREAMER)
-        message(STATUS "GStreamer libraries linked successfully")
-    else()
-        message(FATAL_ERROR "GStreamer libraries not found in ${GSTREAMER_LIBRARY_DIRS}")
     endif()
+    
+    # Add compile definition to enable tlRender code paths
+    target_compile_definitions(kassetmanagerqt PRIVATE HAVE_TLRENDER)
+    
+    # Windows system libraries required by tlRender dependencies
+    if(WIN32)
+        target_link_libraries(kassetmanagerqt PRIVATE
+            opengl32
+            winmm
+            imm32
+            version
+            setupapi
+            # Windows Media Foundation (for WMF decoder)
+            mf
+            mfplat
+            mfreadwrite
+            mfuuid
+            propsys
+            wmcodecdspuuid
+            # Other Windows libs
+            psapi
+            dwmapi
+        )
+    endif()
+    
+    message(STATUS "tlRender linked via imported targets with OCIO color management")
 endif()
 
-# Try to link FFmpeg core libs when headers are present (for conversion tool only)
-if(FFMPEG_FOUND)
-    if(NOT DEFINED FFMPEG_LIBRARY_DIRS)
-        if(DEFINED ENV{VCPKG_ROOT})
-            set(FFMPEG_LIBRARY_DIRS "$ENV{VCPKG_ROOT}/installed/${VCPKG_TARGET_TRIPLET}/lib")
-        endif()
-    endif()
-    find_library(FFMPEG_AVFORMAT avformat HINTS ${FFMPEG_LIBRARY_DIRS})
-    find_library(FFMPEG_AVCODEC  avcodec  HINTS ${FFMPEG_LIBRARY_DIRS})
-    find_library(FFMPEG_AVUTIL     avutil     HINTS ${FFMPEG_LIBRARY_DIRS})
-    find_library(FFMPEG_SWSCALE    swscale    HINTS ${FFMPEG_LIBRARY_DIRS})
-    find_library(FFMPEG_SWRESAMPLE swresample HINTS ${FFMPEG_LIBRARY_DIRS})
-
-    if(FFMPEG_AVFORMAT AND FFMPEG_AVCODEC AND FFMPEG_AVUTIL)
-        target_link_libraries(kassetmanagerqt PRIVATE ${FFMPEG_AVFORMAT} ${FFMPEG_AVCODEC} ${FFMPEG_AVUTIL})
-        if(FFMPEG_SWSCALE)
-            target_link_libraries(kassetmanagerqt PRIVATE ${FFMPEG_SWSCALE})
-            message(STATUS "FFmpeg swscale linked: ${FFMPEG_SWSCALE}")
-        else()
-            message(WARNING "FFmpeg swscale not found. FFmpeg thumbnail fallback will be disabled.")
-        endif()
-        if(FFMPEG_SWRESAMPLE)
-            target_link_libraries(kassetmanagerqt PRIVATE ${FFMPEG_SWRESAMPLE})
-            message(STATUS "FFmpeg swresample linked: ${FFMPEG_SWRESAMPLE}")
-        else()
-            message(WARNING "FFmpeg swresample not found. FFmpeg audio playback will be disabled.")
-        endif()
-        target_compile_definitions(kassetmanagerqt PRIVATE HAVE_FFMPEG)
-        message(STATUS "FFmpeg libraries linked: ${FFMPEG_AVFORMAT}; ${FFMPEG_AVCODEC}; ${FFMPEG_AVUTIL}")
-    else()
-        message(WARNING "FFmpeg headers found but libraries missing. Install via vcpkg: vcpkg install ffmpeg:x64-windows")
-    endif()
+# FFmpeg is provided by tlRender as a transitive dependency
+# Just set the compile definition for code that checks HAVE_FFMPEG
+if(TLRENDER_FOUND)
+    target_compile_definitions(kassetmanagerqt PRIVATE HAVE_FFMPEG)
+    message(STATUS "FFmpeg support enabled via tlRender")
 endif()
 
 
@@ -430,6 +403,7 @@ target_link_libraries(kassetmanagerqt PRIVATE
     Qt6::Concurrent
     Qt6::Svg
     Qt6::SvgWidgets
+    Qt6::OpenGLWidgets
 )
 # Link Qt PDF if available (widgets optional)
 if (TARGET Qt6::Pdf)
@@ -440,14 +414,11 @@ if (TARGET Qt6::PdfWidgets)
   target_link_libraries(kassetmanagerqt PRIVATE Qt6::PdfWidgets)
   target_compile_definitions(kassetmanagerqt PRIVATE HAVE_QT_PDF_WIDGETS)
 endif()
-# Link OpenImageIO if found
-if(OpenImageIO_FOUND)
-    target_link_libraries(kassetmanagerqt PRIVATE OpenImageIO::OpenImageIO)
-endif()
 
-# Link tlRender if enabled and found
-## tlRender linking removed
-# Link minizip-ng (vcpkg target)
+# OpenImageIO is provided by tlRender - no need to link separately
+# The HAVE_OPENIMAGEIO define is set in the tlRender section above
+
+# Link minizip-ng (vcpkg target) - separate from tlRender's bundled minizip-ng
 target_link_libraries(kassetmanagerqt PRIVATE MINIZIP::minizip-ng)
 target_compile_definitions(kassetmanagerqt PRIVATE HAVE_MINIZIP_NG)
 
@@ -550,19 +521,14 @@ if (WIN32)
     message(WARNING "Run scripts/download-everything-sdk.ps1 to download the Everything SDK")
   endif()
 
-  # Install GStreamer runtime files
-  if(GSTREAMER_ROOT AND EXISTS "${GSTREAMER_ROOT}")
-    # Install GStreamer DLLs from bin directory
-    file(GLOB _GSTREAMER_DLLS "${GSTREAMER_ROOT}/bin/*.dll")
-    foreach(_dll ${_GSTREAMER_DLLS})
+  # Install tlRender runtime files (DLLs if using shared libs)
+  if(TLRENDER_ROOT AND EXISTS "${TLRENDER_ROOT}/bin")
+    file(GLOB _TLRENDER_DLLS "${TLRENDER_ROOT}/bin/*.dll")
+    foreach(_dll ${_TLRENDER_DLLS})
       install(FILES "${_dll}" DESTINATION bin)
     endforeach()
-    message(STATUS "GStreamer DLLs will be installed from ${GSTREAMER_ROOT}/bin")
-
-    # Install GStreamer plugins
-    if(EXISTS "${GSTREAMER_ROOT}/lib/gstreamer-1.0")
-      install(DIRECTORY "${GSTREAMER_ROOT}/lib/gstreamer-1.0" DESTINATION lib)
-      message(STATUS "GStreamer plugins will be installed from ${GSTREAMER_ROOT}/lib/gstreamer-1.0")
+    if(_TLRENDER_DLLS)
+      message(STATUS "tlRender DLLs will be installed from ${TLRENDER_ROOT}/bin")
     endif()
   endif()
 endif()

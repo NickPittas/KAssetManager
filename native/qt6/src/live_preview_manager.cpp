@@ -2,7 +2,9 @@
 
 #include "oiio_image_loader.h"
 #include "utils.h"
+#if defined(HAVE_GSTREAMER) && HAVE_GSTREAMER
 #include "media/gstreamer_player.h"
+#endif
 #include "thumbnail_cache_manager.h"
 
 

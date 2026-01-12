@@ -39,7 +39,12 @@
 
 
 #include "oiio_image_loader.h"
+#ifdef HAVE_TLRENDER
+#include "media/tlrender_player.h"
+#include "media/tlrender_widget.h"
+#else
 #include "media/gstreamer_player.h"
+#endif
 
 // Forward declarations
 class SequenceFrameCache;
@@ -382,6 +387,15 @@ private slots:
     void onSequenceTimerTick();
     void onColorSpaceChanged(int index);
 
+#ifdef HAVE_TLRENDER
+    // TLRenderPlayer signal handlers
+    void onPlayerPositionChanged(qint64 positionMs);
+    void onPlayerDurationChanged(qint64 durationMs);
+    void onPlayerMediaInfo(const TLRenderPlayer::MediaInfo& info);
+    void onPlayerPlaybackStateChanged(TLRenderPlayer::PlaybackState state);
+    void onPlayerError(const QString& errorString);
+    void onPlayerEndOfStream();
+#else
     // GStreamerPlayer signal handlers
     void onGStreamerPositionChanged(qint64 positionMs);
     void onGStreamerDurationChanged(qint64 durationMs);
@@ -389,6 +403,7 @@ private slots:
     void onGStreamerPlaybackStateChanged(GStreamerPlayer::PlaybackState state);
     void onGStreamerError(const QString& errorString);
     void onGStreamerEndOfStream();
+#endif
     
     // Annotation slots
     void onToggleAnnotation();
@@ -474,8 +489,14 @@ private:
     QTableView *tableView;
     QStandardItemModel *tableModel;
 
+#ifdef HAVE_TLRENDER
+    // tlRender media player (with OCIO support)
+    TLRenderPlayer *m_player;
+    TLRenderWidget *m_renderWidget;
+#else
     // GStreamer media player
     GStreamerPlayer *m_gstreamerPlayer;
+#endif
 #ifdef HAVE_QT_PDF
     QPdfDocument *pdfDoc;
     QPdfView *pdfView;

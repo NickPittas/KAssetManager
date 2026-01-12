@@ -1,6 +1,10 @@
 #include "thumbnail_generator_worker.h"
 #include "thumbnail_cache_manager.h"
+#if defined(HAVE_GSTREAMER) && HAVE_GSTREAMER
 #include "media/gstreamer_player.h"
+#elif defined(HAVE_TLRENDER) && HAVE_TLRENDER
+#include "media/tlrender_player.h"
+#endif
 #include "oiio_image_loader.h"
 #include <QFileInfo>
 #include <QImage>
@@ -225,6 +229,7 @@ bool ThumbnailGeneratorWorker::generateVideoThumbnails(int index, const QString&
     ThumbnailCacheManager& cache = ThumbnailCacheManager::instance();
     int generated = 0;
 
+#if defined(HAVE_GSTREAMER) && HAVE_GSTREAMER
     for (int i = 0; i < positions.size(); ++i) {
         qreal pos = positions[i];
 
@@ -262,6 +267,13 @@ bool ThumbnailGeneratorWorker::generateVideoThumbnails(int index, const QString&
             emit fileProgress(index, (i + 1) * 100 / positions.size());
         }, Qt::QueuedConnection);
     }
+#else
+    // Video thumbnail generation requires GStreamer or tlRender
+    // For now, generate a single thumbnail from the first frame using FFmpeg if available
+    emit logLine(QString("  WARNING: Video thumbnail generation not available (no GStreamer)"));
+    Q_UNUSED(index);
+    Q_UNUSED(positions);
+#endif
 
     emit logLine(QString("  Generated %1/%2 thumbnails").arg(generated).arg(positions.size()));
     return generated > 0;

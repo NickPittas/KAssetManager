@@ -1,5 +1,36 @@
 #include "preview_overlay.h"
+#ifdef HAVE_TLRENDER
+#include "media/tlrender_player.h"
+#include "media/tlrender_widget.h"
+// Compatibility macros for tlRender
+#define PLAYER_PTR m_player
+#define PLAYER_PLAY() m_player->play()
+#define PLAYER_PAUSE() m_player->pause()
+#define PLAYER_STOP() m_player->stop()
+#define PLAYER_SEEK(pos) m_player->seek(pos)
+#define PLAYER_DURATION() m_player->duration()
+#define PLAYER_POSITION() m_player->position()
+#define PLAYER_SET_URI(uri) m_player->load(uri)
+#define PLAYER_STATE() m_player->playbackState()
+#define PLAYER_STATE_PLAYING TLRenderPlayer::PlaybackState::Playing
+#define PLAYER_STATE_PAUSED TLRenderPlayer::PlaybackState::Paused
+#define PLAYER_STATE_STOPPED TLRenderPlayer::PlaybackState::Stopped
+#else
 #include "media/gstreamer_player.h"
+// Compatibility macros for GStreamer
+#define PLAYER_PTR m_gstreamerPlayer
+#define PLAYER_PLAY() m_gstreamerPlayer->play()
+#define PLAYER_PAUSE() m_gstreamerPlayer->pause()
+#define PLAYER_STOP() m_gstreamerPlayer->stop()
+#define PLAYER_SEEK(pos) m_gstreamerPlayer->seek(pos)
+#define PLAYER_DURATION() m_gstreamerPlayer->duration()
+#define PLAYER_POSITION() m_gstreamerPlayer->position()
+#define PLAYER_SET_URI(uri) m_gstreamerPlayer->setUri(uri)
+#define PLAYER_STATE() m_gstreamerPlayer->state()
+#define PLAYER_STATE_PLAYING GStreamerPlayer::PlaybackState::Playing
+#define PLAYER_STATE_PAUSED GStreamerPlayer::PlaybackState::Paused
+#define PLAYER_STATE_STOPPED GStreamerPlayer::PlaybackState::Stopped
+#endif
 #include "oiio_image_loader.h"
 #include <QMessageBox>
 #include <QVBoxLayout>
@@ -133,7 +164,12 @@ PreviewOverlay::PreviewOverlay(QWidget *parent)
     , imageScene(nullptr)
     , imageItem(nullptr)
     , videoWidget(nullptr)
+#ifdef HAVE_TLRENDER
+    , m_player(nullptr)
+    , m_renderWidget(nullptr)
+#else
     , m_gstreamerPlayer(nullptr)
+#endif
 #ifdef HAVE_QT_PDF
     , pdfDoc(nullptr)
     , pdfView(nullptr)
@@ -155,6 +191,23 @@ PreviewOverlay::PreviewOverlay(QWidget *parent)
     , annotationToolbar(nullptr)
     , currentAnnotatedFrame(-1)
 {
+#ifdef HAVE_TLRENDER
+    // Initialize tlRender globally (call once)
+    TLRenderPlayer::initialize();
+
+    // Create tlRender player for video and image sequence playback with OCIO support
+    m_player = new TLRenderPlayer(this);
+
+    // Connect TLRenderPlayer signals to PreviewOverlay handlers
+    connect(m_player, &TLRenderPlayer::positionChanged, this, &PreviewOverlay::onPlayerPositionChanged);
+    connect(m_player, &TLRenderPlayer::durationChanged, this, &PreviewOverlay::onPlayerDurationChanged);
+    connect(m_player, &TLRenderPlayer::mediaInfoReady, this, &PreviewOverlay::onPlayerMediaInfo);
+    connect(m_player, &TLRenderPlayer::playbackStateChanged, this, &PreviewOverlay::onPlayerPlaybackStateChanged);
+    connect(m_player, &TLRenderPlayer::error, this, &PreviewOverlay::onPlayerError);
+    connect(m_player, &TLRenderPlayer::endOfStream, this, &PreviewOverlay::onPlayerEndOfStream);
+
+    qDebug() << "[PreviewOverlay] TLRenderPlayer initialized with OCIO color management";
+#else
     // Initialize GStreamer globally (call once)
     GStreamerPlayer::initialize();
 
@@ -170,6 +223,7 @@ PreviewOverlay::PreviewOverlay(QWidget *parent)
     connect(m_gstreamerPlayer, &GStreamerPlayer::endOfStream, this, &PreviewOverlay::onGStreamerEndOfStream);
 
     qDebug() << "[PreviewOverlay] GStreamerPlayer initialized with hardware-accelerated playback";
+#endif
 
     setupUi();
     setFocusPolicy(Qt::StrongFocus);
@@ -648,11 +702,25 @@ void PreviewOverlay::setupUi()
         navNextBtn->show();
     }
 
+#ifdef HAVE_TLRENDER
+    // Set video widget for tlRender rendering
+    m_renderWidget = new TLRenderWidget(this);
+    m_renderWidget->setPlayer(m_player);
+    // Replace videoWidget with m_renderWidget in the layout
+    if (videoWidget && videoWidget->parentWidget()) {
+        QLayout* parentLayout = videoWidget->parentWidget()->layout();
+        if (parentLayout) {
+            parentLayout->replaceWidget(videoWidget, m_renderWidget);
+        }
+    }
+    // Set initial volume
+    m_player->setVolume(0.5);
+#else
     // Set video widget for GStreamer rendering
     m_gstreamerPlayer->setVideoWidget(videoWidget);
-
     // Set initial volume
     m_gstreamerPlayer->setVolume(0.5);
+#endif;
     
     // Initialize annotation system
     annotationLayer = new AnnotationLayer(imageScene, this);
@@ -794,7 +862,7 @@ void PreviewOverlay::showImage(const QString &filePath)
     positionNavButtons(imageView->viewport());
 
     // CRITICAL: Stop any video playback
-    m_gstreamerPlayer->stop();
+    PLAYER_STOP();
 
     // Check if this is an HDR/EXR image
     QFileInfo fileInfo(filePath);
@@ -870,7 +938,7 @@ void PreviewOverlay::showImage(const QString &filePath)
 void PreviewOverlay::showVideo(const QString &filePath)
 {
     // Stop any existing playback
-    m_gstreamerPlayer->stop();
+    PLAYER_STOP();
 
     // Hide other content and show video widget
     if (textView) textView->hide();
@@ -882,9 +950,20 @@ void PreviewOverlay::showVideo(const QString &filePath)
 
     videoWidget->show();
 
+#ifdef HAVE_TLRENDER
+    // CRITICAL: Set render widget AFTER show() to ensure valid window handle
+    if (!m_renderWidget) {
+        m_renderWidget = new TLRenderWidget(this);
+        m_renderWidget->setPlayer(m_player);
+    }
+    m_renderWidget->setGeometry(videoWidget->geometry());
+    m_renderWidget->show();
+    videoWidget->hide(); // Hide the placeholder widget
+#else
     // CRITICAL: Set video widget AFTER show() to ensure valid window handle
     // GStreamer needs the native window handle (WId) which is only available after the widget is shown
     m_gstreamerPlayer->setVideoWidget(videoWidget);
+#endif
 
     // Anchor nav arrows to the video widget
     positionNavButtons(videoWidget);
@@ -896,7 +975,11 @@ void PreviewOverlay::showVideo(const QString &filePath)
     // Enable and show audio controls for video
     if (muteBtn) {
         muteBtn->setEnabled(true);
+#ifdef HAVE_TLRENDER
+        muteBtn->setIcon(m_player->isMuted() ? muteIcon : audioIcon);
+#else
         muteBtn->setIcon(m_gstreamerPlayer->isMuted() ? muteIcon : audioIcon);
+#endif
         muteBtn->show();
     }
     if (volumeSlider) {
@@ -907,7 +990,7 @@ void PreviewOverlay::showVideo(const QString &filePath)
     // Hide alpha toggle for videos
     if (alphaCheck) alphaCheck->hide();
 
-    // Hide colorspace selector for videos (GStreamer handles colorspace automatically)
+    // Hide colorspace selector for videos (player handles colorspace automatically)
     if (colorSpaceLabel) colorSpaceLabel->hide();
     if (colorSpaceCombo) colorSpaceCombo->hide();
 
@@ -917,9 +1000,14 @@ void PreviewOverlay::showVideo(const QString &filePath)
     // Default timeline context while media info is loading
     positionSlider->setTimelineContext(true, 24.0);
 
+#ifdef HAVE_TLRENDER
+    // Load and play video with tlRender
+    m_player->load(filePath);
+#else
     // Load and play video with GStreamer
     m_gstreamerPlayer->loadMedia(filePath);
-    m_gstreamerPlayer->play();
+#endif
+    PLAYER_PLAY();
 
     controlsTimer->start();
 }
@@ -935,15 +1023,15 @@ void PreviewOverlay::onPlayPauseClicked()
         }
     } else {
         // Handle video playback with GStreamer
-        if (m_gstreamerPlayer->state() == GStreamerPlayer::PlaybackState::Playing) {
+        if (PLAYER_STATE() == PLAYER_STATE_PLAYING) {
             // Capture position before pausing
-            lastKnownPosition = m_gstreamerPlayer->position();
-            m_gstreamerPlayer->pause();
+            lastKnownPosition = PLAYER_POSITION();
+            PLAYER_PAUSE();
             // Update timecode immediately
-            qint64 durationMs = m_gstreamerPlayer->duration();
+            qint64 durationMs = PLAYER_DURATION();
             updateVideoTimeDisplays(lastKnownPosition, durationMs);
         } else {
-            m_gstreamerPlayer->play();
+            PLAYER_PLAY();
         }
     }
     controlsTimer->start();
@@ -959,11 +1047,11 @@ void PreviewOverlay::onSliderMoved(int position)
     }
 
     // GStreamer path - always do live scrubbing
-    m_gstreamerPlayer->seek(position);
+    PLAYER_SEEK(position);
     
     // Update timecode immediately during scrubbing
     lastKnownPosition = position;
-    qint64 durationMs = m_gstreamerPlayer->duration();
+    qint64 durationMs = PLAYER_DURATION();
     updateVideoTimeDisplays(position, durationMs);
     
     // Don't recapture frame during drag if in annotation mode (too slow)
@@ -974,14 +1062,23 @@ void PreviewOverlay::onSliderMoved(int position)
 
 void PreviewOverlay::onVolumeChanged(int value)
 {
+#ifdef HAVE_TLRENDER
+    m_player->setVolume(value / 100.0);
+#else
     m_gstreamerPlayer->setVolume(value / 100.0);
+#endif
     controlsTimer->start();
 }
 
 void PreviewOverlay::onToggleMute()
 {
+#ifdef HAVE_TLRENDER
+    const bool newMuted = !m_player->isMuted();
+    m_player->setMuted(newMuted);
+#else
     const bool newMuted = !m_gstreamerPlayer->isMuted();
     m_gstreamerPlayer->setMuted(newMuted);
+#endif
     if (muteBtn) {
         muteBtn->setIcon(newMuted ? muteIcon : audioIcon);
     }
@@ -997,12 +1094,12 @@ void PreviewOverlay::onSliderPressed()
         return;
     }
 
-    wasPlayingBeforeSeek = (m_gstreamerPlayer->state() == GStreamerPlayer::PlaybackState::Playing);
+    wasPlayingBeforeSeek = (PLAYER_STATE() == PLAYER_STATE_PLAYING);
     // Capture position before pausing for seek
-    lastKnownPosition = m_gstreamerPlayer->position();
-    m_gstreamerPlayer->pause();
+    lastKnownPosition = PLAYER_POSITION();
+    PLAYER_PAUSE();
     // Update timecode immediately
-    qint64 durationMs = m_gstreamerPlayer->duration();
+    qint64 durationMs = PLAYER_DURATION();
     updateVideoTimeDisplays(lastKnownPosition, durationMs);
 }
 
@@ -1017,7 +1114,7 @@ void PreviewOverlay::onSliderReleased()
         return;
     }
 
-    m_gstreamerPlayer->seek(pos);
+    PLAYER_SEEK(pos);
     
     // Calculate and explicitly track the frame number we seeked to
     double fps = detectedFps > 0.0 ? detectedFps : 24.0;
@@ -1026,14 +1123,14 @@ void PreviewOverlay::onSliderReleased()
     
     // Update lastKnownPosition immediately for timecode display
     lastKnownPosition = pos;
-    qint64 durationMs = m_gstreamerPlayer->duration();
+    qint64 durationMs = PLAYER_DURATION();
     updateVideoTimeDisplays(pos, durationMs);
     
     // If in annotation mode for video, update frame immediately
     if (annotationModeEnabled && isVideo) {
         updateVideoAnnotationFrame();
     } else if (wasPlayingBeforeSeek) {
-        m_gstreamerPlayer->play();
+        PLAYER_PLAY();
     }
     
     userSeeking = false;
@@ -1051,8 +1148,12 @@ void PreviewOverlay::onStepNextFrame()
         return;
     }
 
-    // GStreamer path - professional frame stepping
+    // Player path - professional frame stepping
+#ifdef HAVE_TLRENDER
+    m_player->stepForward();
+#else
     m_gstreamerPlayer->stepForward();
+#endif
     
     // Explicitly track frame number for frame-accurate annotations
     if (lastKnownVideoFrame >= 0) {
@@ -1060,14 +1161,14 @@ void PreviewOverlay::onStepNextFrame()
     } else {
         // Initialize from current position
         double fps = detectedFps > 0.0 ? detectedFps : 24.0;
-        lastKnownVideoFrame = static_cast<int>(qRound((m_gstreamerPlayer->position() / 1000.0) * fps)) + 1;
+        lastKnownVideoFrame = static_cast<int>(qRound((PLAYER_POSITION() / 1000.0) * fps)) + 1;
     }
     qDebug() << "[PreviewOverlay] Step forward - explicitly set frame to:" << lastKnownVideoFrame;
     
-    // Wait briefly for GStreamer to update position, then update timecode
+    // Wait briefly for player to update position, then update timecode
     QTimer::singleShot(50, this, [this]() {
-        lastKnownPosition = m_gstreamerPlayer->position();
-        qint64 durationMs = m_gstreamerPlayer->duration();
+        lastKnownPosition = PLAYER_POSITION();
+        qint64 durationMs = PLAYER_DURATION();
         updateVideoTimeDisplays(lastKnownPosition, durationMs);
     });
     
@@ -1088,8 +1189,12 @@ void PreviewOverlay::onStepPrevFrame()
         return;
     }
 
-    // GStreamer path - professional frame stepping
+    // Player path - professional frame stepping
+#ifdef HAVE_TLRENDER
+    m_player->stepBackward();
+#else
     m_gstreamerPlayer->stepBackward();
+#endif
     
     // Explicitly track frame number for frame-accurate annotations
     if (lastKnownVideoFrame >= 0) {
@@ -1097,14 +1202,14 @@ void PreviewOverlay::onStepPrevFrame()
     } else {
         // Initialize from current position
         double fps = detectedFps > 0.0 ? detectedFps : 24.0;
-        lastKnownVideoFrame = qMax(0, static_cast<int>(qRound((m_gstreamerPlayer->position() / 1000.0) * fps)) - 1);
+        lastKnownVideoFrame = qMax(0, static_cast<int>(qRound((PLAYER_POSITION() / 1000.0) * fps)) - 1);
     }
     qDebug() << "[PreviewOverlay] Step backward - explicitly set frame to:" << lastKnownVideoFrame;
     
     // Wait briefly for GStreamer to update position, then update timecode
     QTimer::singleShot(50, this, [this]() {
-        lastKnownPosition = m_gstreamerPlayer->position();
-        qint64 durationMs = m_gstreamerPlayer->duration();
+        lastKnownPosition = PLAYER_POSITION();
+        qint64 durationMs = PLAYER_DURATION();
         updateVideoTimeDisplays(lastKnownPosition, durationMs);
     });
     
@@ -1145,7 +1250,7 @@ void PreviewOverlay::updatePlayPauseButton()
     if (isSequence) {
         playPauseBtn->setIcon(sequencePlaying ? pauseIcon : playIcon);
     } else {
-        playPauseBtn->setIcon(m_gstreamerPlayer->state() == GStreamerPlayer::PlaybackState::Playing ? pauseIcon : playIcon);
+        playPauseBtn->setIcon(PLAYER_STATE() == PLAYER_STATE_PLAYING ? pauseIcon : playIcon);
     }
 }
 void PreviewOverlay::positionNavButtons(QWidget* container)
@@ -1337,7 +1442,11 @@ void PreviewOverlay::keyPressEvent(QKeyEvent *event)
                     playSequence();
                 }
             } else if (isVideo) {
+#ifdef HAVE_TLRENDER
+                m_player->setPlaybackRate(-1.0);
+#else
                 m_gstreamerPlayer->setPlaybackRate(-1.0);
+#endif
             }
             return;
         case Qt::Key_K:
@@ -1347,7 +1456,7 @@ void PreviewOverlay::keyPressEvent(QKeyEvent *event)
                     pauseSequence();
                 }
             } else if (isVideo) {
-                m_gstreamerPlayer->pause();
+                PLAYER_PAUSE();
             }
             return;
         case Qt::Key_L:
@@ -1359,12 +1468,21 @@ void PreviewOverlay::keyPressEvent(QKeyEvent *event)
                 }
             } else if (isVideo) {
                 // If already playing forward, just ensure rate is 1.0
-                if (m_gstreamerPlayer->state() == GStreamerPlayer::PlaybackState::Playing &&
+#ifdef HAVE_TLRENDER
+                if (PLAYER_STATE() == TLRenderPlayer::PlaybackState::Playing &&
+                    m_player->playbackRate() > 0) {
+                    // Already playing forward, do nothing or could increase speed
+                } else {
+                    m_player->setPlaybackRate(1.0);
+                }
+#else
+                if (PLAYER_STATE() == PLAYER_STATE_PLAYING &&
                     m_gstreamerPlayer->playbackRate() > 0) {
                     // Already playing forward, do nothing or could increase speed
                 } else {
                     m_gstreamerPlayer->setPlaybackRate(1.0);
                 }
+#endif
             }
             return;
 
@@ -1403,7 +1521,11 @@ void PreviewOverlay::resizeEvent(QResizeEvent *event)
 
     // Update video render rectangle if showing a video
     if (isVideo && videoWidget && videoWidget->isVisible()) {
+#ifdef HAVE_TLRENDER
+        if (m_renderWidget) m_renderWidget->update();
+#else
         m_gstreamerPlayer->updateRenderRectangle();
+#endif
         
         // Update annotation overlay geometry if enabled
         if (annotationModeEnabled && annotationOverlayView && annotationOverlayView->isVisible()) {
@@ -1658,7 +1780,7 @@ void PreviewOverlay::showSequence(const QStringList &framePaths, const QString &
 
 
     // Stop video player if running
-    m_gstreamerPlayer->stop();
+    PLAYER_STOP();
 
     // Update file name label and window title
     fileNameLabel->setText(sequenceName);
@@ -2047,7 +2169,7 @@ void PreviewOverlay::stopPlayback()
     qDebug() << "[PreviewOverlay] Stopping playback";
 
     // Stop GStreamer video playback
-    m_gstreamerPlayer->stop();
+    PLAYER_STOP();
 
     // Stop sequence playback
     if (sequencePlaying) {
@@ -2068,16 +2190,105 @@ void PreviewOverlay::stopPlayback()
 
 void PreviewOverlay::onPositionChanged(qint64 position)
 {
-    // Forward to GStreamer handler
+#ifdef HAVE_TLRENDER
+    onPlayerPositionChanged(position);
+#else
     onGStreamerPositionChanged(position);
+#endif
 }
 
 void PreviewOverlay::onDurationChanged(qint64 duration)
 {
-    // Forward to GStreamer handler
+#ifdef HAVE_TLRENDER
+    onPlayerDurationChanged(duration);
+#else
     onGStreamerDurationChanged(duration);
+#endif
 }
 
+#ifdef HAVE_TLRENDER
+// ============================================================================
+// TLRenderPlayer Signal Handlers
+// ============================================================================
+
+void PreviewOverlay::onPlayerPositionChanged(qint64 positionMs)
+{
+    if (!positionSlider->isSliderDown()) {
+        positionSlider->setValue(static_cast<int>(positionMs));
+    }
+
+    qint64 durationMs = m_player->duration();
+    updateVideoTimeDisplays(positionMs, durationMs);
+    
+    // Store last known position for display during pause
+    lastKnownPosition = positionMs;
+    
+    // When playing back, clear the explicit frame tracking so we calculate from position
+    if (m_player->playbackState() == TLRenderPlayer::PlaybackState::Playing) {
+        lastKnownVideoFrame = -1;
+    }
+}
+
+void PreviewOverlay::onPlayerDurationChanged(qint64 durationMs)
+{
+    positionSlider->setRange(0, static_cast<int>(durationMs));
+}
+
+void PreviewOverlay::onPlayerMediaInfo(const TLRenderPlayer::MediaInfo& info)
+{
+    qDebug() << "[PreviewOverlay] tlRender media info:"
+             << "Duration:" << info.durationMs << "ms"
+             << "FPS:" << info.fps
+             << "Resolution:" << info.width << "x" << info.height
+             << "Has Audio:" << info.hasAudio;
+
+    if (info.durationMs > 0) {
+        positionSlider->setRange(0, info.durationMs);
+    }
+
+    if (info.fps > 0.0) {
+        detectedFps = info.fps;
+        if (fpsLabel) fpsLabel->setText(QString::number(info.fps, 'f', 1) + " fps");
+    }
+
+    positionSlider->setTimelineContext(true, detectedFps > 0.0 ? detectedFps : info.fps);
+}
+
+void PreviewOverlay::onPlayerPlaybackStateChanged(TLRenderPlayer::PlaybackState state)
+{
+    qDebug() << "[PreviewOverlay] tlRender state changed to:" << static_cast<int>(state);
+
+    switch (state) {
+        case TLRenderPlayer::PlaybackState::Playing:
+            if (playPauseBtn) playPauseBtn->setIcon(pauseIcon);
+            break;
+        case TLRenderPlayer::PlaybackState::Paused:
+        case TLRenderPlayer::PlaybackState::Stopped:
+            if (playPauseBtn) playPauseBtn->setIcon(playIcon);
+            if (isVideo && lastKnownPosition >= 0) {
+                qint64 durationMs = m_player->duration();
+                updateVideoTimeDisplays(lastKnownPosition, durationMs);
+            }
+            break;
+    }
+}
+
+void PreviewOverlay::onPlayerError(const QString& errorString)
+{
+    qWarning() << "[PreviewOverlay] tlRender error:" << errorString;
+    QMessageBox::warning(this, "Playback Error",
+                        QString("Failed to play media:\n%1").arg(errorString));
+}
+
+void PreviewOverlay::onPlayerEndOfStream()
+{
+    qDebug() << "[PreviewOverlay] tlRender end of stream reached";
+    m_player->stop();
+    m_player->seek(0);
+    if (playPauseBtn) playPauseBtn->setIcon(playIcon);
+}
+
+#else
 // ============================================================================
 // GStreamerPlayer Signal Handlers
 // ============================================================================
@@ -2088,7 +2299,7 @@ void PreviewOverlay::onGStreamerPositionChanged(qint64 positionMs)
         positionSlider->setValue(static_cast<int>(positionMs));
     }
 
-    qint64 durationMs = m_gstreamerPlayer->duration();
+    qint64 durationMs = PLAYER_DURATION();
     updateVideoTimeDisplays(positionMs, durationMs);
     
     // Store last known position for display during pause
@@ -2096,7 +2307,7 @@ void PreviewOverlay::onGStreamerPositionChanged(qint64 positionMs)
     
     // When playing back, clear the explicit frame tracking so we calculate from position
     // This allows smooth playback while maintaining frame accuracy during pause/seek
-    if (m_gstreamerPlayer->state() == GStreamerPlayer::PlaybackState::Playing) {
+    if (PLAYER_STATE() == PLAYER_STATE_PLAYING) {
         lastKnownVideoFrame = -1; // Let calculation take over during playback
     }
 }
@@ -2136,15 +2347,15 @@ void PreviewOverlay::onGStreamerPlaybackStateChanged(GStreamerPlayer::PlaybackSt
     qDebug() << "[PreviewOverlay] GStreamer state changed to:" << static_cast<int>(state);
 
     switch (state) {
-        case GStreamerPlayer::PlaybackState::Playing:
+        case PLAYER_STATE_PLAYING:
             if (playPauseBtn) playPauseBtn->setIcon(pauseIcon);
             break;
-        case GStreamerPlayer::PlaybackState::Paused:
-        case GStreamerPlayer::PlaybackState::Stopped:
+        case PLAYER_STATE_PAUSED:
+        case PLAYER_STATE_STOPPED:
             if (playPauseBtn) playPauseBtn->setIcon(playIcon);
             // Update time display with last known position when paused
             if (isVideo && lastKnownPosition >= 0) {
-                qint64 durationMs = m_gstreamerPlayer->duration();
+                qint64 durationMs = PLAYER_DURATION();
                 updateVideoTimeDisplays(lastKnownPosition, durationMs);
             }
             break;
@@ -2165,10 +2376,11 @@ void PreviewOverlay::onGStreamerEndOfStream()
     qDebug() << "[PreviewOverlay] GStreamer end of stream reached";
 
     // Stop playback and reset to beginning
-    m_gstreamerPlayer->stop();
-    m_gstreamerPlayer->seek(0);
+    PLAYER_STOP();
+    PLAYER_SEEK(0);
     if (playPauseBtn) playPauseBtn->setIcon(playIcon);
 }
+#endif // HAVE_TLRENDER
 
 void PreviewOverlay::showText(const QString &filePath)
 {
@@ -3046,15 +3258,15 @@ void PreviewOverlay::enableAnnotationMode(bool enable)
         if (isVideo || isSequence) {
             if (isVideo) {
                 // Capture current position before pausing
-                lastKnownPosition = m_gstreamerPlayer->position();
+                lastKnownPosition = PLAYER_POSITION();
                 qDebug() << "[PreviewOverlay] Captured position before annotation mode:" << lastKnownPosition;
                 
-                if (m_gstreamerPlayer->playbackState() == GStreamerPlayer::PlaybackState::Playing) {
-                    m_gstreamerPlayer->pause();
+                if (PLAYER_STATE() == PLAYER_STATE_PLAYING) {
+                    PLAYER_PAUSE();
                 }
                 
                 // Immediately update timecode display with captured position
-                qint64 durationMs = m_gstreamerPlayer->duration();
+                qint64 durationMs = PLAYER_DURATION();
                 updateVideoTimeDisplays(lastKnownPosition, durationMs);
             }
             if (sequencePlaying) {
@@ -3070,7 +3282,11 @@ void PreviewOverlay::enableAnnotationMode(bool enable)
             lastKnownVideoFrame = static_cast<int>(qRound((lastKnownPosition / 1000.0) * fps));
             qDebug() << "[PreviewOverlay] Entering annotation mode - initialized frame to:" << lastKnownVideoFrame;
             
+#ifdef HAVE_TLRENDER
+            QImage videoFrame = m_player->getCurrentFrame();
+#else
             QImage videoFrame = m_gstreamerPlayer->getCurrentFrame();
+#endif
             if (!videoFrame.isNull()) {
                 originalPixmap = QPixmap::fromImage(videoFrame);
                 
@@ -3274,9 +3490,9 @@ void PreviewOverlay::onSaveAllAnnotatedFrames()
     
     // Save current frame/time state to restore later
     int originalFrame = isSequence ? currentSequenceFrame : (isVideo ? getVideoFrameNumber() : 0);
-    GStreamerPlayer::PlaybackState originalState = m_gstreamerPlayer->state();
-    if (isVideo && originalState == GStreamerPlayer::PlaybackState::Playing) {
-        m_gstreamerPlayer->pause();
+    bool wasPlaying = (PLAYER_STATE() == PLAYER_STATE_PLAYING);
+    if (isVideo && wasPlaying) {
+        PLAYER_PAUSE();
     }
     
     for (int frameIndex : framesToExport) {
@@ -3288,11 +3504,15 @@ void PreviewOverlay::onSaveAllAnnotatedFrames()
             double fps = detectedFps > 0.0 ? detectedFps : 24.0;
             qint64 timeMs = static_cast<qint64>((frameIndex / fps) * 1000.0);
             qDebug() << "[PreviewOverlay] Exporting frame" << frameIndex << "at time" << timeMs << "ms (fps:" << fps << ")";
-            m_gstreamerPlayer->seek(timeMs);
-            // Give GStreamer time to seek
+            PLAYER_SEEK(timeMs);
+            // Give player time to seek
             QThread::msleep(100);
             // Capture the frame
+#ifdef HAVE_TLRENDER
+            QImage videoFrame = m_player->getCurrentFrame();
+#else
             QImage videoFrame = m_gstreamerPlayer->getCurrentFrame();
+#endif
             if (!videoFrame.isNull()) {
                 originalPixmap = QPixmap::fromImage(videoFrame);
             } else {
@@ -3322,16 +3542,20 @@ void PreviewOverlay::onSaveAllAnnotatedFrames()
         // Convert frame number back to time
         double fps = detectedFps > 0.0 ? detectedFps : 24.0;
         qint64 timeMs = static_cast<qint64>((originalFrame / fps) * 1000.0);
-        m_gstreamerPlayer->seek(timeMs);
+        PLAYER_SEEK(timeMs);
         QThread::msleep(100);
+#ifdef HAVE_TLRENDER
+        QImage videoFrame = m_player->getCurrentFrame();
+#else
         QImage videoFrame = m_gstreamerPlayer->getCurrentFrame();
+#endif
         if (!videoFrame.isNull()) {
             originalPixmap = QPixmap::fromImage(videoFrame);
             loadFrameAnnotations(originalFrame);
             currentAnnotatedFrame = originalFrame;
         }
-        if (originalState == GStreamerPlayer::PlaybackState::Playing) {
-            m_gstreamerPlayer->play();
+        if (wasPlaying) {
+            PLAYER_PLAY();
         }
     }
     
@@ -3440,8 +3664,12 @@ void PreviewOverlay::loadFrameAnnotations(int frameIndex)
 QImage PreviewOverlay::captureCurrentFrame()
 {
     if (isVideo) {
-        // For video, capture current frame from GStreamer
+        // For video, capture current frame from player
+#ifdef HAVE_TLRENDER
+        QImage frame = m_player->getCurrentFrame();
+#else
         QImage frame = m_gstreamerPlayer->getCurrentFrame();
+#endif
         if (frame.isNull()) {
             qWarning() << "[PreviewOverlay] Failed to capture video frame for annotation";
         }
@@ -3504,7 +3732,7 @@ int PreviewOverlay::getVideoFrameNumber() const
     }
     
     // Otherwise calculate from position with rounding to nearest frame
-    qint64 currentTimeMs = m_gstreamerPlayer->position();
+    qint64 currentTimeMs = PLAYER_POSITION();
     double fps = detectedFps > 0.0 ? detectedFps : 24.0; // Default to 24fps if not detected
     
     // Calculate frame number with proper rounding to snap to frame boundaries
@@ -3539,7 +3767,11 @@ void PreviewOverlay::updateVideoAnnotationFrame()
     // Capture new frame (this is slow but necessary for accuracy)
     // Use a single-shot timer to avoid blocking
     QTimer::singleShot(0, this, [this, newFrameIndex, previousFrame]() {
+#ifdef HAVE_TLRENDER
+        QImage videoFrame = m_player->getCurrentFrame();
+#else
         QImage videoFrame = m_gstreamerPlayer->getCurrentFrame();
+#endif
         if (!videoFrame.isNull() && imageItem) {
             originalPixmap = QPixmap::fromImage(videoFrame);
             imageItem->setPixmap(originalPixmap);
