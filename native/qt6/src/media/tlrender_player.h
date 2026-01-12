@@ -9,6 +9,8 @@
 #include <QMutex>
 #include <QTimer>
 #include <QSize>
+#include <QPointer>
+#include <QSharedPointer>
 #include <atomic>
 #include <memory>
 
@@ -25,6 +27,10 @@ namespace tl {
     class System;
     struct OCIOOptions;
     struct VideoFrame;
+    namespace qt {
+        class ContextObject;
+        class PlayerObject;
+    }
     namespace gl {
         class Render;
         class TextureCache;
@@ -253,6 +259,16 @@ public:
     // ========================================================================
 
     /**
+     * @brief Get the shared tlRender context (static, for viewports)
+     */
+    static std::shared_ptr<ftk::Context> sharedContext();
+
+    /**
+     * @brief Get the shared Qt context object (static, for viewports)
+     */
+    static tl::qt::ContextObject* sharedContextObject();
+
+    /**
      * @brief Get the tlRender context (for widget rendering)
      */
     std::shared_ptr<ftk::Context> context() const;
@@ -261,6 +277,11 @@ public:
      * @brief Get the tlRender player (for widget rendering)
      */
     std::shared_ptr<tl::Player> player() const;
+
+    /**
+     * @brief Get the Qt PlayerObject wrapper (for native viewports)
+     */
+    QSharedPointer<tl::qt::PlayerObject> playerObject() const;
 
     /**
      * @brief Get the current video frames for rendering
@@ -313,6 +334,9 @@ public:
     static bool isInitialized();
 
 signals:
+    //! Emitted when new video frames are available for rendering.
+    void videoFramesChanged();
+
     void playbackStateChanged(TLRenderPlayer::PlaybackState state);
     void positionChanged(qint64 positionMs);
     void durationChanged(qint64 durationMs);
@@ -342,6 +366,13 @@ private:
     std::shared_ptr<tl::System> m_system;
     std::shared_ptr<tl::Timeline> m_timeline;
     std::shared_ptr<tl::Player> m_player;
+
+    // tlRender Qt integration (observes player + keeps context ticking).
+    // Stored as QSharedPointer so it can be shared with native viewport.
+    QSharedPointer<tl::qt::PlayerObject> m_playerObject;
+
+    // Cached frames for rendering (to avoid blocking calls on the UI thread).
+    std::vector<tl::VideoFrame> m_cachedVideoFrames;
 
     // State
     mutable QMutex m_mutex;
@@ -376,6 +407,9 @@ private:
     // Initialization flag
     static bool s_initialized;
     static std::shared_ptr<ftk::Context> s_sharedContext;
+
+    // Single context tick object for the shared context (Qt timer driven).
+    static QPointer<tl::qt::ContextObject> s_contextObject;
 };
 
 #endif // TLRENDER_PLAYER_H

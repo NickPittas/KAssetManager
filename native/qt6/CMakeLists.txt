@@ -102,8 +102,8 @@ if (WIN32)
   endif()
 endif()
 
-# OOXML ZIP reading (minizip-ng via vcpkg)
-find_package(minizip-ng CONFIG REQUIRED)
+# OOXML ZIP reading - will be found from tlRender's bundled minizip-ng
+# Moved the find_package call to after tlRender setup to use its bundled version
 
 # =============================================================================
 # tlRender - Professional video/image sequence playback with OCIO color management
@@ -140,6 +140,16 @@ if(TLRENDER_ROOT)
     list(PREPEND CMAKE_PREFIX_PATH "${TLRENDER_ROOT}" "${TLRENDER_ROOT}/share/ftk")
     message(STATUS "Using tlRender from ${TLRENDER_ROOT}")
     
+    # Force CMake to use tlRender's bundled ZLIB to avoid duplicate symbol issues
+    # tlRender bundles a static zlib that was used during its build
+    # We must set these as CACHE FORCE to override vcpkg's zlib
+    set(ZLIB_ROOT "${TLRENDER_ROOT}" CACHE PATH "ZLIB root" FORCE)
+    set(ZLIB_LIBRARY "${TLRENDER_ROOT}/lib/zlib.lib" CACHE FILEPATH "ZLIB library" FORCE)
+    set(ZLIB_LIBRARY_RELEASE "${TLRENDER_ROOT}/lib/zlib.lib" CACHE FILEPATH "ZLIB Release library" FORCE)
+    set(ZLIB_INCLUDE_DIR "${TLRENDER_ROOT}/include" CACHE PATH "ZLIB include dir" FORCE)
+    # Clear any cached found status
+    unset(ZLIB_FOUND CACHE)
+    
     # Find tlRender package - this will find all dependencies automatically
     # including ftk, OpenColorIO, OpenImageIO, OpenEXR, FFmpeg, etc.
     find_package(tlRender CONFIG REQUIRED)
@@ -154,9 +164,13 @@ if(TLRENDER_ROOT)
     
     # tlRender found - all dependencies resolved via imported targets
     message(STATUS "tlRender configured with OCIO and OIIO support")
+
+    # NOTE: We intentionally do not define HAVE_OPENIMAGEIO here.
+    # KAssetManager's own OIIO-based loaders are optional; tlRender is the
+    # required playback path and brings its own bundled OpenImageIO/OpenColorIO.
     
-    # OpenImageIO is provided by tlRender - add our define for code guards
-    add_compile_definitions(HAVE_OPENIMAGEIO)
+    # Find minizip-ng from tlRender's bundled version (for OOXML ZIP reading)
+    find_package(minizip-ng CONFIG REQUIRED)
     
     set(TLRENDER_FOUND TRUE)
 else()
@@ -308,6 +322,8 @@ qt_add_executable(kassetmanagerqt WIN32
     src/media/tlrender_player.cpp
     src/media/tlrender_widget.h
     src/media/tlrender_widget.cpp
+    src/media/tlrender_viewport.h
+    src/media/tlrender_viewport.cpp
     src/theme_manager.h
     src/theme_manager.cpp
     src/annotation_items.h
@@ -360,8 +376,14 @@ if(TLRENDER_FOUND)
         )
     endif()
     
-    # Add compile definition to enable tlRender code paths
-    target_compile_definitions(kassetmanagerqt PRIVATE HAVE_TLRENDER)
+    # Add compile definitions to enable tlRender + bundled deps code paths.
+    # NOTE: We intentionally rely on tlRender's bundled dependencies to avoid ABI/version mixing.
+    # These are used throughout the app (thumbnails, still-image preview, OCIO UI lists).
+    target_compile_definitions(kassetmanagerqt PRIVATE
+      HAVE_TLRENDER=1
+      HAVE_OPENIMAGEIO=1
+      HAVE_OCIO=1
+    )
     
     # Windows system libraries required by tlRender dependencies
     if(WIN32)
@@ -416,7 +438,6 @@ if (TARGET Qt6::PdfWidgets)
 endif()
 
 # OpenImageIO is provided by tlRender - no need to link separately
-# The HAVE_OPENIMAGEIO define is set in the tlRender section above
 
 # Link minizip-ng (vcpkg target) - separate from tlRender's bundled minizip-ng
 target_link_libraries(kassetmanagerqt PRIVATE MINIZIP::minizip-ng)
@@ -438,6 +459,15 @@ if(EXISTS "${_ICONS_DIR}")
   message(STATUS "Icons folder will be installed to bin/icons directory")
 else()
   message(WARNING "Icons folder not found at ${_ICONS_DIR}")
+endif()
+
+# Install bundled ACES OCIO config (ships with repo) so the portable build has a known-good config.
+set(_ACES_OCIO_DIR "${CMAKE_SOURCE_DIR}/../../OpenColorIO-Config-ACES-1.2")
+if(EXISTS "${_ACES_OCIO_DIR}")
+  install(DIRECTORY "${_ACES_OCIO_DIR}" DESTINATION bin)
+  message(STATUS "ACES OCIO config will be installed to bin/OpenColorIO-Config-ACES-1.2")
+else()
+  message(WARNING "ACES OCIO config folder not found at ${_ACES_OCIO_DIR}")
 endif()
 
 # Packaging: deploy Qt runtime. Prefer Qt6DeploySupport if available.

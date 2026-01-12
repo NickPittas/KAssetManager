@@ -1,7 +1,7 @@
 #include "preview_overlay.h"
 #ifdef HAVE_TLRENDER
 #include "media/tlrender_player.h"
-#include "media/tlrender_widget.h"
+#include "media/tlrender_viewport.h"
 // Compatibility macros for tlRender
 #define PLAYER_PTR m_player
 #define PLAYER_PLAY() m_player->play()
@@ -72,9 +72,6 @@
 #include "office_preview.h"
 
 #include <QGraphicsSvgItem>
-#if defined(Q_OS_WIN) && defined(HAVE_QT_AX)
-#include <QAxObject>
-#endif
 
 #ifdef Q_OS_WIN
 #include <windows.h>
@@ -407,9 +404,12 @@ void PreviewOverlay::setupUi()
 
     // CRITICAL: Set widget attributes for native window embedding
     // These attributes tell Qt to create a native window that GStreamer can render into
+    // Do NOT set these attributes when using tlRender/QOpenGLWidget.
+#if !(defined(HAVE_TLRENDER) && HAVE_TLRENDER)
     videoWidget->setAttribute(Qt::WA_NativeWindow);
     videoWidget->setAttribute(Qt::WA_PaintOnScreen);
     videoWidget->setAttribute(Qt::WA_OpaquePaintEvent);
+#endif
 
     videoWidget->installEventFilter(this);
     videoWidget->hide();
@@ -562,6 +562,51 @@ void PreviewOverlay::setupUi()
     colorSpaceCombo->hide();
     connect(colorSpaceCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &PreviewOverlay::onColorSpaceChanged);
 
+#ifdef HAVE_TLRENDER
+    // OCIO controls (hidden until video/sequence playback)
+    ocioEnableCheck = new QCheckBox("OCIO", this);
+    ocioEnableCheck->setFocusPolicy(Qt::NoFocus);
+    ocioEnableCheck->setStyleSheet("QCheckBox { color: white; font-size: 14px; padding: 0 4px; }");
+    ocioEnableCheck->setChecked(true);
+    ocioEnableCheck->hide();
+
+    ocioConfigBtn = new QPushButton("Config…", this);
+    ocioConfigBtn->setFocusPolicy(Qt::NoFocus);
+    ocioConfigBtn->setStyleSheet(
+        "QPushButton { background-color: #444; color: white; font-size: 13px; border-radius: 6px; padding: 4px 8px; border: none; }"
+        "QPushButton:hover { background-color: #555; }"
+    );
+    ocioConfigBtn->hide();
+
+    ocioDisplayLabel = new QLabel("Display", this);
+    ocioDisplayLabel->setStyleSheet("QLabel { color: white; font-size: 14px; padding: 0 4px; }");
+    ocioDisplayLabel->hide();
+
+    ocioDisplayCombo = new QComboBox(this);
+    ocioDisplayCombo->setFocusPolicy(Qt::NoFocus);
+    ocioDisplayCombo->setStyleSheet(
+        "QComboBox { background-color: #333; color: white; border: 1px solid #555; padding: 5px; border-radius: 3px; min-width: 120px; }"
+        "QComboBox::drop-down { border: none; }"
+        "QComboBox::down-arrow { image: none; border: none; }"
+        "QComboBox QAbstractItemView { background-color: #333; color: white; selection-background-color: #58a6ff; }"
+    );
+    ocioDisplayCombo->hide();
+
+    ocioViewLabel = new QLabel("View", this);
+    ocioViewLabel->setStyleSheet("QLabel { color: white; font-size: 14px; padding: 0 4px; }");
+    ocioViewLabel->hide();
+
+    ocioViewCombo = new QComboBox(this);
+    ocioViewCombo->setFocusPolicy(Qt::NoFocus);
+    ocioViewCombo->setStyleSheet(
+        "QComboBox { background-color: #333; color: white; border: 1px solid #555; padding: 5px; border-radius: 3px; min-width: 160px; }"
+        "QComboBox::drop-down { border: none; }"
+        "QComboBox::down-arrow { image: none; border: none; }"
+        "QComboBox QAbstractItemView { background-color: #333; color: white; selection-background-color: #58a6ff; }"
+    );
+    ocioViewCombo->hide();
+#endif
+
     // ========== ROW 3: Playback (center) + Audio (right) ==========
     // Transport (Prev - Play/Pause - Next)
     QWidget *transport = new QWidget(this);
@@ -658,6 +703,15 @@ void PreviewOverlay::setupUi()
     csLayout->setSpacing(6);
     csLayout->addWidget(colorSpaceLabel);
     csLayout->addWidget(colorSpaceCombo);
+#ifdef HAVE_TLRENDER
+    csLayout->addSpacing(8);
+    csLayout->addWidget(ocioEnableCheck);
+    csLayout->addWidget(ocioConfigBtn);
+    csLayout->addWidget(ocioDisplayLabel);
+    csLayout->addWidget(ocioDisplayCombo);
+    csLayout->addWidget(ocioViewLabel);
+    csLayout->addWidget(ocioViewCombo);
+#endif
     // Do not forcibly hide the container; children visibility will control it
     bottomGrid->addWidget(csGroup, 0, 2, Qt::AlignVCenter);
 
@@ -703,9 +757,12 @@ void PreviewOverlay::setupUi()
     }
 
 #ifdef HAVE_TLRENDER
-    // Set video widget for tlRender rendering
-    m_renderWidget = new TLRenderWidget(this);
+    // Set video widget for tlRender rendering using native viewport
+    m_renderWidget = new TLRenderViewport(this);
     m_renderWidget->setPlayer(m_player);
+    // Ensure the overlay remains the focus target for keyboard shortcuts.
+    m_renderWidget->setFocusPolicy(Qt::NoFocus);
+    m_renderWidget->installEventFilter(this);
     // Replace videoWidget with m_renderWidget in the layout
     if (videoWidget && videoWidget->parentWidget()) {
         QLayout* parentLayout = videoWidget->parentWidget()->layout();
@@ -715,6 +772,108 @@ void PreviewOverlay::setupUi()
     }
     // Set initial volume
     m_player->setVolume(0.5);
+
+    // Wire OCIO controls
+    if (ocioEnableCheck) {
+        connect(ocioEnableCheck, &QCheckBox::toggled, this, [this](bool enabled) {
+            m_player->setOCIOEnabled(enabled);
+            controlsTimer->start();
+        });
+    }
+    if (ocioConfigBtn) {
+        connect(ocioConfigBtn, &QPushButton::clicked, this, [this]() {
+            const QString filePath = QFileDialog::getOpenFileName(
+                this,
+                tr("Select OCIO config"),
+                QString(),
+                tr("OCIO Config (config.ocio);;All Files (*.*)")
+            );
+            if (!filePath.isEmpty()) {
+                m_player->setOCIOConfig(filePath);
+                if (ocioEnableCheck) {
+                    ocioEnableCheck->setChecked(true);
+                }
+            }
+        });
+    }
+    if (ocioDisplayCombo) {
+        connect(ocioDisplayCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int idx) {
+            if (idx < 0) return;
+            const QString display = ocioDisplayCombo->itemText(idx);
+            m_player->setDisplay(display);
+
+            if (ocioViewCombo) {
+                const QStringList views = m_player->availableViews(display);
+                ocioViewCombo->blockSignals(true);
+                ocioViewCombo->clear();
+                ocioViewCombo->addItems(views);
+                // Try to keep the player's current view selected
+                const int viewIdx = ocioViewCombo->findText(m_player->view());
+                if (viewIdx >= 0) {
+                    ocioViewCombo->setCurrentIndex(viewIdx);
+                }
+                ocioViewCombo->blockSignals(false);
+            }
+            controlsTimer->start();
+        });
+    }
+    if (ocioViewCombo) {
+        connect(ocioViewCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int idx) {
+            if (idx < 0) return;
+            m_player->setView(ocioViewCombo->itemText(idx));
+            controlsTimer->start();
+        });
+    }
+
+    // Populate OCIO lists once we have a config loaded
+    connect(m_player, &TLRenderPlayer::displaysChanged, this, [this](const QStringList& displays) {
+        if (!ocioDisplayCombo) return;
+        ocioDisplayCombo->blockSignals(true);
+        ocioDisplayCombo->clear();
+        ocioDisplayCombo->addItems(displays);
+        const int idx = ocioDisplayCombo->findText(m_player->display());
+        if (idx >= 0) {
+            ocioDisplayCombo->setCurrentIndex(idx);
+        }
+        ocioDisplayCombo->blockSignals(false);
+
+            // Ensure the views combo is populated for the selected display.
+            if (ocioViewCombo) {
+                const QString display = (idx >= 0) ? ocioDisplayCombo->itemText(idx)
+                                                   : (ocioDisplayCombo->count() > 0 ? ocioDisplayCombo->itemText(0) : QString());
+                const QStringList views = display.isEmpty() ? QStringList() : m_player->availableViews(display);
+                ocioViewCombo->blockSignals(true);
+                ocioViewCombo->clear();
+                ocioViewCombo->addItems(views);
+                const int viewIdx = ocioViewCombo->findText(m_player->view());
+                if (viewIdx >= 0) {
+                    ocioViewCombo->setCurrentIndex(viewIdx);
+                }
+                ocioViewCombo->blockSignals(false);
+            }
+    });
+
+        connect(m_player, &TLRenderPlayer::viewsChanged, this, [this](const QStringList& views) {
+            if (!ocioViewCombo) return;
+            ocioViewCombo->blockSignals(true);
+            ocioViewCombo->clear();
+            ocioViewCombo->addItems(views);
+            const int viewIdx = ocioViewCombo->findText(m_player->view());
+            if (viewIdx >= 0) {
+                ocioViewCombo->setCurrentIndex(viewIdx);
+            }
+            ocioViewCombo->blockSignals(false);
+        });
+
+    // Default to bundled ACES config if it exists in the deployed bin folder
+    {
+        const QString appDir = QCoreApplication::applicationDirPath();
+        const QString acesConfig = QDir(appDir).filePath("OpenColorIO-Config-ACES-1.2/aces_1.2/config.ocio");
+        if (QFileInfo::exists(acesConfig)) {
+            m_player->setOCIOConfig(acesConfig);
+            m_player->setOCIOEnabled(true);
+        }
+    }
 #else
     // Set video widget for GStreamer rendering
     m_gstreamerPlayer->setVideoWidget(videoWidget);
@@ -752,6 +911,16 @@ void PreviewOverlay::showAsset(const QString &filePath, const QString &fileName,
     if (sequenceTimer->isActive()) {
         sequenceTimer->stop();
     }
+
+#ifdef HAVE_TLRENDER
+    // Default to hiding OCIO controls; showVideo()/showSequence(tlRender path) will enable them.
+    if (ocioEnableCheck) ocioEnableCheck->hide();
+    if (ocioConfigBtn) ocioConfigBtn->hide();
+    if (ocioDisplayLabel) ocioDisplayLabel->hide();
+    if (ocioDisplayCombo) ocioDisplayCombo->hide();
+    if (ocioViewLabel) ocioViewLabel->hide();
+    if (ocioViewCombo) ocioViewCombo->hide();
+#endif
 
     // Office parse-only previews
     if (fileType.compare("doc", Qt::CaseInsensitive) == 0) {
@@ -953,7 +1122,7 @@ void PreviewOverlay::showVideo(const QString &filePath)
 #ifdef HAVE_TLRENDER
     // CRITICAL: Set render widget AFTER show() to ensure valid window handle
     if (!m_renderWidget) {
-        m_renderWidget = new TLRenderWidget(this);
+        m_renderWidget = new TLRenderViewport(this);
         m_renderWidget->setPlayer(m_player);
     }
     m_renderWidget->setGeometry(videoWidget->geometry());
@@ -990,9 +1159,19 @@ void PreviewOverlay::showVideo(const QString &filePath)
     // Hide alpha toggle for videos
     if (alphaCheck) alphaCheck->hide();
 
-    // Hide colorspace selector for videos (player handles colorspace automatically)
+    // Hide legacy per-image tone-map colorspace selector for videos (OCIO handles color)
     if (colorSpaceLabel) colorSpaceLabel->hide();
     if (colorSpaceCombo) colorSpaceCombo->hide();
+
+#ifdef HAVE_TLRENDER
+    // Show OCIO controls for tlRender playback
+    if (ocioEnableCheck) ocioEnableCheck->show();
+    if (ocioConfigBtn) ocioConfigBtn->show();
+    if (ocioDisplayLabel) ocioDisplayLabel->show();
+    if (ocioDisplayCombo) ocioDisplayCombo->show();
+    if (ocioViewLabel) ocioViewLabel->show();
+    if (ocioViewCombo) ocioViewCombo->show();
+#endif
 
     originalPixmap = QPixmap(); // Clear the pixmap
     fitPending = true;
@@ -1014,6 +1193,8 @@ void PreviewOverlay::showVideo(const QString &filePath)
 
 void PreviewOverlay::onPlayPauseClicked()
 {
+    qDebug() << "[PreviewOverlay] onPlayPauseClicked: isSequence=" << isSequence << "isVideo=" << isVideo;
+    
     if (isSequence) {
         // Handle sequence playback
         if (sequencePlaying) {
@@ -1022,15 +1203,19 @@ void PreviewOverlay::onPlayPauseClicked()
             playSequence();
         }
     } else {
-        // Handle video playback with GStreamer
-        if (PLAYER_STATE() == PLAYER_STATE_PLAYING) {
+        // Handle video/tlRender playback
+        auto state = PLAYER_STATE();
+        qDebug() << "[PreviewOverlay] onPlayPauseClicked: current state=" << static_cast<int>(state);
+        if (state == PLAYER_STATE_PLAYING) {
             // Capture position before pausing
             lastKnownPosition = PLAYER_POSITION();
+            qDebug() << "[PreviewOverlay] Pausing at position" << lastKnownPosition;
             PLAYER_PAUSE();
             // Update timecode immediately
             qint64 durationMs = PLAYER_DURATION();
             updateVideoTimeDisplays(lastKnownPosition, durationMs);
         } else {
+            qDebug() << "[PreviewOverlay] Starting playback";
             PLAYER_PLAY();
         }
     }
@@ -1447,6 +1632,7 @@ void PreviewOverlay::keyPressEvent(QKeyEvent *event)
 #else
                 m_gstreamerPlayer->setPlaybackRate(-1.0);
 #endif
+                PLAYER_PLAY();
             }
             return;
         case Qt::Key_K:
@@ -1474,6 +1660,7 @@ void PreviewOverlay::keyPressEvent(QKeyEvent *event)
                     // Already playing forward, do nothing or could increase speed
                 } else {
                     m_player->setPlaybackRate(1.0);
+                    PLAYER_PLAY();
                 }
 #else
                 if (PLAYER_STATE() == PLAYER_STATE_PLAYING &&
@@ -1481,6 +1668,7 @@ void PreviewOverlay::keyPressEvent(QKeyEvent *event)
                     // Already playing forward, do nothing or could increase speed
                 } else {
                     m_gstreamerPlayer->setPlaybackRate(1.0);
+                    PLAYER_PLAY();
                 }
 #endif
             }
@@ -1670,7 +1858,10 @@ bool PreviewOverlay::eventFilter(QObject* watched, QEvent* event)
             keyEvent->key() == Qt::Key_Left ||
             keyEvent->key() == Qt::Key_Right ||
             keyEvent->key() == Qt::Key_Period ||
-            keyEvent->key() == Qt::Key_Comma) {
+            keyEvent->key() == Qt::Key_Comma ||
+            keyEvent->key() == Qt::Key_J ||
+            keyEvent->key() == Qt::Key_K ||
+            keyEvent->key() == Qt::Key_L) {
             keyPressEvent(keyEvent);
             return true; // consume event
         }
@@ -1730,6 +1921,80 @@ void PreviewOverlay::resetImageZoom()
 
 void PreviewOverlay::showSequence(const QStringList &framePaths, const QString &sequenceName, int startFrame, int endFrame)
 {
+#ifdef HAVE_TLRENDER
+    // tlRender-native sequence playback.
+    // We intentionally do not use the legacy RAM cache / per-frame OIIO path here.
+    // This fixes slow/blank sequence preview when OIIO is compiled out and enables
+    // proper scrubbing/playback via the tlRender engine.
+    Q_UNUSED(startFrame)
+    Q_UNUSED(endFrame)
+
+    if (framePaths.isEmpty()) {
+        qWarning() << "[PreviewOverlay] showSequence called with empty frame list";
+        return;
+    }
+
+    // Treat sequences as video-like for timeline/scrubbing/controls.
+    isSequence = false;
+    isVideo = true;
+    sequencePlaying = false;
+
+    // Make sure widget is shown and sized before loading content
+    show();
+    raise();
+    setFocus();
+
+    // Anchor nav arrows to the render widget for sequences
+    if (m_renderWidget) {
+        positionNavButtons(m_renderWidget);
+    }
+
+    // Ensure image view is not used for tlRender sequences
+    imageView->hide();
+    if (videoWidget) videoWidget->hide();
+    if (m_renderWidget) m_renderWidget->show();
+
+    controlsWidget->show();
+
+    // Hide legacy per-image tone-map colorspace controls; OCIO handles color
+    if (colorSpaceLabel) colorSpaceLabel->hide();
+    if (colorSpaceCombo) colorSpaceCombo->hide();
+
+    // Show OCIO controls for tlRender playback (sequences are treated like video here).
+    if (ocioEnableCheck) ocioEnableCheck->show();
+    if (ocioConfigBtn) ocioConfigBtn->show();
+    if (ocioDisplayLabel) ocioDisplayLabel->show();
+    if (ocioDisplayCombo) ocioDisplayCombo->show();
+    if (ocioViewLabel) ocioViewLabel->show();
+    if (ocioViewCombo) ocioViewCombo->show();
+
+    // Stop any existing playback and load the sequence pattern
+    PLAYER_STOP();
+
+    fileNameLabel->setText(sequenceName);
+    setWindowTitle(tr("Preview - %1").arg(sequenceName));
+
+    const QString patternPath = SequenceDetector::toHashPatternPath(framePaths.first());
+    qDebug() << "[PreviewOverlay] tlRender sequence load:" << framePaths.first() << "->" << patternPath;
+
+    // Default timeline context while media info is loading
+    positionSlider->setTimelineContext(true, 24.0);
+
+    m_player->load(patternPath);
+    // Do not auto-play sequences; keep same UX as legacy sequence preview.
+    m_player->pause();
+
+    // Reset slider/time display until tlRender provides media info
+    positionSlider->setRange(0, 0);
+    positionSlider->setValue(0);
+    updateVideoTimeDisplays(0, 0);
+    if (fpsLabel) fpsLabel->setText("-- fps");
+    updatePlayPauseButton();
+
+    controlsTimer->start();
+    return;
+#endif
+
     isSequence = true;
     isVideo = false;
     sequenceFramePaths = framePaths;
@@ -2251,6 +2516,17 @@ void PreviewOverlay::onPlayerMediaInfo(const TLRenderPlayer::MediaInfo& info)
         if (fpsLabel) fpsLabel->setText(QString::number(info.fps, 'f', 1) + " fps");
     }
 
+    // Enable/disable audio controls based on actual media
+    if (muteBtn) {
+        muteBtn->setEnabled(info.hasAudio);
+        muteBtn->setIcon(info.hasAudio ? audioIcon : noAudioIcon);
+        muteBtn->show();
+    }
+    if (volumeSlider) {
+        volumeSlider->setEnabled(info.hasAudio);
+        volumeSlider->show();
+    }
+
     positionSlider->setTimelineContext(true, detectedFps > 0.0 ? detectedFps : info.fps);
 }
 
@@ -2446,6 +2722,13 @@ void PreviewOverlay::showText(const QString &filePath)
         textView->setPlainText(decodeText(data));
     } else {
         textView->setPlainText("Preview not available");
+            // Show OCIO controls for tlRender sequence playback
+            if (ocioEnableCheck) ocioEnableCheck->show();
+            if (ocioConfigBtn) ocioConfigBtn->show();
+            if (ocioDisplayLabel) ocioDisplayLabel->show();
+            if (ocioDisplayCombo) ocioDisplayCombo->show();
+            if (ocioViewLabel) ocioViewLabel->show();
+            if (ocioViewCombo) ocioViewCombo->show();
     }
     textView->show();
     positionNavButtons(textView);
@@ -2490,7 +2773,6 @@ void PreviewOverlay::showDoc(const QString &filePath)
     if (pdfView) pdfView->hide();
 #endif
     if (imageView) imageView->hide();
-    if (controlsWidget) controlsWidget->hide();
     if (alphaCheck) alphaCheck->hide();
 
     // Ensure overlay is visible for Office previews
@@ -2519,6 +2801,7 @@ void PreviewOverlay::showXlsx(const QString &filePath)
 {
     // Hide other content
     if (videoWidget) videoWidget->hide();
+                        PLAYER_PLAY();
 #ifdef HAVE_QT_PDF
     if (pdfView) pdfView->hide();
 #endif
@@ -2526,6 +2809,7 @@ void PreviewOverlay::showXlsx(const QString &filePath)
     if (controlsWidget) controlsWidget->hide();
     if (alphaCheck) alphaCheck->hide();
 
+                        PLAYER_PLAY();
     // Ensure overlay is visible for Office previews
     show();
     raise();

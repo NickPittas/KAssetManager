@@ -39,9 +39,10 @@
 
 
 #include "oiio_image_loader.h"
+#include "sequence_detector.h"
 #ifdef HAVE_TLRENDER
 #include "media/tlrender_player.h"
-#include "media/tlrender_widget.h"
+#include "media/tlrender_viewport.h"
 #else
 #include "media/gstreamer_player.h"
 #endif
@@ -474,6 +475,16 @@ private:
     QLabel *fileNameLabel;
     QComboBox *colorSpaceCombo;
     QLabel *colorSpaceLabel;
+
+#ifdef HAVE_TLRENDER
+    // OCIO (ACES) UI controls for tlRender playback
+    QCheckBox *ocioEnableCheck = nullptr;
+    QLabel *ocioDisplayLabel = nullptr;
+    QComboBox *ocioDisplayCombo = nullptr;
+    QLabel *ocioViewLabel = nullptr;
+    QComboBox *ocioViewCombo = nullptr;
+    QPushButton *ocioConfigBtn = nullptr;
+#endif
     QCheckBox *alphaCheck;
     QPlainTextEdit *textView;
 
@@ -492,7 +503,7 @@ private:
 #ifdef HAVE_TLRENDER
     // tlRender media player (with OCIO support)
     TLRenderPlayer *m_player;
-    TLRenderWidget *m_renderWidget;
+    TLRenderViewport *m_renderWidget;
 #else
     // GStreamer media player
     GStreamerPlayer *m_gstreamerPlayer;

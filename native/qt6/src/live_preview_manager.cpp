@@ -2,6 +2,9 @@
 
 #include "oiio_image_loader.h"
 #include "utils.h"
+#if defined(HAVE_TLRENDER) && HAVE_TLRENDER
+#include "media/tlrender_player.h"
+#endif
 #if defined(HAVE_GSTREAMER) && HAVE_GSTREAMER
 #include "media/gstreamer_player.h"
 #endif
@@ -851,9 +854,48 @@ QImage LivePreviewManager::loadVideoFrame(const Request& request, QString& error
     return thumbnail;
 
 #else
+#if defined(HAVE_TLRENDER) && HAVE_TLRENDER
+    QFileInfo info(request.filePath);
+    if (!info.exists()) {
+        error = QStringLiteral("File does not exist");
+        return {};
+    }
+
+    static QHash<QString, qint64> s_durationCache;
+    static QMutex s_durationMutex;
+
+    qint64 durationMs = 0;
+    {
+        QMutexLocker locker(&s_durationMutex);
+        if (s_durationCache.contains(request.filePath)) {
+            durationMs = s_durationCache[request.filePath];
+        }
+    }
+
+    if (durationMs == 0) {
+        durationMs = TLRenderPlayer::queryDuration(request.filePath);
+        if (durationMs <= 0) {
+            error = QStringLiteral("Failed to get video duration");
+            return {};
+        }
+        QMutexLocker locker(&s_durationMutex);
+        s_durationCache[request.filePath] = durationMs;
+    }
+
+    qreal normalized = std::clamp(request.position, 0.0, 1.0);
+    qint64 positionMs = static_cast<qint64>(normalized * durationMs);
+    positionMs = std::clamp(positionMs, 0LL, durationMs);
+
+    QImage thumbnail = TLRenderPlayer::extractThumbnail(request.filePath, request.targetSize, positionMs);
+    if (thumbnail.isNull()) {
+        error = QStringLiteral("Failed to decode video frame");
+        return {};
+    }
+    return thumbnail;
+#else
     Q_UNUSED(request);
     Q_UNUSED(error);
-    // GStreamer not available - return empty image
-    return QImage();
+    return {};
+#endif
 #endif
 }

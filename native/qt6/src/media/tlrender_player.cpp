@@ -14,7 +14,19 @@
 #include <QMutexLocker>
 #include <QApplication>
 #include <QElapsedTimer>
+#include <QImage>
 #include <stdexcept>
+
+#if defined(HAVE_FFMPEG) && HAVE_FFMPEG
+extern "C" {
+#include <libavformat/avformat.h>
+#include <libavcodec/avcodec.h>
+#include <libavutil/avutil.h>
+#include <libavutil/imgutils.h>
+#include <libavutil/log.h>
+#include <libswscale/swscale.h>
+}
+#endif
 
 #ifdef HAVE_TLRENDER
 #include <tlRender/Timeline/Init.h>
@@ -26,6 +38,10 @@
 #include <tlRender/Timeline/DisplayOptions.h>
 #include <tlRender/Timeline/Video.h>
 #include <tlRender/IO/System.h>
+
+#include <tlRender/QtWidget/Init.h>
+#include <tlRender/Qt/ContextObject.h>
+#include <tlRender/Qt/PlayerObject.h>
 
 #include <ftk/Core/Context.h>
 #include <ftk/Core/Path.h>
@@ -44,6 +60,7 @@ namespace OCIO = OCIO_NAMESPACE;
 bool TLRenderPlayer::s_initialized = false;
 #ifdef HAVE_TLRENDER
 std::shared_ptr<ftk::Context> TLRenderPlayer::s_sharedContext;
+QPointer<tl::qt::ContextObject> TLRenderPlayer::s_contextObject;
 #endif
 
 // ============================================================================
@@ -78,9 +95,17 @@ void TLRenderPlayer::initialize()
     try {
         // Create shared context first
         s_sharedContext = ftk::Context::create();
-        
-        // Initialize tlRender timeline system with context
-        tl::init(s_sharedContext);
+
+        // Initialize tlRender with Qt Widgets integration.
+        // This registers Qt metatypes and sets a sane default OpenGL surface format.
+        tl::qtwidget::init(
+            s_sharedContext,
+            tl::qt::DefaultSurfaceFormat::OpenGL_4_1_CoreProfile);
+
+        // Keep the shared context ticking via a precise Qt timer.
+        if (!s_contextObject) {
+            s_contextObject = new tl::qt::ContextObject(s_sharedContext, qApp);
+        }
         
         s_initialized = true;
         qDebug() << "TLRenderPlayer: tlRender initialized successfully";
@@ -158,6 +183,67 @@ void TLRenderPlayer::loadMedia(const QString& filePath)
         }
         
         m_currentPath = filePath;
+
+        // Observe player state via Qt wrapper so the UI can update without polling.
+        // Use QSharedPointer so the viewport can share this object.
+        m_playerObject.reset(new tl::qt::PlayerObject(m_context, m_player, this));
+        connect(
+            m_playerObject.data(),
+            &tl::qt::PlayerObject::currentVideoChanged,
+            this,
+            [this](const std::vector<tl::VideoFrame>& frames)
+            {
+                QMutexLocker locker(&m_mutex);
+                m_cachedVideoFrames = frames;
+                locker.unlock();
+                qDebug() << "[TLRenderPlayer] currentVideoChanged: got" << frames.size() << "frames";
+                emit videoFramesChanged();
+            });
+        connect(
+            m_playerObject.data(),
+            &tl::qt::PlayerObject::currentTimeChanged,
+            this,
+            [this](const OTIO_NS::RationalTime& value)
+            {
+                const double rate = (value.rate() > 0.0) ? value.rate() : 24.0;
+                const qint64 newFrame = static_cast<qint64>(value.value());
+                const qint64 newPositionMs = static_cast<qint64>((value.value() / rate) * 1000.0);
+
+                if (newPositionMs != m_position) {
+                    m_position = newPositionMs;
+                    qDebug() << "[TLRenderPlayer] currentTimeChanged: frame" << newFrame << "pos" << newPositionMs << "ms";
+                    emit positionChanged(newPositionMs);
+                }
+                if (newFrame != m_currentFrame) {
+                    m_currentFrame = newFrame;
+                    emit currentFrameChanged(newFrame);
+                }
+            });
+        connect(
+            m_playerObject.data(),
+            &tl::qt::PlayerObject::playbackChanged,
+            this,
+            [this](tl::Playback playback)
+            {
+                qDebug() << "[TLRenderPlayer] playbackChanged from observer:" << static_cast<int>(playback);
+                PlaybackState newState;
+                switch (playback) {
+                case tl::Playback::Stop:
+                    newState = m_position > 0 ? PlaybackState::Paused : PlaybackState::Stopped;
+                    break;
+                case tl::Playback::Forward:
+                case tl::Playback::Reverse:
+                    newState = PlaybackState::Playing;
+                    break;
+                default:
+                    newState = PlaybackState::Stopped;
+                    break;
+                }
+                if (newState != m_playbackState) {
+                    m_playbackState = newState;
+                    emit playbackStateChanged(newState);
+                }
+            });
         
         // Apply current OCIO settings
         applyOCIOOptions();
@@ -178,9 +264,9 @@ void TLRenderPlayer::loadMedia(const QString& filePath)
         // Update media info
         locker.unlock();
         updateMediaInfo();
-        
-        // Start update timer
-        m_updateTimer->start();
+
+        // No polling timer needed; ContextObject + PlayerObject drive updates.
+        m_updateTimer->stop();
         
         qDebug() << "TLRenderPlayer: Loaded media:" << filePath;
         
@@ -199,6 +285,9 @@ void TLRenderPlayer::unloadMedia()
     QMutexLocker locker(&m_mutex);
     
     m_updateTimer->stop();
+
+    // Clear the shared pointer (will delete when no longer referenced by viewport)
+    m_playerObject.clear();
     
     if (m_player) {
         m_player->stop();
@@ -216,6 +305,8 @@ void TLRenderPlayer::unloadMedia()
     m_currentFrame = 0;
     m_totalFrames = 0;
     m_mediaInfo = MediaInfo();
+
+    m_cachedVideoFrames.clear();
 #endif
 }
 
@@ -245,10 +336,16 @@ void TLRenderPlayer::updateMediaInfo()
     
     m_mediaInfo.width = 0;
     m_mediaInfo.height = 0;
-    m_mediaInfo.fps = timeRange.duration().rate();
+
+    double rate = timeRange.duration().rate();
+    if (rate <= 0.0) {
+        // tlRender can report 0/invalid rates for some stills/sequences depending on source.
+        // Keep the app stable and allow seeking/scrubbing.
+        rate = 24.0;
+    }
+    m_mediaInfo.fps = rate;
     m_mediaInfo.totalFrames = static_cast<qint64>(timeRange.duration().value());
-    m_mediaInfo.durationMs = static_cast<qint64>(
-        (timeRange.duration().value() / timeRange.duration().rate()) * 1000.0);
+    m_mediaInfo.durationMs = static_cast<qint64>((timeRange.duration().value() / rate) * 1000.0);
     
     // Get video info from first video layer
     if (!ioInfo.video.empty()) {
@@ -279,9 +376,23 @@ void TLRenderPlayer::updateMediaInfo()
 void TLRenderPlayer::play()
 {
 #ifdef HAVE_TLRENDER
-    if (!m_player) return;
-    
-    m_player->forward();
+    if (!m_player) {
+        qDebug() << "[TLRenderPlayer::play] No player - cannot play";
+        return;
+    }
+
+    qDebug() << "[TLRenderPlayer::play] Starting playback, rate:" << m_playbackRate;
+
+    // Honor current playback rate sign (JKL expects reverse playback).
+    if (m_playbackRate < 0.0) {
+        m_player->setSpeed(std::abs(m_playbackRate));
+        m_player->reverse();
+        qDebug() << "[TLRenderPlayer::play] Set reverse playback";
+    } else {
+        m_player->setSpeed(m_playbackRate);
+        m_player->forward();
+        qDebug() << "[TLRenderPlayer::play] Set forward playback";
+    }
     m_playbackState = PlaybackState::Playing;
     emit playbackStateChanged(PlaybackState::Playing);
 #endif
@@ -290,8 +401,12 @@ void TLRenderPlayer::play()
 void TLRenderPlayer::pause()
 {
 #ifdef HAVE_TLRENDER
-    if (!m_player) return;
+    if (!m_player) {
+        qDebug() << "[TLRenderPlayer::pause] No player - cannot pause";
+        return;
+    }
     
+    qDebug() << "[TLRenderPlayer::pause] Pausing playback";
     m_player->stop();
     m_playbackState = PlaybackState::Paused;
     emit playbackStateChanged(PlaybackState::Paused);
@@ -330,11 +445,17 @@ void TLRenderPlayer::seek(qint64 positionMs)
     
     const auto& timeRange = m_player->getTimeRange();
     double rate = timeRange.duration().rate();
+    if (rate <= 0.0) {
+        rate = 24.0;
+    }
     double seconds = positionMs / 1000.0;
     double frameValue = seconds * rate;
     
     OTIO_NS::RationalTime seekTime(frameValue, rate);
     m_player->seek(seekTime);
+
+    // Make scrubbing responsive even when paused: update systems immediately.
+    tick();
 #endif
 }
 
@@ -345,9 +466,15 @@ void TLRenderPlayer::seekToFrame(qint64 frameNumber)
     
     const auto& timeRange = m_player->getTimeRange();
     double rate = timeRange.duration().rate();
+    if (rate <= 0.0) {
+        rate = 24.0;
+    }
     
     OTIO_NS::RationalTime seekTime(static_cast<double>(frameNumber), rate);
     m_player->seek(seekTime);
+
+    // Make scrubbing responsive even when paused: update systems immediately.
+    tick();
 #endif
 }
 
@@ -697,6 +824,11 @@ void TLRenderPlayer::updateOCIOLists()
         if (m_view.isEmpty() && !m_display.isEmpty()) {
             m_view = QString::fromStdString(config->getDefaultView(m_display.toStdString().c_str()));
         }
+
+        // Make sure view dropdowns can populate immediately after config load.
+        if (!m_display.isEmpty()) {
+            emit viewsChanged(availableViews(m_display));
+        }
         
         qDebug() << "OCIO: Loaded config with" << m_availableColorspaces.size() << "colorspaces,"
                  << m_availableDisplays.size() << "displays";
@@ -740,6 +872,24 @@ tl::OCIOOptions TLRenderPlayer::currentOCIOOptions() const
 // Rendering Interface
 // ============================================================================
 
+std::shared_ptr<ftk::Context> TLRenderPlayer::sharedContext()
+{
+#ifdef HAVE_TLRENDER
+    return s_sharedContext;
+#else
+    return nullptr;
+#endif
+}
+
+tl::qt::ContextObject* TLRenderPlayer::sharedContextObject()
+{
+#ifdef HAVE_TLRENDER
+    return s_contextObject;
+#else
+    return nullptr;
+#endif
+}
+
 std::shared_ptr<ftk::Context> TLRenderPlayer::context() const
 {
     return m_context;
@@ -754,12 +904,20 @@ std::shared_ptr<tl::Player> TLRenderPlayer::player() const
 #endif
 }
 
+QSharedPointer<tl::qt::PlayerObject> TLRenderPlayer::playerObject() const
+{
+#ifdef HAVE_TLRENDER
+    return m_playerObject;
+#else
+    return QSharedPointer<tl::qt::PlayerObject>();
+#endif
+}
+
 std::vector<tl::VideoFrame> TLRenderPlayer::currentVideoFrames() const
 {
 #ifdef HAVE_TLRENDER
-    if (m_player) {
-        return m_player->getCurrentVideo();
-    }
+    QMutexLocker locker(&m_mutex);
+    return m_cachedVideoFrames;
 #endif
     return {};
 }
@@ -785,13 +943,22 @@ void TLRenderPlayer::onUpdateTimer()
     // Tick the context to process events
     tick();
     
+    // Update media info lazily once I/O has finished (common for sequences).
+    if (m_duration.load() <= 0) {
+        const auto& timeRangeProbe = m_player->getTimeRange();
+        if (timeRangeProbe.duration().value() > 0.0) {
+            updateMediaInfo();
+        }
+    }
+
     // Update position
     const auto& currentTime = m_player->getCurrentTime();
     const auto& timeRange = m_player->getTimeRange();
     
     qint64 newFrame = static_cast<qint64>(currentTime.value());
-    qint64 newPositionMs = static_cast<qint64>(
-        (currentTime.value() / currentTime.rate()) * 1000.0);
+    const double rate = (currentTime.rate() > 0.0) ? currentTime.rate() :
+                        ((timeRange.duration().rate() > 0.0) ? timeRange.duration().rate() : 24.0);
+    qint64 newPositionMs = static_cast<qint64>((currentTime.value() / rate) * 1000.0);
     
     if (newPositionMs != m_position) {
         m_position = newPositionMs;
@@ -832,23 +999,230 @@ void TLRenderPlayer::onUpdateTimer()
 
 QImage TLRenderPlayer::getCurrentFrame(const QSize& targetSize)
 {
-    Q_UNUSED(targetSize)
-    // TODO: Implement frame extraction using tlRender's read functionality
-    return QImage();
+    // For now, reuse the static thumbnail extraction when possible.
+    // Note: This will only work for regular video files (not sequence patterns).
+    if (m_currentPath.isEmpty()) {
+        return QImage();
+    }
+    return extractThumbnail(m_currentPath, targetSize, position());
 }
 
 QImage TLRenderPlayer::extractThumbnail(const QString& filePath, const QSize& targetSize, qint64 positionMs)
 {
+#if defined(HAVE_FFMPEG) && HAVE_FFMPEG
+    // Reduce FFmpeg logging noise
+    static bool logLevelSet = false;
+    if (!logLevelSet) {
+        av_log_set_level(AV_LOG_ERROR);
+        logLevelSet = true;
+    }
+
+    if (filePath.isEmpty()) {
+        return {};
+    }
+
+    AVFormatContext* fmtCtx = nullptr;
+    QByteArray localPath = QFile::encodeName(filePath);
+    int ret = avformat_open_input(&fmtCtx, localPath.constData(), nullptr, nullptr);
+    if (ret < 0 || !fmtCtx) {
+        return {};
+    }
+
+    ret = avformat_find_stream_info(fmtCtx, nullptr);
+    if (ret < 0) {
+        avformat_close_input(&fmtCtx);
+        return {};
+    }
+
+    const int vIdx = av_find_best_stream(fmtCtx, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
+    if (vIdx < 0) {
+        avformat_close_input(&fmtCtx);
+        return {};
+    }
+
+    AVStream* vs = fmtCtx->streams[vIdx];
+    if (!vs || !vs->codecpar) {
+        avformat_close_input(&fmtCtx);
+        return {};
+    }
+
+    const AVCodec* codec = avcodec_find_decoder(vs->codecpar->codec_id);
+    if (!codec) {
+        avformat_close_input(&fmtCtx);
+        return {};
+    }
+
+    AVCodecContext* decCtx = avcodec_alloc_context3(codec);
+    if (!decCtx) {
+        avformat_close_input(&fmtCtx);
+        return {};
+    }
+
+    ret = avcodec_parameters_to_context(decCtx, vs->codecpar);
+    if (ret < 0) {
+        avcodec_free_context(&decCtx);
+        avformat_close_input(&fmtCtx);
+        return {};
+    }
+
+    ret = avcodec_open2(decCtx, codec, nullptr);
+    if (ret < 0) {
+        avcodec_free_context(&decCtx);
+        avformat_close_input(&fmtCtx);
+        return {};
+    }
+
+    // Seek to requested position.
+    // Convert ms -> stream time_base.
+    const double targetSeconds = qMax<qint64>(0, positionMs) / 1000.0;
+    const double tb = av_q2d(vs->time_base);
+    if (tb > 0.0) {
+        const int64_t targetTs = static_cast<int64_t>(targetSeconds / tb);
+        av_seek_frame(fmtCtx, vIdx, targetTs, AVSEEK_FLAG_BACKWARD);
+        avcodec_flush_buffers(decCtx);
+    }
+
+    AVPacket* pkt = av_packet_alloc();
+    AVFrame* frame = av_frame_alloc();
+    AVFrame* rgb = av_frame_alloc();
+    if (!pkt || !frame || !rgb) {
+        if (pkt) av_packet_free(&pkt);
+        if (frame) av_frame_free(&frame);
+        if (rgb) av_frame_free(&rgb);
+        avcodec_free_context(&decCtx);
+        avformat_close_input(&fmtCtx);
+        return {};
+    }
+
+    const int srcW = decCtx->width;
+    const int srcH = decCtx->height;
+    if (srcW <= 0 || srcH <= 0) {
+        av_packet_free(&pkt);
+        av_frame_free(&frame);
+        av_frame_free(&rgb);
+        avcodec_free_context(&decCtx);
+        avformat_close_input(&fmtCtx);
+        return {};
+    }
+
+    SwsContext* sws = sws_getContext(
+        srcW, srcH, decCtx->pix_fmt,
+        srcW, srcH, AV_PIX_FMT_BGRA,
+        SWS_BILINEAR, nullptr, nullptr, nullptr);
+    if (!sws) {
+        av_packet_free(&pkt);
+        av_frame_free(&frame);
+        av_frame_free(&rgb);
+        avcodec_free_context(&decCtx);
+        avformat_close_input(&fmtCtx);
+        return {};
+    }
+
+    const int rgbBufSize = av_image_get_buffer_size(AV_PIX_FMT_BGRA, srcW, srcH, 1);
+    uint8_t* rgbBuf = static_cast<uint8_t*>(av_malloc(rgbBufSize));
+    if (!rgbBuf) {
+        sws_freeContext(sws);
+        av_packet_free(&pkt);
+        av_frame_free(&frame);
+        av_frame_free(&rgb);
+        avcodec_free_context(&decCtx);
+        avformat_close_input(&fmtCtx);
+        return {};
+    }
+    av_image_fill_arrays(rgb->data, rgb->linesize, rgbBuf, AV_PIX_FMT_BGRA, srcW, srcH, 1);
+
+    QImage out;
+    bool gotFrame = false;
+    int safetyPackets = 0;
+
+    while (av_read_frame(fmtCtx, pkt) >= 0 && safetyPackets < 5000) {
+        ++safetyPackets;
+        if (pkt->stream_index != vIdx) {
+            av_packet_unref(pkt);
+            continue;
+        }
+
+        ret = avcodec_send_packet(decCtx, pkt);
+        av_packet_unref(pkt);
+        if (ret < 0) {
+            continue;
+        }
+
+        while ((ret = avcodec_receive_frame(decCtx, frame)) >= 0) {
+            // Optional: try to reach/skip to target time, but keep it simple.
+            // Many codecs will output the closest prior frame after AVSEEK_FLAG_BACKWARD.
+            sws_scale(sws, frame->data, frame->linesize, 0, srcH, rgb->data, rgb->linesize);
+
+            QImage img(rgb->data[0], srcW, srcH, rgb->linesize[0], QImage::Format_ARGB32);
+            out = img.copy();
+            gotFrame = true;
+            break;
+        }
+
+        if (gotFrame) {
+            break;
+        }
+    }
+
+    if (gotFrame && !targetSize.isEmpty()) {
+        out = out.scaled(targetSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    }
+
+    av_free(rgbBuf);
+    sws_freeContext(sws);
+    av_packet_free(&pkt);
+    av_frame_free(&frame);
+    av_frame_free(&rgb);
+    avcodec_free_context(&decCtx);
+    avformat_close_input(&fmtCtx);
+
+    return out;
+#else
     Q_UNUSED(filePath)
     Q_UNUSED(targetSize)
     Q_UNUSED(positionMs)
-    // TODO: Implement using tlRender I/O system
-    return QImage();
+    return {};
+#endif
 }
 
 qint64 TLRenderPlayer::queryDuration(const QString& filePath)
 {
+#if defined(HAVE_FFMPEG) && HAVE_FFMPEG
+    if (filePath.isEmpty()) {
+        return 0;
+    }
+
+    AVFormatContext* fmtCtx = nullptr;
+    QByteArray localPath = QFile::encodeName(filePath);
+    int ret = avformat_open_input(&fmtCtx, localPath.constData(), nullptr, nullptr);
+    if (ret < 0 || !fmtCtx) {
+        return 0;
+    }
+
+    ret = avformat_find_stream_info(fmtCtx, nullptr);
+    if (ret < 0) {
+        avformat_close_input(&fmtCtx);
+        return 0;
+    }
+
+    qint64 durationMs = 0;
+    if (fmtCtx->duration > 0) {
+        durationMs = static_cast<qint64>((fmtCtx->duration * 1000.0) / AV_TIME_BASE);
+    } else {
+        const int vIdx = av_find_best_stream(fmtCtx, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
+        if (vIdx >= 0) {
+            AVStream* vs = fmtCtx->streams[vIdx];
+            if (vs && vs->duration > 0) {
+                const double sec = vs->duration * av_q2d(vs->time_base);
+                durationMs = static_cast<qint64>(sec * 1000.0);
+            }
+        }
+    }
+
+    avformat_close_input(&fmtCtx);
+    return durationMs;
+#else
     Q_UNUSED(filePath)
-    // TODO: Implement using tlRender I/O system
     return 0;
+#endif
 }

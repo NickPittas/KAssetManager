@@ -81,8 +81,14 @@ void TLRenderWidget::setPlayer(TLRenderPlayer* player)
     if (m_player) {
         connect(m_player, &TLRenderPlayer::positionChanged,
                 this, &TLRenderWidget::onPlayerPositionChanged);
+        connect(m_player, &TLRenderPlayer::videoFramesChanged,
+            this, [this]() {
+                qDebug() << "[TLRenderWidget] videoFramesChanged received - requesting render";
+                requestRender();
+            });
         connect(m_player, &TLRenderPlayer::mediaInfoReady,
                 this, [this](const TLRenderPlayer::MediaInfo& info) {
+                    qDebug() << "[TLRenderWidget] mediaInfoReady:" << info.width << "x" << info.height;
                     m_videoSize = QSize(info.width, info.height);
                     calculateVideoRect();
                     emit videoSizeChanged(m_videoSize);
@@ -216,7 +222,17 @@ void TLRenderWidget::paintGL()
         // Get current video frames
         auto videoFrames = m_player->currentVideoFrames();
         if (videoFrames.empty()) {
+            static int emptyFrameLogCount = 0;
+            if (emptyFrameLogCount++ % 100 == 0) {
+                qDebug() << "[TLRenderWidget::paintGL] No frames available (every 100th log)";
+            }
             return;
+        }
+
+        // Log frame info periodically during playback
+        static int frameLogCount = 0;
+        if (frameLogCount++ % 60 == 0) {
+            qDebug() << "[TLRenderWidget::paintGL] Rendering frame, videoFrames.size():" << videoFrames.size();
         }
 
         // Get widget size
@@ -370,10 +386,13 @@ void TLRenderWidget::checkGLError(const char* operation)
 void TLRenderWidget::onRenderTimer()
 {
     if (m_player && m_player->playbackState() == TLRenderPlayer::PlaybackState::Playing) {
-        // Tick the player
-        m_player->tick();
+        // Frames and timing are advanced by tlRender's Qt ContextObject.
+        // Keep repainting while playing.
         requestRender();
-    } else if (m_needsRender) {
+        return;
+    }
+
+    if (m_needsRender) {
         update();
     }
 }

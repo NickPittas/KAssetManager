@@ -170,20 +170,53 @@ $configureArgs = @(
     "-G", $Generator
 )
 
+# Packaging builds don't need unit tests and they pull optional deps (e.g. GStreamer).
+$configureArgs += @(
+    "-DBUILD_APP=ON",
+    "-DBUILD_TESTS=OFF"
+)
+
+# Detect tlRender install (required for playback). If present, prefer its bundled deps
+# to avoid link-time conflicts with vcpkg (zlib/OpenImageIO/minizip-ng).
+$tlRenderRoot = Join-Path $repoRoot 'third_party/tlRender-build/install-Release'
+$tlRenderConfig = Join-Path $tlRenderRoot 'lib/cmake/tlRender/tlRenderConfig.cmake'
+$hasTlRender = Test-Path $tlRenderConfig
+if ($hasTlRender) {
+    Write-Host "Detected tlRender install: $tlRenderRoot" -ForegroundColor Green
+}
+
 # Always drive CMake with the vcpkg toolchain from C:/vcpkg and make search paths explicit
 if (Test-Path (Join-Path $vcpkgRoot 'scripts/buildsystems/vcpkg.cmake')) {
     $tc = (Join-Path $vcpkgRoot 'scripts/buildsystems/vcpkg.cmake') -replace '\\','/'
     $prefixQt = $QtPrefix -replace '\\','/'
     $prefixVcpkg = (Join-Path $vcpkgRoot 'installed/x64-windows') -replace '\\','/'
-    $configureArgs += @(
-        "-DCMAKE_TOOLCHAIN_FILE=$tc",
-        "-DVCPKG_TARGET_TRIPLET=x64-windows",
-        "-DCMAKE_PREFIX_PATH=$prefixVcpkg;$prefixQt",
-        "-DOpenImageIO_DIR=$prefixVcpkg/share/openimageio",
-        "-Dminizip-ng_DIR=$prefixVcpkg/share/minizip-ng"
-    )
+    if ($hasTlRender) {
+        $prefixTl = ($tlRenderRoot -replace '\\','/')
+        $configureArgs += @(
+            "-DCMAKE_TOOLCHAIN_FILE=$tc",
+            "-DVCPKG_TARGET_TRIPLET=x64-windows",
+            # Keep vcpkg toolchain (MSVC integration), but prefer tlRender deps first.
+            "-DCMAKE_PREFIX_PATH=$prefixTl;$prefixTl/share/ftk;$prefixVcpkg;$prefixQt",
+            "-DOpenImageIO_DIR=$prefixTl/lib/cmake/OpenImageIO",
+            "-DOpenEXR_DIR=$prefixTl/lib/cmake/OpenEXR",
+            "-DImath_DIR=$prefixTl/lib/cmake/Imath",
+            "-DOpenColorIO_DIR=$prefixTl/lib/cmake/OpenColorIO",
+            "-Dminizip-ng_DIR=$prefixTl/lib/cmake/minizip-ng",
+            "-DZLIB_LIBRARY_RELEASE=$prefixTl/lib/zlib.lib",
+            "-DZLIB_INCLUDE_DIR=$prefixTl/include"
+        )
+        Write-Host "Using tlRender-provided deps (OIIO/zlib/minizip-ng)" -ForegroundColor Green
+    } else {
+        $configureArgs += @(
+            "-DCMAKE_TOOLCHAIN_FILE=$tc",
+            "-DVCPKG_TARGET_TRIPLET=x64-windows",
+            "-DCMAKE_PREFIX_PATH=$prefixVcpkg;$prefixQt",
+            "-DOpenImageIO_DIR=$prefixVcpkg/share/openimageio",
+            "-Dminizip-ng_DIR=$prefixVcpkg/share/minizip-ng"
+        )
+        Write-Host "vcpkg prefix added: $prefixVcpkg" -ForegroundColor Green
+    }
     Write-Host "Using vcpkg toolchain: $tc" -ForegroundColor Green
-    Write-Host "vcpkg prefix added: $prefixVcpkg" -ForegroundColor Green
 } else {
     # Fall back to at least include Qt in prefix
     $configureArgs += @("-DCMAKE_PREFIX_PATH=$QtPrefix")
@@ -197,6 +230,9 @@ if ($Generator -eq "Ninja") {
 }
 
 cmake @configureArgs
+if ($LASTEXITCODE -ne 0) {
+    throw "CMake configure failed (exit code $LASTEXITCODE)"
+}
 
 # Build Release by default for packaging
 $buildArgs = @("--build", $build)
@@ -204,6 +240,9 @@ if ($Generator -eq "Visual Studio 17 2022") {
     $buildArgs += @("--config","Release")
 }
 cmake @buildArgs
+if ($LASTEXITCODE -ne 0) {
+    throw "CMake build failed (exit code $LASTEXITCODE)"
+}
 
 if ($Package) {
     Push-Location $build
@@ -216,27 +255,53 @@ if ($Package) {
             $installArgs += @('--config','Release')
         }
         cmake @installArgs
+        if ($LASTEXITCODE -ne 0) {
+            throw "CMake install failed (exit code $LASTEXITCODE)"
+        }
 
         $exe = Join-Path $stage 'bin/kassetmanagerqt.exe'
         if (-not (Test-Path $exe)) { throw "Installed exe not found: $exe" }
 
-        # 2) Copy ALL vcpkg DLLs BEFORE running verification (OpenImageIO has many dependencies)
+        # 2) Copy runtime DLLs BEFORE running verification
+        $stageBinDir = Join-Path $stage 'bin'
+
+        if ($hasTlRender) {
+            $tlBin = Join-Path $tlRenderRoot 'bin'
+            if (Test-Path $tlBin) {
+                Write-Host "Copying tlRender runtime DLLs to staging directory..." -ForegroundColor Cyan
+                Get-ChildItem -Path $tlBin -Filter "*.dll" -ErrorAction SilentlyContinue |
+                    ForEach-Object { Copy-Item $_.FullName -Destination $stageBinDir -Force }
+            } else {
+                Write-Warning "tlRender bin directory not found at $tlBin"
+            }
+        }
+
+        # Copy vcpkg DLLs (optional extras). When tlRender is enabled, skip known-conflicting DLLs.
         $vcpkgBin = 'C:\vcpkg\installed\x64-windows\bin'
         if (Test-Path $vcpkgBin) {
-            Write-Host "Copying ALL vcpkg DLLs to staging directory..." -ForegroundColor Cyan
-            $stageBinDir = Join-Path $stage 'bin'
-        $dlls = Get-ChildItem -Path $vcpkgBin -Filter "*.dll" -ErrorAction SilentlyContinue
-        $copiedCount = 0
-        foreach ($dll in $dlls) {
-            if ($dll.Name -match '^(avcodec|avdevice|avfilter|avformat|avutil|postproc|swresample|swscale).*-?\d*\.dll$') {
-                continue # Keep our custom FFmpeg runtime untouched
+            Write-Host "Copying vcpkg DLLs to staging directory..." -ForegroundColor Cyan
+            $dlls = Get-ChildItem -Path $vcpkgBin -Filter "*.dll" -ErrorAction SilentlyContinue
+            $copiedCount = 0
+            foreach ($dll in $dlls) {
+                if ($dll.Name -match '^(avcodec|avdevice|avfilter|avformat|avutil|postproc|swresample|swscale).*-?\d*\.dll$') {
+                    continue # Keep our custom FFmpeg runtime untouched
+                }
+                if ($hasTlRender) {
+                    # Keep tlRender's bundled OIIO/EXR stack; avoid staging vcpkg OpenImageIO DLLs.
+                    if ($dll.Name -like 'OpenImageIO*.dll') { continue }
+                }
+                Copy-Item $dll.FullName -Destination $stageBinDir -Force
+                $copiedCount++
             }
-            Copy-Item $dll.FullName -Destination $stageBinDir -Force
-            $copiedCount++
-        }
-        Write-Host "Copied $copiedCount DLL files from vcpkg" -ForegroundColor Green
+            Write-Host "Copied $copiedCount DLL files from vcpkg" -ForegroundColor Green
         } else {
             Write-Warning "vcpkg not found at $vcpkgBin - application may be missing required DLLs"
+        }
+
+        # Ensure zlib runtime is present if any staged DLLs depend on it.
+        $vcpkgZlib = Join-Path $vcpkgBin 'zlib1.dll'
+        if (Test-Path $vcpkgZlib) {
+            Copy-Item $vcpkgZlib -Destination $stageBinDir -Force
         }
 
         # Optional: copy custom FFmpeg runtime if FFMPEG_ROOT environment variable is provided

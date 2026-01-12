@@ -1,5 +1,181 @@
 # tlRender Integration Plan for KAssetManager
 
+## ⚠️ CRITICAL ISSUES IDENTIFIED (2026-01-13)
+
+**Current State: BROKEN - 0.5 FPS playback instead of 24+ FPS**
+
+### Root Cause Analysis
+
+From app.log:
+```
+[00:24:04.867] currentTimeChanged: frame 1 pos 41 ms  
+[00:24:05.867] currentTimeChanged: frame 2 pos 83 ms   <- 1 SECOND between frames!
+[00:24:06.868] currentTimeChanged: frame 3 pos 125 ms  <- Should be 41ms apart
+```
+
+The ContextObject's 5ms timer is supposed to drive `context->tick()` which advances the player.
+Something is blocking or the timer isn't firing correctly.
+
+---
+
+## Architecture Mindmap (CORRECT tlRender Qt Integration)
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         tlRender Qt Integration Architecture                 │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ INITIALIZATION (Once at app startup, BEFORE QApplication)                    │
+│                                                                              │
+│   ftk::Context::create()                                                     │
+│         │                                                                    │
+│         ▼                                                                    │
+│   tl::qtwidget::init(context, OpenGL_4_1_CoreProfile)                       │
+│         │    └── Sets QSurfaceFormat, registers Qt metatypes                │
+│         ▼                                                                    │
+│   tl::qt::ContextObject(context, qApp)  <── SINGLETON                       │
+│         │    └── Internal QTimer (5ms) calls context->tick()                │
+│         │    └── This drives ALL player timing!                             │
+│         ▼                                                                    │
+│   tl::qtwidget::initFonts(context)  (After QApplication created)            │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ MEDIA LOADING (Per file/sequence)                                            │
+│                                                                              │
+│   ftk::Path(filePath)                                                        │
+│         │                                                                    │
+│         ▼                                                                    │
+│   tl::Timeline::create(context, path, options)                              │
+│         │    └── Handles video files, image sequences, .otio                │
+│         ▼                                                                    │
+│   tl::Player::create(context, timeline, playerOptions)                      │
+│         │    └── Native C++ player with threading & caching                 │
+│         ▼                                                                    │
+│   tl::qt::PlayerObject(context, player)  <── Qt wrapper                     │
+│         │    └── Wraps native Player                                        │
+│         │    └── Emits Qt signals: currentTimeChanged, playbackChanged, etc │
+│         │    └── Has slots: play(), pause(), seek(), setSpeed()             │
+│         │                                                                    │
+│         │    IMPORTANT: PlayerObject observes Player state via callbacks.   │
+│         │    When context->tick() is called, Player advances time,          │
+│         │    PlayerObject detects changes and emits Qt signals.             │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ RENDERING (Viewport)                                                         │
+│                                                                              │
+│   tl::qtwidget::Viewport(context, style)                                    │
+│         │    └── QOpenGLWidget subclass                                     │
+│         │    └── Internal rendering loop (not timer-based!)                 │
+│         │    └── Observes PlayerObject for video frames                     │
+│         │                                                                    │
+│         ▼                                                                    │
+│   viewport->setPlayer(QSharedPointer<PlayerObject>)                         │
+│         │    └── Viewport connects to PlayerObject::currentVideoChanged     │
+│         │    └── When new video frame available, viewport redraws           │
+│         │                                                                    │
+│         ▼                                                                    │
+│   viewport->setOCIOOptions(ocioOptions)                                     │
+│         │    └── Color management applied during GL rendering               │
+│                                                                              │
+│   CRITICAL: Viewport does NOT have its own player. It USES the shared       │
+│   PlayerObject. There should be ONE PlayerObject per media file.            │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ DATA FLOW DURING PLAYBACK                                                    │
+│                                                                              │
+│   QTimer (5ms, in ContextObject)                                            │
+│         │                                                                    │
+│         ▼                                                                    │
+│   context->tick()                                                           │
+│         │                                                                    │
+│         ▼                                                                    │
+│   Player internal thread advances currentTime                               │
+│         │                                                                    │
+│         ▼                                                                    │
+│   PlayerObject observers detect change                                      │
+│         │                                                                    │
+│         ▼                                                                    │
+│   PlayerObject emits currentTimeChanged(RationalTime)                       │
+│   PlayerObject emits currentVideoChanged(vector<VideoFrame>)                │
+│         │                                                                    │
+│         ▼                                                                    │
+│   Viewport receives currentVideoChanged                                     │
+│         │                                                                    │
+│         ▼                                                                    │
+│   Viewport calls update() -> paintGL() -> renders frame                     │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## WHAT WENT WRONG (Previous Implementation)
+
+1. **Created TLRenderPlayer wrapper that duplicates PlayerObject functionality**
+   - Has its own QTimer (m_updateTimer) that calls onUpdateTimer()
+   - This timer was STOPPED when PlayerObject was created
+   - But ContextObject's timer should be the ONLY driver
+
+2. **Possible context tick issue**
+   - ContextObject is created with `qApp` as parent
+   - But is this object actually running its timer?
+   - Need to verify ContextObject is alive and ticking
+
+3. **TLRenderViewport wraps qtwidget::Viewport correctly**
+   - But may not be receiving PlayerObject signals properly
+   - The shared PlayerObject approach was correct, but timing is broken
+
+4. **Overcomplication**
+   - TLRenderPlayer does too much: wraps Player AND PlayerObject AND has its own signals
+   - Should just expose PlayerObject directly and let the viewport use it
+
+---
+
+## CORRECT IMPLEMENTATION (Simplified)
+
+### Option A: Minimal Wrapper (Recommended)
+
+```cpp
+// TLRenderPlayer should be THIN - just load media and return PlayerObject
+class TLRenderPlayer : public QObject {
+    static void initialize();  // Call once at startup
+    static std::shared_ptr<ftk::Context> sharedContext();
+    
+    void loadMedia(const QString& path);
+    QSharedPointer<tl::qt::PlayerObject> playerObject() const;
+    
+    // OCIO settings - apply to DisplayOptions, not PlayerObject
+    void setOCIOOptions(const tl::OCIOOptions& options);
+    
+private:
+    std::shared_ptr<tl::Timeline> m_timeline;
+    std::shared_ptr<tl::Player> m_player;
+    QSharedPointer<tl::qt::PlayerObject> m_playerObject;
+};
+
+// Usage in PreviewOverlay:
+m_tlPlayer->loadMedia(path);
+m_viewport->setPlayer(m_tlPlayer->playerObject());
+
+// Playback control - use PlayerObject directly!
+m_tlPlayer->playerObject()->forward();   // Play
+m_tlPlayer->playerObject()->stop();      // Pause
+m_tlPlayer->playerObject()->seek(time);  // Seek
+```
+
+### Option B: Remove TLRenderPlayer entirely
+
+Just use tlRender's native classes directly in PreviewOverlay:
+- Create Timeline
+- Create Player  
+- Create PlayerObject
+- Pass PlayerObject to Viewport
+
+---
+
 ## Overview
 
 Replace GStreamer video playback with tlRender (mrv2's playback engine) to enable full ACES/OpenColorIO color management support.
