@@ -2438,6 +2438,8 @@ void MainWindow::setupFileManagerUi()
                 });
             }
         }
+
+        syncFmToolbarFromActivePane();
     });
 
     LogManager::instance().addLog("[TRACE] setupFileManagerUi exit", "DEBUG");
@@ -2722,7 +2724,7 @@ void MainWindow::onFmDelete()
         QWidget* fw = QApplication::focusWidget();
         if (fw && (qobject_cast<QLineEdit*>(fw) || fw->inherits("QTextEdit") || fw->inherits("QPlainTextEdit"))) return;
     }
-    QStringList paths = getSelectedFileManagerPaths(fmDirModel, fmGridView, fmListView, fmViewStack);
+    QStringList paths = selectedPathsForActiveFmPane();
     if (paths.isEmpty()) return;
 
 
@@ -2741,7 +2743,7 @@ void MainWindow::onFmDeletePermanent()
         QWidget* fw = QApplication::focusWidget();
         if (fw && (qobject_cast<QLineEdit*>(fw) || fw->inherits("QTextEdit") || fw->inherits("QPlainTextEdit"))) return;
     }
-    QStringList paths = getSelectedFileManagerPaths(fmDirModel, fmGridView, fmListView, fmViewStack);
+    QStringList paths = selectedPathsForActiveFmPane();
     if (paths.isEmpty()) return;
 
 
@@ -2815,7 +2817,7 @@ void MainWindow::onFmRename()
         QWidget* fw = QApplication::focusWidget();
         if (fw && (qobject_cast<QLineEdit*>(fw) || fw->inherits("QTextEdit") || fw->inherits("QPlainTextEdit"))) return;
     }
-    QStringList paths = getSelectedFileManagerPaths(fmDirModel, fmGridView, fmListView, fmViewStack);
+    QStringList paths = selectedPathsForActiveFmPane();
 
     if (paths.size() != 1) return;
     QString p = paths.first();
@@ -2859,7 +2861,8 @@ void MainWindow::onFmNewFolder()
         QWidget* fw = QApplication::focusWidget();
         if (fw && (qobject_cast<QLineEdit*>(fw) || fw->inherits("QTextEdit") || fw->inherits("QPlainTextEdit"))) return;
     }
-    const QString destDir = fmDirModel->rootPath();
+    const QString destDir = activeFmRootPath();
+    if (destDir.isEmpty()) return;
     QString path = uniqueNameInDir(destDir, "New Folder");
     QDir().mkpath(path);
 }
@@ -3261,10 +3264,11 @@ void MainWindow::onFmCreateFolderWithSelected()
         QWidget* fw = QApplication::focusWidget();
         if (fw && (qobject_cast<QLineEdit*>(fw) || fw->inherits("QTextEdit") || fw->inherits("QPlainTextEdit"))) return;
     }
-    QStringList paths = getSelectedFileManagerPaths(fmDirModel, fmGridView, fmListView, fmViewStack);
+    QStringList paths = selectedPathsForActiveFmPane();
     if (paths.isEmpty()) return;
-    // Destination directory is current root of fmDirModel
-    const QString destDir = fmDirModel->rootPath();
+    // Destination directory is current root of active pane
+    const QString destDir = activeFmRootPath();
+    if (destDir.isEmpty()) return;
     bool ok=false;
     QString folderName = QInputDialog::getText(this, "Create Folder", "Enter folder name:", QLineEdit::Normal, "New Folder", &ok);
     if (!ok) return;
@@ -3289,6 +3293,16 @@ void MainWindow::onFmCreateFolderWithSelected()
 
 void MainWindow::onFmViewModeToggled()
 {
+    if (isSecondaryFmPaneActive()) {
+        const bool grid = !fmSecondaryPane->isGridMode();
+        fmSecondaryPane->setGridMode(grid);
+        if (fmViewModeButton) {
+            const QColor iconColor = ThemeManager::instance().iconColor();
+            fmViewModeButton->setIcon(grid ? icoGrid(iconColor) : icoList(iconColor));
+        }
+        return;
+    }
+
     fmIsGridMode = !fmIsGridMode;
     fmViewStack->setCurrentIndex(fmIsGridMode ? 0 : 1);
     fmViewModeButton->setIcon(fmIsGridMode ? icoGrid() : icoList());
@@ -3324,6 +3338,11 @@ void MainWindow::onFmViewModeToggled()
 
 void MainWindow::onFmThumbnailSizeChanged(int size)
 {
+    if (isSecondaryFmPaneActive()) {
+        fmSecondaryPane->setThumbnailSize(size);
+        return;
+    }
+
     if (fmGridView) {
         fmGridView->setIconSize(QSize(size, size));
         fmGridView->setGridSize(QSize(size + 8, size + 36));
@@ -3594,8 +3613,12 @@ void MainWindow::syncFmToolbarFromActivePane()
         fmViewModeButton->setIcon(grid ? icoGrid(iconColor) : icoList(iconColor));
     }
     if (fmThumbnailSizeSlider) {
-        const int size = secondaryActive && fmSecondaryPane ? fmSecondaryPane->thumbnailSize()
-                                                           : fmThumbnailSizeSlider->value();
+        int size = fmThumbnailSizeSlider->value();
+        if (secondaryActive && fmSecondaryPane) {
+            size = fmSecondaryPane->thumbnailSize();
+        } else if (fmGridView) {
+            size = fmGridView->iconSize().width();
+        }
         QSignalBlocker block(fmThumbnailSizeSlider);
         fmThumbnailSizeSlider->setValue(size);
     }
@@ -3646,31 +3669,12 @@ void MainWindow::onAddSelectionToAssetLibrary()
     QStringList filePaths;
     QStringList folderPaths;
 
-    const bool isGrid = (fmViewStack->currentIndex() == 0);
-    if (isGrid) {
-        if (!fmGridView || !fmGridView->selectionModel()) return;
-        const auto indexes = fmGridView->selectionModel()->selectedIndexes();
-        for (const QModelIndex &idx : indexes) {
-            QModelIndex srcIdx = idx;
-            if (fmProxyModel && idx.model() == fmProxyModel)
-                srcIdx = fmProxyModel->mapToSource(idx);
-            if (!srcIdx.isValid()) continue;
-            const QString path = fmDirModel->filePath(srcIdx);
-            if (path.isEmpty()) continue;
-            if (fmDirModel->isDir(srcIdx)) folderPaths << path; else filePaths << path;
-        }
-    } else {
-        if (!fmListView || !fmListView->selectionModel()) return;
-        const auto rows = fmListView->selectionModel()->selectedRows();
-        for (const QModelIndex &idx : rows) {
-            QModelIndex srcIdx = idx;
-            if (fmProxyModel && idx.model() == fmProxyModel)
-                srcIdx = fmProxyModel->mapToSource(idx);
-            if (!srcIdx.isValid()) continue;
-            const QString path = fmDirModel->filePath(srcIdx);
-            if (path.isEmpty()) continue;
-            if (fmDirModel->isDir(srcIdx)) folderPaths << path; else filePaths << path;
-        }
+    const QStringList paths = selectedPathsForActiveFmPane();
+    for (const QString &path : paths) {
+        if (path.isEmpty()) continue;
+        QFileInfo fi(path);
+        if (fi.isDir()) folderPaths << path;
+        else filePaths << path;
     }
 
     importToAssetLibrary(filePaths, folderPaths);
@@ -4182,6 +4186,8 @@ void MainWindow::setupProjectManagerUi()
             pmPlayPauseBtn->setIcon(icoMediaPause(ThemeManager::instance().iconColor()));
         }
     });
+
+    syncFmToolbarFromActivePane();
     
     connect(pmTlRenderPlayer, &TLRenderPlayer::positionChanged, this, [this](qint64 pos){
         if (pmIsSequence) return;
@@ -10483,6 +10489,18 @@ void MainWindow::onFmSelectionChanged()
 
 void MainWindow::onFmTogglePreview()
 {
+    if (isSecondaryFmPaneActive()) {
+        const bool show = fmPreviewToggleButton ? fmPreviewToggleButton->isChecked()
+                                                : fmSecondaryPane->isPreviewVisible();
+        fmSecondaryPane->setPreviewVisible(show);
+        if (show) {
+            fmSecondaryPane->updatePreviewForIndex(fmSecondaryPane->currentIndex());
+        } else {
+            fmSecondaryPane->clearPreview();
+        }
+        return;
+    }
+
     if (!fmPreviewInfoSplitter) return;
     const bool show = fmPreviewToggleButton ? fmPreviewToggleButton->isChecked() : !fmPreviewInfoSplitter->isVisible();
     fmPreviewInfoSplitter->setVisible(show);
@@ -10997,11 +11015,20 @@ void MainWindow::setAssetManagerSequenceGroupingEnabled(bool enabled)
 
 void MainWindow::onFmGroupSequencesToggled(bool checked)
 {
+    if (isSecondaryFmPaneActive()) {
+        fmSecondaryPane->setSequenceGroupingEnabled(checked);
+        return;
+    }
     setSequenceGroupingEnabled(checked);
 }
 
 void MainWindow::onFmHideFoldersToggled(bool checked)
 {
+    if (isSecondaryFmPaneActive()) {
+        fmSecondaryPane->setHideFolders(checked);
+        return;
+    }
+
     fmHideFolders = checked;
     if (fmDirModel) {
         // Preserve current path
@@ -11057,36 +11084,44 @@ void MainWindow::onEverythingSearchFileManager()
     EverythingSearchDialog dialog(EverythingSearchDialog::FileManagerMode, this);
     if (dialog.exec() == QDialog::Accepted) {
         QStringList selectedPaths = dialog.getSelectedPaths();
-        if (!selectedPaths.isEmpty() && fmDirModel) {
-            // Navigate to the first selected file's directory
-            QString firstPath = selectedPaths.first();
-            QFileInfo fi(firstPath);
-            if (fi.exists()) {
-                QString dirPath = fi.absolutePath();
+        if (selectedPaths.isEmpty()) return;
 
-                // Set the root path in the file manager
-                fmDirModel->setRootPath(dirPath);
-                QModelIndex srcRoot = fmDirModel->index(dirPath);
-                if (fmProxyModel) {
-                    fmProxyModel->rebuildForRoot(dirPath);
-                    QModelIndex proxyRoot = fmProxyModel->mapFromSource(srcRoot);
-                    if (fmGridView) fmGridView->setRootIndex(proxyRoot);
-                    if (fmListView) fmListView->setRootIndex(proxyRoot);
-                }
+        // Navigate to the first selected file's directory
+        QString firstPath = selectedPaths.first();
+        QFileInfo fi(firstPath);
+        if (!fi.exists()) return;
+        QString dirPath = fi.absolutePath();
 
-                // Update tree selection
-                if (fmTree) {
-                    QModelIndex idx = fmIndexForPath(dirPath);
-                    if (idx.isValid()) fmTree->setCurrentIndex(idx);
-                }
-
-                // Select the files in the view
-                QTimer::singleShot(100, this, [this, selectedPaths]() {
-                    // TODO: Select the files in fmGridView/fmListView
-                    statusBar()->showMessage(QString("Found %1 file(s)").arg(selectedPaths.size()), 3000);
-                });
+        if (isSecondaryFmPaneActive()) {
+            if (fmSecondaryPane) {
+                fmSecondaryPane->navigateToPath(dirPath, true);
             }
+            return;
         }
+
+        if (!fmDirModel) return;
+
+        // Set the root path in the file manager (primary pane)
+        fmDirModel->setRootPath(dirPath);
+        QModelIndex srcRoot = fmDirModel->index(dirPath);
+        if (fmProxyModel) {
+            fmProxyModel->rebuildForRoot(dirPath);
+            QModelIndex proxyRoot = fmProxyModel->mapFromSource(srcRoot);
+            if (fmGridView) fmGridView->setRootIndex(proxyRoot);
+            if (fmListView) fmListView->setRootIndex(proxyRoot);
+        }
+
+        // Update tree selection
+        if (fmTree) {
+            QModelIndex idx = fmIndexForPath(dirPath);
+            if (idx.isValid()) fmTree->setCurrentIndex(idx);
+        }
+
+        // Select the files in the view
+        QTimer::singleShot(100, this, [this, selectedPaths]() {
+            // TODO: Select the files in fmGridView/fmListView
+            statusBar()->showMessage(QString("Found %1 file(s)").arg(selectedPaths.size()), 3000);
+        });
     }
 }
 
@@ -11356,6 +11391,7 @@ void MainWindow::onFmTreeChildrenFetched(const QModelIndex &parent)
 
 void MainWindow::fmUpdateNavigationButtons()
 {
+    if (isSecondaryFmPaneActive()) return;
     if (fmBackButton) {
         fmBackButton->setEnabled(fmNavigationIndex > 0);
     }
@@ -11372,6 +11408,11 @@ void MainWindow::fmUpdateNavigationButtons()
 
 void MainWindow::onFmNavigateBack()
 {
+    if (isSecondaryFmPaneActive()) {
+        fmSecondaryPane->navigateBack();
+        syncFmToolbarFromActivePane();
+        return;
+    }
     if (fmNavigationIndex <= 0 || fmNavigationHistory.isEmpty()) return;
 
     fmNavigationIndex--;
@@ -11444,6 +11485,11 @@ void MainWindow::applyTheme()
 
 void MainWindow::onFmNavigateUp()
 {
+    if (isSecondaryFmPaneActive()) {
+        fmSecondaryPane->navigateUp();
+        syncFmToolbarFromActivePane();
+        return;
+    }
     if (!fmDirModel) return;
     QString currentPath = fmDirModel->rootPath();
     if (currentPath.isEmpty()) return;
