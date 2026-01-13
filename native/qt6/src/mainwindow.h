@@ -34,6 +34,7 @@ class VirtualFolderTreeModel;
 class AssetsModel;
 class TagsModel;
 class PreviewOverlay;
+class ImagePreviewOverlay;
 class SequenceGroupingProxyModel;
 class GridScrubController;
 class FileManagerPane;
@@ -371,6 +372,7 @@ private:
 
     // Preview overlay
     PreviewOverlay *previewOverlay;
+    ImagePreviewOverlay *imagePreviewOverlay = nullptr;
     GridScrubController *assetScrubController = nullptr;
     GridScrubController *fmScrubController = nullptr;
 

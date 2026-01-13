@@ -6,6 +6,7 @@
 #include "importer.h"
 #include "db.h"
 #include "preview_overlay.h"
+#include "image_preview_overlay.h"
 #include "oiio_image_loader.h"
 #include "live_preview_manager.h"
 #include "import_progress_dialog.h"
@@ -2508,6 +2509,8 @@ void MainWindow::onFmTreeActivated(const QModelIndex &index)
 }
 
 // Forward declarations for file-type helpers used by File Manager handlers
+static inline bool isImageFile(const QString &ext);
+static inline bool isVideoFile(const QString &ext);
 static bool isPreviewOverlayViewable(const QString &ext);
 
 void MainWindow::onFmItemDoubleClicked(const QModelIndex &index)
@@ -2526,6 +2529,9 @@ void MainWindow::onFmItemDoubleClicked(const QModelIndex &index)
         auto info = fmProxyModel->infoForProxyIndex(idx);
         QStringList frames = reconstructSequenceFramePaths(info.reprPath, info.start, info.end);
         if (!frames.isEmpty()) {
+            if (imagePreviewOverlay && imagePreviewOverlay->isVisible()) {
+                imagePreviewOverlay->hide();
+            }
             if (!previewOverlay) {
                 previewOverlay = new PreviewOverlay(this);
                 // Center overlay to the app window instead of screen top-left
@@ -2558,21 +2564,44 @@ void MainWindow::onFmItemDoubleClicked(const QModelIndex &index)
     }
 
     const QString ext = fi.suffix();
-    if (FileUtils::isImageFile(ext) || FileUtils::isVideoFile(ext)) {
-        if (!previewOverlay) {
-            previewOverlay = new PreviewOverlay(this);
-            // Center overlay to the app window instead of screen top-left
-            previewOverlay->setGeometry(geometry());
-            connect(previewOverlay, &PreviewOverlay::closed, this, &MainWindow::closePreview);
-            connect(previewOverlay, &PreviewOverlay::navigateRequested, this, &MainWindow::changeFmPreview);
-        } else {
-            previewOverlay->stopPlayback();
-        }
+    const bool isImage = FileUtils::isImageFile(ext);
+    const bool isVideo = FileUtils::isVideoFile(ext);
+    if (isImage || isVideo) {
         // Remember source view/index for focus restoration on close
         QAbstractItemView* srcView = (fmGridView && fmGridView->isVisible() && fmGridView->hasFocus()) ? static_cast<QAbstractItemView*>(fmGridView) : static_cast<QAbstractItemView*>(fmListView);
         fmOverlayCurrentIndex = QPersistentModelIndex(idx);
         fmOverlaySourceView = srcView;
-        previewOverlay->showAsset(path, fi.fileName(), fi.suffix());
+
+        if (isImage && !isVideo) {
+            if (previewOverlay && previewOverlay->isVisible()) {
+                previewOverlay->stopPlayback();
+                previewOverlay->hide();
+            }
+            if (!imagePreviewOverlay) {
+                imagePreviewOverlay = new ImagePreviewOverlay(this);
+                imagePreviewOverlay->setGeometry(geometry());
+                connect(imagePreviewOverlay, &ImagePreviewOverlay::closed, this, &MainWindow::closePreview);
+                connect(imagePreviewOverlay, &ImagePreviewOverlay::navigateRequested, this, &MainWindow::changeFmPreview);
+            } else {
+                imagePreviewOverlay->stopPlayback();
+            }
+            imagePreviewOverlay->showImage(path, fi.fileName(), fi.suffix());
+        } else {
+            if (imagePreviewOverlay && imagePreviewOverlay->isVisible()) {
+                imagePreviewOverlay->stopPlayback();
+                imagePreviewOverlay->hide();
+            }
+            if (!previewOverlay) {
+                previewOverlay = new PreviewOverlay(this);
+                // Center overlay to the app window instead of screen top-left
+                previewOverlay->setGeometry(geometry());
+                connect(previewOverlay, &PreviewOverlay::closed, this, &MainWindow::closePreview);
+                connect(previewOverlay, &PreviewOverlay::navigateRequested, this, &MainWindow::changeFmPreview);
+            } else {
+                previewOverlay->stopPlayback();
+            }
+            previewOverlay->showAsset(path, fi.fileName(), fi.suffix());
+        }
     } else {
         QDesktopServices::openUrl(QUrl::fromLocalFile(path));
     }
@@ -3449,21 +3478,43 @@ void MainWindow::onSecondaryPaneFileDoubleClicked(const QString &path)
     QFileInfo info(path);
     if (!info.exists() || info.isDir()) return;
     
-    if (!previewOverlay) {
-        previewOverlay = new PreviewOverlay(this);
-        previewOverlay->setGeometry(geometry());
-        connect(previewOverlay, &PreviewOverlay::closed, this, &MainWindow::closePreview);
-        connect(previewOverlay, &PreviewOverlay::navigateRequested, this, &MainWindow::changeFmPreview);
-    } else {
-        previewOverlay->stopPlayback();
-    }
-    
+    const bool isImage = FileUtils::isImageFile(info.suffix());
+    const bool isVideo = FileUtils::isVideoFile(info.suffix());
+
     // Mark that overlay was opened from secondary pane
     fmOverlayFromSecondaryPane = true;
     fmOverlayCurrentIndex = QPersistentModelIndex(fmSecondaryPane->currentIndex());
     fmOverlaySourceView = nullptr;  // Will use secondary pane's view
-    
-    previewOverlay->showAsset(path, info.fileName(), info.suffix());
+
+    if (isImage && !isVideo) {
+        if (previewOverlay && previewOverlay->isVisible()) {
+            previewOverlay->stopPlayback();
+            previewOverlay->hide();
+        }
+        if (!imagePreviewOverlay) {
+            imagePreviewOverlay = new ImagePreviewOverlay(this);
+            imagePreviewOverlay->setGeometry(geometry());
+            connect(imagePreviewOverlay, &ImagePreviewOverlay::closed, this, &MainWindow::closePreview);
+            connect(imagePreviewOverlay, &ImagePreviewOverlay::navigateRequested, this, &MainWindow::changeFmPreview);
+        } else {
+            imagePreviewOverlay->stopPlayback();
+        }
+        imagePreviewOverlay->showImage(path, info.fileName(), info.suffix());
+    } else {
+        if (imagePreviewOverlay && imagePreviewOverlay->isVisible()) {
+            imagePreviewOverlay->stopPlayback();
+            imagePreviewOverlay->hide();
+        }
+        if (!previewOverlay) {
+            previewOverlay = new PreviewOverlay(this);
+            previewOverlay->setGeometry(geometry());
+            connect(previewOverlay, &PreviewOverlay::closed, this, &MainWindow::closePreview);
+            connect(previewOverlay, &PreviewOverlay::navigateRequested, this, &MainWindow::changeFmPreview);
+        } else {
+            previewOverlay->stopPlayback();
+        }
+        previewOverlay->showAsset(path, info.fileName(), info.suffix());
+    }
 }
 
 void MainWindow::setActiveFmPane(bool primary)
@@ -4489,7 +4540,8 @@ void MainWindow::onPmAssetDoubleClicked(const QModelIndex &index)
 void MainWindow::onPmOpenOverlay()
 {
     // Toggle: if overlay is visible, close it
-    if (previewOverlay && previewOverlay->isVisible()) {
+    if ((previewOverlay && previewOverlay->isVisible()) ||
+        (imagePreviewOverlay && imagePreviewOverlay->isVisible())) {
         closePreview();
         return;
     }
@@ -4509,16 +4561,19 @@ void MainWindow::onPmOpenOverlay()
     
     if (filePath.isEmpty()) return;
     
-    if (!previewOverlay) {
-        previewOverlay = new PreviewOverlay(this);
-        previewOverlay->setGeometry(geometry());
-        connect(previewOverlay, &PreviewOverlay::closed, this, &MainWindow::closePreview);
-        connect(previewOverlay, &PreviewOverlay::navigateRequested, this, &MainWindow::changePmPreview);
-    } else {
-        previewOverlay->stopPlayback();
-    }
-    
     if (isSequence) {
+        if (imagePreviewOverlay && imagePreviewOverlay->isVisible()) {
+            imagePreviewOverlay->stopPlayback();
+            imagePreviewOverlay->hide();
+        }
+        if (!previewOverlay) {
+            previewOverlay = new PreviewOverlay(this);
+            previewOverlay->setGeometry(geometry());
+            connect(previewOverlay, &PreviewOverlay::closed, this, &MainWindow::closePreview);
+            connect(previewOverlay, &PreviewOverlay::navigateRequested, this, &MainWindow::changePmPreview);
+        } else {
+            previewOverlay->stopPlayback();
+        }
         QString pattern = idx.data(ProjectAssetsModel::SequencePatternRole).toString();
         int startFrame = idx.data(ProjectAssetsModel::SequenceStartFrameRole).toInt();
         int endFrame = idx.data(ProjectAssetsModel::SequenceEndFrameRole).toInt();
@@ -4537,7 +4592,37 @@ void MainWindow::onPmOpenOverlay()
     // Single file preview
     QFileInfo info(filePath);
     if (info.exists()) {
-        previewOverlay->showAsset(filePath, info.fileName(), info.suffix());
+        const bool isImage = isImageFile(info.suffix());
+        const bool isVideo = isVideoFile(info.suffix());
+        if (isImage && !isVideo) {
+            if (previewOverlay && previewOverlay->isVisible()) {
+                previewOverlay->stopPlayback();
+                previewOverlay->hide();
+            }
+            if (!imagePreviewOverlay) {
+                imagePreviewOverlay = new ImagePreviewOverlay(this);
+                imagePreviewOverlay->setGeometry(geometry());
+                connect(imagePreviewOverlay, &ImagePreviewOverlay::closed, this, &MainWindow::closePreview);
+                connect(imagePreviewOverlay, &ImagePreviewOverlay::navigateRequested, this, &MainWindow::changePmPreview);
+            } else {
+                imagePreviewOverlay->stopPlayback();
+            }
+            imagePreviewOverlay->showImage(filePath, info.fileName(), info.suffix());
+        } else {
+            if (imagePreviewOverlay && imagePreviewOverlay->isVisible()) {
+                imagePreviewOverlay->stopPlayback();
+                imagePreviewOverlay->hide();
+            }
+            if (!previewOverlay) {
+                previewOverlay = new PreviewOverlay(this);
+                previewOverlay->setGeometry(geometry());
+                connect(previewOverlay, &PreviewOverlay::closed, this, &MainWindow::closePreview);
+                connect(previewOverlay, &PreviewOverlay::navigateRequested, this, &MainWindow::changePmPreview);
+            } else {
+                previewOverlay->stopPlayback();
+            }
+            previewOverlay->showAsset(filePath, info.fileName(), info.suffix());
+        }
     }
 }
 
@@ -5270,7 +5355,16 @@ void MainWindow::onPmShowNotifications()
 void MainWindow::onPmNewFilesDetected(int projectId, const QStringList &newFiles)
 {
     Q_UNUSED(projectId);
-    LogManager::instance().addLog(QString("[ProjectManager] New files detected: %1").arg(newFiles.join(", ")), "INFO");
+    const int total = newFiles.size();
+    const int sampleCount = qMin(total, 10);
+    const QStringList sample = newFiles.mid(0, sampleCount);
+    const QString suffix = (total > sampleCount)
+        ? QString(" (+%1 more)").arg(total - sampleCount)
+        : QString();
+    LogManager::instance().addLog(
+        QString("[ProjectManager] New files detected (%1): %2%3")
+            .arg(total).arg(sample.join(", ")).arg(suffix),
+        "INFO");
     
     // Update notification badge
     updatePmNotificationBadge();
@@ -5283,7 +5377,16 @@ void MainWindow::onPmNewFilesDetected(int projectId, const QStringList &newFiles
 
 void MainWindow::onPmFilesRemoved(int projectId, const QStringList &removedFiles)
 {
-    LogManager::instance().addLog(QString("[ProjectManager] Files removed: %1").arg(removedFiles.join(", ")), "INFO");
+    const int total = removedFiles.size();
+    const int sampleCount = qMin(total, 10);
+    const QStringList sample = removedFiles.mid(0, sampleCount);
+    const QString suffix = (total > sampleCount)
+        ? QString(" (+%1 more)").arg(total - sampleCount)
+        : QString();
+    LogManager::instance().addLog(
+        QString("[ProjectManager] Files removed (%1): %2%3")
+            .arg(total).arg(sample.join(", ")).arg(suffix),
+        "INFO");
     
     // Remove assets from database
     int removed = ProjectDB::instance().removeAssetsByPath(removedFiles);
@@ -5681,64 +5784,106 @@ void MainWindow::changePmPreview(int delta)
     
     QModelIndex current = view->currentIndex();
     if (!current.isValid()) return;
-    
-    int newRow = current.row() + delta;
-    int rowCount = view->model()->rowCount();
-    
-    if (newRow < 0) newRow = rowCount - 1;
-    if (newRow >= rowCount) newRow = 0;
-    
-    QModelIndex newIdx = view->model()->index(newRow, 0);
-    if (newIdx.isValid()) {
-        view->setCurrentIndex(newIdx);
-        view->scrollTo(newIdx);
-        
-        // Update overlay with new asset
+
+    const int rowCount = view->model()->rowCount();
+    const int step = (delta > 0) ? 1 : -1;
+    int searchRow = current.row() + delta;
+
+    for (int i = 0; i < rowCount; ++i) {
+        if (searchRow < 0) searchRow = rowCount - 1;
+        if (searchRow >= rowCount) searchRow = 0;
+
+        QModelIndex newIdx = view->model()->index(searchRow, 0);
+        if (!newIdx.isValid()) {
+            searchRow += step;
+            continue;
+        }
+
         QString filePath = newIdx.data(ProjectAssetsModel::FilePathRole).toString();
         bool isSequence = newIdx.data(ProjectAssetsModel::IsSequenceRole).toBool();
-        
+
+        view->setCurrentIndex(newIdx);
+        view->scrollTo(newIdx);
+
         if (previewOverlay && previewOverlay->isVisible()) {
             previewOverlay->stopPlayback();
-            
-            if (isSequence) {
-                QString pattern = newIdx.data(ProjectAssetsModel::SequencePatternRole).toString();
-                int startFrame = newIdx.data(ProjectAssetsModel::SequenceStartFrameRole).toInt();
-                int endFrame = newIdx.data(ProjectAssetsModel::SequenceEndFrameRole).toInt();
-                
-                QStringList frames;
-                // Pattern is just the filename (e.g. "render.####.exr"), get directory from filePath
-                QFileInfo fi(pattern);
-                QString base = fi.completeBaseName();
-                QString ext = fi.suffix();
-                QString dir = QFileInfo(filePath).absolutePath();  // Use filePath for directory!
-                int hashCount = base.count('#');
-                
-                if (hashCount > 0) {
-                    int hashStart = base.indexOf('#');
-                    QString prefix = base.left(hashStart);
-                    QString suffix = base.mid(hashStart + hashCount);
-                    
-                    for (int f = startFrame; f <= endFrame; ++f) {
-                        QString frameStr = QString("%1").arg(f, hashCount, 10, QLatin1Char('0'));
-                        QString framePath = dir + "/" + prefix + frameStr + suffix + "." + ext;
-                        if (QFileInfo::exists(framePath)) {
-                            frames.append(framePath);
-                        }
+        }
+        if (imagePreviewOverlay && imagePreviewOverlay->isVisible()) {
+            imagePreviewOverlay->stopPlayback();
+        }
+
+        if (isSequence) {
+            if (imagePreviewOverlay && imagePreviewOverlay->isVisible()) {
+                imagePreviewOverlay->hide();
+            }
+            if (!previewOverlay) {
+                previewOverlay = new PreviewOverlay(this);
+                previewOverlay->setGeometry(geometry());
+                connect(previewOverlay, &PreviewOverlay::closed, this, &MainWindow::closePreview);
+                connect(previewOverlay, &PreviewOverlay::navigateRequested, this, &MainWindow::changePmPreview);
+            }
+
+            QString pattern = newIdx.data(ProjectAssetsModel::SequencePatternRole).toString();
+            int startFrame = newIdx.data(ProjectAssetsModel::SequenceStartFrameRole).toInt();
+            int endFrame = newIdx.data(ProjectAssetsModel::SequenceEndFrameRole).toInt();
+
+            QStringList frames;
+            QFileInfo fi(pattern);
+            QString base = fi.completeBaseName();
+            QString ext = fi.suffix();
+            QString dir = QFileInfo(filePath).absolutePath();
+            int hashCount = base.count('#');
+
+            if (hashCount > 0) {
+                int hashStart = base.indexOf('#');
+                QString prefix = base.left(hashStart);
+                QString suffix = base.mid(hashStart + hashCount);
+
+                for (int f = startFrame; f <= endFrame; ++f) {
+                    QString frameStr = QString("%1").arg(f, hashCount, 10, QLatin1Char('0'));
+                    QString framePath = dir + "/" + prefix + frameStr + suffix + "." + ext;
+                    if (QFileInfo::exists(framePath)) {
+                        frames.append(framePath);
                     }
                 }
-                
-                if (!frames.isEmpty()) {
-                    QString seqName = QFileInfo(pattern).fileName();
-                    previewOverlay->showSequence(frames, seqName, startFrame, endFrame);
-                    return;
-                }
             }
-            
-            QFileInfo info(filePath);
-            if (info.exists()) {
+
+            if (!frames.isEmpty()) {
+                QString seqName = QFileInfo(pattern).fileName();
+                previewOverlay->showSequence(frames, seqName, startFrame, endFrame);
+                return;
+            }
+        }
+
+        QFileInfo info(filePath);
+        if (info.exists()) {
+            const bool isImage = isImageFile(info.suffix());
+            const bool isVideo = isVideoFile(info.suffix());
+            if (isImage && !isVideo) {
+                if (previewOverlay && previewOverlay->isVisible()) {
+                    previewOverlay->hide();
+                }
+                if (!imagePreviewOverlay) {
+                    imagePreviewOverlay = new ImagePreviewOverlay(this);
+                    imagePreviewOverlay->setGeometry(geometry());
+                    connect(imagePreviewOverlay, &ImagePreviewOverlay::closed, this, &MainWindow::closePreview);
+                    connect(imagePreviewOverlay, &ImagePreviewOverlay::navigateRequested, this, &MainWindow::changePmPreview);
+                }
+                imagePreviewOverlay->showImage(filePath, info.fileName(), info.suffix());
+            } else {
+                if (imagePreviewOverlay && imagePreviewOverlay->isVisible()) {
+                    imagePreviewOverlay->hide();
+                }
+                if (!previewOverlay) {
+                    previewOverlay = new PreviewOverlay(this);
+                    previewOverlay->setGeometry(geometry());
+                    connect(previewOverlay, &PreviewOverlay::closed, this, &MainWindow::closePreview);
+                    connect(previewOverlay, &PreviewOverlay::navigateRequested, this, &MainWindow::changePmPreview);
+                }
                 previewOverlay->showAsset(filePath, info.fileName(), info.suffix());
             }
         }
+        return;
     }
 }
 
@@ -7162,6 +7307,30 @@ void MainWindow::showPreview(int index)
     QString fileType = modelIndex.data(AssetsModel::FileTypeRole).toString();
     bool isSequence = modelIndex.data(AssetsModel::IsSequenceRole).toBool();
 
+    const bool useImageOverlay = !isSequence && isImageFile(fileType) && !isVideoFile(fileType);
+
+    if (useImageOverlay) {
+        if (previewOverlay && previewOverlay->isVisible()) {
+            previewOverlay->stopPlayback();
+            previewOverlay->hide();
+        }
+        if (!imagePreviewOverlay) {
+            imagePreviewOverlay = new ImagePreviewOverlay(this);
+            imagePreviewOverlay->setGeometry(geometry());
+            connect(imagePreviewOverlay, &ImagePreviewOverlay::closed, this, &MainWindow::closePreview);
+            connect(imagePreviewOverlay, &ImagePreviewOverlay::navigateRequested, this, &MainWindow::changePreview);
+        } else {
+            imagePreviewOverlay->stopPlayback();
+        }
+        imagePreviewOverlay->showImage(filePath, fileName, fileType);
+        return;
+    }
+
+    if (imagePreviewOverlay && imagePreviewOverlay->isVisible()) {
+        imagePreviewOverlay->stopPlayback();
+        imagePreviewOverlay->hide();
+    }
+
     if (!previewOverlay) {
         previewOverlay = new PreviewOverlay(this);
         // Center overlay to the app window instead of screen top-left
@@ -7211,6 +7380,12 @@ void MainWindow::closePreview()
         previewOverlay->deleteLater();
         previewOverlay = nullptr;
     }
+    if (imagePreviewOverlay) {
+        imagePreviewOverlay->stopPlayback();
+        imagePreviewOverlay->hide();
+        imagePreviewOverlay->deleteLater();
+        imagePreviewOverlay = nullptr;
+    }
 
     // 1) If preview was opened from File Manager, restore focus/selection there
     if (fmOverlaySourceView && fmOverlayCurrentIndex.isValid()) {
@@ -7246,8 +7421,11 @@ void MainWindow::changePreview(int delta)
     if (previewIndex < 0) return;
 
     // Stop playback ONCE before searching for next file
-    if (previewOverlay) {
+    if (previewOverlay && previewOverlay->isVisible()) {
         previewOverlay->stopPlayback();
+    }
+    if (imagePreviewOverlay && imagePreviewOverlay->isVisible()) {
+        imagePreviewOverlay->stopPlayback();
     }
 
     const int rowCount = assetsModel->rowCount(QModelIndex());
@@ -7281,10 +7459,51 @@ void MainWindow::changePreview(int delta)
 
 void MainWindow::changeFmPreview(int delta)
 {
-    if (!previewOverlay) return;
+    if ((!previewOverlay || !previewOverlay->isVisible()) &&
+        (!imagePreviewOverlay || !imagePreviewOverlay->isVisible())) {
+        return;
+    }
 
     // Stop playback ONCE before searching for next file
-    previewOverlay->stopPlayback();
+    if (previewOverlay && previewOverlay->isVisible()) {
+        previewOverlay->stopPlayback();
+    }
+    if (imagePreviewOverlay && imagePreviewOverlay->isVisible()) {
+        imagePreviewOverlay->stopPlayback();
+    }
+
+    auto showFmPath = [this](const QString &path) {
+        QFileInfo info(path);
+        const QString ext = info.suffix();
+        const bool isImage = FileUtils::isImageFile(ext);
+        const bool isVideo = FileUtils::isVideoFile(ext);
+
+        if (isImage && !isVideo) {
+            if (previewOverlay && previewOverlay->isVisible()) {
+                previewOverlay->stopPlayback();
+                previewOverlay->hide();
+            }
+            if (!imagePreviewOverlay) {
+                imagePreviewOverlay = new ImagePreviewOverlay(this);
+                imagePreviewOverlay->setGeometry(geometry());
+                connect(imagePreviewOverlay, &ImagePreviewOverlay::closed, this, &MainWindow::closePreview);
+                connect(imagePreviewOverlay, &ImagePreviewOverlay::navigateRequested, this, &MainWindow::changeFmPreview);
+            }
+            imagePreviewOverlay->showImage(path, info.fileName(), info.suffix());
+        } else {
+            if (imagePreviewOverlay && imagePreviewOverlay->isVisible()) {
+                imagePreviewOverlay->stopPlayback();
+                imagePreviewOverlay->hide();
+            }
+            if (!previewOverlay) {
+                previewOverlay = new PreviewOverlay(this);
+                previewOverlay->setGeometry(geometry());
+                connect(previewOverlay, &PreviewOverlay::closed, this, &MainWindow::closePreview);
+                connect(previewOverlay, &PreviewOverlay::navigateRequested, this, &MainWindow::changeFmPreview);
+            }
+            previewOverlay->showAsset(path, info.fileName(), info.suffix());
+        }
+    };
 
     // If preview was opened from secondary pane, use its data for navigation
     if (fmOverlayFromSecondaryPane && fmSecondaryPane) {
@@ -7318,7 +7537,7 @@ void MainWindow::changeFmPreview(int delta)
                     // Found a viewable file - update context and show it
                     fmOverlayCurrentIndex = QPersistentModelIndex(next);
                     fmSecondaryPane->setCurrentIndex(next);
-                    previewOverlay->showAsset(path, fi.fileName(), fi.suffix());
+                    showFmPath(path);
                     return;
                 }
             }
@@ -7373,6 +7592,15 @@ void MainWindow::changeFmPreview(int delta)
                 QString s0 = QString("%1").arg(info.start, pad, 10, QLatin1Char('0'));
                 QString s1 = QString("%1").arg(info.end, pad, 10, QLatin1Char('0'));
                 QString seqName = QString("%1.[%2-%3].%4").arg(info.base, s0, s1, info.ext);
+                if (imagePreviewOverlay && imagePreviewOverlay->isVisible()) {
+                    imagePreviewOverlay->hide();
+                }
+                if (!previewOverlay) {
+                    previewOverlay = new PreviewOverlay(this);
+                    previewOverlay->setGeometry(geometry());
+                    connect(previewOverlay, &PreviewOverlay::closed, this, &MainWindow::closePreview);
+                    connect(previewOverlay, &PreviewOverlay::navigateRequested, this, &MainWindow::changeFmPreview);
+                }
                 previewOverlay->showSequence(frames, seqName, info.start, info.end);
                 return;
             }
@@ -7394,7 +7622,7 @@ void MainWindow::changeFmPreview(int delta)
                 }
 
                 // Show asset (stopPlayback already called at function start)
-                previewOverlay->showAsset(path, fi.fileName(), fi.suffix());
+                showFmPath(path);
                 return;
             }
         }
@@ -8233,7 +8461,8 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
     if ((watched == assetGridView || watched == assetTableView) && event->type() == QEvent::KeyPress) {
         QKeyEvent *keyEvent = static_cast<QKeyEvent*>(event);
         if (keyEvent->key() == Qt::Key_Space && !keyEvent->isAutoRepeat()) {
-            if (previewOverlay && previewOverlay->isVisible()) {
+            if ((previewOverlay && previewOverlay->isVisible()) ||
+                (imagePreviewOverlay && imagePreviewOverlay->isVisible())) {
                 closePreview();
                 return true;
             }
@@ -10338,7 +10567,46 @@ void MainWindow::updateFmInfoPanel()
 void MainWindow::onFmOpenOverlay()
 {
     // Toggle: if overlay is visible, close it
-    if (previewOverlay && previewOverlay->isVisible()) { closePreview(); return; }
+    if ((previewOverlay && previewOverlay->isVisible()) ||
+        (imagePreviewOverlay && imagePreviewOverlay->isVisible())) {
+        closePreview();
+        return;
+    }
+
+    auto showFmOverlayForPath = [this](const QString &path) {
+        QFileInfo info(path);
+        const QString ext = info.suffix();
+        const bool isImage = FileUtils::isImageFile(ext);
+        const bool isVideo = FileUtils::isVideoFile(ext);
+
+        if (isImage && !isVideo) {
+            if (previewOverlay && previewOverlay->isVisible()) {
+                previewOverlay->stopPlayback();
+                previewOverlay->hide();
+            }
+            if (!imagePreviewOverlay) {
+                imagePreviewOverlay = new ImagePreviewOverlay(this);
+                imagePreviewOverlay->setGeometry(geometry());
+                connect(imagePreviewOverlay, &ImagePreviewOverlay::closed, this, &MainWindow::closePreview);
+                connect(imagePreviewOverlay, &ImagePreviewOverlay::navigateRequested, this, &MainWindow::changeFmPreview);
+            }
+            imagePreviewOverlay->showImage(path, info.fileName(), info.suffix());
+        } else {
+            if (imagePreviewOverlay && imagePreviewOverlay->isVisible()) {
+                imagePreviewOverlay->stopPlayback();
+                imagePreviewOverlay->hide();
+            }
+            if (!previewOverlay) {
+                previewOverlay = new PreviewOverlay(this);
+                previewOverlay->setGeometry(geometry());
+                connect(previewOverlay, &PreviewOverlay::closed, this, &MainWindow::closePreview);
+                connect(previewOverlay, &PreviewOverlay::navigateRequested, this, &MainWindow::changeFmPreview);
+            } else {
+                previewOverlay->stopPlayback();
+            }
+            previewOverlay->showAsset(path, info.fileName(), info.suffix());
+        }
+    };
 
     // Check if secondary pane is active and has focus
     if (fmSecondaryPane && fmSecondaryPane->isVisible() && !fmPrimaryPaneActive) {
@@ -10350,19 +10618,11 @@ void MainWindow::onFmOpenOverlay()
                 QString path = paths.first();
                 QFileInfo info(path);
                 if (info.exists() && !info.isDir()) {
-                    if (!previewOverlay) {
-                        previewOverlay = new PreviewOverlay(this);
-                        previewOverlay->setGeometry(geometry());
-                        connect(previewOverlay, &PreviewOverlay::closed, this, &MainWindow::closePreview);
-                        connect(previewOverlay, &PreviewOverlay::navigateRequested, this, &MainWindow::changeFmPreview);
-                    } else {
-                        previewOverlay->stopPlayback();
-                    }
                     // Mark that overlay was opened from secondary pane for navigation
                     fmOverlayFromSecondaryPane = true;
                     fmOverlayCurrentIndex = QPersistentModelIndex(idx);
                     fmOverlaySourceView = nullptr;
-                    previewOverlay->showAsset(path, info.fileName(), info.suffix());
+                    showFmOverlayForPath(path);
                     return;
                 }
             }
@@ -10386,6 +10646,9 @@ void MainWindow::onFmOpenOverlay()
         auto info = fmProxyModel->infoForProxyIndex(idx);
         QStringList frames = reconstructSequenceFramePaths(info.reprPath, info.start, info.end);
         if (!frames.isEmpty()) {
+            if (imagePreviewOverlay && imagePreviewOverlay->isVisible()) {
+                imagePreviewOverlay->hide();
+            }
             if (!previewOverlay) {
                 previewOverlay = new PreviewOverlay(this);
                 // Center overlay to the app window instead of screen top-left
@@ -10414,16 +10677,7 @@ void MainWindow::onFmOpenOverlay()
     if (path.isEmpty()) return;
     QFileInfo info(path);
     if (!info.exists()) return;
-    if (!previewOverlay) {
-        previewOverlay = new PreviewOverlay(this);
-        // Center overlay to the app window instead of screen top-left
-        previewOverlay->setGeometry(geometry());
-        connect(previewOverlay, &PreviewOverlay::closed, this, &MainWindow::closePreview);
-        connect(previewOverlay, &PreviewOverlay::navigateRequested, this, &MainWindow::changeFmPreview);
-    } else {
-        previewOverlay->stopPlayback();
-    }
-    previewOverlay->showAsset(path, info.fileName(), info.suffix());
+    showFmOverlayForPath(path);
 }
 
 

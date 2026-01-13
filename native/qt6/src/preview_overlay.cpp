@@ -141,8 +141,16 @@ static QIcon tintIcon(const QIcon& base, const QColor& color)
 
 static constexpr int kControlsMinHeight = 130;
 static constexpr int kControlsMaxHeight = 180;
-static constexpr int kImageControlsMinHeight = 70;
-static constexpr int kImageControlsMaxHeight = 100;
+static constexpr int kImageControlsMinHeight = 44;
+static constexpr int kImageControlsMaxHeight = 72;
+static constexpr int kControlsSideMargin = 20;
+static constexpr int kControlsTopMargin = 5;
+static constexpr int kControlsBottomMargin = 10;
+static constexpr int kControlsSpacing = 2;
+static constexpr int kImageControlsSideMargin = 12;
+static constexpr int kImageControlsTopMargin = 4;
+static constexpr int kImageControlsBottomMargin = 6;
+static constexpr int kImageControlsSpacing = 0;
 
 #ifdef HAVE_FFMPEG
 extern "C" {
@@ -404,6 +412,23 @@ void PreviewOverlay::setupUi()
     imageView->hide();
     contentLayout->addWidget(imageView);
 
+    // Dedicated still image view to keep image-only behavior isolated
+    stillImageView = new QGraphicsView(this);
+    stillImageView->setScene(imageScene);
+    stillImageView->setStyleSheet("QGraphicsView { background-color: #000000; border: none; }");
+    stillImageView->setRenderHints(QPainter::SmoothPixmapTransform | QPainter::TextAntialiasing);
+    stillImageView->setViewportUpdateMode(QGraphicsView::SmartViewportUpdate);
+    stillImageView->setOptimizationFlags(QGraphicsView::DontSavePainterState);
+    stillImageView->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    stillImageView->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    stillImageView->setDragMode(QGraphicsView::ScrollHandDrag);
+    stillImageView->setTransformationAnchor(QGraphicsView::AnchorUnderMouse);
+    stillImageView->setResizeAnchor(QGraphicsView::AnchorUnderMouse);
+    stillImageView->installEventFilter(this);
+    stillImageView->viewport()->installEventFilter(this);
+    stillImageView->hide();
+    contentLayout->addWidget(stillImageView);
+
     // Video widget for GStreamer direct rendering
     videoWidget = new QWidget(this);
     videoWidget->setStyleSheet("QWidget { background-color: #000000; }");
@@ -489,10 +514,11 @@ void PreviewOverlay::setupUi()
     controlsWidget->installEventFilter(this);
     controlsWidget->hide();
 
-    QVBoxLayout *controlsLayout = new QVBoxLayout(controlsWidget);
+    controlsLayout = new QVBoxLayout(controlsWidget);
     // Minimal margins to reduce dead space, with small bottom padding for taskbar
-    controlsLayout->setContentsMargins(20, 5, 20, 10);
-    controlsLayout->setSpacing(2); // Tight spacing between rows
+    controlsLayout->setContentsMargins(kControlsSideMargin, kControlsTopMargin,
+                                       kControlsSideMargin, kControlsBottomMargin);
+    controlsLayout->setSpacing(kControlsSpacing); // Tight spacing between rows
 
     // Position slider with cached frame visualization
     positionSlider = new CachedFrameSlider(Qt::Horizontal, this);
@@ -1171,6 +1197,7 @@ void PreviewOverlay::showAsset(const QString &filePath, const QString &fileName,
     currentFileType = fileType.toLower();
     fileNameLabel->setText(fileName);
     setWindowTitle(tr("Preview - %1").arg(fileName));
+    if (closeBtn) closeBtn->show();
 
     // Determine content type and route
     QStringList videoFormats = {"mp4", "avi", "mov", "mkv", "webm", "flv", "wmv", "m4v", "mxf"};
@@ -1199,10 +1226,11 @@ void PreviewOverlay::showAsset(const QString &filePath, const QString &fileName,
     if (currentFileType == "pdf" || currentFileType == "ai") {
         // No Qt PDF available: show placeholder message
         videoWidget->hide();
-        imageView->show();
+        if (stillImageView) stillImageView->hide();
+        if (imageView) imageView->show();
         imageScene->clear();
         imageScene->addText("Preview not available", QFont("Segoe UI", 14));
-        controlsWidget->hide();
+        setControlsVisible(false);
         if (alphaCheck) alphaCheck->hide();
         isVideo = false;
         isHDRImage = false;
@@ -1216,13 +1244,14 @@ void PreviewOverlay::showAsset(const QString &filePath, const QString &fileName,
 #ifdef HAVE_QT_PDF
         if (pdfView) pdfView->hide();
 #endif
-        imageView->show();
+        if (stillImageView) stillImageView->hide();
+        if (imageView) imageView->show();
         imageScene->clear();
         svgItem = new QGraphicsSvgItem(filePath);
         imageScene->addItem(svgItem);
         imageScene->setSceneRect(svgItem->boundingRect());
         fitImageToView();
-        controlsWidget->hide();
+        setControlsVisible(false);
         if (alphaCheck) alphaCheck->hide();
         isVideo = false;
         isHDRImage = false;
@@ -1240,17 +1269,24 @@ void PreviewOverlay::showAsset(const QString &filePath, const QString &fileName,
 void PreviewOverlay::showImage(const QString &filePath)
 {
     // CRITICAL: Hide other widgets and show image view
+    if (closeBtn) closeBtn->hide();
     if (videoWidget) videoWidget->hide();
     if (textView) textView->hide();
     if (tableView) tableView->hide();
 #ifdef HAVE_QT_PDF
     if (pdfView) pdfView->hide();
 #endif
-    imageView->setBackgroundBrush(QColor("#0a0a0a"));
-    imageView->show();
+    if (imageView) imageView->hide();
+    if (stillImageView) stillImageView->hide();
+    if (stillImageView) {
+        stillImageView->setBackgroundBrush(QColor("#0a0a0a"));
+        stillImageView->show();
+    }
 
-    // Anchor nav arrows to the image viewport when showing images
-    positionNavButtons(imageView->viewport());
+    // Hide navigation arrows for still images
+    navContainer = nullptr;
+    if (navPrevBtn) navPrevBtn->hide();
+    if (navNextBtn) navNextBtn->hide();
 
     // CRITICAL: Stop any video playback
     PLAYER_STOP();
@@ -1300,27 +1336,21 @@ void PreviewOverlay::showImage(const QString &filePath)
         imageScene->setSceneRect(newPixmap.rect());
 
         // Fit to view once on first frame for this media
-        fitPending = true;
-        fitImageToView();
-        fitPending = false;
+        stillFitMode = true;
+        fitStillImageToView();
 
         // CRITICAL: Force complete view refresh
-        imageView->viewport()->update();
-        imageView->update();
+        if (stillImageView) {
+            stillImageView->viewport()->update();
+            stillImageView->update();
+        }
         imageScene->update();
 
-    // For single images, only show colorspace selector when HDR
+    // No controls for still images
     setPlaybackControlsVisible(false);
-    if (isHDRImage) {
-        colorSpaceLabel->show();
-        colorSpaceCombo->show();
-        setControlsHeightForImage(true);
-        controlsWidget->show();
-    } else {
-        colorSpaceLabel->hide();
-        colorSpaceCombo->hide();
-        controlsWidget->hide();
-    }
+    if (colorSpaceLabel) colorSpaceLabel->hide();
+    if (colorSpaceCombo) colorSpaceCombo->hide();
+    setControlsVisible(false);
     } else {
         qWarning() << "[PreviewOverlay::showImage] Failed to load image:" << filePath;
     }
@@ -1362,7 +1392,7 @@ void PreviewOverlay::showVideo(const QString &filePath)
     positionNavButtons(videoWidget);
     setPlaybackControlsVisible(true);
     setControlsHeightForImage(false);
-    controlsWidget->show();
+    setControlsVisible(true);
 
     // Cache bar is only for sequences
     if (cacheBar) cacheBar->hide();
@@ -1682,9 +1712,33 @@ void PreviewOverlay::setControlsHeightForImage(bool imageMode)
     if (imageMode) {
         controlsWidget->setMinimumHeight(kImageControlsMinHeight);
         controlsWidget->setMaximumHeight(kImageControlsMaxHeight);
+        if (controlsLayout) {
+            controlsLayout->setContentsMargins(kImageControlsSideMargin, kImageControlsTopMargin,
+                                               kImageControlsSideMargin, kImageControlsBottomMargin);
+            controlsLayout->setSpacing(kImageControlsSpacing);
+        }
     } else {
         controlsWidget->setMinimumHeight(kControlsMinHeight);
         controlsWidget->setMaximumHeight(kControlsMaxHeight);
+        if (controlsLayout) {
+            controlsLayout->setContentsMargins(kControlsSideMargin, kControlsTopMargin,
+                                               kControlsSideMargin, kControlsBottomMargin);
+            controlsLayout->setSpacing(kControlsSpacing);
+        }
+    }
+    controlsWidget->updateGeometry();
+}
+
+void PreviewOverlay::setControlsVisible(bool visible)
+{
+    if (!controlsWidget) return;
+    const bool allow = isVideo || isSequence;
+    if (visible && allow) {
+        controlsWidget->show();
+    } else {
+        controlsWidget->hide();
+        controlsWidget->setMinimumHeight(0);
+        controlsWidget->setMaximumHeight(0);
     }
     controlsWidget->updateGeometry();
 }
@@ -1972,7 +2026,11 @@ void PreviewOverlay::resizeEvent(QResizeEvent *event)
 
     // Refit image if showing an image
     if (!isVideo && !originalPixmap.isNull()) {
-        fitImageToView();
+        if (stillImageView && stillImageView->isVisible() && stillFitMode) {
+            fitStillImageToView();
+        } else if (imageView && imageView->isVisible()) {
+            fitImageToView();
+        }
     }
 
     // Update video render rectangle if showing a video
@@ -1995,20 +2053,25 @@ void PreviewOverlay::resizeEvent(QResizeEvent *event)
     if (navContainer) {
         positionNavButtons(navContainer);
     }
+
 }
 
 void PreviewOverlay::mousePressEvent(QMouseEvent *event)
 {
     // Right-click resets zoom for both images and videos
     if (event->button() == Qt::RightButton) {
-        resetImageZoom();
+        if (stillImageView && stillImageView->isVisible()) {
+            resetStillImageZoom();
+        } else {
+            resetImageZoom();
+        }
         event->accept();
         return;
     }
 
     if (isVideo) {
         // Show controls on click
-        controlsWidget->show();
+        setControlsVisible(true);
         controlsTimer->start();
     } else if (event->button() == Qt::MiddleButton) {
         // Start panning for images
@@ -2022,6 +2085,12 @@ void PreviewOverlay::mousePressEvent(QMouseEvent *event)
 void PreviewOverlay::wheelEvent(QWheelEvent *event)
 {
     // Enable zoom for images and sequences (fallback if event reached overlay)
+    if (stillImageView && stillImageView->isVisible() && !originalPixmap.isNull()) {
+        double factor = event->angleDelta().y() > 0 ? 1.15 : 0.85;
+        zoomStillImage(factor);
+        event->accept();
+        return;
+    }
     if (!originalPixmap.isNull() || isSequence) {
         double factor = event->angleDelta().y() > 0 ? 1.15 : 0.85;
         zoomImage(factor);
@@ -2035,6 +2104,7 @@ bool PreviewOverlay::eventFilter(QObject* watched, QEvent* event)
 {
     // Handle annotation mode mouse events on the scene
     if (annotationModeEnabled && (watched == imageView || (imageView && watched == imageView->viewport()) ||
+                                  watched == stillImageView || (stillImageView && watched == stillImageView->viewport()) ||
                                   watched == annotationOverlayView || (annotationOverlayView && watched == annotationOverlayView->viewport()))) {
         // In Select mode, let the scene handle events for item selection/movement
         if (annotationLayer->currentMode() == AnnotationLayer::Select) {
@@ -2058,8 +2128,14 @@ bool PreviewOverlay::eventFilter(QObject* watched, QEvent* event)
             }
             
             // Convert viewport coordinates to scene coordinates
-            QGraphicsView* activeView = (watched == annotationOverlayView || watched == annotationOverlayView->viewport()) 
-                                        ? annotationOverlayView : imageView;
+            QGraphicsView* activeView = nullptr;
+            if (watched == annotationOverlayView || watched == annotationOverlayView->viewport()) {
+                activeView = annotationOverlayView;
+            } else if (watched == stillImageView || (stillImageView && watched == stillImageView->viewport())) {
+                activeView = stillImageView;
+            } else {
+                activeView = imageView;
+            }
             QPointF scenePos = activeView->mapToScene(mouseEvent->pos());
             
             // Create a scene mouse event
@@ -2087,6 +2163,17 @@ bool PreviewOverlay::eventFilter(QObject* watched, QEvent* event)
     }
     
     // Handle wheel events for image/sequence zoom
+    if ((watched == stillImageView || (stillImageView && watched == stillImageView->viewport())) &&
+        event->type() == QEvent::Wheel) {
+        if (!originalPixmap.isNull()) {
+            QWheelEvent* wheel = static_cast<QWheelEvent*>(event);
+            double factor = wheel->angleDelta().y() > 0 ? 1.15 : 0.85;
+            zoomStillImage(factor);
+            wheel->accept();
+            return true;
+        }
+    }
+
     if ((watched == imageView || (imageView && watched == imageView->viewport())) && event->type() == QEvent::Wheel) {
         // Enable zoom for images (when pixmap is loaded) or sequences
         if (!originalPixmap.isNull() || isSequence) {
@@ -2096,6 +2183,12 @@ bool PreviewOverlay::eventFilter(QObject* watched, QEvent* event)
             wheel->accept();
             return true; // consume to prevent any scrolling
         }
+    }
+
+    if ((watched == stillImageView || (stillImageView && watched == stillImageView->viewport())) &&
+        event->type() == QEvent::MouseButtonDblClick) {
+        toggleStillImageFit();
+        return true;
     }
 
     // Drag-and-drop from overlay preview is disabled
@@ -2187,6 +2280,60 @@ void PreviewOverlay::resetImageZoom()
     }
 }
 
+void PreviewOverlay::toggleStillImageFit()
+{
+    if (!stillImageView || !imageItem || originalPixmap.isNull()) return;
+    if (stillFitMode) {
+        resetStillImageZoom();
+        stillFitMode = false;
+    } else {
+        stillFitMode = true;
+        fitStillImageToView();
+    }
+}
+
+void PreviewOverlay::fitStillImageToView()
+{
+    if (!stillImageView || !imageItem) return;
+
+    QRectF sceneRect = imageItem->boundingRect();
+    if (sceneRect.isEmpty()) return;
+
+    QRectF viewRect = stillImageView->viewport()->rect();
+    if (viewRect.isEmpty()) return;
+
+    double xRatio = viewRect.width() / sceneRect.width();
+    double yRatio = viewRect.height() / sceneRect.height();
+
+    // Fill the view to eliminate letterboxing for still images.
+    stillImageZoom = qMax(xRatio, yRatio);
+
+    stillImageView->resetTransform();
+    stillImageView->scale(stillImageZoom, stillImageZoom);
+    stillImageView->centerOn(imageItem);
+    stillImageView->viewport()->update();
+}
+
+void PreviewOverlay::resetStillImageZoom()
+{
+    if (!stillImageView || !imageItem) return;
+    stillImageZoom = 1.0;
+    stillImageView->resetTransform();
+    stillImageView->centerOn(imageItem);
+    stillImageView->viewport()->update();
+}
+
+void PreviewOverlay::zoomStillImage(double factor)
+{
+    if (!stillImageView || !imageItem) return;
+    stillFitMode = false;
+    stillImageZoom *= factor;
+    stillImageView->resetTransform();
+    stillImageView->scale(stillImageZoom, stillImageZoom);
+    stillImageView->centerOn(imageItem);
+    stillImageView->viewport()->update();
+}
+
 void PreviewOverlay::showSequence(const QStringList &framePaths, const QString &sequenceName, int startFrame, int endFrame)
 {
 #ifdef HAVE_TLRENDER
@@ -2229,7 +2376,7 @@ void PreviewOverlay::showSequence(const QStringList &framePaths, const QString &
 
     setPlaybackControlsVisible(true);
     setControlsHeightForImage(false);
-    controlsWidget->show();
+    setControlsVisible(true);
 
     // Hide legacy per-image tone-map colorspace controls; OCIO handles color
     if (colorSpaceLabel) colorSpaceLabel->hide();
@@ -2298,6 +2445,7 @@ void PreviewOverlay::showSequence(const QStringList &framePaths, const QString &
     setFocus();
 
     // Anchor nav arrows to the image viewport for sequences
+    if (stillImageView) stillImageView->hide();
     positionNavButtons(imageView->viewport());
 
     // Process events to ensure window is properly sized
@@ -2311,7 +2459,7 @@ void PreviewOverlay::showSequence(const QStringList &framePaths, const QString &
     imageView->show();
     setPlaybackControlsVisible(true);
     setControlsHeightForImage(false);
-    controlsWidget->show();
+    setControlsVisible(true);
     // Disable audio controls for image sequences (no audio)
     if (muteBtn) {
         muteBtn->setEnabled(false);
@@ -2431,7 +2579,7 @@ void PreviewOverlay::showSequence(const QStringList &framePaths, const QString &
     updatePlayPauseButton();
 
     // Show controls
-    controlsWidget->show();
+    setControlsVisible(true);
     controlsTimer->start();
 }
 
@@ -2958,12 +3106,13 @@ void PreviewOverlay::onGStreamerEndOfStream()
 void PreviewOverlay::showText(const QString &filePath)
 {
     // Hide other content
-    videoWidget->hide();
+    if (videoWidget) videoWidget->hide();
 #ifdef HAVE_QT_PDF
     if (pdfView) pdfView->hide();
 #endif
-    imageView->hide();
-    controlsWidget->hide();
+    if (imageView) imageView->hide();
+    if (stillImageView) stillImageView->hide();
+    setControlsVisible(false);
     if (alphaCheck) alphaCheck->hide();
 
     if (!textView) return;
@@ -3038,7 +3187,8 @@ void PreviewOverlay::showDocx(const QString &filePath)
     if (pdfView) pdfView->hide();
 #endif
     if (imageView) imageView->hide();
-    if (controlsWidget) controlsWidget->hide();
+    if (stillImageView) stillImageView->hide();
+    setControlsVisible(false);
     if (alphaCheck) alphaCheck->hide();
 
     // Ensure overlay is visible for Office previews
@@ -3070,6 +3220,8 @@ void PreviewOverlay::showDoc(const QString &filePath)
     if (pdfView) pdfView->hide();
 #endif
     if (imageView) imageView->hide();
+    if (stillImageView) stillImageView->hide();
+    setControlsVisible(false);
     if (alphaCheck) alphaCheck->hide();
 
     // Ensure overlay is visible for Office previews
@@ -3103,7 +3255,8 @@ void PreviewOverlay::showXlsx(const QString &filePath)
     if (pdfView) pdfView->hide();
 #endif
     if (imageView) imageView->hide();
-    if (controlsWidget) controlsWidget->hide();
+    if (stillImageView) stillImageView->hide();
+    setControlsVisible(false);
     if (alphaCheck) alphaCheck->hide();
 
                         PLAYER_PLAY();
@@ -3136,7 +3289,8 @@ void PreviewOverlay::showPdf(const QString &filePath)
     if (videoWidget) videoWidget->hide();
     if (textView) textView->hide();
     if (tableView) tableView->hide();
-    controlsWidget->hide();
+    if (stillImageView) stillImageView->hide();
+    setControlsVisible(false);
     if (alphaCheck) alphaCheck->hide();
 
     // Load PDF (works for many AI files that embed PDF)
@@ -3145,6 +3299,7 @@ void PreviewOverlay::showPdf(const QString &filePath)
     QPdfDocument::Error err = pdfDoc->load(filePath);
     if (err == QPdfDocument::Error::None && pdfDoc->pageCount() > 0) {
         pdfCurrentPage = 0;
+        if (stillImageView) stillImageView->hide();
         imageView->show();
         positionNavButtons(imageView->viewport());
         // Always render into the image view for consistent zoom/pan behavior
@@ -3873,7 +4028,8 @@ void PreviewOverlay::enableAnnotationMode(bool enable)
                 
                 // Switch from video widget to image view
                 videoWidget->hide();
-                imageView->show();
+        if (stillImageView) stillImageView->hide();
+        imageView->show();
                 
                 // Display captured frame in imageView
                 imageScene->clear();

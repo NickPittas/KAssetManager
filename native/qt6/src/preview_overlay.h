@@ -49,6 +49,7 @@
 
 // Forward declarations
 class SequenceFrameCache;
+class QVBoxLayout;
 
 class CacheBarWidget;
 /**
@@ -444,6 +445,11 @@ private:
     void updateDetectedFps();
     void setPlaybackControlsVisible(bool visible);
     void setControlsHeightForImage(bool imageMode);
+    void setControlsVisible(bool visible);
+    void toggleStillImageFit();
+    void fitStillImageToView();
+    void resetStillImageZoom();
+    void zoomStillImage(double factor);
     
     // Annotation helpers
     void setupAnnotationToolbar();
@@ -459,6 +465,7 @@ private:
     QGraphicsView *imageView;
     QGraphicsScene *imageScene;
     QGraphicsPixmapItem *imageItem;
+    QGraphicsView *stillImageView = nullptr;
     QGraphicsSvgItem *svgItem;
     QWidget *videoWidget; // Widget for GStreamer video rendering
     QWidget *controlsWidget;
@@ -470,6 +477,7 @@ private:
     QLabel *currentTimeLabel;
     QLabel *durationTimeLabel;
     QLabel *fpsLabel;
+    QVBoxLayout *controlsLayout = nullptr;
     QSlider *volumeSlider;
     QPushButton *muteBtn;
 
@@ -552,7 +560,9 @@ private:
 
     // Image zoom/pan state
     double currentZoom;
+    double stillImageZoom = 1.0;
     QPixmap originalPixmap;
+    bool stillFitMode = true;
     QPoint lastPanPoint;
     bool isPanning;
 

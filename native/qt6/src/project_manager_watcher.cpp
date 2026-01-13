@@ -63,15 +63,23 @@ void ProjectManagerWatcher::watchProject(int projectId, const QString& watchPath
     }
     
     // Watch all directories (QFileSystemWatcher only watches specific dirs, not recursively)
-    QStringList added = m_watcher->addPaths(dirsToWatch);
-    
-    if (!added.isEmpty()) {
+    const QStringList failed = m_watcher->addPaths(dirsToWatch);
+    QSet<QString> failedSet(failed.begin(), failed.end());
+    QStringList watched;
+    watched.reserve(dirsToWatch.size() - failed.size());
+    for (const QString& dir : dirsToWatch) {
+        if (!failedSet.contains(dir)) {
+            watched.append(dir);
+        }
+    }
+
+    if (!watched.isEmpty()) {
         LogManager::instance().addLog(
             QString("[ProjectManagerWatcher] Watching project %1 at: %2 (%3 directories)")
-                .arg(projectId).arg(watchPath).arg(added.size()), "INFO");
+                .arg(projectId).arg(watchPath).arg(watched.size()), "INFO");
         
         // Map all watched directories to this project
-        for (const QString& dir : added) {
+        for (const QString& dir : watched) {
             m_pathToProject[dir] = projectId;
         }
         
@@ -87,6 +95,11 @@ void ProjectManagerWatcher::watchProject(int projectId, const QString& watchPath
         LogManager::instance().addLog(
             QString("[ProjectManagerWatcher] Initial scan cached %1 directories, %2 files")
                 .arg(dirFiles.size()).arg(totalFiles), "DEBUG");
+        if (!failed.isEmpty()) {
+            LogManager::instance().addLog(
+                QString("[ProjectManagerWatcher] Failed to watch %1 directories (first: %2)")
+                    .arg(failed.size()).arg(failed.first()), "WARN");
+        }
     } else {
         LogManager::instance().addLog(
             QString("[ProjectManagerWatcher] Failed to watch: %1").arg(watchPath), "ERROR");
@@ -232,7 +245,6 @@ void ProjectManagerWatcher::processChangedDirectories(int projectId)
 {
     if (!m_projectPaths.contains(projectId)) return;
     
-    QString rootPath = m_projectPaths[projectId];
     QSet<QString> changedDirs = m_pendingChangedDirs.take(projectId);
     
     QStringList newFilesList;
@@ -285,18 +297,27 @@ void ProjectManagerWatcher::processChangedDirectories(int projectId)
         m_dirModTimes[projectId][dirPath] = currentModTime;
     }
     
-    // Also check for new subdirectories that appeared
-    QDirIterator it(rootPath, QDir::Dirs | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
-    while (it.hasNext()) {
-        QString dirPath = it.next();
-        if (!m_dirModTimes[projectId].contains(dirPath)) {
-            // New directory - scan it
-            QFileInfo dirInfo(dirPath);
-            m_dirModTimes[projectId][dirPath] = dirInfo.lastModified();
-            
-            QStringList dirFilesList = scanSingleDirectory(dirPath);
-            m_dirFiles[projectId][dirPath] = QSet<QString>(dirFilesList.begin(), dirFilesList.end());
-            
+    // Also check for new subdirectories directly under changed directories.
+    // This avoids rescanning the full tree on every change.
+    for (const QString& dirPath : changedDirs) {
+        QDir dir(dirPath);
+        if (!dir.exists()) continue;
+
+        const QFileInfoList subdirs = dir.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot);
+        for (const QFileInfo& subdirInfo : subdirs) {
+            const QString subdirPath = subdirInfo.absoluteFilePath();
+            if (m_dirModTimes[projectId].contains(subdirPath)) {
+                continue;
+            }
+
+            if (m_watcher->addPath(subdirPath)) {
+                m_pathToProject[subdirPath] = projectId;
+            }
+
+            m_dirModTimes[projectId][subdirPath] = subdirInfo.lastModified();
+            QStringList dirFilesList = scanSingleDirectory(subdirPath);
+            m_dirFiles[projectId][subdirPath] = QSet<QString>(dirFilesList.begin(), dirFilesList.end());
+
             for (const QString& f : dirFilesList) {
                 newFilesList.append(f);
             }

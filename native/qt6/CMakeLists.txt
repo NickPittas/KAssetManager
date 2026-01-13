@@ -242,6 +242,8 @@ qt_add_executable(kassetmanagerqt WIN32
     src/tags_model.h
     src/preview_overlay.h
     src/preview_overlay.cpp
+    src/image_preview_overlay.h
+    src/image_preview_overlay.cpp
     src/import_progress_dialog.h
     src/import_progress_dialog.cpp
     src/settings_dialog.h
