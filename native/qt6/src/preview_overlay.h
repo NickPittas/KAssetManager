@@ -442,6 +442,8 @@ private:
     // Seeking helpers
     double frameDurationMs() const; // based on detectedFps (from metadata) or fallbackFps
     void updateDetectedFps();
+    void setPlaybackControlsVisible(bool visible);
+    void setControlsHeightForImage(bool imageMode);
     
     // Annotation helpers
     void setupAnnotationToolbar();
@@ -484,6 +486,19 @@ private:
     QLabel *ocioViewLabel = nullptr;
     QComboBox *ocioViewCombo = nullptr;
     QPushButton *ocioConfigBtn = nullptr;
+    
+    // Playback controls
+    QComboBox *loopModeCombo = nullptr;
+    QComboBox *playbackRateCombo = nullptr;
+    
+    // Exposure/Gamma controls
+    QSlider *exposureSlider = nullptr;
+    QLabel *exposureLabel = nullptr;
+    QSlider *gammaSlider = nullptr;
+    QLabel *gammaLabel = nullptr;
+    
+    // Playback controls container (for show/hide)
+    QWidget *playbackControlsGroup = nullptr;
 #endif
     QCheckBox *alphaCheck;
     QPlainTextEdit *textView;

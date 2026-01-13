@@ -27,6 +27,9 @@ namespace tl {
     class System;
     struct OCIOOptions;
     struct VideoFrame;
+    struct DisplayOptions;
+    struct Levels;
+    struct EXRDisplay;
     namespace qt {
         class ContextObject;
         class PlayerObject;
@@ -294,6 +297,23 @@ public:
     tl::OCIOOptions currentOCIOOptions() const;
 
     /**
+     * @brief Get the current display options (exposure, gamma, etc.)
+     */
+    tl::DisplayOptions currentDisplayOptions() const;
+
+    /**
+     * @brief Set exposure adjustment (-10.0 to 10.0, 0.0 = no change)
+     */
+    void setExposure(float exposure);
+    float exposure() const;
+
+    /**
+     * @brief Set gamma adjustment (0.1 to 4.0, 1.0 = no change)
+     */
+    void setGamma(float gamma);
+    float gamma() const;
+
+    /**
      * @brief Tick the player (call from render loop)
      */
     void tick();
@@ -389,6 +409,10 @@ private:
     MediaInfo m_mediaInfo;
     QString m_currentPath;
 
+    // Flag to defer playback until first frame is cached
+    bool m_pendingPlay{false};
+    bool m_pendingReverse{false};
+
     // OCIO state
     bool m_ocioEnabled{false};
     QString m_ocioConfigPath;
@@ -401,11 +425,16 @@ private:
     mutable QMap<QString, QStringList> m_availableViews;
     QStringList m_availableLooks;
 
+    // Display options (exposure, gamma, etc.)
+    float m_exposure{0.0f};
+    float m_gamma{1.0f};
+
     // Update timer
     QTimer* m_updateTimer{nullptr};
 
     // Initialization flag
     static bool s_initialized;
+    static bool s_fontsInitialized;
     static std::shared_ptr<ftk::Context> s_sharedContext;
 
     // Single context tick object for the shared context (Qt timer driven).

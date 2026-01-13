@@ -139,6 +139,11 @@ static QIcon tintIcon(const QIcon& base, const QColor& color)
     return result.isNull() ? base : result;
 }
 
+static constexpr int kControlsMinHeight = 130;
+static constexpr int kControlsMaxHeight = 180;
+static constexpr int kImageControlsMinHeight = 70;
+static constexpr int kImageControlsMaxHeight = 100;
+
 #ifdef HAVE_FFMPEG
 extern "C" {
 #include <libavformat/avformat.h>
@@ -376,8 +381,9 @@ void PreviewOverlay::setupUi()
 
     // Image view with zoom/pan support (for images and videos)
     imageView = new QGraphicsView(this);
-#ifdef KAM_HAVE_QOPENGLWIDGET
-    // Use OpenGL-backed viewport for smoother video/image scaling when available
+#if defined(KAM_HAVE_QOPENGLWIDGET) && !(defined(HAVE_TLRENDER) && HAVE_TLRENDER)
+    // Use OpenGL-backed viewport for smoother video/image scaling when available.
+    // When tlRender is enabled, avoid an extra QOpenGLWidget to reduce context churn.
     imageView->setViewport(new QOpenGLWidget());
 // else: fall back to default raster viewport
 #endif
@@ -478,7 +484,8 @@ void PreviewOverlay::setupUi()
     // Bottom controls (for video) - positioned at the very bottom
     controlsWidget = new QWidget(this);
     controlsWidget->setStyleSheet("QWidget { background-color: rgba(0, 0, 0, 180); }");
-    controlsWidget->setFixedHeight(110); // Reduced to minimize dead space
+    controlsWidget->setMinimumHeight(kControlsMinHeight);
+    controlsWidget->setMaximumHeight(kControlsMaxHeight); // Flexible height to fit all controls
     controlsWidget->installEventFilter(this);
     controlsWidget->hide();
 
@@ -605,6 +612,64 @@ void PreviewOverlay::setupUi()
         "QComboBox QAbstractItemView { background-color: #333; color: white; selection-background-color: #58a6ff; }"
     );
     ocioViewCombo->hide();
+    
+    // Loop mode combo
+    loopModeCombo = new QComboBox(this);
+    loopModeCombo->setFocusPolicy(Qt::NoFocus);
+    loopModeCombo->addItems({"Loop", "Once", "Ping-Pong"});
+    loopModeCombo->setCurrentIndex(0);
+    loopModeCombo->setStyleSheet(
+        "QComboBox { background-color: #333; color: white; border: 1px solid #555; padding: 5px; border-radius: 3px; min-width: 80px; }"
+        "QComboBox::drop-down { border: none; }"
+        "QComboBox::down-arrow { image: none; border: none; }"
+        "QComboBox QAbstractItemView { background-color: #333; color: white; selection-background-color: #58a6ff; }"
+    );
+    // Visibility managed by parent playbackControlsGroup
+    
+    // Playback rate combo
+    playbackRateCombo = new QComboBox(this);
+    playbackRateCombo->setFocusPolicy(Qt::NoFocus);
+    playbackRateCombo->addItems({"0.25x", "0.5x", "1x", "1.5x", "2x", "4x"});
+    playbackRateCombo->setCurrentIndex(2); // Default to 1x
+    playbackRateCombo->setStyleSheet(
+        "QComboBox { background-color: #333; color: white; border: 1px solid #555; padding: 5px; border-radius: 3px; min-width: 60px; }"
+        "QComboBox::drop-down { border: none; }"
+        "QComboBox::down-arrow { image: none; border: none; }"
+        "QComboBox QAbstractItemView { background-color: #333; color: white; selection-background-color: #58a6ff; }"
+    );
+    // Visibility managed by parent playbackControlsGroup
+    
+    // Exposure slider
+    exposureLabel = new QLabel("Exp: 0.0", this);
+    exposureLabel->setStyleSheet("QLabel { color: white; font-size: 12px; min-width: 55px; }");
+    // Visibility managed by parent playbackControlsGroup
+    
+    exposureSlider = new QSlider(Qt::Horizontal, this);
+    exposureSlider->setFocusPolicy(Qt::NoFocus);
+    exposureSlider->setRange(-100, 100); // -10.0 to 10.0 with 0.1 steps
+    exposureSlider->setValue(0);
+    exposureSlider->setFixedWidth(80);
+    exposureSlider->setStyleSheet(
+        "QSlider::groove:horizontal { background: #555; height: 4px; border-radius: 2px; }"
+        "QSlider::handle:horizontal { background: #fff; border: 1px solid #58a6ff; width: 10px; margin: -4px 0; border-radius: 5px; }"
+    );
+    // Visibility managed by parent playbackControlsGroup
+    
+    // Gamma slider
+    gammaLabel = new QLabel("γ: 1.0", this);
+    gammaLabel->setStyleSheet("QLabel { color: white; font-size: 12px; min-width: 45px; }");
+    // Visibility managed by parent playbackControlsGroup
+    
+    gammaSlider = new QSlider(Qt::Horizontal, this);
+    gammaSlider->setFocusPolicy(Qt::NoFocus);
+    gammaSlider->setRange(10, 400); // 0.1 to 4.0 with 0.01 steps
+    gammaSlider->setValue(100); // 1.0
+    gammaSlider->setFixedWidth(80);
+    gammaSlider->setStyleSheet(
+        "QSlider::groove:horizontal { background: #555; height: 4px; border-radius: 2px; }"
+        "QSlider::handle:horizontal { background: #fff; border: 1px solid #58a6ff; width: 10px; margin: -4px 0; border-radius: 5px; }"
+    );
+    // Visibility managed by parent playbackControlsGroup
 #endif
 
     // ========== ROW 3: Playback (center) + Audio (right) ==========
@@ -719,6 +784,29 @@ void PreviewOverlay::setupUi()
 
     controlsLayout->addLayout(bottomGrid);
 
+#ifdef HAVE_TLRENDER
+    // Playback controls row (Loop, Rate, Exposure, Gamma) - added as separate row in controlsLayout
+    playbackControlsGroup = new QWidget(this);
+    QHBoxLayout *playbackControlsLayout = new QHBoxLayout(playbackControlsGroup);
+    playbackControlsLayout->setContentsMargins(0, 0, 0, 0);
+    playbackControlsLayout->setSpacing(8);
+    playbackControlsLayout->addStretch();
+    playbackControlsLayout->addWidget(loopModeCombo);
+    playbackControlsLayout->addWidget(playbackRateCombo);
+    playbackControlsLayout->addSpacing(16);
+    playbackControlsLayout->addWidget(exposureLabel);
+    playbackControlsLayout->addWidget(exposureSlider);
+    playbackControlsLayout->addWidget(gammaLabel);
+    playbackControlsLayout->addWidget(gammaSlider);
+    playbackControlsLayout->addStretch();
+    playbackControlsGroup->setFixedHeight(30);
+    playbackControlsGroup->hide(); // Hidden by default
+    
+    // Add directly to controls layout as a new row
+    controlsLayout->addWidget(playbackControlsGroup);
+    qDebug() << "[setupUi] playbackControlsGroup created and added to layout";
+#endif
+
     mainLayout->addWidget(controlsWidget);
     // Overlay side navigation arrows
     navPrevBtn = new QPushButton("\u25C0", this); // ◀
@@ -820,7 +908,61 @@ void PreviewOverlay::setupUi()
     if (ocioViewCombo) {
         connect(ocioViewCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int idx) {
             if (idx < 0) return;
-            m_player->setView(ocioViewCombo->itemText(idx));
+            const QString view = ocioViewCombo->itemText(idx);
+            m_player->setView(view);
+            // Save to settings for persistence
+            QSettings settings("AugmentCode", "KAssetManager");
+            settings.setValue("OCIO/LastView", view);
+            settings.setValue("OCIO/LastDisplay", m_player->display());
+            controlsTimer->start();
+        });
+    }
+    
+    // Loop mode control
+    if (loopModeCombo) {
+        connect(loopModeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int idx) {
+            TLRenderPlayer::LoopMode mode = TLRenderPlayer::LoopMode::Loop;
+            switch (idx) {
+                case 0: mode = TLRenderPlayer::LoopMode::Loop; break;
+                case 1: mode = TLRenderPlayer::LoopMode::Once; break;
+                case 2: mode = TLRenderPlayer::LoopMode::PingPong; break;
+            }
+            m_player->setLoopMode(mode);
+            controlsTimer->start();
+        });
+    }
+    
+    // Playback rate control
+    if (playbackRateCombo) {
+        connect(playbackRateCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int idx) {
+            static const double rates[] = {0.25, 0.5, 1.0, 1.5, 2.0, 4.0};
+            if (idx >= 0 && idx < 6) {
+                m_player->setPlaybackRate(rates[idx]);
+            }
+            controlsTimer->start();
+        });
+    }
+    
+    // Exposure slider
+    if (exposureSlider) {
+        connect(exposureSlider, &QSlider::valueChanged, this, [this](int value) {
+            float exposure = value / 10.0f; // -10.0 to 10.0
+            m_player->setExposure(exposure);
+            if (exposureLabel) {
+                exposureLabel->setText(QString("Exp: %1").arg(exposure, 0, 'f', 1));
+            }
+            controlsTimer->start();
+        });
+    }
+    
+    // Gamma slider
+    if (gammaSlider) {
+        connect(gammaSlider, &QSlider::valueChanged, this, [this](int value) {
+            float gamma = value / 100.0f; // 0.1 to 4.0
+            m_player->setGamma(gamma);
+            if (gammaLabel) {
+                gammaLabel->setText(QString("γ: %1").arg(gamma, 0, 'f', 2));
+            }
             controlsTimer->start();
         });
     }
@@ -831,7 +973,17 @@ void PreviewOverlay::setupUi()
         ocioDisplayCombo->blockSignals(true);
         ocioDisplayCombo->clear();
         ocioDisplayCombo->addItems(displays);
-        const int idx = ocioDisplayCombo->findText(m_player->display());
+        
+        // Try to restore last used display from settings
+        QSettings settings("AugmentCode", "KAssetManager");
+        const QString lastDisplay = settings.value("OCIO/LastDisplay").toString();
+        int idx = -1;
+        if (!lastDisplay.isEmpty()) {
+            idx = ocioDisplayCombo->findText(lastDisplay);
+        }
+        if (idx < 0) {
+            idx = ocioDisplayCombo->findText(m_player->display());
+        }
         if (idx >= 0) {
             ocioDisplayCombo->setCurrentIndex(idx);
         }
@@ -845,7 +997,34 @@ void PreviewOverlay::setupUi()
                 ocioViewCombo->blockSignals(true);
                 ocioViewCombo->clear();
                 ocioViewCombo->addItems(views);
-                const int viewIdx = ocioViewCombo->findText(m_player->view());
+                
+                // Restore view from settings or use smart defaults
+                const QString lastView = settings.value("OCIO/LastView").toString();
+                int viewIdx = -1;
+                if (!lastView.isEmpty()) {
+                    viewIdx = ocioViewCombo->findText(lastView);
+                }
+                
+                // If no saved view, check for video file defaults
+                if (viewIdx < 0 && !currentFilePath.isEmpty()) {
+                    const QString ext = QFileInfo(currentFilePath).suffix().toLower();
+                    if (ext == "mov" || ext == "mp4" || ext == "m4v" || ext == "avi" || ext == "mkv" || ext == "webm") {
+                        for (int i = 0; i < ocioViewCombo->count(); ++i) {
+                            const QString viewName = ocioViewCombo->itemText(i).toLower();
+                            if (viewName.contains("rec.709") || viewName.contains("rec709")) {
+                                viewIdx = i;
+                                break;
+                            }
+                            if (viewIdx < 0 && viewName.contains("srgb")) {
+                                viewIdx = i;
+                            }
+                        }
+                    }
+                }
+                
+                if (viewIdx < 0) {
+                    viewIdx = ocioViewCombo->findText(m_player->view());
+                }
                 if (viewIdx >= 0) {
                     ocioViewCombo->setCurrentIndex(viewIdx);
                 }
@@ -858,7 +1037,39 @@ void PreviewOverlay::setupUi()
             ocioViewCombo->blockSignals(true);
             ocioViewCombo->clear();
             ocioViewCombo->addItems(views);
-            const int viewIdx = ocioViewCombo->findText(m_player->view());
+            
+            // Try to restore last used view from settings
+            QSettings settings("AugmentCode", "KAssetManager");
+            const QString lastView = settings.value("OCIO/LastView").toString();
+            int viewIdx = -1;
+            
+            if (!lastView.isEmpty()) {
+                viewIdx = ocioViewCombo->findText(lastView);
+            }
+            
+            // If no saved view or saved view not found, check for video file defaults
+            if (viewIdx < 0 && !currentFilePath.isEmpty()) {
+                const QString ext = QFileInfo(currentFilePath).suffix().toLower();
+                // For video files, default to Rec.709 or sRGB view
+                if (ext == "mov" || ext == "mp4" || ext == "m4v" || ext == "avi" || ext == "mkv" || ext == "webm") {
+                    for (int i = 0; i < ocioViewCombo->count(); ++i) {
+                        const QString viewName = ocioViewCombo->itemText(i).toLower();
+                        if (viewName.contains("rec.709") || viewName.contains("rec709")) {
+                            viewIdx = i;
+                            break;
+                        }
+                        // Fallback to sRGB if no Rec.709
+                        if (viewIdx < 0 && viewName.contains("srgb")) {
+                            viewIdx = i;
+                        }
+                    }
+                }
+            }
+            
+            // Final fallback: use player's current view or first item
+            if (viewIdx < 0) {
+                viewIdx = ocioViewCombo->findText(m_player->view());
+            }
             if (viewIdx >= 0) {
                 ocioViewCombo->setCurrentIndex(viewIdx);
             }
@@ -872,6 +1083,17 @@ void PreviewOverlay::setupUi()
         if (QFileInfo::exists(acesConfig)) {
             m_player->setOCIOConfig(acesConfig);
             m_player->setOCIOEnabled(true);
+            
+            // Restore last used OCIO display/view from settings
+            QSettings settings("AugmentCode", "KAssetManager");
+            const QString lastDisplay = settings.value("OCIO/LastDisplay").toString();
+            const QString lastView = settings.value("OCIO/LastView").toString();
+            if (!lastDisplay.isEmpty()) {
+                m_player->setDisplay(lastDisplay);
+            }
+            if (!lastView.isEmpty()) {
+                m_player->setView(lastView);
+            }
         }
     }
 #else
@@ -1088,9 +1310,11 @@ void PreviewOverlay::showImage(const QString &filePath)
         imageScene->update();
 
     // For single images, only show colorspace selector when HDR
+    setPlaybackControlsVisible(false);
     if (isHDRImage) {
         colorSpaceLabel->show();
         colorSpaceCombo->show();
+        setControlsHeightForImage(true);
         controlsWidget->show();
     } else {
         colorSpaceLabel->hide();
@@ -1136,6 +1360,8 @@ void PreviewOverlay::showVideo(const QString &filePath)
 
     // Anchor nav arrows to the video widget
     positionNavButtons(videoWidget);
+    setPlaybackControlsVisible(true);
+    setControlsHeightForImage(false);
     controlsWidget->show();
 
     // Cache bar is only for sequences
@@ -1171,6 +1397,19 @@ void PreviewOverlay::showVideo(const QString &filePath)
     if (ocioDisplayCombo) ocioDisplayCombo->show();
     if (ocioViewLabel) ocioViewLabel->show();
     if (ocioViewCombo) ocioViewCombo->show();
+
+    // Show playback control widgets row
+    qDebug() << "[showVideo] Playback controls check:"
+             << "playbackControlsGroup:" << (playbackControlsGroup != nullptr)
+             << "loopModeCombo:" << (loopModeCombo != nullptr)
+             << "exposureSlider:" << (exposureSlider != nullptr);
+    if (playbackControlsGroup) { 
+        playbackControlsGroup->show();
+        playbackControlsGroup->setVisible(true);
+        qDebug() << "[showVideo] playbackControlsGroup isVisible:" << playbackControlsGroup->isVisible()
+                 << "size:" << playbackControlsGroup->size()
+                 << "parent:" << playbackControlsGroup->parentWidget();
+    }
 #endif
 
     originalPixmap = QPixmap(); // Clear the pixmap
@@ -1419,6 +1658,35 @@ void PreviewOverlay::updateDetectedFps()
     // FPS is now provided by GStreamer media info callback
     // No need to query metadata here
     if (detectedFps <= 0.0) detectedFps = 24.0;
+}
+
+void PreviewOverlay::setPlaybackControlsVisible(bool visible)
+{
+    if (positionSlider) positionSlider->setVisible(visible);
+    if (currentTimeLabel) currentTimeLabel->setVisible(visible);
+    if (durationTimeLabel) durationTimeLabel->setVisible(visible);
+    if (fpsLabel) fpsLabel->setVisible(visible);
+    if (prevFrameBtn) prevFrameBtn->setVisible(visible);
+    if (playPauseBtn) playPauseBtn->setVisible(visible);
+    if (nextFrameBtn) nextFrameBtn->setVisible(visible);
+    if (muteBtn) muteBtn->setVisible(visible);
+    if (volumeSlider) volumeSlider->setVisible(visible);
+#ifdef HAVE_TLRENDER
+    if (playbackControlsGroup) playbackControlsGroup->setVisible(visible);
+#endif
+}
+
+void PreviewOverlay::setControlsHeightForImage(bool imageMode)
+{
+    if (!controlsWidget) return;
+    if (imageMode) {
+        controlsWidget->setMinimumHeight(kImageControlsMinHeight);
+        controlsWidget->setMaximumHeight(kImageControlsMaxHeight);
+    } else {
+        controlsWidget->setMinimumHeight(kControlsMinHeight);
+        controlsWidget->setMaximumHeight(kControlsMaxHeight);
+    }
+    controlsWidget->updateGeometry();
 }
 
 
@@ -1926,13 +2194,18 @@ void PreviewOverlay::showSequence(const QStringList &framePaths, const QString &
     // We intentionally do not use the legacy RAM cache / per-frame OIIO path here.
     // This fixes slow/blank sequence preview when OIIO is compiled out and enables
     // proper scrubbing/playback via the tlRender engine.
-    Q_UNUSED(startFrame)
-    Q_UNUSED(endFrame)
 
     if (framePaths.isEmpty()) {
         qWarning() << "[PreviewOverlay] showSequence called with empty frame list";
         return;
     }
+
+    // Calculate duration from known frame range (we already know start/end from sequence grouping)
+    const int totalFrames = endFrame - startFrame + 1;
+    const double defaultFps = 24.0;
+    const qint64 knownDurationMs = static_cast<qint64>((totalFrames / defaultFps) * 1000.0);
+    qDebug() << "[PreviewOverlay] Sequence range:" << startFrame << "-" << endFrame 
+             << "totalFrames:" << totalFrames << "durationMs:" << knownDurationMs;
 
     // Treat sequences as video-like for timeline/scrubbing/controls.
     isSequence = false;
@@ -1954,6 +2227,8 @@ void PreviewOverlay::showSequence(const QStringList &framePaths, const QString &
     if (videoWidget) videoWidget->hide();
     if (m_renderWidget) m_renderWidget->show();
 
+    setPlaybackControlsVisible(true);
+    setControlsHeightForImage(false);
     controlsWidget->show();
 
     // Hide legacy per-image tone-map colorspace controls; OCIO handles color
@@ -1968,6 +2243,11 @@ void PreviewOverlay::showSequence(const QStringList &framePaths, const QString &
     if (ocioViewLabel) ocioViewLabel->show();
     if (ocioViewCombo) ocioViewCombo->show();
 
+    // Show playback control widgets row
+    if (playbackControlsGroup) {
+        playbackControlsGroup->show();
+    }
+
     // Stop any existing playback and load the sequence pattern
     PLAYER_STOP();
 
@@ -1977,18 +2257,17 @@ void PreviewOverlay::showSequence(const QStringList &framePaths, const QString &
     const QString patternPath = SequenceDetector::toHashPatternPath(framePaths.first());
     qDebug() << "[PreviewOverlay] tlRender sequence load:" << framePaths.first() << "->" << patternPath;
 
-    // Default timeline context while media info is loading
-    positionSlider->setTimelineContext(true, 24.0);
+    // Set slider range immediately using known frame range (don't wait for tlRender)
+    positionSlider->setRange(0, static_cast<int>(knownDurationMs));
+    positionSlider->setValue(0);
+    positionSlider->setTimelineContext(true, defaultFps);
+    updateVideoTimeDisplays(0, knownDurationMs);
+    detectedFps = defaultFps;
+    if (fpsLabel) fpsLabel->setText(QString::number(defaultFps, 'f', 1) + " fps");
 
     m_player->load(patternPath);
     // Do not auto-play sequences; keep same UX as legacy sequence preview.
     m_player->pause();
-
-    // Reset slider/time display until tlRender provides media info
-    positionSlider->setRange(0, 0);
-    positionSlider->setValue(0);
-    updateVideoTimeDisplays(0, 0);
-    if (fpsLabel) fpsLabel->setText("-- fps");
     updatePlayPauseButton();
 
     controlsTimer->start();
@@ -2030,6 +2309,8 @@ void PreviewOverlay::showSequence(const QStringList &framePaths, const QString &
     // Show image view and controls
     videoWidget->hide();
     imageView->show();
+    setPlaybackControlsVisible(true);
+    setControlsHeightForImage(false);
     controlsWidget->show();
     // Disable audio controls for image sequences (no audio)
     if (muteBtn) {
@@ -2478,8 +2759,14 @@ void PreviewOverlay::onDurationChanged(qint64 duration)
 
 void PreviewOverlay::onPlayerPositionChanged(qint64 positionMs)
 {
+    qDebug() << "[PreviewOverlay] onPlayerPositionChanged:"
+             << "positionMs=" << positionMs
+             << "slider range=[" << positionSlider->minimum() << "," << positionSlider->maximum() << "]"
+             << "sliderDown=" << positionSlider->isSliderDown();
+             
     if (!positionSlider->isSliderDown()) {
         positionSlider->setValue(static_cast<int>(positionMs));
+        qDebug() << "[PreviewOverlay] slider setValue result:" << positionSlider->value();
     }
 
     qint64 durationMs = m_player->duration();
@@ -2496,19 +2783,29 @@ void PreviewOverlay::onPlayerPositionChanged(qint64 positionMs)
 
 void PreviewOverlay::onPlayerDurationChanged(qint64 durationMs)
 {
-    positionSlider->setRange(0, static_cast<int>(durationMs));
+    // Only update if tlRender reports a valid duration AND it's larger than what we have
+    // (we may have pre-set the range from known sequence metadata)
+    if (durationMs > 0 && durationMs > positionSlider->maximum()) {
+        positionSlider->setRange(0, static_cast<int>(durationMs));
+    }
 }
 
 void PreviewOverlay::onPlayerMediaInfo(const TLRenderPlayer::MediaInfo& info)
 {
     qDebug() << "[PreviewOverlay] tlRender media info:"
              << "Duration:" << info.durationMs << "ms"
+             << "TotalFrames:" << info.totalFrames
              << "FPS:" << info.fps
              << "Resolution:" << info.width << "x" << info.height
              << "Has Audio:" << info.hasAudio;
 
-    if (info.durationMs > 0) {
+    // Only update slider if tlRender reports a valid duration larger than what we have
+    // (we may have pre-set the range from known sequence metadata)
+    if (info.durationMs > 0 && info.durationMs > positionSlider->maximum()) {
+        qDebug() << "[PreviewOverlay] Updating slider range to [0," << info.durationMs << "]";
         positionSlider->setRange(0, info.durationMs);
+    } else if (info.durationMs <= 0) {
+        qDebug() << "[PreviewOverlay] tlRender reported invalid duration, keeping current range [0," << positionSlider->maximum() << "]";
     }
 
     if (info.fps > 0.0) {

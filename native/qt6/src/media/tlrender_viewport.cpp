@@ -85,6 +85,13 @@ void TLRenderViewport::setPlayer(TLRenderPlayer* player)
             }
         });
         
+        // Connect to video frames changed (for exposure/gamma updates)
+        connect(player, &TLRenderPlayer::videoFramesChanged, this, [this]() {
+            if (m_viewport && m_player) {
+                m_viewport->setDisplayOptions({m_player->currentDisplayOptions()});
+            }
+        });
+        
         // If player already has media loaded, setup now
         if (player->playerObject()) {
             setupViewportPlayer();
@@ -140,6 +147,9 @@ void TLRenderViewport::setupViewportPlayer()
     
     // Apply current OCIO options from player
     m_viewport->setOCIOOptions(m_player->currentOCIOOptions());
+    
+    // Apply current display options (exposure/gamma) from player
+    m_viewport->setDisplayOptions({m_player->currentDisplayOptions()});
     
     qDebug() << "[TLRenderViewport] Viewport player setup complete";
 #endif

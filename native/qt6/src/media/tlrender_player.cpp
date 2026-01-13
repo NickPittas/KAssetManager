@@ -16,6 +16,7 @@
 #include <QElapsedTimer>
 #include <QImage>
 #include <stdexcept>
+#include "video_metadata.h"
 
 #if defined(HAVE_FFMPEG) && HAVE_FFMPEG
 extern "C" {
@@ -58,6 +59,7 @@ namespace OCIO = OCIO_NAMESPACE;
 #endif // HAVE_TLRENDER
 
 bool TLRenderPlayer::s_initialized = false;
+bool TLRenderPlayer::s_fontsInitialized = false;
 #ifdef HAVE_TLRENDER
 std::shared_ptr<ftk::Context> TLRenderPlayer::s_sharedContext;
 QPointer<tl::qt::ContextObject> TLRenderPlayer::s_contextObject;
@@ -88,6 +90,16 @@ TLRenderPlayer::~TLRenderPlayer()
 void TLRenderPlayer::initialize()
 {
     if (s_initialized) {
+#ifdef HAVE_TLRENDER
+        // Create the context tick object after QApplication exists.
+        if (!s_contextObject && qApp && s_sharedContext) {
+            s_contextObject = new tl::qt::ContextObject(s_sharedContext, qApp);
+        }
+        if (!s_fontsInitialized && qApp && s_sharedContext) {
+            tl::qtwidget::initFonts(s_sharedContext);
+            s_fontsInitialized = true;
+        }
+#endif
         return;
     }
 
@@ -103,8 +115,13 @@ void TLRenderPlayer::initialize()
             tl::qt::DefaultSurfaceFormat::OpenGL_4_1_CoreProfile);
 
         // Keep the shared context ticking via a precise Qt timer.
-        if (!s_contextObject) {
+        // This must be created after QApplication exists.
+        if (!s_contextObject && qApp) {
             s_contextObject = new tl::qt::ContextObject(s_sharedContext, qApp);
+        }
+        if (!s_fontsInitialized && qApp) {
+            tl::qtwidget::initFonts(s_sharedContext);
+            s_fontsInitialized = true;
         }
         
         s_initialized = true;
@@ -149,6 +166,13 @@ void TLRenderPlayer::loadMedia(const QString& filePath)
 #ifdef HAVE_TLRENDER
     QMutexLocker locker(&m_mutex);
     
+    // Reset any pending deferred playback from previous media
+    m_pendingPlay = false;
+    m_pendingReverse = false;
+    
+    // Clear cached frames from previous media to avoid stale data
+    m_cachedVideoFrames.clear();
+    
     // Stop any current playback
     if (m_player) {
         m_player->stop();
@@ -159,13 +183,43 @@ void TLRenderPlayer::loadMedia(const QString& filePath)
         std::string pathStr = filePath.toStdString();
         ftk::Path path(pathStr);
         
+        qDebug() << "[TLRenderPlayer] loadMedia: input path=" << filePath;
+        qDebug() << "[TLRenderPlayer] loadMedia: ftk::Path:"
+                 << "isSeq=" << path.isSeq()
+                 << "getNum=" << QString::fromStdString(path.getNum())
+                 << "getPad=" << path.getPad();
+        
         // Create timeline from path (handles video, sequences, and .otio files)
         tl::Options timelineOptions;
+#ifdef HAVE_FFMPEG
+        ::MediaInfo::VideoMetadata meta;
+        QString metaError;
+        if (::MediaInfo::probeVideoFile(filePath, meta, &metaError)) {
+            const QString codec = meta.videoCodec.toLower();
+            if (codec.contains("png")) {
+                // PNG-in-MOV can be unstable with multi-threaded FFmpeg decode.
+                timelineOptions.ioOptions["FFmpeg/ThreadCount"] = "1";
+                timelineOptions.ioOptions["FFmpeg/VideoBufferSize"] = "1";
+                qDebug() << "[TLRenderPlayer] Using single-thread FFmpeg decode for PNG codec";
+            }
+        }
+#endif
         m_timeline = tl::Timeline::create(m_context, path, timelineOptions);
         
         if (!m_timeline) {
             emit error(tr("Failed to create timeline from: %1").arg(filePath));
             return;
+        }
+        
+        // Log what tlRender actually detected/expanded
+        const auto& tlPath = m_timeline->getPath();
+        qDebug() << "[TLRenderPlayer] loadMedia: tlRender expanded path:"
+                 << "path=" << QString::fromStdString(tlPath.get())
+                 << "isSeq=" << tlPath.isSeq()
+                 << "hasFrames=" << tlPath.getFrames().has_value();
+        if (tlPath.getFrames().has_value()) {
+            const auto& frames = tlPath.getFrames().value();
+            qDebug() << "[TLRenderPlayer] loadMedia: frame range=" << frames.min() << "-" << frames.max();
         }
         
         // Create player
@@ -193,10 +247,47 @@ void TLRenderPlayer::loadMedia(const QString& filePath)
             this,
             [this](const std::vector<tl::VideoFrame>& frames)
             {
-                QMutexLocker locker(&m_mutex);
-                m_cachedVideoFrames = frames;
-                locker.unlock();
-                qDebug() << "[TLRenderPlayer] currentVideoChanged: got" << frames.size() << "frames";
+                bool shouldStartPlayback = false;
+                bool reversePlayback = false;
+
+                // Check if we have a frame with valid image data (not just empty structure)
+                bool hasValidFrame = false;
+                for (const auto& frame : frames) {
+                    if (!frame.layers.empty() && frame.layers[0].image) {
+                        hasValidFrame = true;
+                        break;
+                    }
+                }
+
+                {
+                    QMutexLocker locker(&m_mutex);
+                    m_cachedVideoFrames = frames;
+
+                    // If play() was called before frames were ready, start now
+                    if (m_pendingPlay && hasValidFrame) {
+                        shouldStartPlayback = true;
+                        reversePlayback = m_pendingReverse;
+                        m_pendingPlay = false;
+                        m_pendingReverse = false;
+                    }
+                }
+
+                qDebug() << "[TLRenderPlayer] currentVideoChanged: got" << frames.size() 
+                         << "frames, hasValidFrame:" << hasValidFrame
+                         << "pendingPlay:" << m_pendingPlay;
+
+                // Start actual playback now that we have frames
+                if (shouldStartPlayback && m_player) {
+                    qDebug() << "[TLRenderPlayer] First frame ready, starting deferred playback";
+                    if (reversePlayback) {
+                        m_player->setSpeedMult(std::abs(m_playbackRate.load()));
+                        m_player->reverse();
+                    } else {
+                        m_player->setSpeedMult(m_playbackRate.load());
+                        m_player->forward();
+                    }
+                }
+
                 emit videoFramesChanged();
             });
         connect(
@@ -205,9 +296,34 @@ void TLRenderPlayer::loadMedia(const QString& filePath)
             this,
             [this](const OTIO_NS::RationalTime& value)
             {
-                const double rate = (value.rate() > 0.0) ? value.rate() : 24.0;
-                const qint64 newFrame = static_cast<qint64>(value.value());
-                const qint64 newPositionMs = static_cast<qint64>((value.value() / rate) * 1000.0);
+                const auto timeRange = m_player->getTimeRange();
+                const double rate = (value.rate() > 0.0) ? value.rate() :
+                                    ((timeRange.duration().rate() > 0.0) ? timeRange.duration().rate() : 24.0);
+                const double startValue = timeRange.start_time().rescaled_to(rate).value();
+                const double durationValue = timeRange.duration().value();
+                double localValue = value.value() - startValue;
+                if (localValue < 0.0) {
+                    localValue = 0.0;
+                }
+                const qint64 newFrame = static_cast<qint64>(localValue);
+                const qint64 newPositionMs = static_cast<qint64>((localValue / rate) * 1000.0);
+                
+                qDebug() << "[TLRenderPlayer] currentTimeChanged DEBUG:"
+                         << "rawValue=" << value.value()
+                         << "startValue=" << startValue
+                         << "durationValue=" << durationValue
+                         << "localValue=" << localValue
+                         << "rate=" << rate
+                         << "newFrame=" << newFrame
+                         << "newPositionMs=" << newPositionMs
+                         << "m_duration=" << m_duration.load();
+
+                // Lazy update media info if we haven't got valid duration yet
+                // (common for sequences where timeline loads asynchronously)
+                if (m_duration.load() <= 0 && timeRange.duration().value() > 0.0) {
+                    qDebug() << "[TLRenderPlayer] Late media info update (sequence async load)";
+                    updateMediaInfo();
+                }
 
                 if (newPositionMs != m_position) {
                     m_position = newPositionMs;
@@ -225,7 +341,8 @@ void TLRenderPlayer::loadMedia(const QString& filePath)
             this,
             [this](tl::Playback playback)
             {
-                qDebug() << "[TLRenderPlayer] playbackChanged from observer:" << static_cast<int>(playback);
+                qDebug() << "[TLRenderPlayer] playbackChanged SIGNAL received:" << static_cast<int>(playback)
+                         << "(0=Stop, 1=Forward, 2=Reverse)";
                 PlaybackState newState;
                 switch (playback) {
                 case tl::Playback::Stop:
@@ -328,11 +445,17 @@ void TLRenderPlayer::updateMediaInfo()
 {
 #ifdef HAVE_TLRENDER
     if (!m_player || !m_timeline) {
+        qDebug() << "[TLRenderPlayer] updateMediaInfo: no player or timeline!";
         return;
     }
     
     const auto& ioInfo = m_player->getIOInfo();
     const auto& timeRange = m_player->getTimeRange();
+    
+    qDebug() << "[TLRenderPlayer] updateMediaInfo:"
+             << "timeRange.start=" << timeRange.start_time().value()
+             << "timeRange.duration=" << timeRange.duration().value()
+             << "timeRange.rate=" << timeRange.duration().rate();
     
     m_mediaInfo.width = 0;
     m_mediaInfo.height = 0;
@@ -346,6 +469,11 @@ void TLRenderPlayer::updateMediaInfo()
     m_mediaInfo.fps = rate;
     m_mediaInfo.totalFrames = static_cast<qint64>(timeRange.duration().value());
     m_mediaInfo.durationMs = static_cast<qint64>((timeRange.duration().value() / rate) * 1000.0);
+    
+    qDebug() << "[TLRenderPlayer] updateMediaInfo computed:"
+             << "fps=" << m_mediaInfo.fps
+             << "totalFrames=" << m_mediaInfo.totalFrames
+             << "durationMs=" << m_mediaInfo.durationMs;
     
     // Get video info from first video layer
     if (!ioInfo.video.empty()) {
@@ -381,20 +509,49 @@ void TLRenderPlayer::play()
         return;
     }
 
-    qDebug() << "[TLRenderPlayer::play] Starting playback, rate:" << m_playbackRate;
+    qDebug() << "[TLRenderPlayer::play] CALLED - rate:" << m_playbackRate
+             << "currentPlayback:" << static_cast<int>(m_player->getPlayback());
+
+    // Check if we have frames with valid image data cached yet. If not, defer
+    // playback until currentVideoChanged delivers the first valid frame. This
+    // prevents the "grey screen" issue where the timeline advances before frames
+    // are decoded and ready for display.
+    {
+        QMutexLocker locker(&m_mutex);
+        bool hasValidFrame = false;
+        for (const auto& frame : m_cachedVideoFrames) {
+            if (!frame.layers.empty() && frame.layers[0].image) {
+                hasValidFrame = true;
+                break;
+            }
+        }
+        
+        if (!hasValidFrame) {
+            qDebug() << "[TLRenderPlayer::play] No valid frames cached yet, deferring playback";
+            m_pendingPlay = true;
+            m_pendingReverse = (m_playbackRate < 0.0);
+            m_playbackState = PlaybackState::Playing;  // UI shows "playing" immediately
+            locker.unlock();
+            emit playbackStateChanged(PlaybackState::Playing);
+            return;
+        }
+    }
 
     // Honor current playback rate sign (JKL expects reverse playback).
     if (m_playbackRate < 0.0) {
-        m_player->setSpeed(std::abs(m_playbackRate));
+        m_player->setSpeedMult(std::abs(m_playbackRate));
+        qDebug() << "[TLRenderPlayer::play] Calling m_player->reverse()";
         m_player->reverse();
-        qDebug() << "[TLRenderPlayer::play] Set reverse playback";
+        qDebug() << "[TLRenderPlayer::play] After reverse(), playback:" << static_cast<int>(m_player->getPlayback());
     } else {
-        m_player->setSpeed(m_playbackRate);
+        m_player->setSpeedMult(m_playbackRate);
+        qDebug() << "[TLRenderPlayer::play] Calling m_player->forward()";
         m_player->forward();
-        qDebug() << "[TLRenderPlayer::play] Set forward playback";
+        qDebug() << "[TLRenderPlayer::play] After forward(), playback:" << static_cast<int>(m_player->getPlayback());
     }
     m_playbackState = PlaybackState::Playing;
     emit playbackStateChanged(PlaybackState::Playing);
+    qDebug() << "[TLRenderPlayer::play] COMPLETED - emitted PlaybackState::Playing";
 #endif
 }
 
@@ -407,6 +564,14 @@ void TLRenderPlayer::pause()
     }
     
     qDebug() << "[TLRenderPlayer::pause] Pausing playback";
+    
+    // Cancel any pending deferred playback
+    {
+        QMutexLocker locker(&m_mutex);
+        m_pendingPlay = false;
+        m_pendingReverse = false;
+    }
+    
     m_player->stop();
     m_playbackState = PlaybackState::Paused;
     emit playbackStateChanged(PlaybackState::Paused);
@@ -417,6 +582,13 @@ void TLRenderPlayer::stop()
 {
 #ifdef HAVE_TLRENDER
     if (!m_player) return;
+    
+    // Cancel any pending deferred playback
+    {
+        QMutexLocker locker(&m_mutex);
+        m_pendingPlay = false;
+        m_pendingReverse = false;
+    }
     
     m_player->stop();
     m_player->gotoStart();
@@ -450,8 +622,9 @@ void TLRenderPlayer::seek(qint64 positionMs)
     }
     double seconds = positionMs / 1000.0;
     double frameValue = seconds * rate;
+    const double startValue = timeRange.start_time().rescaled_to(rate).value();
     
-    OTIO_NS::RationalTime seekTime(frameValue, rate);
+    OTIO_NS::RationalTime seekTime(frameValue + startValue, rate);
     m_player->seek(seekTime);
 
     // Make scrubbing responsive even when paused: update systems immediately.
@@ -470,7 +643,8 @@ void TLRenderPlayer::seekToFrame(qint64 frameNumber)
         rate = 24.0;
     }
     
-    OTIO_NS::RationalTime seekTime(static_cast<double>(frameNumber), rate);
+    const double startValue = timeRange.start_time().rescaled_to(rate).value();
+    OTIO_NS::RationalTime seekTime(static_cast<double>(frameNumber) + startValue, rate);
     m_player->seek(seekTime);
 
     // Make scrubbing responsive even when paused: update systems immediately.
@@ -485,14 +659,11 @@ void TLRenderPlayer::setPlaybackRate(double rate)
     
     m_playbackRate = rate;
     
-    if (rate < 0) {
-        m_player->setSpeed(std::abs(rate));
-        if (m_playbackState == PlaybackState::Playing) {
+    m_player->setSpeedMult(std::abs(rate));
+    if (m_playbackState == PlaybackState::Playing) {
+        if (rate < 0) {
             m_player->reverse();
-        }
-    } else {
-        m_player->setSpeed(rate);
-        if (m_playbackState == PlaybackState::Playing) {
+        } else {
             m_player->forward();
         }
     }
@@ -799,6 +970,14 @@ void TLRenderPlayer::updateOCIOLists()
         for (int i = 0; i < config->getNumColorSpaces(); ++i) {
             m_availableColorspaces.append(QString::fromStdString(config->getColorSpaceNameByIndex(i)));
         }
+        if (m_inputColorspace.isEmpty() || !m_availableColorspaces.contains(m_inputColorspace)) {
+            const char* role = config->getRoleColorSpace(OCIO::ROLE_SCENE_LINEAR);
+            if (role && *role) {
+                m_inputColorspace = QString::fromStdString(role);
+            } else if (!m_availableColorspaces.isEmpty()) {
+                m_inputColorspace = m_availableColorspaces.first();
+            }
+        }
         emit colorspacesChanged(m_availableColorspaces);
         
         // Get displays
@@ -866,6 +1045,47 @@ tl::OCIOOptions TLRenderPlayer::currentOCIOOptions() const
     options.look = m_look.toStdString();
 #endif
     return options;
+}
+
+tl::DisplayOptions TLRenderPlayer::currentDisplayOptions() const
+{
+    tl::DisplayOptions options;
+#ifdef HAVE_TLRENDER
+    // EXR Display settings (exposure)
+    if (m_exposure != 0.0f) {
+        options.exrDisplay.enabled = true;
+        options.exrDisplay.exposure = m_exposure;
+    }
+    
+    // Levels settings (gamma)
+    if (m_gamma != 1.0f) {
+        options.levels.enabled = true;
+        options.levels.gamma = m_gamma;
+    }
+#endif
+    return options;
+}
+
+void TLRenderPlayer::setExposure(float exposure)
+{
+    m_exposure = qBound(-10.0f, exposure, 10.0f);
+    emit videoFramesChanged(); // Trigger redraw
+}
+
+float TLRenderPlayer::exposure() const
+{
+    return m_exposure;
+}
+
+void TLRenderPlayer::setGamma(float gamma)
+{
+    m_gamma = qBound(0.1f, gamma, 4.0f);
+    emit videoFramesChanged(); // Trigger redraw
+}
+
+float TLRenderPlayer::gamma() const
+{
+    return m_gamma;
 }
 
 // ============================================================================
@@ -955,10 +1175,15 @@ void TLRenderPlayer::onUpdateTimer()
     const auto& currentTime = m_player->getCurrentTime();
     const auto& timeRange = m_player->getTimeRange();
     
-    qint64 newFrame = static_cast<qint64>(currentTime.value());
     const double rate = (currentTime.rate() > 0.0) ? currentTime.rate() :
                         ((timeRange.duration().rate() > 0.0) ? timeRange.duration().rate() : 24.0);
-    qint64 newPositionMs = static_cast<qint64>((currentTime.value() / rate) * 1000.0);
+    const double startValue = timeRange.start_time().rescaled_to(rate).value();
+    double localValue = currentTime.value() - startValue;
+    if (localValue < 0.0) {
+        localValue = 0.0;
+    }
+    qint64 newFrame = static_cast<qint64>(localValue);
+    qint64 newPositionMs = static_cast<qint64>((localValue / rate) * 1000.0);
     
     if (newPositionMs != m_position) {
         m_position = newPositionMs;

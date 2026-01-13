@@ -13,6 +13,9 @@
 #include "log_manager.h"
 #include "progress_manager.h"
 #include "theme_manager.h"
+#ifdef HAVE_TLRENDER
+#include "media/tlrender_player.h"
+#endif
 
 #ifdef Q_OS_WIN
 #include <windows.h>
@@ -43,9 +46,18 @@ int main(int argc, char *argv[])
     QGuiApplication::setHighDpiScaleFactorRoundingPolicy(
         Qt::HighDpiScaleFactorRoundingPolicy::PassThrough);
 
+    // Enable OpenGL context sharing for multiple QOpenGLWidgets.
+    QApplication::setAttribute(Qt::AA_ShareOpenGLContexts);
+
     // Enable hardware-accelerated OpenGL rendering for smooth window resize/move
     // This uses the system's native OpenGL driver for widget compositing
     QApplication::setAttribute(Qt::AA_UseDesktopOpenGL);
+
+#ifdef HAVE_TLRENDER
+    // Initialize tlRender before QApplication to ensure the default surface format
+    // is set correctly for QOpenGLWidget usage.
+    TLRenderPlayer::initialize();
+#endif
 
     // Suppress FFmpeg error messages to prevent console spam
 #ifdef HAVE_FFMPEG_LOG
