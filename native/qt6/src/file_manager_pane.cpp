@@ -711,10 +711,35 @@ void FileManagerPane::navigateUp()
 
 void FileManagerPane::refresh()
 {
+    if (!m_dirModel) return;
+
     QString path = currentPath();
-    if (!path.isEmpty() && m_proxyModel) {
-        m_proxyModel->rebuildForRoot(path);
+    if (path.isEmpty()) {
+        if (m_gridView && m_gridView->viewport()) m_gridView->viewport()->update();
+        if (m_listView && m_listView->viewport()) m_listView->viewport()->update();
+        return;
     }
+
+    // Force a model refresh by flipping the root path.
+    QString tempPath = QDir::tempPath();
+    m_dirModel->setRootPath(tempPath);
+    m_dirModel->setRootPath(path);
+
+    QModelIndex srcRoot = m_dirModel->index(path);
+    if (m_proxyModel) {
+        if (m_proxyModel->groupingEnabled()) {
+            m_proxyModel->rebuildForRoot(path);
+        }
+        QModelIndex proxyRoot = m_proxyModel->mapFromSource(srcRoot);
+        if (m_gridView) m_gridView->setRootIndex(proxyRoot);
+        if (m_listView) m_listView->setRootIndex(proxyRoot);
+    } else {
+        if (m_gridView) m_gridView->setRootIndex(srcRoot);
+        if (m_listView) m_listView->setRootIndex(srcRoot);
+    }
+
+    if (m_gridView && m_gridView->viewport()) m_gridView->viewport()->update();
+    if (m_listView && m_listView->viewport()) m_listView->viewport()->update();
 }
 
 QStringList FileManagerPane::selectedPaths() const

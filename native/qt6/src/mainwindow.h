@@ -237,6 +237,7 @@ private:
     QStringList selectedPathsForActiveFmPane() const;
     QString activeFmRootPath() const;
     void syncFmToolbarFromActivePane();
+    void showFmContextMenuAt(const QPoint &globalPos);
     void navigateToFolder(int folderId, bool addToHistory = true);
     void setSequenceGroupingEnabled(bool enabled);
     void setAssetManagerSequenceGroupingEnabled(bool enabled);

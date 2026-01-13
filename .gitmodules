@@ -1,3 +1,5 @@
 [submodule "third_party/tlRender"]
 	path = third_party/tlRender
 	url = https://github.com/grizzlypeak3d/tlRender.git
+	update = none
+	ignore = all

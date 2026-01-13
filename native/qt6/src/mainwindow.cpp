@@ -2765,6 +2765,14 @@ void MainWindow::onFmBackToParent()
 
 void MainWindow::onFmRefresh()
 {
+    if (isSecondaryFmPaneActive()) {
+        if (fmSecondaryPane) {
+            fmSecondaryPane->refresh();
+            statusBar()->showMessage("Folder refreshed", 2000);
+            syncFmToolbarFromActivePane();
+        }
+        return;
+    }
     if (!fmDirModel) return;
 
     // Get the current directory path
@@ -2837,7 +2845,7 @@ void MainWindow::onFmRename()
 
 void MainWindow::onFmBulkRename()
 {
-    QStringList paths = getSelectedFileManagerPaths(fmDirModel, fmGridView, fmListView, fmViewStack);
+    QStringList paths = selectedPathsForActiveFmPane();
     if (paths.size() < 2) return;
 
 
@@ -2846,7 +2854,9 @@ void MainWindow::onFmBulkRename()
     BulkRenameDialog dialog(paths, this);
     if (dialog.exec() == QDialog::Accepted) {
         // Refresh the file manager view
-        if (fmDirModel) {
+        if (isSecondaryFmPaneActive() && fmSecondaryPane) {
+            fmSecondaryPane->refresh();
+        } else if (fmDirModel) {
             QString currentPath = fmDirModel->rootPath();
             fmDirModel->setRootPath("");
             fmDirModel->setRootPath(currentPath);
@@ -2869,7 +2879,7 @@ void MainWindow::onFmNewFolder()
 
 void MainWindow::onFmAddToFavorites()
 {
-    QStringList sel = getSelectedFileManagerPaths(fmDirModel, fmGridView, fmListView, fmViewStack);
+    QStringList sel = selectedPathsForActiveFmPane();
     sel << getSelectedFmTreePaths();
     sel.removeDuplicates();
     if (sel.isEmpty()) return;
@@ -2958,7 +2968,16 @@ void MainWindow::saveFmFavorites()
 void MainWindow::onFmShowContextMenu(const QPoint &pos)
 {
     QWidget *senderW = qobject_cast<QWidget*>(sender());
+    if (!senderW) return;
+    if (senderW == fmGridView || senderW == fmListView) {
+        setActiveFmPane(true);
+    }
     QPoint globalPos = senderW->mapToGlobal(pos);
+    showFmContextMenuAt(globalPos);
+}
+
+void MainWindow::showFmContextMenuAt(const QPoint &globalPos)
+{
     QMenu menu;
     QAction *refreshA = menu.addAction("Refresh", this, &MainWindow::onFmRefresh, QKeySequence(Qt::Key_F5));
     menu.addSeparator();
@@ -2981,7 +3000,7 @@ void MainWindow::onFmShowContextMenu(const QPoint &pos)
     QAction *openWithA = menu.addAction("Open With...");
 
     // Enable/disable depending on selection
-    QStringList selectedPaths = getSelectedFileManagerPaths(fmDirModel, fmGridView, fmListView, fmViewStack);
+    QStringList selectedPaths = selectedPathsForActiveFmPane();
     bool hasSel = !selectedPaths.isEmpty();
     int selCount = selectedPaths.size();
 
@@ -3148,7 +3167,7 @@ void MainWindow::onFmTreeContextMenu(const QPoint &pos)
         dir.mkpath(newPath);
     } else if (chosen == createFolderWithSelA) {
         // Use selection from main view, create folder inside tree path
-        QStringList files = getSelectedFileManagerPaths(fmDirModel, fmGridView, fmListView, fmViewStack);
+        QStringList files = selectedPathsForActiveFmPane();
         if (files.isEmpty()) return;
         bool ok=false;
         QString folderName = QInputDialog::getText(this, "Create Folder", "Enter folder name:", QLineEdit::Normal, "New Folder", &ok);
@@ -3366,7 +3385,13 @@ void MainWindow::onFmToggleSecondPane(bool checked)
             
             // Connect activated signal for active pane tracking
             connect(fmSecondaryPane, &FileManagerPane::activated, this, &MainWindow::onSecondaryPaneActivated);
-            
+
+            // Context menu should operate on the secondary pane selection
+            connect(fmSecondaryPane, &FileManagerPane::contextMenuRequested, this, [this](const QPoint &globalPos) {
+                setActiveFmPane(false);
+                showFmContextMenuAt(globalPos);
+            });
+
             // Connect filesDropped for copy/move operations
             connect(fmSecondaryPane, &FileManagerPane::filesDropped, this, [this](const QStringList &paths, const QString &destDir) {
                 // Determine if this is a cut (move) or copy operation
