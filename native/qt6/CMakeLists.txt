@@ -332,7 +332,11 @@ qt_add_executable(kassetmanagerqt WIN32
     ${APP_RESOURCES}
 )
 
-target_compile_definitions(kassetmanagerqt PRIVATE KAM_APP_VERSION="${PROJECT_VERSION}")
+target_compile_definitions(kassetmanagerqt PRIVATE
+    KAM_APP_VERSION="${PROJECT_VERSION}"
+    QT_NO_DEBUG_OUTPUT
+    QT_NO_INFO_OUTPUT
+)
 
 target_include_directories(kassetmanagerqt PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src

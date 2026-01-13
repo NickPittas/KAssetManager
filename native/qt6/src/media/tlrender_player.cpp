@@ -74,7 +74,8 @@ TLRenderPlayer::TLRenderPlayer(QObject* parent)
 {
     // Create update timer for position updates
     m_updateTimer = new QTimer(this);
-    m_updateTimer->setInterval(16); // ~60fps updates
+    m_updateTimer->setTimerType(Qt::PreciseTimer);
+    m_updateTimer->setInterval(5); // keep tlRender context ticking consistently
     connect(m_updateTimer, &QTimer::timeout, this, &TLRenderPlayer::onUpdateTimer);
 
 #ifdef HAVE_TLRENDER
@@ -382,8 +383,8 @@ void TLRenderPlayer::loadMedia(const QString& filePath)
         locker.unlock();
         updateMediaInfo();
 
-        // No polling timer needed; ContextObject + PlayerObject drive updates.
-        m_updateTimer->stop();
+        // Keep a precise tick running to avoid render stalls on some systems.
+        m_updateTimer->start();
         
         qDebug() << "TLRenderPlayer: Loaded media:" << filePath;
         
@@ -1158,63 +1159,7 @@ void TLRenderPlayer::tick()
 void TLRenderPlayer::onUpdateTimer()
 {
 #ifdef HAVE_TLRENDER
-    if (!m_player) return;
-    
-    // Tick the context to process events
     tick();
-    
-    // Update media info lazily once I/O has finished (common for sequences).
-    if (m_duration.load() <= 0) {
-        const auto& timeRangeProbe = m_player->getTimeRange();
-        if (timeRangeProbe.duration().value() > 0.0) {
-            updateMediaInfo();
-        }
-    }
-
-    // Update position
-    const auto& currentTime = m_player->getCurrentTime();
-    const auto& timeRange = m_player->getTimeRange();
-    
-    const double rate = (currentTime.rate() > 0.0) ? currentTime.rate() :
-                        ((timeRange.duration().rate() > 0.0) ? timeRange.duration().rate() : 24.0);
-    const double startValue = timeRange.start_time().rescaled_to(rate).value();
-    double localValue = currentTime.value() - startValue;
-    if (localValue < 0.0) {
-        localValue = 0.0;
-    }
-    qint64 newFrame = static_cast<qint64>(localValue);
-    qint64 newPositionMs = static_cast<qint64>((localValue / rate) * 1000.0);
-    
-    if (newPositionMs != m_position) {
-        m_position = newPositionMs;
-        emit positionChanged(newPositionMs);
-    }
-    
-    if (newFrame != m_currentFrame) {
-        m_currentFrame = newFrame;
-        emit currentFrameChanged(newFrame);
-    }
-    
-    // Check playback state
-    auto playback = m_player->getPlayback();
-    PlaybackState newState;
-    switch (playback) {
-        case tl::Playback::Stop:
-            newState = m_position > 0 ? PlaybackState::Paused : PlaybackState::Stopped;
-            break;
-        case tl::Playback::Forward:
-        case tl::Playback::Reverse:
-            newState = PlaybackState::Playing;
-            break;
-        default:
-            newState = PlaybackState::Stopped;
-            break;
-    }
-    
-    if (newState != m_playbackState) {
-        m_playbackState = newState;
-        emit playbackStateChanged(newState);
-    }
 #endif
 }
 
