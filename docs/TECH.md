@@ -43,9 +43,9 @@ KAsset Manager is built with **Qt 6 Widgets** (C++20) for native Windows desktop
 
 ### Media Support
 
-- **GStreamer 1.x** - Primary backend for all video and image-sequence playback
-  - Custom GStreamer integration (see `gstreamer_player.*`) feeds LivePreviewManager and PreviewOverlay.
-  - Supports professional codecs and containers such as MP4, MOV (including ProRes 4444 and Animation), AVI, etc., subject to the bundled plugin set.
+- **tlRender (mrv2)** - Primary backend for all video and image-sequence playback
+  - tlRender integration (see `tlrender_player.*`, `tlrender_widget.*`) feeds LivePreviewManager and PreviewOverlay.
+  - Supports professional codecs and containers such as MP4, MOV (including ProRes 4444 and Animation), AVI, etc., via bundled FFmpeg.
 - **Qt Multimedia / Audio** - Used only for lightweight audio-only playback where appropriate.
 - **FFmpeg (external)** - Used only by the Convert dialog/tools for format conversion (not for live playback).
 
@@ -190,7 +190,7 @@ CREATE INDEX idx_asset_versions_asset_id ON asset_versions(asset_id);
 #### LivePreviewManager (live_preview_manager.h/cpp)
 - Manages in-memory poster frames and hover scrubbing
 - Normalises requests (path, size, position)
-- Dispatches GStreamer/OpenImageIO decode jobs on background threads
+- Dispatches tlRender/OpenImageIO decode jobs on background threads
 - Emits `frameReady` / `frameFailed` signals consumed by grid delegates and the preview overlay
 - Maintains an LRU pixmap cache (~512 MB default)
 - Reconstructs image sequence frame lists for grouped entries
@@ -259,7 +259,7 @@ CREATE INDEX idx_asset_versions_asset_id ON asset_versions(asset_id);
 
 - LivePreviewManager decodes frames on demand and caches pixmaps in memory
 - Grid delegates clamp rendering to inset card bounds
-- Background jobs use GStreamer (video/image sequences) and OpenImageIO (advanced still formats).
+- Background jobs use tlRender (video/image sequences) and OpenImageIO (advanced still formats).
 - Cache eviction is LRU-based and tunable via code constants
 
 ### Database Optimization
@@ -352,7 +352,7 @@ CREATE INDEX idx_asset_versions_asset_id ON asset_versions(asset_id);
 
 - Qt 6.9.3 (Widgets, SQL; Multimedia modules are not used for playback)
 - MinGW runtime DLLs
-- GStreamer 1.x runtime (bundled from `third_party/gstreamer`)
+- tlRender runtime DLLs (bundled from `third_party/tlRender-build/install-Release/bin`)
 - FFmpeg (from `third_party/ffmpeg`, used only by the Convert dialog/tools)
 - SQLite (bundled with Qt)
 
@@ -384,7 +384,7 @@ CREATE INDEX idx_asset_versions_asset_id ON asset_versions(asset_id);
 - Context-aware status bar progress:
   - Status bar progress label distinguishes "File Manager previews (visible)" from "Asset previews (visible)" while thumbnails are being generated.
 - Playback backend updates:
-  - GStreamer is now the sole backend for video and image-sequence playback; FFmpeg is retained only for the Convert dialog/tools.
+  - tlRender is now the primary backend for video and image-sequence playback; FFmpeg is retained only for the Convert dialog/tools.
 
 ### v1.1.0
 

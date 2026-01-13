@@ -5,7 +5,7 @@ It is organized by feature rather than by directory tree.
 Key UI subsystems:
 - **Asset Manager** – virtual folders, asset grid/list, filters, and tagging.
 - **File Manager** – filesystem tree plus grid/list with sequence grouping and shell-style file operations.
-- **Preview & Playback** – LivePreviewManager + PreviewOverlay + GStreamerPlayer for all video and image sequence playback.
+- **Preview & Playback** - LivePreviewManager + PreviewOverlay + TLRenderPlayer for video and image sequence playback.
 
 ## 1. Application shell
 - **Entry point**
@@ -70,12 +70,12 @@ Key UI subsystems:
 ## 7. Live preview, playback, and thumbnails
 - **LivePreviewManager and decoding backends**
   - `LivePreviewManager` – `native/qt6/src/live_preview_manager.{h,cpp}`; singleton responsible for asynchronous preview decoding, caching, and cache eviction for stills, video, and image sequences.
-  - `GStreamerPlayer` – `native/qt6/src/media/gstreamer_player.{h,cpp}`; GStreamer-based playback engine used by `PreviewOverlay` and `LivePreviewManager` for all video/sequence playback.
+  - `TLRenderPlayer` - `native/qt6/src/media/tlrender_player.{h,cpp}`; tlRender-based playback engine used by `PreviewOverlay` and `LivePreviewManager` for video/sequence playback.
   - `OIIOImageLoader` – `native/qt6/src/oiio_image_loader.{h,cpp}`; OpenImageIO-based still-image loader for high-quality image decoding and color management.
   - `VideoMetadata` – `native/qt6/src/video_metadata.{h,cpp}`; extracts and caches video metadata (dimensions, duration, FPS, codecs) used by previews and thumbnails.
 - **Thumbnail caching and generation**
   - `ThumbnailCacheManager` – `native/qt6/src/thumbnail_cache_manager.{h,cpp}`; manages on-disk and in-memory thumbnail cache entries.
-  - `ThumbnailGeneratorWorker` – `native/qt6/src/thumbnail_generator_worker.{h,cpp}`; worker that generates thumbnails via GStreamer/OIIO on background threads.
+  - `ThumbnailGeneratorWorker` - `native/qt6/src/thumbnail_generator_worker.{h,cpp}`; worker that generates thumbnails via tlRender/OIIO on background threads.
   - `ThumbnailGeneratorDialog` – `native/qt6/src/thumbnail_generator_dialog.{h,cpp}`; UI for bulk thumbnail generation over projects or folders.
 
 ## 8. Preview overlay window and annotation system
@@ -91,7 +91,7 @@ Key UI subsystems:
     - `EllipseAnnotation` – circle/ellipse shapes
     - `ArrowAnnotation` – arrows with directional heads
   - All annotation items support JSON serialization/deserialization, interactive editing with resize handles, and per-frame storage in `PreviewOverlay::frameAnnotations` map.
-  - Frame-accurate positioning uses explicit frame tracking (`PreviewOverlay::lastKnownVideoFrame`) to prevent ±1 frame drift from GStreamer position queries.
+  - Frame-accurate positioning uses explicit frame tracking (`PreviewOverlay::lastKnownVideoFrame`) to prevent +/-1 frame drift from backend position queries.
   - Timeline markers (green lines) indicate which frames contain annotations.
   - Export workflow captures frame + annotations composite as PNG/JPG.
 
@@ -126,7 +126,7 @@ Key UI subsystems:
   - `scripts/build-installer.ps1` – helper for NSIS/ZIP installer creation on top of the packaged portable build.
   - `scripts/download-everything-sdk.ps1` – downloads the Everything SDK DLL to `third_party/everything` when missing.
 - **Third-party runtimes (not edited here)**
-  - `third_party/gstreamer` – bundled GStreamer runtime used by `GStreamerPlayer` and all playback/sequence features.
+  - `third_party/tlRender-build/install-Release` - tlRender runtime used for playback/sequence features.
   - `third_party/ffmpeg` – FFmpeg binaries/headers used only by the conversion tools.
   - `third_party/ImageMagick-*/` – portable ImageMagick used by image conversion tools.
   - `third_party/everything` – Everything64.dll + headers used by EverythingSearch integration.

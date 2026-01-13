@@ -170,7 +170,7 @@ $configureArgs = @(
     "-G", $Generator
 )
 
-# Packaging builds don't need unit tests and they pull optional deps (e.g. GStreamer).
+# Packaging builds don't need unit tests and they pull optional deps (e.g. tlRender).
 $configureArgs += @(
     "-DBUILD_APP=ON",
     "-DBUILD_TESTS=OFF"

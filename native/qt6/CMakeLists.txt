@@ -14,7 +14,7 @@ if(NOT DEFINED CMAKE_TOOLCHAIN_FILE)
     endif()
 endif()
 
-project(KAssetManagerQt VERSION 1.6.0 LANGUAGES CXX)
+project(KAssetManagerQt VERSION 1.8.0 LANGUAGES CXX)
 # Optional static analysis / sanitizers
 option(ENABLE_ASAN "Enable AddressSanitizer (Clang/GCC only)" OFF)
 if(ENABLE_ASAN)
@@ -316,9 +316,6 @@ qt_add_executable(kassetmanagerqt WIN32
     src/thumbnail_generator_dialog.cpp
     src/thumbnail_generator_worker.h
     src/thumbnail_generator_worker.cpp
-    # GStreamer video player (legacy fallback)
-    src/media/gstreamer_player.h
-    src/media/gstreamer_player.cpp
     # tlRender integration - professional video/sequence playback with OCIO
     src/media/tlrender_player.h
     src/media/tlrender_player.cpp

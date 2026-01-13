@@ -25,7 +25,8 @@ class SequenceGroupingProxyModel;
 class FmGridViewEx;
 class FmListViewEx;
 class GridScrubController;
-class GStreamerPlayer;
+class TLRenderPlayer;
+class TLRenderViewport;
 
 #if defined(HAVE_QT_PDF)
 class QPdfDocument;
@@ -86,6 +87,14 @@ public:
     // Active state (visual highlight when this pane has focus)
     void setActive(bool active);
     bool isActive() const { return m_isActive; }
+
+    // Toolbar visibility (shared toolbar is handled by MainWindow)
+    void setToolbarVisible(bool visible);
+    bool isToolbarVisible() const;
+
+    // Navigation availability (for shared toolbar enablement)
+    bool canNavigateBack() const;
+    bool canNavigateUp() const;
 
     // Models access (for external connections like tree view)
     QFileSystemModel *dirModel() const { return m_dirModel; }
@@ -179,8 +188,8 @@ private:
     QGraphicsView *m_imageView = nullptr;
     QGraphicsScene *m_imageScene = nullptr;
     QGraphicsPixmapItem *m_imageItem = nullptr;
-    QWidget *m_videoWidget = nullptr;
-    GStreamerPlayer *m_gstreamerPlayer = nullptr;
+    TLRenderViewport *m_videoWidget = nullptr;
+    TLRenderPlayer *m_tlrenderPlayer = nullptr;
     QPlainTextEdit *m_textView = nullptr;
     QTableView *m_csvView = nullptr;
     QStandardItemModel *m_csvModel = nullptr;

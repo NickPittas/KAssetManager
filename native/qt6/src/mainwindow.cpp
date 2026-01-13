@@ -39,6 +39,8 @@
 
 #include "office_preview.h"
 #include "file_manager_pane.h"
+#include "media/tlrender_player.h"
+#include "media/tlrender_viewport.h"
 
 #include "media_convert_dialog.h"
 #include "thumbnail_cache_manager.h"
@@ -230,10 +232,6 @@ MainWindow::MainWindow(QWidget *parent)
 
     // Load theme before UI setup
     ThemeManager::instance().loadTheme();
-
-    // CRITICAL: Initialize GStreamer early to avoid 8+ second delay on first video
-    // This must be done before any thumbnail generation or video playback
-    GStreamerPlayer::initialize();
 
     // Load LivePreview cache size setting
     {
@@ -1584,8 +1582,6 @@ void MainWindow::setupFileManagerUi()
     connect(fmSyncNavButton, &QToolButton::toggled, this, &MainWindow::onFmSyncNavToggled);
     tb->addWidget(fmSyncNavButton);
 
-    rightLayout->addWidget(fmToolbar);
-
     // Editable path bar (like Windows Explorer)
     fmPathBar = new QLineEdit(right);
     fmPathBar->setPlaceholderText("Enter path...");
@@ -1944,21 +1940,15 @@ void MainWindow::setupFileManagerUi()
 
     pv->addLayout(alphaRow);
 
-    // Video widget for GStreamer rendering
-    fmVideoWidget = new QWidget(fmPreviewPanel);
+    // Video widget for tlRender rendering
+    fmVideoWidget = new TLRenderViewport(fmPreviewPanel);
     fmVideoWidget->setMinimumHeight(160);
     fmVideoWidget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-
-    // CRITICAL: Set widget attributes for native window embedding
-    // These attributes tell Qt to create a native window that GStreamer can render into
-    fmVideoWidget->setAttribute(Qt::WA_NativeWindow);
-    fmVideoWidget->setAttribute(Qt::WA_PaintOnScreen);
-    fmVideoWidget->setAttribute(Qt::WA_OpaquePaintEvent);
-
     fmVideoWidget->hide();
 
-    // Create GStreamer player for video playback
-    fmGStreamerPlayer = new GStreamerPlayer(fmPreviewPanel);
+    // Create tlRender player for video playback
+    fmTlRenderPlayer = new TLRenderPlayer(fmPreviewPanel);
+    fmVideoWidget->setPlayer(fmTlRenderPlayer);
 
     // Media controls (Explorer-like): Prev - Play/Pause - Next - Slider - Time - Audio
     QHBoxLayout *mc = new QHBoxLayout();
@@ -2021,20 +2011,20 @@ void MainWindow::setupFileManagerUi()
             if (fmSequencePlaying) pauseFmSequence(); else playFmSequence();
             return;
         }
-        if (!fmGStreamerPlayer) return;
-        if (fmGStreamerPlayer->state() == GStreamerPlayer::PlaybackState::Playing) {
-            fmGStreamerPlayer->pause();
+        if (!fmTlRenderPlayer) return;
+        if (fmTlRenderPlayer->playbackState() == TLRenderPlayer::PlaybackState::Playing) {
+            fmTlRenderPlayer->pause();
             fmPlayPauseBtn->setIcon(icoMediaPlay(ThemeManager::instance().iconColor()));
         } else {
-            fmGStreamerPlayer->play();
+            fmTlRenderPlayer->play();
             fmPlayPauseBtn->setIcon(icoMediaPause(ThemeManager::instance().iconColor()));
         }
     });
 
-    connect(fmGStreamerPlayer, &GStreamerPlayer::positionChanged, this, [this](qint64 pos){
+    connect(fmTlRenderPlayer, &TLRenderPlayer::positionChanged, this, [this](qint64 pos){
         if (fmIsSequence) return; // sequence updates handled separately
-        qint64 duration = fmGStreamerPlayer->duration();
-        if (fmGStreamerPlayer && duration > 0){
+        qint64 duration = fmTlRenderPlayer->duration();
+        if (fmTlRenderPlayer && duration > 0){
             fmPositionSlider->blockSignals(true);
             fmPositionSlider->setValue(int(pos*1000/duration));
             fmPositionSlider->blockSignals(false);
@@ -2047,15 +2037,15 @@ void MainWindow::setupFileManagerUi()
             loadFmSequenceFrame(v);
             return;
         }
-        qint64 duration = fmGStreamerPlayer->duration();
-        if (fmGStreamerPlayer && duration > 0) fmGStreamerPlayer->seek(qint64(v) * duration / 1000);
+        qint64 duration = fmTlRenderPlayer->duration();
+        if (fmTlRenderPlayer && duration > 0) fmTlRenderPlayer->seek(qint64(v) * duration / 1000);
     });
 
-    connect(fmVolumeSlider, &QSlider::valueChanged, this, [this](int v){ if (fmGStreamerPlayer) fmGStreamerPlayer->setVolume(v/100.0); });
+    connect(fmVolumeSlider, &QSlider::valueChanged, this, [this](int v){ if (fmTlRenderPlayer) fmTlRenderPlayer->setVolume(v/100.0f); });
     connect(fmMuteBtn, &QPushButton::clicked, this, [this]{
-        if (!fmGStreamerPlayer) return;
-        bool newMuted = !fmGStreamerPlayer->isMuted();
-        fmGStreamerPlayer->setMuted(newMuted);
+        if (!fmTlRenderPlayer) return;
+        bool newMuted = !fmTlRenderPlayer->isMuted();
+        fmTlRenderPlayer->setMuted(newMuted);
         fmMuteBtn->setIcon(newMuted ? icoMediaMute() : icoMediaAudio());
     });
 
@@ -2293,6 +2283,10 @@ void MainWindow::setupFileManagerUi()
     // Install page layout
     QVBoxLayout *pageLayout = new QVBoxLayout(fileManagerPage);
     pageLayout->setContentsMargins(0,0,0,0);
+    if (fmToolbar) {
+        fmToolbar->setParent(fileManagerPage);
+        pageLayout->addWidget(fmToolbar);
+    }
     pageLayout->addWidget(fmSplitter);
 
     // Persist splitter positions with debouncing (avoid disk I/O during drag)
@@ -2707,7 +2701,7 @@ void MainWindow::onFmPaste()
     }
 
     // Ensure any preview locks are released before file ops
-    if (fmGStreamerPlayer) { fmGStreamerPlayer->stop(); }
+    if (fmTlRenderPlayer) { fmTlRenderPlayer->stop(); }
     // Release any locks held by previews
     releaseAnyPreviewLocksForPaths(fmClipboard);
     // Enqueue async operation
@@ -3241,7 +3235,7 @@ void MainWindow::releaseAnyPreviewLocksForPaths(const QStringList& paths)
 {
     QSet<QString> s; for (const QString &p : paths) s.insert(QFileInfo(p).absoluteFilePath());
     // Embedded FM preview: stop media and clear if current preview is among paths
-    if (fmGStreamerPlayer) { fmGStreamerPlayer->stop(); }
+    if (fmTlRenderPlayer) { fmTlRenderPlayer->stop(); }
     if (!fmCurrentPreviewPath.isEmpty()) {
         QString abs = QFileInfo(fmCurrentPreviewPath).absoluteFilePath();
         if (s.contains(abs)) {
@@ -3382,6 +3376,9 @@ void MainWindow::onFmToggleSecondPane(bool checked)
             
             // Hide the preview panel by default for the secondary pane
             fmSecondaryPane->setPreviewVisible(false);
+
+            // Hide the per-pane toolbar; use the shared File Manager toolbar instead
+            fmSecondaryPane->setToolbarVisible(false);
         }
         
         // Create the dual-pane splitter if it doesn't exist
@@ -3551,6 +3548,78 @@ void MainWindow::setActiveFmPane(bool primary)
     
     LogManager::instance().addLog(
         QString("[FileManager] Active pane: %1").arg(primary ? "Primary" : "Secondary"), "DEBUG");
+
+    syncFmToolbarFromActivePane();
+}
+
+bool MainWindow::isSecondaryFmPaneActive() const
+{
+    return fmSecondaryPane && fmSecondaryPane->isVisible() && !fmPrimaryPaneActive;
+}
+
+QStringList MainWindow::selectedPathsForActiveFmPane() const
+{
+    if (isSecondaryFmPaneActive()) {
+        return fmSecondaryPane->selectedPaths();
+    }
+    return getSelectedFileManagerPaths(fmDirModel, fmGridView, fmListView, fmViewStack);
+}
+
+QString MainWindow::activeFmRootPath() const
+{
+    if (isSecondaryFmPaneActive()) {
+        return fmSecondaryPane->currentPath();
+    }
+    return fmDirModel ? fmDirModel->rootPath() : QString();
+}
+
+void MainWindow::syncFmToolbarFromActivePane()
+{
+    if (!fmToolbar) return;
+
+    const bool secondaryActive = isSecondaryFmPaneActive();
+    const QColor iconColor = ThemeManager::instance().iconColor();
+
+    // Navigation enablement
+    if (secondaryActive && fmSecondaryPane) {
+        if (fmBackButton) fmBackButton->setEnabled(fmSecondaryPane->canNavigateBack());
+        if (fmUpButton) fmUpButton->setEnabled(fmSecondaryPane->canNavigateUp());
+    } else {
+        fmUpdateNavigationButtons();
+    }
+
+    // View mode icon and thumbnail size
+    if (fmViewModeButton) {
+        const bool grid = secondaryActive && fmSecondaryPane ? fmSecondaryPane->isGridMode() : fmIsGridMode;
+        fmViewModeButton->setIcon(grid ? icoGrid(iconColor) : icoList(iconColor));
+    }
+    if (fmThumbnailSizeSlider) {
+        const int size = secondaryActive && fmSecondaryPane ? fmSecondaryPane->thumbnailSize()
+                                                           : fmThumbnailSizeSlider->value();
+        QSignalBlocker block(fmThumbnailSizeSlider);
+        fmThumbnailSizeSlider->setValue(size);
+    }
+
+    // Toggle buttons
+    if (fmGroupSequencesCheckBox) {
+        const bool enabled = secondaryActive && fmSecondaryPane ? fmSecondaryPane->isSequenceGroupingEnabled()
+                                                                : fmGroupSequences;
+        QSignalBlocker block(fmGroupSequencesCheckBox);
+        fmGroupSequencesCheckBox->setChecked(enabled);
+    }
+    if (fmHideFoldersCheckBox) {
+        const bool hidden = secondaryActive && fmSecondaryPane ? fmSecondaryPane->hideFolders()
+                                                               : fmHideFolders;
+        QSignalBlocker block(fmHideFoldersCheckBox);
+        fmHideFoldersCheckBox->setChecked(hidden);
+    }
+    if (fmPreviewToggleButton) {
+        const bool visible = secondaryActive && fmSecondaryPane
+            ? fmSecondaryPane->isPreviewVisible()
+            : (fmPreviewInfoSplitter && fmPreviewInfoSplitter->isVisible());
+        QSignalBlocker block(fmPreviewToggleButton);
+        fmPreviewToggleButton->setChecked(visible);
+    }
 }
 
 void MainWindow::onFmSyncNavToggled(bool checked)
@@ -4007,14 +4076,9 @@ void MainWindow::setupProjectManagerUi()
     pmImageView->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     
     // Video widget (hidden by default)
-    pmVideoWidget = new QWidget(pmPreviewPanel);
+    pmVideoWidget = new TLRenderViewport(pmPreviewPanel);
     pmVideoWidget->setMinimumHeight(160);
-    pmVideoWidget->setAutoFillBackground(true);
-    {
-        QPalette vPal = pmVideoWidget->palette();
-        vPal.setColor(QPalette::Window, Qt::black);
-        pmVideoWidget->setPalette(vPal);
-    }
+    pmVideoWidget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     pmVideoWidget->hide();
     
     // Preview content container
@@ -4081,8 +4145,9 @@ void MainWindow::setupProjectManagerUi()
     
     pv->addLayout(mc);
     
-    // Create GStreamer player for video playback
-    pmGStreamerPlayer = new GStreamerPlayer(pmPreviewPanel);
+    // Create tlRender player for video playback
+    pmTlRenderPlayer = new TLRenderPlayer(pmPreviewPanel);
+    pmVideoWidget->setPlayer(pmTlRenderPlayer);
     
     // Sequence timer for image sequence playback
     pmSequenceTimer = new QTimer(pmPreviewPanel);
@@ -4096,11 +4161,11 @@ void MainWindow::setupProjectManagerUi()
     // Wire up media controls
     connect(pmPrevFrameBtn, &QPushButton::clicked, this, [this]{ 
         if (pmIsSequence) stepPmSequence(-1); 
-        else if (pmGStreamerPlayer) pmGStreamerPlayer->stepBackward();
+        else if (pmTlRenderPlayer) pmTlRenderPlayer->stepBackward();
     });
     connect(pmNextFrameBtn, &QPushButton::clicked, this, [this]{ 
         if (pmIsSequence) stepPmSequence(1); 
-        else if (pmGStreamerPlayer) pmGStreamerPlayer->stepForward();
+        else if (pmTlRenderPlayer) pmTlRenderPlayer->stepForward();
     });
     
     connect(pmPlayPauseBtn, &QPushButton::clicked, this, [this]{
@@ -4108,20 +4173,20 @@ void MainWindow::setupProjectManagerUi()
             if (pmSequencePlaying) pausePmSequence(); else playPmSequence();
             return;
         }
-        if (!pmGStreamerPlayer) return;
-        if (pmGStreamerPlayer->state() == GStreamerPlayer::PlaybackState::Playing) {
-            pmGStreamerPlayer->pause();
+        if (!pmTlRenderPlayer) return;
+        if (pmTlRenderPlayer->playbackState() == TLRenderPlayer::PlaybackState::Playing) {
+            pmTlRenderPlayer->pause();
             pmPlayPauseBtn->setIcon(icoMediaPlay(ThemeManager::instance().iconColor()));
         } else {
-            pmGStreamerPlayer->play();
+            pmTlRenderPlayer->play();
             pmPlayPauseBtn->setIcon(icoMediaPause(ThemeManager::instance().iconColor()));
         }
     });
     
-    connect(pmGStreamerPlayer, &GStreamerPlayer::positionChanged, this, [this](qint64 pos){
+    connect(pmTlRenderPlayer, &TLRenderPlayer::positionChanged, this, [this](qint64 pos){
         if (pmIsSequence) return;
-        qint64 duration = pmGStreamerPlayer->duration();
-        if (pmGStreamerPlayer && duration > 0){
+        qint64 duration = pmTlRenderPlayer->duration();
+        if (pmTlRenderPlayer && duration > 0){
             pmPositionSlider->blockSignals(true);
             pmPositionSlider->setValue(int(pos*1000/duration));
             pmPositionSlider->blockSignals(false);
@@ -4131,9 +4196,9 @@ void MainWindow::setupProjectManagerUi()
         }
     });
     
-    connect(pmGStreamerPlayer, &GStreamerPlayer::playbackStateChanged, this, [this](GStreamerPlayer::PlaybackState state){
+    connect(pmTlRenderPlayer, &TLRenderPlayer::playbackStateChanged, this, [this](TLRenderPlayer::PlaybackState state){
         if (pmPlayPauseBtn) {
-            pmPlayPauseBtn->setIcon(state == GStreamerPlayer::PlaybackState::Playing 
+            pmPlayPauseBtn->setIcon(state == TLRenderPlayer::PlaybackState::Playing 
                 ? icoMediaPause(ThemeManager::instance().iconColor()) 
                 : icoMediaPlay(ThemeManager::instance().iconColor()));
         }
@@ -4144,22 +4209,22 @@ void MainWindow::setupProjectManagerUi()
             loadPmSequenceFrame(v);
             return;
         }
-        if (pmGStreamerPlayer) {
-            qint64 duration = pmGStreamerPlayer->duration();
+        if (pmTlRenderPlayer) {
+            qint64 duration = pmTlRenderPlayer->duration();
             if (duration > 0) {
-                pmGStreamerPlayer->seek(v * duration / 1000);
+                pmTlRenderPlayer->seek(v * duration / 1000);
             }
         }
     });
     
     connect(pmVolumeSlider, &QSlider::valueChanged, this, [this](int v){
-        if (pmGStreamerPlayer) pmGStreamerPlayer->setVolume(v / 100.0);
+        if (pmTlRenderPlayer) pmTlRenderPlayer->setVolume(v / 100.0f);
     });
     
     connect(pmMuteBtn, &QPushButton::clicked, this, [this]{
-        if (!pmGStreamerPlayer) return;
-        bool newMuted = !pmGStreamerPlayer->isMuted();
-        pmGStreamerPlayer->setMuted(newMuted);
+        if (!pmTlRenderPlayer) return;
+        bool newMuted = !pmTlRenderPlayer->isMuted();
+        pmTlRenderPlayer->setMuted(newMuted);
         pmMuteBtn->setIcon(newMuted ? icoMediaMute(ThemeManager::instance().iconColor()) 
                                     : icoMediaAudio(ThemeManager::instance().iconColor()));
     });
@@ -5581,8 +5646,8 @@ void MainWindow::clearPmPreview()
     pmCurrentPreviewPath.clear();
     
     // Stop video playback
-    if (pmGStreamerPlayer) {
-        pmGStreamerPlayer->stop();
+    if (pmTlRenderPlayer) {
+        pmTlRenderPlayer->stop();
     }
     
     // Stop sequence playback
@@ -5672,10 +5737,10 @@ void MainWindow::loadPmSequenceFrame(int index)
 
 void MainWindow::showPmVideo(const QString &filePath)
 {
-    if (!pmGStreamerPlayer || !pmVideoWidget) return;
+    if (!pmTlRenderPlayer || !pmVideoWidget) return;
     
     // Stop any previous playback
-    pmGStreamerPlayer->stop();
+    pmTlRenderPlayer->stop();
     pausePmSequence();
     pmIsSequence = false;
     
@@ -5683,8 +5748,8 @@ void MainWindow::showPmVideo(const QString &filePath)
     if (pmImageView) pmImageView->hide();
     pmVideoWidget->show();
     
-    // Set video widget for GStreamer (needs valid window handle)
-    pmGStreamerPlayer->setVideoWidget(pmVideoWidget);
+    // Ensure tlRender viewport is wired to the active player
+    pmVideoWidget->setPlayer(pmTlRenderPlayer);
     
     // Show media controls
     if (pmPrevFrameBtn) pmPrevFrameBtn->show();
@@ -5696,14 +5761,14 @@ void MainWindow::showPmVideo(const QString &filePath)
     if (pmMuteBtn) pmMuteBtn->show();
     
     // Load and play
-    pmGStreamerPlayer->loadMedia(filePath);
-    pmGStreamerPlayer->play();
+    pmTlRenderPlayer->loadMedia(filePath);
+    pmTlRenderPlayer->play();
 }
 
 void MainWindow::showPmImage(const QString &filePath)
 {
     // Stop any previous playback
-    if (pmGStreamerPlayer) pmGStreamerPlayer->stop();
+    if (pmTlRenderPlayer) pmTlRenderPlayer->stop();
     pausePmSequence();
     pmIsSequence = false;
     
@@ -5748,7 +5813,7 @@ void MainWindow::showPmSequence(const QStringList &framePaths)
     if (framePaths.isEmpty()) return;
     
     // Stop any previous playback
-    if (pmGStreamerPlayer) pmGStreamerPlayer->stop();
+    if (pmTlRenderPlayer) pmTlRenderPlayer->stop();
     
     pmIsSequence = true;
     pmSequenceFramePaths = framePaths;
@@ -7752,7 +7817,7 @@ void MainWindow::updateInfoPanel()
                 QStringList videoExts = {"mp4", "mov", "avi", "mkv", "wmv", "flv", "webm",
                                         "m4v", "mpg", "mpeg", "3gp", "mts", "m2ts", "mxf"};
                 if (videoExts.contains(fileType.toLower())) {
-                    // TODO: Extract video metadata using GStreamer
+                    // TODO: Extract video metadata using tlRender/FFmpeg
                     // For now, just show "Video file"
                     dimensionsStr = "Video file";
                 }
@@ -8714,7 +8779,7 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
 
                 const bool shift = dropEvent->keyboardModifiers().testFlag(Qt::ShiftModifier);
                 // Ensure any preview locks are released before file ops
-                if (fmGStreamerPlayer) { fmGStreamerPlayer->stop(); }
+                if (fmTlRenderPlayer) { fmTlRenderPlayer->stop(); }
                 if (shift) FileOpsQueue::instance().enqueueMove(sources, destDir);
                 else FileOpsQueue::instance().enqueueCopy(sources, destDir);
                 if (!fileOpsDialog) fileOpsDialog = new FileOpsProgressDialog(this);
@@ -8820,7 +8885,7 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
 
                 const bool shift = dropEvent->keyboardModifiers().testFlag(Qt::ShiftModifier);
                 // Ensure any preview locks are released before file ops
-                if (fmGStreamerPlayer) { fmGStreamerPlayer->stop(); }
+                if (fmTlRenderPlayer) { fmTlRenderPlayer->stop(); }
                 if (shift) FileOpsQueue::instance().enqueueMove(sources, destDir);
                 else       FileOpsQueue::instance().enqueueCopy(sources, destDir);
                 if (!fileOpsDialog) fileOpsDialog = new FileOpsProgressDialog(this);
@@ -9775,7 +9840,7 @@ void MainWindow::onAssetVersionsChanged(int assetId)
 // ===== File Manager Preview handlers =====
 void MainWindow::clearFmPreview()
 {
-    if (fmGStreamerPlayer) { fmGStreamerPlayer->stop(); }
+    if (fmTlRenderPlayer) { fmTlRenderPlayer->stop(); }
     if (fmVideoWidget) fmVideoWidget->hide();
     if (fmPrevFrameBtn) fmPrevFrameBtn->hide();
     if (fmPlayPauseBtn) fmPlayPauseBtn->hide();
@@ -9903,7 +9968,7 @@ void MainWindow::updateFmPreviewForIndex(const QModelIndex &idx)
         if (frames.isEmpty()) { clearFmPreview(); return; }
 
         // Stop any video playback and show image-based sequence view
-        if (fmGStreamerPlayer) { fmGStreamerPlayer->stop(); }
+        if (fmTlRenderPlayer) { fmTlRenderPlayer->stop(); }
         if (fmVideoWidget) fmVideoWidget->hide();
         if (fmImageView) fmImageView->show();
 
@@ -9968,7 +10033,7 @@ void MainWindow::updateFmPreviewForIndex(const QModelIndex &idx)
 
     if (isImageFile(ext)) {
         // Stop any media playback and hide media-specific widgets/controls
-        if (fmGStreamerPlayer) { fmGStreamerPlayer->stop(); }
+        if (fmTlRenderPlayer) { fmTlRenderPlayer->stop(); }
         hideNonImageWidgets();
 
         // Try OpenImageIO first for advanced formats (PSD/EXR/TIFF/etc.)
@@ -10243,7 +10308,7 @@ if (isExcelFile(ext)) {
             if (fmVideoWidget) {
                 fmVideoWidget->show();
                 // CRITICAL: Set video widget AFTER show() to ensure valid window handle
-                if (fmGStreamerPlayer) fmGStreamerPlayer->setVideoWidget(fmVideoWidget);
+                if (fmTlRenderPlayer) fmVideoWidget->setPlayer(fmTlRenderPlayer);
             }
             if (fmImageView) fmImageView->hide();
         } else {
@@ -10257,9 +10322,9 @@ if (isExcelFile(ext)) {
         if (fmVolumeSlider) fmVolumeSlider->show();
         if (fmMuteBtn) fmMuteBtn->show();
 
-        if (fmGStreamerPlayer) {
-            fmGStreamerPlayer->loadMedia(path);
-            fmGStreamerPlayer->pause();
+        if (fmTlRenderPlayer) {
+            fmTlRenderPlayer->loadMedia(path);
+            fmTlRenderPlayer->pause();
             if (fmPlayPauseBtn) fmPlayPauseBtn->setIcon(icoMediaPlay(ThemeManager::instance().iconColor()));
         }
         return;
@@ -10422,7 +10487,7 @@ void MainWindow::onFmTogglePreview()
     const bool show = fmPreviewToggleButton ? fmPreviewToggleButton->isChecked() : !fmPreviewInfoSplitter->isVisible();
     fmPreviewInfoSplitter->setVisible(show);
     if (!show) {
-        if (fmGStreamerPlayer) { fmGStreamerPlayer->stop(); }
+        if (fmTlRenderPlayer) { fmTlRenderPlayer->stop(); }
     } else {
         onFmSelectionChanged();
     }
@@ -10532,7 +10597,7 @@ void MainWindow::updateFmInfoPanel()
             QStringList videoExts = {"mp4", "mov", "avi", "mkv", "wmv", "flv", "webm",
                                     "m4v", "mpg", "mpeg", "3gp", "mts", "m2ts", "mxf"};
             if (videoExts.contains(ext)) {
-                // TODO: Extract video metadata using GStreamer
+                // TODO: Extract video metadata using tlRender/FFmpeg
                 // For now, just show "Video file"
                 dimensionsStr = "Video file";
             }
@@ -11373,6 +11438,8 @@ void MainWindow::applyTheme()
     update();
 
     LogManager::instance().addLog("[THEME] Theme applied successfully", "INFO");
+
+    syncFmToolbarFromActivePane();
 }
 
 void MainWindow::onFmNavigateUp()
@@ -11387,3 +11454,4 @@ void MainWindow::onFmNavigateUp()
         fmNavigateToPath(parentPath, true);
     }
 }
+

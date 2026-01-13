@@ -40,12 +40,8 @@
 
 #include "oiio_image_loader.h"
 #include "sequence_detector.h"
-#ifdef HAVE_TLRENDER
 #include "media/tlrender_player.h"
 #include "media/tlrender_viewport.h"
-#else
-#include "media/gstreamer_player.h"
-#endif
 
 // Forward declarations
 class SequenceFrameCache;
@@ -389,7 +385,6 @@ private slots:
     void onSequenceTimerTick();
     void onColorSpaceChanged(int index);
 
-#ifdef HAVE_TLRENDER
     // TLRenderPlayer signal handlers
     void onPlayerPositionChanged(qint64 positionMs);
     void onPlayerDurationChanged(qint64 durationMs);
@@ -397,15 +392,6 @@ private slots:
     void onPlayerPlaybackStateChanged(TLRenderPlayer::PlaybackState state);
     void onPlayerError(const QString& errorString);
     void onPlayerEndOfStream();
-#else
-    // GStreamerPlayer signal handlers
-    void onGStreamerPositionChanged(qint64 positionMs);
-    void onGStreamerDurationChanged(qint64 durationMs);
-    void onGStreamerMediaInfo(const GStreamerPlayer::MediaInfo& info);
-    void onGStreamerPlaybackStateChanged(GStreamerPlayer::PlaybackState state);
-    void onGStreamerError(const QString& errorString);
-    void onGStreamerEndOfStream();
-#endif
     
     // Annotation slots
     void onToggleAnnotation();
@@ -446,6 +432,8 @@ private:
     void setPlaybackControlsVisible(bool visible);
     void setControlsHeightForImage(bool imageMode);
     void setControlsVisible(bool visible);
+    QWidget* activeVideoWidget() const;
+    void hideVideoWidgets();
     void toggleStillImageFit();
     void fitStillImageToView();
     void resetStillImageZoom();
@@ -467,7 +455,7 @@ private:
     QGraphicsPixmapItem *imageItem;
     QGraphicsView *stillImageView = nullptr;
     QGraphicsSvgItem *svgItem;
-    QWidget *videoWidget; // Widget for GStreamer video rendering
+    QWidget *videoWidget; // Video rendering placeholder (replaced by tlRender viewport)
     QWidget *controlsWidget;
     QPushButton *playPauseBtn;
     QPushButton *prevFrameBtn;
@@ -523,14 +511,9 @@ private:
     QTableView *tableView;
     QStandardItemModel *tableModel;
 
-#ifdef HAVE_TLRENDER
     // tlRender media player (with OCIO support)
     TLRenderPlayer *m_player;
     TLRenderViewport *m_renderWidget;
-#else
-    // GStreamer media player
-    GStreamerPlayer *m_gstreamerPlayer;
-#endif
 #ifdef HAVE_QT_PDF
     QPdfDocument *pdfDoc;
     QPdfView *pdfView;

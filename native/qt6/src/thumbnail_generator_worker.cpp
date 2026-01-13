@@ -1,8 +1,6 @@
 #include "thumbnail_generator_worker.h"
 #include "thumbnail_cache_manager.h"
-#if defined(HAVE_GSTREAMER) && HAVE_GSTREAMER
-#include "media/gstreamer_player.h"
-#elif defined(HAVE_TLRENDER) && HAVE_TLRENDER
+#if defined(HAVE_TLRENDER) && HAVE_TLRENDER
 #include "media/tlrender_player.h"
 #endif
 #include "oiio_image_loader.h"
@@ -229,45 +227,7 @@ bool ThumbnailGeneratorWorker::generateVideoThumbnails(int index, const QString&
     ThumbnailCacheManager& cache = ThumbnailCacheManager::instance();
     int generated = 0;
 
-#if defined(HAVE_GSTREAMER) && HAVE_GSTREAMER
-    for (int i = 0; i < positions.size(); ++i) {
-        qreal pos = positions[i];
-
-        // Calculate position in milliseconds
-        // We need to get video duration first
-        qint64 durationMs = GStreamerPlayer::queryDuration(filePath);
-        if (durationMs <= 0) {
-            emit logLine(QString("  ERROR: Failed to get video duration - file may be corrupt or unsupported codec"));
-            emit logLine(QString("  Path: %1").arg(filePath));
-            return false;
-        }
-
-        if (i == 0) {
-            emit logLine(QString("  Video duration: %1 seconds").arg(durationMs / 1000.0, 0, 'f', 2));
-        }
-
-        qint64 positionMs = static_cast<qint64>(pos * durationMs);
-
-        // Extract thumbnail using GStreamer
-        QImage thumbnail = GStreamerPlayer::extractThumbnail(filePath, size, positionMs);
-        if (thumbnail.isNull()) {
-            emit logLine(QString("  WARNING: Failed to extract thumbnail at position %1 (%2s)")
-                .arg(pos)
-                .arg(positionMs / 1000.0, 0, 'f', 2));
-            continue;
-        }
-
-        if (!cache.storeThumbnail(filePath, size, pos, thumbnail)) {
-            emit logLine(QString("  WARNING: Failed to store thumbnail at position %1").arg(pos));
-            continue;
-        }
-
-        ++generated;
-        QMetaObject::invokeMethod(this, [this, index, i, positions]() {
-            emit fileProgress(index, (i + 1) * 100 / positions.size());
-        }, Qt::QueuedConnection);
-    }
-#elif defined(HAVE_TLRENDER) && HAVE_TLRENDER
+#if defined(HAVE_TLRENDER) && HAVE_TLRENDER
     // tlRender build: use TLRenderPlayer's static helpers (currently FFmpeg-backed)
     const qint64 durationMs = TLRenderPlayer::queryDuration(filePath);
     if (durationMs <= 0) {
@@ -301,9 +261,8 @@ bool ThumbnailGeneratorWorker::generateVideoThumbnails(int index, const QString&
         }, Qt::QueuedConnection);
     }
 #else
-    // Video thumbnail generation requires GStreamer or tlRender
-    // For now, generate a single thumbnail from the first frame using FFmpeg if available
-    emit logLine(QString("  WARNING: Video thumbnail generation not available (no GStreamer)"));
+    // Video thumbnail generation requires tlRender
+    emit logLine(QString("  WARNING: Video thumbnail generation not available (no tlRender)"));
     Q_UNUSED(index);
     Q_UNUSED(positions);
 #endif
