@@ -1,6 +1,8 @@
 #include "thumbnail_generator_worker.h"
 #include "thumbnail_cache_manager.h"
-#include "media/gstreamer_player.h"
+#if defined(HAVE_TLRENDER) && HAVE_TLRENDER
+#include "media/tlrender_player.h"
+#endif
 #include "oiio_image_loader.h"
 #include <QFileInfo>
 #include <QImage>
@@ -225,26 +227,22 @@ bool ThumbnailGeneratorWorker::generateVideoThumbnails(int index, const QString&
     ThumbnailCacheManager& cache = ThumbnailCacheManager::instance();
     int generated = 0;
 
+#if defined(HAVE_TLRENDER) && HAVE_TLRENDER
+    // tlRender build: use TLRenderPlayer's static helpers (currently FFmpeg-backed)
+    const qint64 durationMs = TLRenderPlayer::queryDuration(filePath);
+    if (durationMs <= 0) {
+        emit logLine(QString("  ERROR: Failed to get video duration"));
+        emit logLine(QString("  Path: %1").arg(filePath));
+        return false;
+    }
+    emit logLine(QString("  Video duration: %1 seconds").arg(durationMs / 1000.0, 0, 'f', 2));
+
     for (int i = 0; i < positions.size(); ++i) {
-        qreal pos = positions[i];
-
-        // Calculate position in milliseconds
-        // We need to get video duration first
-        qint64 durationMs = GStreamerPlayer::queryDuration(filePath);
-        if (durationMs <= 0) {
-            emit logLine(QString("  ERROR: Failed to get video duration - file may be corrupt or unsupported codec"));
-            emit logLine(QString("  Path: %1").arg(filePath));
-            return false;
-        }
-
-        if (i == 0) {
-            emit logLine(QString("  Video duration: %1 seconds").arg(durationMs / 1000.0, 0, 'f', 2));
-        }
-
+        const qreal pos = positions[i];
         qint64 positionMs = static_cast<qint64>(pos * durationMs);
+        positionMs = std::clamp(positionMs, 0LL, durationMs);
 
-        // Extract thumbnail using GStreamer
-        QImage thumbnail = GStreamerPlayer::extractThumbnail(filePath, size, positionMs);
+        QImage thumbnail = TLRenderPlayer::extractThumbnail(filePath, size, positionMs);
         if (thumbnail.isNull()) {
             emit logLine(QString("  WARNING: Failed to extract thumbnail at position %1 (%2s)")
                 .arg(pos)
@@ -262,6 +260,12 @@ bool ThumbnailGeneratorWorker::generateVideoThumbnails(int index, const QString&
             emit fileProgress(index, (i + 1) * 100 / positions.size());
         }, Qt::QueuedConnection);
     }
+#else
+    // Video thumbnail generation requires tlRender
+    emit logLine(QString("  WARNING: Video thumbnail generation not available (no tlRender)"));
+    Q_UNUSED(index);
+    Q_UNUSED(positions);
+#endif
 
     emit logLine(QString("  Generated %1/%2 thumbnails").arg(generated).arg(positions.size()));
     return generated > 0;

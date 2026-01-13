@@ -24,9 +24,9 @@ They are **not deleted automatically**; please review each item before removing 
 - Evidence of being unused:
   - The file is **not** listed in `native/qt6/CMakeLists.txt` inside the `qt_add_executable(kassetmanagerqt ...)` source list, so it is not compiled into the application.
   - No other file in the repo references `live_preview_manager_slots.cpp` or `FFmpegPlayer`; only `live_preview_manager.cpp` is included in the main app and tests.
-  - The current preview pipeline is implemented with `GStreamerPlayer` and `OIIOImageLoader` (see `live_preview_manager.cpp` and `media/gstreamer_player.{h,cpp}`).
+  - The current preview pipeline is implemented with `TLRenderPlayer` and `OIIOImageLoader` (see `live_preview_manager.cpp` and `media/tlrender_player.{h,cpp}`).
   - Also detected as an unreferenced source when comparing `git ls-files native/qt6/src` with sources listed in `native/qt6/CMakeLists.txt` and `native/qt6/tests/CMakeLists.txt`.
-- Impact if removed: safe to delete as old FFmpeg-based LivePreviewManager slot code; removal will not change the current GStreamer-based preview behavior or builds.
+- Impact if removed: safe to delete as old FFmpeg-based LivePreviewManager slot code; removal will not change the current tlRender-based preview behavior or builds.
 
 ### 1.3 `native/qt6/src/app.rc`
 - Path: `native/qt6/src/app.rc`.
@@ -80,10 +80,10 @@ These items live **inside** otherwise active source files. They appear unused ba
 - Evidence of being unused:
   - Grepping the repository shows no call sites to `ffmpegErrorString` in any translation unit; only its own definitions appear.
   - Inside `live_preview_manager.cpp` there are no uses of `AVFormatContext`, `AVCodec`, `AVFrame`, `SwsContext`, or other FFmpeg types.
-  - LivePreviewManager's actual preview/thumbnail pipeline is implemented with `GStreamerPlayer` and `OIIOImageLoader`; it does not perform in-process FFmpeg decoding.
+  - LivePreviewManager's actual preview/thumbnail pipeline is implemented with `TLRenderPlayer` and `OIIOImageLoader`; it does not perform in-process FFmpeg decoding.
 - Impact if removed:
   - Leaves LivePreviewManager behavior unchanged.
-  - Drops an unused FFmpeg dependency from this translation unit, keeping the implementation aligned with the "GStreamer-only playback" design.
+  - Drops an unused FFmpeg dependency from this translation unit, keeping the implementation aligned with the "tlRender-only playback" design.
 
 ### 4.2 `native/qt6/src/preview_overlay.cpp` – unused `HAVE_FFMPEG` include/comment block
 - Code:
@@ -91,13 +91,13 @@ These items live **inside** otherwise active source files. They appear unused ba
     - Includes `<libavformat/avformat.h>` and `<libavcodec/avcodec.h>`.
     - Adds comments describing a "Unified FFmpeg-based video and image sequence playback backend" using an `FFmpegPlayer` member.
 - Evidence of being unused/legacy:
-  - The rest of `preview_overlay.cpp` never refers to any FFmpeg types or functions; all video/sequence playback is routed through `GStreamerPlayer`.
+  - The rest of `preview_overlay.cpp` never refers to any FFmpeg types or functions; all video/sequence playback is routed through `TLRenderPlayer`.
   - There is no `FFmpegPlayer` class in the compiled sources; the only remaining references are:
     - In comments here, and
     - In the uncompiled legacy file `native/qt6/src/live_preview_manager_slots.cpp` (already listed in section 1.2).
   - The includes pulled in by this block are otherwise unused, so the block has no effect on generated code.
 - Impact if removed:
-  - Pure cleanup of an unused macro block and outdated comments; safe with respect to the current GStreamer-based preview behavior.
+  - Pure cleanup of an unused macro block and outdated comments; safe with respect to the current tlRender-based preview behavior.
 
 ### 4.3 `native/qt6/src/video_metadata.{h,cpp}` – unused `MediaInfo::probeVideoFile`
 - Code:
@@ -105,7 +105,7 @@ These items live **inside** otherwise active source files. They appear unused ba
   - Uses in-process FFmpeg APIs (`AVFormatContext`, `AVStream`, `AVCodecParameters`, `avformat_open_input`, `avcodec_find_decoder`, etc.) to probe codec, resolution, FPS, bitrate, and timecode.
 - Evidence of being unused:
   - Code search shows no call sites to `MediaInfo::probeVideoFile` anywhere in the application or tests; only the declaration and definition exist.
-  - `mainwindow.cpp` currently contains TODO comments like "TODO: Extract video metadata using GStreamer" rather than calling this helper.
+  - `mainwindow.cpp` currently contains TODO comments like "TODO: Extract video metadata using tlRender/FFmpeg" rather than calling this helper.
 - Impact if removed:
   - No change to current features, since nothing invokes the function.
   - Slightly reduces the in-process FFmpeg surface area, bringing the implementation closer to the documented policy that FFmpeg is used only by the Convert dialog/tools.

@@ -2,7 +2,9 @@
 
 #include "oiio_image_loader.h"
 #include "utils.h"
-#include "media/gstreamer_player.h"
+#if defined(HAVE_TLRENDER) && HAVE_TLRENDER
+#include "media/tlrender_player.h"
+#endif
 #include "thumbnail_cache_manager.h"
 
 
@@ -30,9 +32,6 @@ extern "C" {
 }
 #endif
 
-#if defined(HAVE_GSTREAMER) && HAVE_GSTREAMER
-#include <gst/gst.h>
-#endif
 
 namespace {
 
@@ -46,7 +45,7 @@ constexpr int kDecodeSafetyIterMax = 256;
 constexpr qreal kDefaultPosterPosition = 0.05; // pick early frame for motion clips
 constexpr int kSequenceMetaTtlMs = 30000;
 
-// Cache for video durations to avoid repeated GStreamer queries during scrubbing
+// Cache for video durations to avoid repeated tlRender queries during scrubbing
 static QHash<QString, qint64> s_durationCache;
 static QMutex s_durationCacheMutex;
 
@@ -131,7 +130,7 @@ LivePreviewManager::LivePreviewManager(QObject* parent)
     
     m_lastRequestTime.start();
 
-    qInfo() << "[LivePreview] LivePreviewManager initialized with GStreamer backend,"
+    qInfo() << "[LivePreview] LivePreviewManager initialized with tlRender backend,"
             << poolSize << "decode threads";
 }
 
@@ -463,7 +462,7 @@ void LivePreviewManager::startDecodeTask(const Request& request, const QString& 
         QString error;
         QImage image;
 
-        // Wrap decode operations in try-catch to prevent crashes from OIIO/GStreamer
+        // Wrap decode operations in try-catch to prevent crashes from OIIO/tlRender
         // propagating through the thread pool and terminating the application
         try {
             const bool treatAsSequence = fromSequenceQueue || (seqDetectionEnabled && isImageSequence(request.filePath));
@@ -788,27 +787,17 @@ QImage LivePreviewManager::loadSequenceFrame(const Request& request, QString& er
 
 QImage LivePreviewManager::loadVideoFrame(const Request& request, QString& error)
 {
-#if defined(HAVE_GSTREAMER) && HAVE_GSTREAMER
-    // Treat thumbnails EXACTLY like the preview pane:
-    // - Use a PERSISTENT headless GStreamer pipeline with appsink (no video windows!)
-    // - Load the video once and keep it in PAUSED state
-    // - For each scrub position, just SEEK (like preview pane timeline scrubbing)
-    // - Pull the frame from appsink
-    // This is EXACTLY how preview pane works, just with appsink instead of video widget
-
+#if defined(HAVE_TLRENDER) && HAVE_TLRENDER
     QFileInfo info(request.filePath);
     if (!info.exists()) {
         error = QStringLiteral("File does not exist");
         return {};
     }
 
-    // Use a static cache to avoid repeated duration queries
     static QHash<QString, qint64> s_durationCache;
     static QMutex s_durationMutex;
 
     qint64 durationMs = 0;
-
-    // Check cache first
     {
         QMutexLocker locker(&s_durationMutex);
         if (s_durationCache.contains(request.filePath)) {
@@ -816,42 +805,29 @@ QImage LivePreviewManager::loadVideoFrame(const Request& request, QString& error
         }
     }
 
-    // If not cached, query duration using the new lightweight function
     if (durationMs == 0) {
-        durationMs = GStreamerPlayer::queryDuration(request.filePath);
-
+        durationMs = TLRenderPlayer::queryDuration(request.filePath);
         if (durationMs <= 0) {
             error = QStringLiteral("Failed to get video duration");
             return {};
         }
-
-        // Cache the duration
         QMutexLocker locker(&s_durationMutex);
         s_durationCache[request.filePath] = durationMs;
-        qDebug() << "[LivePreview] Cached duration for" << request.filePath << ":" << durationMs << "ms";
     }
 
-    // Calculate absolute position from normalized position (0.0 to 1.0)
-    // Left edge of thumbnail = 0.0 (first frame), Right edge = 1.0 (last frame)
-    qint64 positionMs = static_cast<qint64>(request.position * durationMs);
+    qreal normalized = std::clamp(request.position, 0.0, 1.0);
+    qint64 positionMs = static_cast<qint64>(normalized * durationMs);
     positionMs = std::clamp(positionMs, 0LL, durationMs);
 
-    qDebug() << "[LivePreview] Scrubbing to position:" << request.position << "-> " << positionMs << "ms (duration:" << durationMs << "ms)";
-
-    // Use extractThumbnail - it uses the SAME seeking mechanism as the media player
-    QImage thumbnail = GStreamerPlayer::extractThumbnail(request.filePath, request.targetSize, positionMs);
-
+    QImage thumbnail = TLRenderPlayer::extractThumbnail(request.filePath, request.targetSize, positionMs);
     if (thumbnail.isNull()) {
-        error = QStringLiteral("Failed to decode video frame with GStreamer");
+        error = QStringLiteral("Failed to decode video frame");
         return {};
     }
-
     return thumbnail;
-
 #else
     Q_UNUSED(request);
     Q_UNUSED(error);
-    // GStreamer not available - return empty image
-    return QImage();
+    return {};
 #endif
 }

@@ -95,9 +95,9 @@ Desktop app built with Qt 6 Widgets (C++20). Core subsystems and constraints bel
 
 - Background work and preview pipeline
   - `LivePreviewManager` schedules decode work via `QtConcurrent`/`QThreadPool` and maintains an LRU pixmap cache.
-  - Playback for video and image sequences is GStreamer‑only (`media/gstreamer_player.*`).
+- Playback for video and image sequences is tlRender-based (`media/tlrender_player.*`, `media/tlrender_viewport.*`).
   - Still images use OpenImageIO when available for consistent decoding; Qt readers are fallback.
-  - Optional features are guarded with compile definitions: `HAVE_GSTREAMER`, `HAVE_OPENIMAGEIO`, `HAVE_FFMPEG`, `HAVE_QT_PDF[_WIDGETS]`.
+- Optional features are guarded with compile definitions: `HAVE_TLRENDER`, `HAVE_OPENIMAGEIO`, `HAVE_FFMPEG`, `HAVE_QT_PDF[_WIDGETS]`.
 
 - Database layer (SQLite via QtSql)
   - `DB` is a singleton managing schema, migrations, and CRUD.
@@ -114,7 +114,7 @@ Desktop app built with Qt 6 Widgets (C++20). Core subsystems and constraints bel
 
 - Packaging/runtime layout (Windows)
   - `cmake --install` stages into `native/qt6/build/<gen>/install_run/`.
-  - Packaging copies Qt plugins, vcpkg DLLs, optional FFmpeg/ImageMagick, GStreamer runtime, and Everything DLL if present.
+- Packaging copies Qt plugins, vcpkg DLLs, optional FFmpeg/ImageMagick, tlRender runtime, and Everything DLL if present.
   - Portable build appears under `dist/portable/`.
 
 ## Agent‑facing conventions (summarized from .github/copilot‑instructions.md)

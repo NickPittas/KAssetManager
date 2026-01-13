@@ -6,18 +6,18 @@ The application depends on and/or bundles the following components.
 
 - Modules: Widgets, Multimedia, MultimediaWidgets, Sql, Concurrent, Svg, SvgWidgets (optionally Pdf/PdfWidgets)
 
-## GStreamer (playback)
+## tlRender (mrv2 playback)
 
-- Version: 1.x runtime (MSVC x64) as shipped under `third_party/gstreamer`
-- License: LGPL for core/base/good; additional plugins may carry their own licenses
-- Usage: Primary and only backend for all video and image-sequence playback (PreviewOverlay, File Manager preview panes, thumbnails)
-- Packaging: build script bundles the GStreamer runtime into dist/portable and installer packages
+- Location: prebuilt install under `third_party/tlRender-build/install-Release`
+- Usage: Primary backend for video and image-sequence playback (PreviewOverlay, LivePreviewManager)
+- Packaging: build script and install rules bundle tlRender runtime DLLs into dist/portable and installer packages
+- Note: tlRender bundles OpenColorIO/OpenImageIO/FFmpeg dependencies for playback
 
 
 ## FFmpeg
 
 - Version: 8.0 (full build from [Gyan](https://www.gyan.dev))
-- Usage: Only used by the Convert dialog/tools for format conversion; live playback is handled by GStreamer.
+- Usage: Only used by the Convert dialog/tools for format conversion; live playback is handled by tlRender (bundled FFmpeg).
 - License: GPL v3
 - Location (if bundled): third_party/ffmpeg
 - Configure override: set FFMPEG_ROOT to your FFmpeg prefix (must contain include/, lib/, and bin/)

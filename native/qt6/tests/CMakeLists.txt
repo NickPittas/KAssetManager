@@ -107,8 +107,6 @@ add_executable(test_live_preview_manager
     ../src/live_preview_manager.h
     ../src/thumbnail_cache_manager.cpp
     ../src/thumbnail_cache_manager.h
-    ../src/media/gstreamer_player.cpp
-    ../src/media/gstreamer_player.h
     ../src/oiio_image_loader.cpp
     ../src/oiio_image_loader.h
     ../src/utils.cpp
@@ -116,32 +114,15 @@ add_executable(test_live_preview_manager
 )
 
 # Needs Widgets for QPixmap, and Concurrent for QtConcurrent::run
-# Find GStreamer libraries for linking
-find_library(GSTREAMER_LIB gstreamer-1.0 HINTS ${GSTREAMER_LIBRARY_DIRS})
-find_library(GSTREAMER_VIDEO_LIB gstvideo-1.0 HINTS ${GSTREAMER_LIBRARY_DIRS})
-find_library(GSTREAMER_AUDIO_LIB gstaudio-1.0 HINTS ${GSTREAMER_LIBRARY_DIRS})
-find_library(GSTREAMER_APP_LIB gstapp-1.0 HINTS ${GSTREAMER_LIBRARY_DIRS})
-find_library(GSTREAMER_BASE_LIB gstbase-1.0 HINTS ${GSTREAMER_LIBRARY_DIRS})
-find_library(GLIB_LIB glib-2.0 HINTS ${GSTREAMER_LIBRARY_DIRS})
-find_library(GOBJECT_LIB gobject-2.0 HINTS ${GSTREAMER_LIBRARY_DIRS})
-
 target_link_libraries(test_live_preview_manager PRIVATE
     Qt6::Test
     Qt6::Core
     Qt6::Widgets
     Qt6::Concurrent
-    ${GSTREAMER_LIB}
-    ${GSTREAMER_VIDEO_LIB}
-    ${GSTREAMER_AUDIO_LIB}
-    ${GSTREAMER_APP_LIB}
-    ${GSTREAMER_BASE_LIB}
-    ${GLIB_LIB}
-    ${GOBJECT_LIB}
 )
 
 target_include_directories(test_live_preview_manager PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../src
-    ${GSTREAMER_INCLUDE_DIRS}
 )
 
 add_test(NAME test_live_preview_manager COMMAND test_live_preview_manager)
@@ -154,7 +135,7 @@ set_tests_properties(test_live_preview_manager PROPERTIES WORKING_DIRECTORY "${C
 target_compile_definitions(test_live_preview_manager PRIVATE
     HAVE_OPENIMAGEIO=0
     HAVE_FFMPEG=0
-    HAVE_GSTREAMER=1
+    HAVE_TLRENDER=0
 )
 
 install(TARGETS test_live_preview_manager DESTINATION bin)

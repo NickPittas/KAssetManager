@@ -56,3 +56,6 @@ resources/ffmpeg/
 
 B165C015_241223_R0G5.mxf.txt
 .kilocode/mcp.json
+OpenColorIO-Config-ACES-1.2/
+studio-config-all-views-v4.0.0_aces-v2.0_ocio-v2.5.ocio
+third_party/tlRender-build/

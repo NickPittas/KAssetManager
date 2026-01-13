@@ -39,10 +39,13 @@
 
 
 #include "oiio_image_loader.h"
-#include "media/gstreamer_player.h"
+#include "sequence_detector.h"
+#include "media/tlrender_player.h"
+#include "media/tlrender_viewport.h"
 
 // Forward declarations
 class SequenceFrameCache;
+class QVBoxLayout;
 
 class CacheBarWidget;
 /**
@@ -382,13 +385,13 @@ private slots:
     void onSequenceTimerTick();
     void onColorSpaceChanged(int index);
 
-    // GStreamerPlayer signal handlers
-    void onGStreamerPositionChanged(qint64 positionMs);
-    void onGStreamerDurationChanged(qint64 durationMs);
-    void onGStreamerMediaInfo(const GStreamerPlayer::MediaInfo& info);
-    void onGStreamerPlaybackStateChanged(GStreamerPlayer::PlaybackState state);
-    void onGStreamerError(const QString& errorString);
-    void onGStreamerEndOfStream();
+    // TLRenderPlayer signal handlers
+    void onPlayerPositionChanged(qint64 positionMs);
+    void onPlayerDurationChanged(qint64 durationMs);
+    void onPlayerMediaInfo(const TLRenderPlayer::MediaInfo& info);
+    void onPlayerPlaybackStateChanged(TLRenderPlayer::PlaybackState state);
+    void onPlayerError(const QString& errorString);
+    void onPlayerEndOfStream();
     
     // Annotation slots
     void onToggleAnnotation();
@@ -426,6 +429,15 @@ private:
     // Seeking helpers
     double frameDurationMs() const; // based on detectedFps (from metadata) or fallbackFps
     void updateDetectedFps();
+    void setPlaybackControlsVisible(bool visible);
+    void setControlsHeightForImage(bool imageMode);
+    void setControlsVisible(bool visible);
+    QWidget* activeVideoWidget() const;
+    void hideVideoWidgets();
+    void toggleStillImageFit();
+    void fitStillImageToView();
+    void resetStillImageZoom();
+    void zoomStillImage(double factor);
     
     // Annotation helpers
     void setupAnnotationToolbar();
@@ -441,8 +453,9 @@ private:
     QGraphicsView *imageView;
     QGraphicsScene *imageScene;
     QGraphicsPixmapItem *imageItem;
+    QGraphicsView *stillImageView = nullptr;
     QGraphicsSvgItem *svgItem;
-    QWidget *videoWidget; // Widget for GStreamer video rendering
+    QWidget *videoWidget; // Video rendering placeholder (replaced by tlRender viewport)
     QWidget *controlsWidget;
     QPushButton *playPauseBtn;
     QPushButton *prevFrameBtn;
@@ -452,6 +465,7 @@ private:
     QLabel *currentTimeLabel;
     QLabel *durationTimeLabel;
     QLabel *fpsLabel;
+    QVBoxLayout *controlsLayout = nullptr;
     QSlider *volumeSlider;
     QPushButton *muteBtn;
 
@@ -459,6 +473,29 @@ private:
     QLabel *fileNameLabel;
     QComboBox *colorSpaceCombo;
     QLabel *colorSpaceLabel;
+
+#ifdef HAVE_TLRENDER
+    // OCIO (ACES) UI controls for tlRender playback
+    QCheckBox *ocioEnableCheck = nullptr;
+    QLabel *ocioDisplayLabel = nullptr;
+    QComboBox *ocioDisplayCombo = nullptr;
+    QLabel *ocioViewLabel = nullptr;
+    QComboBox *ocioViewCombo = nullptr;
+    QPushButton *ocioConfigBtn = nullptr;
+    
+    // Playback controls
+    QComboBox *loopModeCombo = nullptr;
+    QComboBox *playbackRateCombo = nullptr;
+    
+    // Exposure/Gamma controls
+    QSlider *exposureSlider = nullptr;
+    QLabel *exposureLabel = nullptr;
+    QSlider *gammaSlider = nullptr;
+    QLabel *gammaLabel = nullptr;
+    
+    // Playback controls container (for show/hide)
+    QWidget *playbackControlsGroup = nullptr;
+#endif
     QCheckBox *alphaCheck;
     QPlainTextEdit *textView;
 
@@ -474,8 +511,9 @@ private:
     QTableView *tableView;
     QStandardItemModel *tableModel;
 
-    // GStreamer media player
-    GStreamerPlayer *m_gstreamerPlayer;
+    // tlRender media player (with OCIO support)
+    TLRenderPlayer *m_player;
+    TLRenderViewport *m_renderWidget;
 #ifdef HAVE_QT_PDF
     QPdfDocument *pdfDoc;
     QPdfView *pdfView;
@@ -505,7 +543,9 @@ private:
 
     // Image zoom/pan state
     double currentZoom;
+    double stillImageZoom = 1.0;
     QPixmap originalPixmap;
+    bool stillFitMode = true;
     QPoint lastPanPoint;
     bool isPanning;
 

@@ -16,7 +16,6 @@
 
 #include <QCache>
 
-#include "media/gstreamer_player.h"
 
 /**
  * LivePreviewManager streams preview frames for stills, video clips, and image sequences

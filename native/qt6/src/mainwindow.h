@@ -34,6 +34,7 @@ class VirtualFolderTreeModel;
 class AssetsModel;
 class TagsModel;
 class PreviewOverlay;
+class ImagePreviewOverlay;
 class SequenceGroupingProxyModel;
 class GridScrubController;
 class FileManagerPane;
@@ -46,6 +47,8 @@ class ProjectAssetsModel;
 class ProjectItemDelegate;
 class ProjectManagerWatcher;
 class ProjectImportController;
+class TLRenderPlayer;
+class TLRenderViewport;
 
 class MainWindow : public QMainWindow
 {
@@ -230,6 +233,11 @@ private:
     void fmUpdateNavigationButtons();
     void fmScrollTreeToPath(const QString& path);
     void amUpdateNavigationButtons();
+    bool isSecondaryFmPaneActive() const;
+    QStringList selectedPathsForActiveFmPane() const;
+    QString activeFmRootPath() const;
+    void syncFmToolbarFromActivePane();
+    void showFmContextMenuAt(const QPoint &globalPos);
     void navigateToFolder(int folderId, bool addToHistory = true);
     void setSequenceGroupingEnabled(bool enabled);
     void setAssetManagerSequenceGroupingEnabled(bool enabled);
@@ -371,6 +379,7 @@ private:
 
     // Preview overlay
     PreviewOverlay *previewOverlay;
+    ImagePreviewOverlay *imagePreviewOverlay = nullptr;
     GridScrubController *assetScrubController = nullptr;
     GridScrubController *fmScrubController = nullptr;
 
@@ -463,7 +472,7 @@ private:
     class QGraphicsView *fmImageView = nullptr;
     class QGraphicsScene *fmImageScene = nullptr;
     class QGraphicsPixmapItem *fmImageItem = nullptr;
-    QWidget *fmVideoWidget = nullptr; // Changed from QVideoWidget to QWidget for GStreamer
+    TLRenderViewport *fmVideoWidget = nullptr; // tlRender viewport for video playback
     // Additional preview widgets
     class QPlainTextEdit *fmTextView = nullptr;           // TXT/LOG
     class QTableView *fmCsvView = nullptr;                // CSV table
@@ -478,8 +487,8 @@ private:
     bool fmImageFitToView = true; // auto fit image to view and refit on resize until user zooms manually
     QImage fmOriginalImage; QString fmCurrentPreviewPath; bool fmPreviewHasAlpha = false; bool fmAlphaOnlyMode = false;
     QPoint fmPreviewDragStartPos; bool fmPreviewDragPending = false;
-    // Media - GStreamer player
-    class GStreamerPlayer *fmGStreamerPlayer = nullptr;
+    // Media - tlRender player
+    class TLRenderPlayer *fmTlRenderPlayer = nullptr;
     QPushButton *fmPlayPauseBtn;
     QPushButton *fmPrevFrameBtn = nullptr;
     QPushButton *fmNextFrameBtn = nullptr;
@@ -609,8 +618,8 @@ private:
     class QGraphicsView *pmImageView = nullptr;
     class QGraphicsScene *pmImageScene = nullptr;
     class QGraphicsPixmapItem *pmImageItem = nullptr;
-    QWidget *pmVideoWidget = nullptr;
-    class GStreamerPlayer *pmGStreamerPlayer = nullptr;
+    TLRenderViewport *pmVideoWidget = nullptr;
+    class TLRenderPlayer *pmTlRenderPlayer = nullptr;
     
     // Media controls
     QPushButton *pmPlayPauseBtn = nullptr;

@@ -65,7 +65,7 @@ KAsset Manager is a native Windows desktop application built with Qt 6 that prov
 
 #### 🚀 **Performance**
 
-- **Live Preview Streaming** - GStreamer for video/sequences, OpenImageIO for all still images with in-memory caching
+- **Live Preview Streaming** - tlRender (mrv2) for video/sequences, OpenImageIO for all still images with in-memory caching
 - **Smart Caching** - LRU pixmap cache (~512MB) keeps recent frames warm
 - **Database Indexes** - Optimized queries for large libraries
 - **Lazy Loading** - Decode only when cards enter the viewport
@@ -73,7 +73,7 @@ KAsset Manager is a native Windows desktop application built with Qt 6 that prov
 #### 📊 **Professional Formats**
 
 - **Images**: PNG, JPG, JPEG, BMP, GIF, TIFF, TIF, EXR, HDR, PFM, PSD, IFF, RAW (all formats handled by OpenImageIO for consistent quality and proper aspect ratio)
-- **Videos**: MOV, MP4, AVI, MP5, MKV, WMV (playback via GStreamer; conversion via FFmpeg)
+- **Videos**: MOV, MP4, AVI, MP5, MKV, WMV (playback via tlRender/FFmpeg; conversion via FFmpeg)
 - **Audio**: MP3, WAV, OGG, FLAC
 - **Sequences**: Automatic detection of numbered image sequences
 - **External DnD aware:** Explorer/Desktop receives individual frame files; Nuke/After Effects receive folder paths (single sequence import)
@@ -161,7 +161,7 @@ SQLite database stored in persistent user data location (see [docs/INSTALL.md](d
 
 - Give the decoder a moment to cache the first frame (large EXR/ProRes files can take a second).
 - Check `debug.log` for `[LivePreview]` warnings about codecs or permissions.
-- Ensure the bundled GStreamer runtime is present in the portable/installer build (check that the expected GStreamer DLLs exist alongside the executable).
+- Ensure the bundled tlRender runtime DLLs are present in the portable/installer build (tlRender/ftk/FFmpeg DLLs alongside the executable).
 
 **Import not working:**
 

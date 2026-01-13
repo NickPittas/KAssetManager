@@ -8,7 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Note
-This file now includes the 1.6.0 release notes below. Unreleased will contain future work.
+This file now includes the 1.8.0 release notes below. Unreleased will contain future work.
+
+## [1.8.0] - 2026-01-13
+
+### Added
+- **tlRender (mrv2) playback engine** for video and image-sequence preview with full OpenColorIO support
+- **TLRenderPlayer/TLRenderWidget** integration for OCIO-aware playback and rendering
+
+### Changed
+- **Preview overlay playback** now uses tlRender exclusively for video/sequence playback
+- Updated build CMake project version, Windows resource metadata, and NSIS installer metadata to 1.8.0
+
+### Removed
+- Legacy GStreamer preview paths and runtime packaging in favor of tlRender
 
 ## [1.6.0] - 2025-12-30
 

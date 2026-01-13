@@ -7,7 +7,8 @@
 #include "theme_manager.h"
 #include "icon_utils.h"
 #include "oiio_image_loader.h"
-#include "media/gstreamer_player.h"
+#include "media/tlrender_player.h"
+#include "media/tlrender_viewport.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -420,17 +421,15 @@ void FileManagerPane::setupPreviewPanel()
 
     pv->addLayout(alphaRow);
 
-    // Video widget
-    m_videoWidget = new QWidget(m_previewPanel);
+    // Video widget (tlRender viewport)
+    m_videoWidget = new TLRenderViewport(m_previewPanel);
     m_videoWidget->setMinimumHeight(0);  // Allow free resizing
     m_videoWidget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    m_videoWidget->setAttribute(Qt::WA_NativeWindow);
-    m_videoWidget->setAttribute(Qt::WA_PaintOnScreen);
-    m_videoWidget->setAttribute(Qt::WA_OpaquePaintEvent);
     m_videoWidget->hide();
 
-    // GStreamer player
-    m_gstreamerPlayer = new GStreamerPlayer(m_previewPanel);
+    // tlRender player
+    m_tlrenderPlayer = new TLRenderPlayer(m_previewPanel);
+    m_videoWidget->setPlayer(m_tlrenderPlayer);
 
     // Media controls
     QHBoxLayout *mc = new QHBoxLayout();
@@ -496,20 +495,20 @@ void FileManagerPane::setupPreviewPanel()
             else playSequence();
             return;
         }
-        if (!m_gstreamerPlayer) return;
-        if (m_gstreamerPlayer->state() == GStreamerPlayer::PlaybackState::Playing) {
-            m_gstreamerPlayer->pause();
+        if (!m_tlrenderPlayer) return;
+        if (m_tlrenderPlayer->playbackState() == TLRenderPlayer::PlaybackState::Playing) {
+            m_tlrenderPlayer->pause();
             m_playPauseBtn->setIcon(icoMediaPlay(ThemeManager::instance().iconColor()));
         } else {
-            m_gstreamerPlayer->play();
+            m_tlrenderPlayer->play();
             m_playPauseBtn->setIcon(icoMediaPause(ThemeManager::instance().iconColor()));
         }
     });
 
-    connect(m_gstreamerPlayer, &GStreamerPlayer::positionChanged, this, [this](qint64 pos) {
+    connect(m_tlrenderPlayer, &TLRenderPlayer::positionChanged, this, [this](qint64 pos) {
         if (m_isSequence) return;
-        qint64 duration = m_gstreamerPlayer->duration();
-        if (m_gstreamerPlayer && duration > 0) {
+        qint64 duration = m_tlrenderPlayer->duration();
+        if (m_tlrenderPlayer && duration > 0) {
             m_positionSlider->blockSignals(true);
             m_positionSlider->setValue(int(pos * 1000 / duration));
             m_positionSlider->blockSignals(false);
@@ -524,20 +523,20 @@ void FileManagerPane::setupPreviewPanel()
             loadSequenceFrame(v);
             return;
         }
-        qint64 duration = m_gstreamerPlayer->duration();
-        if (m_gstreamerPlayer && duration > 0) {
-            m_gstreamerPlayer->seek(qint64(v) * duration / 1000);
+        qint64 duration = m_tlrenderPlayer->duration();
+        if (m_tlrenderPlayer && duration > 0) {
+            m_tlrenderPlayer->seek(qint64(v) * duration / 1000);
         }
     });
 
     connect(m_volumeSlider, &QSlider::valueChanged, this, [this](int v) {
-        if (m_gstreamerPlayer) m_gstreamerPlayer->setVolume(v / 100.0);
+        if (m_tlrenderPlayer) m_tlrenderPlayer->setVolume(v / 100.0f);
     });
 
     connect(m_muteBtn, &QPushButton::clicked, this, [this] {
-        if (!m_gstreamerPlayer) return;
-        bool newMuted = !m_gstreamerPlayer->isMuted();
-        m_gstreamerPlayer->setMuted(newMuted);
+        if (!m_tlrenderPlayer) return;
+        bool newMuted = !m_tlrenderPlayer->isMuted();
+        m_tlrenderPlayer->setMuted(newMuted);
         m_muteBtn->setIcon(newMuted ? icoMediaMute() : icoMediaAudio());
     });
 
@@ -712,10 +711,35 @@ void FileManagerPane::navigateUp()
 
 void FileManagerPane::refresh()
 {
+    if (!m_dirModel) return;
+
     QString path = currentPath();
-    if (!path.isEmpty() && m_proxyModel) {
-        m_proxyModel->rebuildForRoot(path);
+    if (path.isEmpty()) {
+        if (m_gridView && m_gridView->viewport()) m_gridView->viewport()->update();
+        if (m_listView && m_listView->viewport()) m_listView->viewport()->update();
+        return;
     }
+
+    // Force a model refresh by flipping the root path.
+    QString tempPath = QDir::tempPath();
+    m_dirModel->setRootPath(tempPath);
+    m_dirModel->setRootPath(path);
+
+    QModelIndex srcRoot = m_dirModel->index(path);
+    if (m_proxyModel) {
+        if (m_proxyModel->groupingEnabled()) {
+            m_proxyModel->rebuildForRoot(path);
+        }
+        QModelIndex proxyRoot = m_proxyModel->mapFromSource(srcRoot);
+        if (m_gridView) m_gridView->setRootIndex(proxyRoot);
+        if (m_listView) m_listView->setRootIndex(proxyRoot);
+    } else {
+        if (m_gridView) m_gridView->setRootIndex(srcRoot);
+        if (m_listView) m_listView->setRootIndex(srcRoot);
+    }
+
+    if (m_gridView && m_gridView->viewport()) m_gridView->viewport()->update();
+    if (m_listView && m_listView->viewport()) m_listView->viewport()->update();
 }
 
 QStringList FileManagerPane::selectedPaths() const
@@ -842,6 +866,31 @@ void FileManagerPane::setActive(bool active)
     if (active) {
         emit activated();
     }
+}
+
+void FileManagerPane::setToolbarVisible(bool visible)
+{
+    if (m_toolbar) {
+        m_toolbar->setVisible(visible);
+    }
+}
+
+bool FileManagerPane::isToolbarVisible() const
+{
+    return m_toolbar && m_toolbar->isVisible();
+}
+
+bool FileManagerPane::canNavigateBack() const
+{
+    return m_navigationIndex > 0;
+}
+
+bool FileManagerPane::canNavigateUp() const
+{
+    const QString path = currentPath();
+    if (path.isEmpty()) return false;
+    QDir dir(path);
+    return dir.cdUp();
 }
 
 void FileManagerPane::applyActiveStyle()
@@ -982,9 +1031,8 @@ void FileManagerPane::updatePreviewForIndex(const QModelIndex &idx)
         }
     } else if (videoExts.contains(suffix)) {
         // Video preview
-        if (m_gstreamerPlayer) {
-            m_gstreamerPlayer->setVideoWidget(m_videoWidget);
-            m_gstreamerPlayer->loadMedia(filePath);
+        if (m_tlrenderPlayer) {
+            m_tlrenderPlayer->loadMedia(filePath);
             m_videoWidget->show();
             m_playPauseBtn->show();
             m_positionSlider->show();
@@ -1032,8 +1080,9 @@ void FileManagerPane::clearPreview()
     m_imageItem->setPixmap(QPixmap());
     
     // Stop video playback
-    if (m_gstreamerPlayer) {
-        m_gstreamerPlayer->stop();
+    if (m_tlrenderPlayer) {
+        m_tlrenderPlayer->stop();
+        m_tlrenderPlayer->unloadMedia();
     }
 
     // Stop sequence playback
