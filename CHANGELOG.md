@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Color management settings**: OCIO config picker plus default input transforms for 8-bit, 16-bit, 32-bit, and log sources
+- **Searchable OCIO inputs** in the preview overlay for faster transform selection
+- **Video pan/zoom parity** with images via middle-mouse panning in the tlRender viewport
+
+### Changed
+- **OCIO configuration persistence**: enable state, config path, and input defaults now survive restarts
+- **OCIO input lists** now populate directly from the selected config (including ACEScc/ACEScct/ACEScg) and apply LUTs from that config
+- **Preview fit behavior**: right-click returns videos to fit view; navigation to next/previous resets fit view
+
 ### Note
 This file now includes the 1.8.0 release notes below. Unreleased will contain future work.
 
