@@ -13,6 +13,7 @@
 
 #include <QWidget>
 #include <QVBoxLayout>
+#include <QPoint>
 #include <memory>
 
 #include "tlrender_player.h"
@@ -81,6 +82,7 @@ signals:
 
 protected:
     void resizeEvent(QResizeEvent* event) override;
+    bool eventFilter(QObject* watched, QEvent* event) override;
 
 private slots:
     void onMediaLoaded(const TLRenderPlayer::MediaInfo& info);
@@ -97,6 +99,9 @@ private:
 #endif
 
     QVBoxLayout* m_layout{nullptr};
+
+    bool m_isPanning{false};
+    QPoint m_lastPanPos;
 };
 
 #endif // TLRENDER_VIEWPORT_H

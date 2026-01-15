@@ -6,6 +6,7 @@
 #include "tlrender_player.h"
 #include <QDebug>
 #include <QResizeEvent>
+#include <QMouseEvent>
 
 #ifdef HAVE_TLRENDER
 #include <tlRender/Timeline/Player.h>
@@ -35,6 +36,8 @@ TLRenderViewport::TLRenderViewport(QWidget* parent)
         // Create native tlRender viewport
         m_viewport = new tl::qtwidget::Viewport(m_context, m_style, this);
         m_layout->addWidget(m_viewport);
+        m_viewport->installEventFilter(this);
+        m_viewport->setMouseTracking(true);
         
         // Enable frame view by default (fit video to window)
         m_viewport->setFrameView(true);
@@ -219,4 +222,52 @@ void TLRenderViewport::resizeEvent(QResizeEvent* event)
 {
     QWidget::resizeEvent(event);
     // The native viewport handles resize internally
+}
+
+bool TLRenderViewport::eventFilter(QObject* watched, QEvent* event)
+{
+#ifdef HAVE_TLRENDER
+    if (watched == m_viewport) {
+        if (event->type() == QEvent::MouseButtonPress) {
+            QMouseEvent* mouseEvent = static_cast<QMouseEvent*>(event);
+            if (mouseEvent->button() == Qt::RightButton) {
+                m_isPanning = false;
+                unsetCursor();
+                m_viewport->setFrameView(true);
+                return true;
+            }
+            if (mouseEvent->button() == Qt::MiddleButton) {
+                if (m_viewport->hasFrameView()) {
+                    m_viewport->setFrameView(false);
+                }
+                m_isPanning = true;
+                m_lastPanPos = mouseEvent->pos();
+                setCursor(Qt::ClosedHandCursor);
+                return true;
+            }
+        } else if (event->type() == QEvent::MouseMove) {
+            QMouseEvent* mouseEvent = static_cast<QMouseEvent*>(event);
+            if (m_isPanning && (mouseEvent->buttons() & Qt::MiddleButton)) {
+                const QPoint delta = mouseEvent->pos() - m_lastPanPos;
+                m_lastPanPos = mouseEvent->pos();
+                const double zoom = m_viewport->viewZoom();
+                const double scale = zoom > 0.0 ? zoom : 1.0;
+                const int dx = qRound(delta.x() / scale);
+                const int dy = qRound(delta.y() / scale);
+                const ftk::V2I& currentPos = m_viewport->viewPos();
+                const ftk::V2I newPos(currentPos.x - dx, currentPos.y - dy);
+                m_viewport->setViewPosAndZoom(newPos, zoom);
+                return true;
+            }
+        } else if (event->type() == QEvent::MouseButtonRelease) {
+            QMouseEvent* mouseEvent = static_cast<QMouseEvent*>(event);
+            if (m_isPanning && mouseEvent->button() == Qt::MiddleButton) {
+                m_isPanning = false;
+                unsetCursor();
+                return true;
+            }
+        }
+    }
+#endif
+    return QWidget::eventFilter(watched, event);
 }

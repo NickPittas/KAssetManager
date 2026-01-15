@@ -1674,6 +1674,9 @@ void PreviewOverlay::showVideo(const QString &filePath)
 #ifdef HAVE_TLRENDER
     applyOcioInputDefaults(filePath);
 #endif
+    if (m_renderWidget) {
+        m_renderWidget->setFrameView(true);
+    }
     m_player->loadMedia(filePath);
     PLAYER_PLAY();
 
@@ -2257,6 +2260,8 @@ void PreviewOverlay::mousePressEvent(QMouseEvent *event)
     if (event->button() == Qt::RightButton) {
         if (stillImageView && stillImageView->isVisible()) {
             resetStillImageZoom();
+        } else if (isVideo && m_renderWidget) {
+            m_renderWidget->setFrameView(true);
         } else {
             resetImageZoom();
         }
@@ -2613,6 +2618,9 @@ void PreviewOverlay::showSequence(const QStringList &framePaths, const QString &
     if (fpsLabel) fpsLabel->setText(QString::number(defaultFps, 'f', 1) + " fps");
 
     applyOcioInputDefaults(framePaths.first());
+    if (m_renderWidget) {
+        m_renderWidget->setFrameView(true);
+    }
     m_player->load(patternPath);
     // Do not auto-play sequences; keep same UX as legacy sequence preview.
     m_player->pause();
