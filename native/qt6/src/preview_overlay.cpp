@@ -51,13 +51,23 @@
 
 #include <QVector>
 #include <QSettings>
+#include <QSignalBlocker>
 
 #include "office_preview.h"
 
 #include <QGraphicsSvgItem>
 
 #ifdef Q_OS_WIN
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
+#ifdef min
+#undef min
+#endif
+#ifdef max
+#undef max
+#endif
 #endif
 
 #include <atomic>
@@ -77,7 +87,148 @@
 #include <QFileDialog>
 #include <QMessageBox>
 #include <QGraphicsSceneMouseEvent>
+#include <QCompleter>
+#include <QLineEdit>
 #include <algorithm>
+
+#ifdef HAVE_OPENIMAGEIO
+#include <OpenImageIO/imageio.h>
+#endif
+namespace {
+#ifdef HAVE_TLRENDER
+const QString kOcioInputSrgb = QStringLiteral("Output - sRGB");
+const QString kOcioInputRec709 = QStringLiteral("Output - Rec.709");
+const QString kOcioEnabledSetting = QStringLiteral("OCIO/Enabled");
+const QString kOcioConfigSetting = QStringLiteral("OCIO/ConfigPath");
+const QString kOcioDefault8bitSetting = QStringLiteral("OCIO/DefaultInput8bit");
+const QString kOcioDefault16bitSetting = QStringLiteral("OCIO/DefaultInput16bit");
+const QString kOcioDefault32bitSetting = QStringLiteral("OCIO/DefaultInput32bit");
+const QString kOcioDefaultLogSetting = QStringLiteral("OCIO/DefaultInputLog");
+const QString kOcioLast8bitSetting = QStringLiteral("OCIO/LastInput8bit");
+const QString kOcioLast16bitSetting = QStringLiteral("OCIO/LastInput16bit");
+const QString kOcioLast32bitSetting = QStringLiteral("OCIO/LastInput32bit");
+const QString kOcioLastLogSetting = QStringLiteral("OCIO/LastInputLog");
+const QString kOcioLegacyVideoSetting = QStringLiteral("OCIO/LastInputColorspaceVideo");
+const QString kOcioLegacyOtherSetting = QStringLiteral("OCIO/LastInputColorspaceOther");
+
+enum class OcioInputCategory
+{
+    Bit8,
+    Bit16,
+    Bit32,
+    Log
+};
+
+bool isVideoExtension(const QString& ext)
+{
+    static const QStringList kVideoExtensions = {
+        "mp4", "avi", "mov", "mkv", "webm", "flv", "wmv", "m4v", "mxf"
+    };
+    return kVideoExtensions.contains(ext, Qt::CaseInsensitive);
+}
+
+bool isLogExtension(const QString& ext)
+{
+    static const QStringList kLogExtensions = {
+        "dpx", "cin", "cineon"
+    };
+    return kLogExtensions.contains(ext, Qt::CaseInsensitive);
+}
+
+int detectImageBitDepth(const QString& filePath)
+{
+#ifdef HAVE_OPENIMAGEIO
+    using namespace OIIO;
+    auto in = ImageInput::open(filePath.toStdString());
+    if (!in) {
+        return 0;
+    }
+    const ImageSpec& spec = in->spec();
+    in->close();
+    switch (spec.format.basetype) {
+        case TypeDesc::UINT8:
+            return 8;
+        case TypeDesc::UINT16:
+        case TypeDesc::HALF:
+            return 16;
+        case TypeDesc::FLOAT:
+        case TypeDesc::DOUBLE:
+            return 32;
+        default:
+            return 0;
+    }
+#else
+    Q_UNUSED(filePath);
+    return 0;
+#endif
+}
+
+OcioInputCategory ocioCategoryForFile(const QString& filePath)
+{
+    const QString ext = QFileInfo(filePath).suffix().toLower();
+    if (isLogExtension(ext)) {
+        return OcioInputCategory::Log;
+    }
+
+    const QStringList hdrExts = {"exr", "hdr", "pfm", "pic"};
+    if (hdrExts.contains(ext)) {
+        const int depth = detectImageBitDepth(filePath);
+        if (depth >= 32) {
+            return OcioInputCategory::Bit32;
+        }
+        if (depth == 16) {
+            return OcioInputCategory::Bit16;
+        }
+    }
+
+    return OcioInputCategory::Bit8;
+}
+
+QString ocioDefaultKey(OcioInputCategory category)
+{
+    switch (category) {
+        case OcioInputCategory::Bit8: return kOcioDefault8bitSetting;
+        case OcioInputCategory::Bit16: return kOcioDefault16bitSetting;
+        case OcioInputCategory::Bit32: return kOcioDefault32bitSetting;
+        case OcioInputCategory::Log: return kOcioDefaultLogSetting;
+    }
+    return QString();
+}
+
+QString ocioLastKey(OcioInputCategory category)
+{
+    switch (category) {
+        case OcioInputCategory::Bit8: return kOcioLast8bitSetting;
+        case OcioInputCategory::Bit16: return kOcioLast16bitSetting;
+        case OcioInputCategory::Bit32: return kOcioLast32bitSetting;
+        case OcioInputCategory::Log: return kOcioLastLogSetting;
+    }
+    return QString();
+}
+
+QString findBundledAcesConfig()
+{
+    const QString appDir = QCoreApplication::applicationDirPath();
+    const QString relPath = "OpenColorIO-Config-ACES-1.2/aces_1.2/config.ocio";
+    const QStringList roots = {
+        appDir,
+        QDir(appDir).filePath(".."),
+        QDir(appDir).filePath("../.."),
+        QDir(appDir).filePath("../../.."),
+        QDir::currentPath(),
+        QDir(QDir::currentPath()).filePath(".."),
+        QDir(QDir::currentPath()).filePath("../..")
+    };
+    for (const QString& root : roots) {
+        const QString candidate = QDir(root).filePath(relPath);
+        if (QFileInfo::exists(candidate)) {
+            return QDir::cleanPath(candidate);
+        }
+    }
+    return QString();
+}
+#endif
+} // namespace
 
 // Load media icons from disk without recoloring; search common install paths
 static QIcon loadMediaIcon(const QString& relative)
@@ -563,6 +714,32 @@ void PreviewOverlay::setupUi()
     );
     ocioConfigBtn->hide();
 
+    ocioInputLabel = new QLabel("Input", this);
+    ocioInputLabel->setStyleSheet("QLabel { color: white; font-size: 14px; padding: 0 4px; }");
+    ocioInputLabel->hide();
+
+    ocioInputCombo = new QComboBox(this);
+    ocioInputCombo->setFocusPolicy(Qt::NoFocus);
+    ocioInputCombo->setEditable(true);
+    ocioInputCombo->setInsertPolicy(QComboBox::NoInsert);
+    ocioInputCombo->setStyleSheet(
+        "QComboBox { background-color: #333; color: white; border: 1px solid #555; padding: 5px; border-radius: 3px; min-width: 200px; }"
+        "QComboBox::drop-down { border: none; }"
+        "QComboBox::down-arrow { image: none; border: none; }"
+        "QComboBox QAbstractItemView { background-color: #333; color: white; selection-background-color: #58a6ff; }"
+    );
+    if (auto *edit = ocioInputCombo->lineEdit()) {
+        edit->setPlaceholderText("Search...");
+        edit->setClearButtonEnabled(true);
+    }
+    auto *ocioCompleter = new QCompleter(ocioInputCombo);
+    ocioCompleter->setModel(ocioInputCombo->model());
+    ocioCompleter->setCompletionMode(QCompleter::PopupCompletion);
+    ocioCompleter->setFilterMode(Qt::MatchContains);
+    ocioCompleter->setCaseSensitivity(Qt::CaseInsensitive);
+    ocioInputCombo->setCompleter(ocioCompleter);
+    ocioInputCombo->hide();
+
     ocioDisplayLabel = new QLabel("Display", this);
     ocioDisplayLabel->setStyleSheet("QLabel { color: white; font-size: 14px; padding: 0 4px; }");
     ocioDisplayLabel->hide();
@@ -750,6 +927,8 @@ void PreviewOverlay::setupUi()
     csLayout->addSpacing(8);
     csLayout->addWidget(ocioEnableCheck);
     csLayout->addWidget(ocioConfigBtn);
+    csLayout->addWidget(ocioInputLabel);
+    csLayout->addWidget(ocioInputCombo);
     csLayout->addWidget(ocioDisplayLabel);
     csLayout->addWidget(ocioDisplayCombo);
     csLayout->addWidget(ocioViewLabel);
@@ -843,7 +1022,11 @@ void PreviewOverlay::setupUi()
     if (ocioEnableCheck) {
         connect(ocioEnableCheck, &QCheckBox::toggled, this, [this](bool enabled) {
             m_player->setOCIOEnabled(enabled);
-            controlsTimer->start();
+            QSettings settings("AugmentCode", "KAssetManager");
+            settings.setValue(kOcioEnabledSetting, enabled);
+            if (controlsTimer) {
+                controlsTimer->start();
+            }
         });
     }
     if (ocioConfigBtn) {
@@ -856,10 +1039,24 @@ void PreviewOverlay::setupUi()
             );
             if (!filePath.isEmpty()) {
                 m_player->setOCIOConfig(filePath);
-                if (ocioEnableCheck) {
-                    ocioEnableCheck->setChecked(true);
-                }
+                QSettings settings("AugmentCode", "KAssetManager");
+                settings.setValue(kOcioConfigSetting, filePath);
             }
+        });
+    }
+    if (ocioInputCombo) {
+        connect(ocioInputCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int idx) {
+            if (idx < 0) return;
+            const QString colorspace = ocioInputCombo->itemText(idx);
+            m_player->setInputColorspace(colorspace);
+
+            const OcioInputCategory category = ocioCategoryForFile(currentFilePath);
+            const QString settingsKey = ocioLastKey(category);
+            if (!settingsKey.isEmpty()) {
+                QSettings settings("AugmentCode", "KAssetManager");
+                settings.setValue(settingsKey, colorspace);
+            }
+            controlsTimer->start();
         });
     }
     if (ocioDisplayCombo) {
@@ -946,6 +1143,12 @@ void PreviewOverlay::setupUi()
     }
 
     // Populate OCIO lists once we have a config loaded
+    connect(m_player, &TLRenderPlayer::colorspacesChanged, this, [this](const QStringList& colorspaces) {
+        populateOcioInputColorspaces(colorspaces);
+        if (!currentFilePath.isEmpty()) {
+            applyOcioInputDefaults(currentFilePath);
+        }
+    });
     connect(m_player, &TLRenderPlayer::displaysChanged, this, [this](const QStringList& displays) {
         if (!ocioDisplayCombo) return;
         ocioDisplayCombo->blockSignals(true);
@@ -986,17 +1189,16 @@ void PreviewOverlay::setupUi()
                 // If no saved view, check for video file defaults
                 if (viewIdx < 0 && !currentFilePath.isEmpty()) {
                     const QString ext = QFileInfo(currentFilePath).suffix().toLower();
-                    if (ext == "mov" || ext == "mp4" || ext == "m4v" || ext == "avi" || ext == "mkv" || ext == "webm") {
-                        for (int i = 0; i < ocioViewCombo->count(); ++i) {
-                            const QString viewName = ocioViewCombo->itemText(i).toLower();
-                            if (viewName.contains("rec.709") || viewName.contains("rec709")) {
-                                viewIdx = i;
-                                break;
-                            }
-                            if (viewIdx < 0 && viewName.contains("srgb")) {
-                                viewIdx = i;
-                            }
+                    const int rec709Idx = ocioViewCombo->findText("Rec.709", Qt::MatchFixedString);
+                    const int srgbIdx = ocioViewCombo->findText("sRGB", Qt::MatchFixedString);
+                    if (isVideoExtension(ext)) {
+                        if (rec709Idx >= 0) {
+                            viewIdx = rec709Idx;
+                        } else if (srgbIdx >= 0) {
+                            viewIdx = srgbIdx;
                         }
+                    } else if (srgbIdx >= 0) {
+                        viewIdx = srgbIdx;
                     }
                 }
                 
@@ -1028,19 +1230,16 @@ void PreviewOverlay::setupUi()
             // If no saved view or saved view not found, check for video file defaults
             if (viewIdx < 0 && !currentFilePath.isEmpty()) {
                 const QString ext = QFileInfo(currentFilePath).suffix().toLower();
-                // For video files, default to Rec.709 or sRGB view
-                if (ext == "mov" || ext == "mp4" || ext == "m4v" || ext == "avi" || ext == "mkv" || ext == "webm") {
-                    for (int i = 0; i < ocioViewCombo->count(); ++i) {
-                        const QString viewName = ocioViewCombo->itemText(i).toLower();
-                        if (viewName.contains("rec.709") || viewName.contains("rec709")) {
-                            viewIdx = i;
-                            break;
-                        }
-                        // Fallback to sRGB if no Rec.709
-                        if (viewIdx < 0 && viewName.contains("srgb")) {
-                            viewIdx = i;
-                        }
+                const int rec709Idx = ocioViewCombo->findText("Rec.709", Qt::MatchFixedString);
+                const int srgbIdx = ocioViewCombo->findText("sRGB", Qt::MatchFixedString);
+                if (isVideoExtension(ext)) {
+                    if (rec709Idx >= 0) {
+                        viewIdx = rec709Idx;
+                    } else if (srgbIdx >= 0) {
+                        viewIdx = srgbIdx;
                     }
+                } else if (srgbIdx >= 0) {
+                    viewIdx = srgbIdx;
                 }
             }
             
@@ -1056,22 +1255,36 @@ void PreviewOverlay::setupUi()
 
     // Default to bundled ACES config if it exists in the deployed bin folder
     {
-        const QString appDir = QCoreApplication::applicationDirPath();
-        const QString acesConfig = QDir(appDir).filePath("OpenColorIO-Config-ACES-1.2/aces_1.2/config.ocio");
-        if (QFileInfo::exists(acesConfig)) {
-            m_player->setOCIOConfig(acesConfig);
-            m_player->setOCIOEnabled(true);
-            
-            // Restore last used OCIO display/view from settings
-            QSettings settings("AugmentCode", "KAssetManager");
-            const QString lastDisplay = settings.value("OCIO/LastDisplay").toString();
-            const QString lastView = settings.value("OCIO/LastView").toString();
-            if (!lastDisplay.isEmpty()) {
-                m_player->setDisplay(lastDisplay);
-            }
-            if (!lastView.isEmpty()) {
-                m_player->setView(lastView);
-            }
+        QSettings settings("AugmentCode", "KAssetManager");
+        const bool ocioEnabled = settings.value(kOcioEnabledSetting, true).toBool();
+        if (ocioEnableCheck) {
+            QSignalBlocker blocker(ocioEnableCheck);
+            ocioEnableCheck->setChecked(ocioEnabled);
+        }
+        m_player->setOCIOEnabled(ocioEnabled);
+
+        QString configPath = settings.value(kOcioConfigSetting).toString();
+        if (!configPath.isEmpty() && !QFileInfo::exists(configPath)) {
+            qWarning() << "[PreviewOverlay] OCIO config not found at" << configPath;
+            configPath.clear();
+        }
+        if (configPath.isEmpty()) {
+            configPath = findBundledAcesConfig();
+        }
+        if (!configPath.isEmpty()) {
+            m_player->setOCIOConfig(configPath);
+        } else {
+            qWarning() << "[PreviewOverlay] ACES OCIO config not found.";
+        }
+
+        // Restore last used OCIO display/view from settings
+        const QString lastDisplay = settings.value("OCIO/LastDisplay").toString();
+        const QString lastView = settings.value("OCIO/LastView").toString();
+        if (!lastDisplay.isEmpty()) {
+            m_player->setDisplay(lastDisplay);
+        }
+        if (!lastView.isEmpty()) {
+            m_player->setView(lastView);
         }
     }
 #endif
@@ -1089,6 +1302,78 @@ void PreviewOverlay::setupUi()
     
     setupAnnotationToolbar();
 }
+
+#ifdef HAVE_TLRENDER
+void PreviewOverlay::populateOcioInputColorspaces(const QStringList& colorspaces)
+{
+    if (!ocioInputCombo) return;
+    QSignalBlocker blocker(ocioInputCombo);
+    ocioInputCombo->clear();
+    ocioInputCombo->addItems(colorspaces);
+}
+
+QString PreviewOverlay::defaultOcioInputName(const QString& filePath) const
+{
+    const QString ext = QFileInfo(filePath).suffix().toLower();
+    return isVideoExtension(ext) ? kOcioInputRec709 : kOcioInputSrgb;
+}
+
+void PreviewOverlay::applyOcioInputDefaults(const QString& filePath)
+{
+    if (!m_player || !ocioInputCombo) return;
+    const QStringList colorspaces = m_player->availableColorspaces();
+    if (colorspaces.isEmpty()) return;
+
+    QSettings settings("AugmentCode", "KAssetManager");
+    const OcioInputCategory category = ocioCategoryForFile(filePath);
+    QString selected;
+    const QString lastKey = ocioLastKey(category);
+    const QString defaultKey = ocioDefaultKey(category);
+
+    if (!lastKey.isEmpty()) {
+        selected = settings.value(lastKey).toString();
+    }
+    if (selected.isEmpty() || !colorspaces.contains(selected)) {
+        if (!defaultKey.isEmpty()) {
+            selected = settings.value(defaultKey).toString();
+        }
+    }
+    if (selected.isEmpty() || !colorspaces.contains(selected)) {
+        if (category == OcioInputCategory::Bit8) {
+            selected = defaultOcioInputName(filePath);
+        } else {
+            const QString current = m_player->inputColorspace();
+            if (colorspaces.contains(current)) {
+                selected = current;
+            }
+        }
+    }
+    if (selected.isEmpty() || !colorspaces.contains(selected)) {
+        if (category == OcioInputCategory::Bit8) {
+            const QString legacyKey = isVideoExtension(QFileInfo(filePath).suffix().toLower())
+                ? kOcioLegacyVideoSetting
+                : kOcioLegacyOtherSetting;
+            const QString legacyValue = settings.value(legacyKey).toString();
+            if (colorspaces.contains(legacyValue)) {
+                selected = legacyValue;
+            }
+        }
+    }
+    if (selected.isEmpty() || !colorspaces.contains(selected)) {
+        if (!selected.isEmpty()) {
+            qWarning() << "[PreviewOverlay] OCIO input colorspace not found in config:" << selected;
+        }
+        return;
+    }
+
+    const int idx = ocioInputCombo->findText(selected);
+    if (idx >= 0) {
+        QSignalBlocker blocker(ocioInputCombo);
+        ocioInputCombo->setCurrentIndex(idx);
+    }
+    m_player->setInputColorspace(selected);
+}
+#endif
 
 void PreviewOverlay::showAsset(const QString &filePath, const QString &fileName, const QString &fileType)
 {
@@ -1111,6 +1396,8 @@ void PreviewOverlay::showAsset(const QString &filePath, const QString &fileName,
     // Default to hiding OCIO controls; showVideo()/showSequence(tlRender path) will enable them.
     if (ocioEnableCheck) ocioEnableCheck->hide();
     if (ocioConfigBtn) ocioConfigBtn->hide();
+    if (ocioInputLabel) ocioInputLabel->hide();
+    if (ocioInputCombo) ocioInputCombo->hide();
     if (ocioDisplayLabel) ocioDisplayLabel->hide();
     if (ocioDisplayCombo) ocioDisplayCombo->hide();
     if (ocioViewLabel) ocioViewLabel->hide();
@@ -1357,6 +1644,8 @@ void PreviewOverlay::showVideo(const QString &filePath)
     // Show OCIO controls for tlRender playback
     if (ocioEnableCheck) ocioEnableCheck->show();
     if (ocioConfigBtn) ocioConfigBtn->show();
+    if (ocioInputLabel) ocioInputLabel->show();
+    if (ocioInputCombo) ocioInputCombo->show();
     if (ocioDisplayLabel) ocioDisplayLabel->show();
     if (ocioDisplayCombo) ocioDisplayCombo->show();
     if (ocioViewLabel) ocioViewLabel->show();
@@ -1382,6 +1671,9 @@ void PreviewOverlay::showVideo(const QString &filePath)
     positionSlider->setTimelineContext(true, 24.0);
 
     // Load and play video with tlRender
+#ifdef HAVE_TLRENDER
+    applyOcioInputDefaults(filePath);
+#endif
     m_player->loadMedia(filePath);
     PLAYER_PLAY();
 
@@ -2250,6 +2542,9 @@ void PreviewOverlay::showSequence(const QStringList &framePaths, const QString &
         return;
     }
 
+    currentFilePath = framePaths.first();
+    currentFileType = QFileInfo(currentFilePath).suffix().toLower();
+
     // Calculate duration from known frame range (we already know start/end from sequence grouping)
     const int totalFrames = endFrame - startFrame + 1;
     const double defaultFps = 24.0;
@@ -2288,6 +2583,8 @@ void PreviewOverlay::showSequence(const QStringList &framePaths, const QString &
     // Show OCIO controls for tlRender playback (sequences are treated like video here).
     if (ocioEnableCheck) ocioEnableCheck->show();
     if (ocioConfigBtn) ocioConfigBtn->show();
+    if (ocioInputLabel) ocioInputLabel->show();
+    if (ocioInputCombo) ocioInputCombo->show();
     if (ocioDisplayLabel) ocioDisplayLabel->show();
     if (ocioDisplayCombo) ocioDisplayCombo->show();
     if (ocioViewLabel) ocioViewLabel->show();
@@ -2315,6 +2612,7 @@ void PreviewOverlay::showSequence(const QStringList &framePaths, const QString &
     detectedFps = defaultFps;
     if (fpsLabel) fpsLabel->setText(QString::number(defaultFps, 'f', 1) + " fps");
 
+    applyOcioInputDefaults(framePaths.first());
     m_player->load(patternPath);
     // Do not auto-play sequences; keep same UX as legacy sequence preview.
     m_player->pause();
@@ -2971,6 +3269,8 @@ void PreviewOverlay::showText(const QString &filePath)
             // Show OCIO controls for tlRender sequence playback
             if (ocioEnableCheck) ocioEnableCheck->show();
             if (ocioConfigBtn) ocioConfigBtn->show();
+            if (ocioInputLabel) ocioInputLabel->show();
+            if (ocioInputCombo) ocioInputCombo->show();
             if (ocioDisplayLabel) ocioDisplayLabel->show();
             if (ocioDisplayCombo) ocioDisplayCombo->show();
             if (ocioViewLabel) ocioViewLabel->show();

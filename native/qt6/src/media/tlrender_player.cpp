@@ -844,6 +844,7 @@ void TLRenderPlayer::setOCIOConfig(const QString& configPath)
     updateOCIOLists();
     applyOCIOOptions();
     emit ocioConfigChanged(configPath);
+    emit ocioOptionsChanged();
 }
 
 QString TLRenderPlayer::ocioConfigPath() const
@@ -998,11 +999,16 @@ void TLRenderPlayer::updateOCIOLists()
         m_availableViews.clear();
         
         // Set defaults if not set
-        if (m_display.isEmpty() && !m_availableDisplays.isEmpty()) {
-            m_display = QString::fromStdString(config->getDefaultDisplay());
+        if (!m_availableDisplays.isEmpty()) {
+            if (m_display.isEmpty() || !m_availableDisplays.contains(m_display)) {
+                m_display = QString::fromStdString(config->getDefaultDisplay());
+            }
         }
-        if (m_view.isEmpty() && !m_display.isEmpty()) {
-            m_view = QString::fromStdString(config->getDefaultView(m_display.toStdString().c_str()));
+        if (!m_display.isEmpty()) {
+            const QStringList views = availableViews(m_display);
+            if (m_view.isEmpty() || !views.contains(m_view)) {
+                m_view = QString::fromStdString(config->getDefaultView(m_display.toStdString().c_str()));
+            }
         }
 
         // Make sure view dropdowns can populate immediately after config load.

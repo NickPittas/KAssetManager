@@ -449,6 +449,12 @@ private:
     void updateVideoAnnotationFrame(); // Update frame and handle per-frame annotations for videos
     int getVideoFrameNumber() const; // Calculate frame number from current position and FPS
 
+#ifdef HAVE_TLRENDER
+    void populateOcioInputColorspaces(const QStringList& colorspaces);
+    void applyOcioInputDefaults(const QString& filePath);
+    QString defaultOcioInputName(const QString& filePath) const;
+#endif
+
     // UI Components
     QGraphicsView *imageView;
     QGraphicsScene *imageScene;
@@ -477,6 +483,8 @@ private:
 #ifdef HAVE_TLRENDER
     // OCIO (ACES) UI controls for tlRender playback
     QCheckBox *ocioEnableCheck = nullptr;
+    QLabel *ocioInputLabel = nullptr;
+    QComboBox *ocioInputCombo = nullptr;
     QLabel *ocioDisplayLabel = nullptr;
     QComboBox *ocioDisplayCombo = nullptr;
     QLabel *ocioViewLabel = nullptr;
