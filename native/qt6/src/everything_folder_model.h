@@ -37,6 +37,9 @@ public:
     void resolvePathAsync(const QString &path);
 
     void refresh();
+    
+    // Refresh a specific path - invalidates cached children and re-fetches
+    void refreshPath(const QString &path);
 
 signals:
     // Emitted when async path resolution completes

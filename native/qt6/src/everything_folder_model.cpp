@@ -95,6 +95,141 @@ void EverythingFolderModel::refresh()
     endResetModel();
 }
 
+void EverythingFolderModel::refreshPath(const QString &path)
+{
+    QString normalized = normalizePath(path);
+    if (normalized.isEmpty()) {
+        return;
+    }
+    
+    const QString key = normalized.toCaseFolded();
+    Node *node = m_nodesByPath.value(key, nullptr);
+    if (!node) {
+        // Path not cached, nothing to refresh
+        return;
+    }
+    
+    // Cancel any pending fetch for this path
+    {
+        QMutexLocker locker(&m_fetchMutex);
+        if (m_fetchingPaths.contains(key)) {
+            auto *watcher = m_pendingFetches.value(key, nullptr);
+            if (watcher) {
+                watcher->cancel();
+                watcher->waitForFinished();
+                m_pendingFetches.remove(key);
+                delete watcher;
+            }
+            m_fetchingPaths.remove(key);
+        }
+    }
+    
+    // Get current children from filesystem using QDir (immediate, accurate)
+    // We use QDir instead of Everything SDK because Everything's index may not
+    // be updated yet when the user just created/deleted a folder
+    QDir dir(normalized);
+    const QFileInfoList entries = dir.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name | QDir::IgnoreCase);
+    
+    // Build set of current children paths for comparison
+    QHash<QString, QString> currentChildren; // key (lowercased) -> (name, path)
+    for (const QFileInfo &entry : entries) {
+        QString childPath = QDir::toNativeSeparators(entry.absoluteFilePath());
+        currentChildren.insert(childPath.toCaseFolded(), childPath);
+    }
+    
+    // Build set of existing node children
+    QHash<QString, Node*> existingChildren;
+    for (Node *child : node->children) {
+        existingChildren.insert(child->path.toCaseFolded(), child);
+    }
+    
+    QModelIndex parentIndex = (node->parent == nullptr || node == m_root)
+        ? QModelIndex()
+        : createIndex(rowOfNode(node), 0, node);
+    
+    // Find children to remove (exist in node but not in filesystem)
+    QVector<Node*> toRemove;
+    for (auto it = existingChildren.begin(); it != existingChildren.end(); ++it) {
+        if (!currentChildren.contains(it.key())) {
+            toRemove.append(it.value());
+        }
+    }
+    
+    // Remove deleted children
+    for (Node *child : toRemove) {
+        int row = node->children.indexOf(child);
+        if (row >= 0) {
+            beginRemoveRows(parentIndex, row, row);
+            node->children.removeAt(row);
+            
+            // Remove from path map recursively
+            std::function<void(Node*)> removeFromMap = [this, &removeFromMap](Node *n) {
+                if (!n) return;
+                for (Node *c : n->children) {
+                    removeFromMap(c);
+                }
+                if (!n->path.isEmpty()) {
+                    m_nodesByPath.remove(n->path.toCaseFolded());
+                }
+                delete n;
+            };
+            removeFromMap(child);
+            
+            endRemoveRows();
+        }
+    }
+    
+    // Find children to add (exist in filesystem but not in node)
+    QVector<QPair<QString, QString>> toAdd; // (name, path)
+    for (const QFileInfo &entry : entries) {
+        QString childPath = QDir::toNativeSeparators(entry.absoluteFilePath());
+        QString childKey = childPath.toCaseFolded();
+        if (!existingChildren.contains(childKey)) {
+            toAdd.append(qMakePair(entry.fileName(), childPath));
+        }
+    }
+    
+    // Add new children
+    if (!toAdd.isEmpty()) {
+        // Sort new children to maintain alphabetical order
+        std::sort(toAdd.begin(), toAdd.end(), [](const auto &a, const auto &b) {
+            return QString::localeAwareCompare(a.first, b.first) < 0;
+        });
+        
+        for (const auto &pair : toAdd) {
+            const QString &name = pair.first;
+            const QString &childPath = pair.second;
+            
+            // Find insertion position to maintain sorted order
+            int insertPos = 0;
+            for (int i = 0; i < node->children.size(); ++i) {
+                if (QString::localeAwareCompare(name, node->children[i]->name) < 0) {
+                    break;
+                }
+                insertPos = i + 1;
+            }
+            
+            beginInsertRows(parentIndex, insertPos, insertPos);
+            Node *newNode = new Node;
+            newNode->name = name;
+            newNode->path = childPath;
+            newNode->parent = node;
+            newNode->fetched = false;
+            newNode->fetching = false;
+            node->children.insert(insertPos, newNode);
+            m_nodesByPath.insert(childPath.toCaseFolded(), newNode);
+            endInsertRows();
+        }
+    }
+    
+    // Emit dataChanged to ensure view updates
+    if (!node->children.isEmpty()) {
+        QModelIndex topLeft = index(0, 0, parentIndex);
+        QModelIndex bottomRight = index(node->children.size() - 1, 0, parentIndex);
+        emit dataChanged(topLeft, bottomRight);
+    }
+}
+
 int EverythingFolderModel::rowCount(const QModelIndex &parent) const
 {
     Node *node = parent.isValid() ? static_cast<Node*>(parent.internalPointer()) : m_root;

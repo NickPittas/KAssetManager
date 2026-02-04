@@ -2804,6 +2804,11 @@ void MainWindow::onFmRefresh()
         fmProxyModel->rebuildForRoot(currentPath);
     }
 
+    // Also refresh tree node for current path so new subfolders appear
+    if (fmEverythingTreeModel) {
+        fmEverythingTreeModel->refreshPath(currentPath);
+    }
+
     // Force viewport updates
     if (fmGridView) fmGridView->viewport()->update();
     if (fmListView) fmListView->viewport()->update();
@@ -2811,12 +2816,31 @@ void MainWindow::onFmRefresh()
     statusBar()->showMessage("Folder refreshed", 2000);
 }
 
-// Lightweight refresh used by QFileSystemWatcher; avoid heavy model resets
+// Lightweight refresh used by QFileSystemWatcher; refreshes file list and tree node
 void MainWindow::onFmLightRefresh()
 {
+    // Refresh file list model by flipping root path
+    if (fmDirModel) {
+        QString currentPath = fmDirModel->rootPath();
+        if (!currentPath.isEmpty()) {
+            QString tempPath = QDir::tempPath();
+            fmDirModel->setRootPath(tempPath);
+            fmDirModel->setRootPath(currentPath);
+            
+            // Rebuild sequence grouping proxy if enabled
+            if (fmProxyModel && fmProxyModel->groupingEnabled()) {
+                fmProxyModel->rebuildForRoot(currentPath);
+            }
+            
+            // Also refresh tree node for current path
+            if (fmEverythingTreeModel) {
+                fmEverythingTreeModel->refreshPath(currentPath);
+            }
+        }
+    }
+    
     if (fmGridView && fmGridView->viewport()) fmGridView->viewport()->update();
     if (fmListView && fmListView->viewport()) fmListView->viewport()->update();
-    // Do not rebuild models, clear caches, or flip root paths here.
 }
 
 void MainWindow::onFmRename()
@@ -2874,7 +2898,27 @@ void MainWindow::onFmNewFolder()
     const QString destDir = activeFmRootPath();
     if (destDir.isEmpty()) return;
     QString path = uniqueNameInDir(destDir, "New Folder");
-    QDir().mkpath(path);
+    if (QDir().mkpath(path)) {
+        // Refresh the file list and tree to show the new folder
+        if (fmDirModel) {
+            QString tempPath = QDir::tempPath();
+            fmDirModel->setRootPath(tempPath);
+            fmDirModel->setRootPath(destDir);
+            
+            // Rebuild sequence grouping proxy if enabled
+            if (fmProxyModel && fmProxyModel->groupingEnabled()) {
+                fmProxyModel->rebuildForRoot(destDir);
+            }
+        }
+        
+        // Refresh tree node for the parent directory
+        if (fmEverythingTreeModel) {
+            fmEverythingTreeModel->refreshPath(destDir);
+        }
+        
+        if (fmGridView && fmGridView->viewport()) fmGridView->viewport()->update();
+        if (fmListView && fmListView->viewport()) fmListView->viewport()->update();
+    }
 }
 
 void MainWindow::onFmAddToFavorites()

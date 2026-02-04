@@ -14,7 +14,7 @@ if(NOT DEFINED CMAKE_TOOLCHAIN_FILE)
     endif()
 endif()
 
-project(KAssetManagerQt VERSION 1.8.1 LANGUAGES CXX)
+project(KAssetManagerQt VERSION 1.8.5 LANGUAGES CXX)
 # Optional static analysis / sanitizers
 option(ENABLE_ASAN "Enable AddressSanitizer (Clang/GCC only)" OFF)
 if(ENABLE_ASAN)
