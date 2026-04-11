@@ -1,16 +1,17 @@
 #include "preview_overlay.h"
+#include "icon_utils.h"
 #include "media/tlrender_player.h"
 #include "media/tlrender_viewport.h"
 // Compatibility macros for tlRender
 #define PLAYER_PTR m_player
-#define PLAYER_PLAY() m_player->play()
-#define PLAYER_PAUSE() m_player->pause()
-#define PLAYER_STOP() m_player->stop()
-#define PLAYER_SEEK(pos) m_player->seek(pos)
-#define PLAYER_DURATION() m_player->duration()
-#define PLAYER_POSITION() m_player->position()
-#define PLAYER_SET_URI(uri) m_player->load(uri)
-#define PLAYER_STATE() m_player->playbackState()
+#define PLAYER_PLAY() do { if (m_player) m_player->play(); } while (0)
+#define PLAYER_PAUSE() do { if (m_player) m_player->pause(); } while (0)
+#define PLAYER_STOP() do { if (m_player) m_player->stop(); } while (0)
+#define PLAYER_SEEK(pos) do { if (m_player) m_player->seek(pos); } while (0)
+#define PLAYER_DURATION() (m_player ? m_player->duration() : 0)
+#define PLAYER_POSITION() (m_player ? m_player->position() : 0)
+#define PLAYER_SET_URI(uri) do { if (m_player) m_player->load(uri); } while (0)
+#define PLAYER_STATE() (m_player ? m_player->playbackState() : TLRenderPlayer::PlaybackState::Stopped)
 #define PLAYER_STATE_PLAYING TLRenderPlayer::PlaybackState::Playing
 #define PLAYER_STATE_PAUSED TLRenderPlayer::PlaybackState::Paused
 #define PLAYER_STATE_STOPPED TLRenderPlayer::PlaybackState::Stopped
@@ -88,16 +89,71 @@
 #include <QMessageBox>
 #include <QGraphicsSceneMouseEvent>
 #include <QCompleter>
+#include <QCursor>
 #include <QLineEdit>
+#include <QTimer>
 #include <algorithm>
+#if defined(Q_OS_LINUX)
+#include <sys/sysinfo.h>
+#endif
 
 #ifdef HAVE_OPENIMAGEIO
 #include <OpenImageIO/imageio.h>
 #endif
 namespace {
+void activatePreviewWindow(QWidget* window, QWidget* preferredFocus = nullptr)
+{
+    if (!window) {
+        return;
+    }
+
+    window->show();
+    window->raise();
+    window->activateWindow();
+    window->setFocus(Qt::ActiveWindowFocusReason);
+
+    if (preferredFocus) {
+        preferredFocus->setFocus(Qt::ActiveWindowFocusReason);
+    }
+
+    // Wayland focus handoff can lag until the next event turn.
+    QTimer::singleShot(0, window, [window, preferredFocus]() {
+        if (!window) {
+            return;
+        }
+        window->raise();
+        window->activateWindow();
+        if (preferredFocus) {
+            preferredFocus->setFocus(Qt::ActiveWindowFocusReason);
+        } else {
+            window->setFocus(Qt::ActiveWindowFocusReason);
+        }
+    });
+}
+
+void syncAnnotationOverlayToVideo(QGraphicsView* overlayView,
+                                  QGraphicsScene* overlayScene,
+                                  QWidget* videoContainer)
+{
+    if (!overlayView || !overlayScene || !videoContainer) {
+        return;
+    }
+
+    if (QWidget* parent = overlayView->parentWidget()) {
+        const QPoint overlayPos = videoContainer->mapTo(parent, QPoint(0, 0));
+        overlayView->setGeometry(QRect(overlayPos, videoContainer->size()));
+    }
+
+    if (overlayScene->sceneRect().isEmpty()) {
+        overlayScene->setSceneRect(QRectF(QPointF(0, 0), QSizeF(videoContainer->size())));
+    }
+
+    overlayView->fitInView(overlayScene->sceneRect(), Qt::KeepAspectRatio);
+}
+
 #ifdef HAVE_TLRENDER
-const QString kOcioInputSrgb = QStringLiteral("Output - sRGB");
-const QString kOcioInputRec709 = QStringLiteral("Output - Rec.709");
+const QString kOcioInputSrgb = QStringLiteral("sRGB");
+const QString kOcioInputRec709 = QStringLiteral("Rec.709");
 const QString kOcioEnabledSetting = QStringLiteral("OCIO/Enabled");
 const QString kOcioConfigSetting = QStringLiteral("OCIO/ConfigPath");
 const QString kOcioDefault8bitSetting = QStringLiteral("OCIO/DefaultInput8bit");
@@ -206,47 +262,89 @@ QString ocioLastKey(OcioInputCategory category)
     return QString();
 }
 
+QString findMatchingColorspace(const QStringList& colorspaces, const QStringList& preferred)
+{
+    for (const QString& candidate : preferred) {
+        const int exactIdx = colorspaces.indexOf(candidate);
+        if (exactIdx >= 0) {
+            return colorspaces.at(exactIdx);
+        }
+    }
+
+    for (const QString& candidate : preferred) {
+        for (const QString& colorspace : colorspaces) {
+            if (colorspace.contains(candidate, Qt::CaseInsensitive) &&
+                !colorspace.contains(QStringLiteral("Display"), Qt::CaseInsensitive)) {
+                return colorspace;
+            }
+        }
+    }
+
+    return QString();
+}
+
 QString findBundledAcesConfig()
 {
     const QString appDir = QCoreApplication::applicationDirPath();
-    const QString relPath = "OpenColorIO-Config-ACES-1.2/aces_1.2/config.ocio";
     const QStringList roots = {
         appDir,
         QDir(appDir).filePath(".."),
         QDir(appDir).filePath("../.."),
         QDir(appDir).filePath("../../.."),
+        QDir(appDir).filePath("../../../.."),
         QDir::currentPath(),
         QDir(QDir::currentPath()).filePath(".."),
-        QDir(QDir::currentPath()).filePath("../..")
+        QDir(QDir::currentPath()).filePath("../.."),
+        QDir(QDir::currentPath()).filePath("../../..")
+    };
+    const QStringList relPaths = {
+        QStringLiteral("OpenColorIO-Config-ACES-1.2/aces_1.2/config.ocio"),
+        QStringLiteral("OpenColorIO-Config-ACES-1.2/config.ocio"),
+        QStringLiteral("OpenColorIO/aces_1.2/config.ocio"),
+        QStringLiteral("ocio/config.ocio")
     };
     for (const QString& root : roots) {
-        const QString candidate = QDir(root).filePath(relPath);
-        if (QFileInfo::exists(candidate)) {
+        for (const QString& relPath : relPaths) {
+            const QString candidate = QDir(root).filePath(relPath);
+            if (QFileInfo::exists(candidate)) {
+                return QDir::cleanPath(candidate);
+            }
+        }
+    }
+
+    const QStringList envVars = {QStringLiteral("OCIO"), QStringLiteral("OCIO_CONFIG")};
+    for (const QString& envVar : envVars) {
+        const QString candidate = qEnvironmentVariable(envVar.toUtf8().constData());
+        if (!candidate.isEmpty() && QFileInfo::exists(candidate)) {
             return QDir::cleanPath(candidate);
         }
     }
+
+#if defined(Q_OS_LINUX)
+    const QStringList linuxFallbacks = {
+        QStringLiteral("/opt/BorisFX/MochaPro2026/resources/ocio/default/config.ocio"),
+        QStringLiteral("/opt/BorisFX/SapphireOFX/ocio/config.ocio"),
+        QStringLiteral("/opt/Nuke17.0v1/plugins/OCIOConfigs/configs/nuke-default/config.ocio"),
+        QStringLiteral("/opt/resolve/Fusion/LUTs/DefaultConfig.ocio"),
+        QStringLiteral("/usr/autodesk/maya2026/resources/OCIO-configs/Maya2022-default/config.ocio"),
+        QStringLiteral("/usr/autodesk/maya2026/resources/OCIO-configs/Maya-legacy/config.ocio")
+    };
+    for (const QString& candidate : linuxFallbacks) {
+        if (QFileInfo::exists(candidate)) {
+            return candidate;
+        }
+    }
+#endif
+
     return QString();
 }
 #endif
 } // namespace
 
-// Load media icons from disk without recoloring; search common install paths
+// Load media icons from disk without recoloring.
 static QIcon loadMediaIcon(const QString& relative)
 {
-    const QString appDir = QCoreApplication::applicationDirPath();
-    const QStringList searchPaths = {
-        appDir + "/icons/" + relative,
-        appDir + "/../icons/" + relative,
-        appDir + "/../../icons/" + relative,
-        appDir + "/../Resources/icons/" + relative
-    };
-    for (const QString& p : searchPaths) {
-        if (QFileInfo::exists(p)) {
-            return QIcon(p);
-        }
-    }
-    qWarning() << "[PreviewOverlay] Icon not found:" << relative;
-    return QIcon();
+    return loadRawPngIcon(relative);
 }
 
 // Simple tint helper to force monochrome icons to a desired color
@@ -331,24 +429,9 @@ PreviewOverlay::PreviewOverlay(QWidget *parent)
     , annotationToolbar(nullptr)
     , currentAnnotatedFrame(-1)
 {
-    // Initialize tlRender globally (call once)
-    TLRenderPlayer::initialize();
-
-    // Create tlRender player for video and image sequence playback with OCIO support
-    m_player = new TLRenderPlayer(this);
-
-    // Connect TLRenderPlayer signals to PreviewOverlay handlers
-    connect(m_player, &TLRenderPlayer::positionChanged, this, &PreviewOverlay::onPlayerPositionChanged);
-    connect(m_player, &TLRenderPlayer::durationChanged, this, &PreviewOverlay::onPlayerDurationChanged);
-    connect(m_player, &TLRenderPlayer::mediaInfoReady, this, &PreviewOverlay::onPlayerMediaInfo);
-    connect(m_player, &TLRenderPlayer::playbackStateChanged, this, &PreviewOverlay::onPlayerPlaybackStateChanged);
-    connect(m_player, &TLRenderPlayer::error, this, &PreviewOverlay::onPlayerError);
-    connect(m_player, &TLRenderPlayer::endOfStream, this, &PreviewOverlay::onPlayerEndOfStream);
-
-    qDebug() << "[PreviewOverlay] TLRenderPlayer initialized with OCIO color management";
-
     setupUi();
     setFocusPolicy(Qt::StrongFocus);
+    setMouseTracking(true);
 
     // Auto-hide controls timer
     controlsTimer = new QTimer(this);
@@ -412,6 +495,7 @@ void PreviewOverlay::setupUi()
     setWindowFlags(Qt::Window | Qt::WindowStaysOnTopHint);
     setWindowTitle(tr("Preview"));
     setAttribute(Qt::WA_DeleteOnClose, false); // Don't auto-delete when closed
+    setMinimumSize(QSize(640, 420));
 
     QVBoxLayout *mainLayout = new QVBoxLayout(this);
     // No bottom margin - controls will be at the very bottom with internal padding
@@ -465,8 +549,7 @@ void PreviewOverlay::setupUi()
     
     // Annotation toggle button with icon
     toggleAnnotationBtn = new QPushButton(this);
-    QString annotationIconPath = QCoreApplication::applicationDirPath() + "/Icons/Annotation/Annotate.png";
-    toggleAnnotationBtn->setIcon(QIcon(annotationIconPath));
+    toggleAnnotationBtn->setIcon(loadRawPngIcon(QStringLiteral("Annotation/Annotate.png")));
     toggleAnnotationBtn->setIconSize(QSize(24, 24));
     toggleAnnotationBtn->setText(" Annotate");
     toggleAnnotationBtn->setFocusPolicy(Qt::NoFocus);
@@ -496,12 +579,13 @@ void PreviewOverlay::setupUi()
 
     // Content area (image or video)
     QWidget *contentWidget = new QWidget(this);
+    contentWidget->setMinimumSize(QSize(0, 0));
     QVBoxLayout *contentLayout = new QVBoxLayout(contentWidget);
     contentLayout->setContentsMargins(0, 0, 0, 0);
 
     // Image view with zoom/pan support (for images and videos)
     imageView = new QGraphicsView(this);
-#if defined(KAM_HAVE_QOPENGLWIDGET) && !(defined(HAVE_TLRENDER) && HAVE_TLRENDER)
+#if defined(KAM_HAVE_QOPENGLWIDGET) && !(defined(HAVE_TLRENDER) && HAVE_TLRENDER) && !defined(Q_OS_LINUX)
     // Use OpenGL-backed viewport for smoother video/image scaling when available.
     // When tlRender is enabled, avoid an extra QOpenGLWidget to reduce context churn.
     imageView->setViewport(new QOpenGLWidget());
@@ -573,6 +657,8 @@ void PreviewOverlay::setupUi()
     annotationOverlayView->setFrameShape(QFrame::NoFrame);
     annotationOverlayView->setRenderHints(QPainter::Antialiasing | QPainter::TextAntialiasing);
     annotationOverlayView->setInteractive(true);
+    annotationOverlayView->installEventFilter(this);
+    annotationOverlayView->viewport()->installEventFilter(this);
     annotationOverlayView->hide();
     // Will position overlay absolutely when annotation mode is enabled
 #ifdef HAVE_QT_PDF
@@ -626,6 +712,7 @@ void PreviewOverlay::setupUi()
     // Position slider with cached frame visualization
     positionSlider = new CachedFrameSlider(Qt::Horizontal, this);
     positionSlider->setFocusPolicy(Qt::NoFocus);
+    positionSlider->installEventFilter(this);
     positionSlider->setStyleSheet(
         "QSlider::groove:horizontal { background: transparent; height: 28px; margin: 0 12px; }"
         "QSlider::handle:horizontal { background: transparent; width: 18px; margin: -14px 0; }"
@@ -849,6 +936,7 @@ void PreviewOverlay::setupUi()
     transportLayout->addWidget(prevFrameBtn);
 
     playPauseBtn = new QPushButton(this);
+    playPauseBtn->installEventFilter(this);
     playPauseBtn->setIcon(playIcon);
     playPauseBtn->setIconSize(QSize(24, 24));
     playPauseBtn->setFixedSize(40, 40);
@@ -1002,25 +1090,14 @@ void PreviewOverlay::setupUi()
     }
 
 #ifdef HAVE_TLRENDER
-    // Set video widget for tlRender rendering using native viewport
-    m_renderWidget = new TLRenderViewport(this);
-    m_renderWidget->setPlayer(m_player);
-    // Ensure the overlay remains the focus target for keyboard shortcuts.
-    m_renderWidget->setFocusPolicy(Qt::NoFocus);
-    m_renderWidget->installEventFilter(this);
-    // Replace videoWidget with m_renderWidget in the layout
-    if (videoWidget && videoWidget->parentWidget()) {
-        QLayout* parentLayout = videoWidget->parentWidget()->layout();
-        if (parentLayout) {
-            parentLayout->replaceWidget(videoWidget, m_renderWidget);
-        }
-    }
-    // Set initial volume
-    m_player->setVolume(0.5);
+    // Delay all tlRender setup until a video/sequence is actually shown.
+    // Creating the player or hidden GL surfaces up front is unstable on Wayland/NVIDIA.
 
     // Wire OCIO controls
     if (ocioEnableCheck) {
         connect(ocioEnableCheck, &QCheckBox::toggled, this, [this](bool enabled) {
+            ensurePlayer();
+            if (!m_player) return;
             m_player->setOCIOEnabled(enabled);
             QSettings settings("AugmentCode", "KAssetManager");
             settings.setValue(kOcioEnabledSetting, enabled);
@@ -1038,6 +1115,8 @@ void PreviewOverlay::setupUi()
                 tr("OCIO Config (config.ocio);;All Files (*.*)")
             );
             if (!filePath.isEmpty()) {
+                ensurePlayer();
+                if (!m_player) return;
                 m_player->setOCIOConfig(filePath);
                 QSettings settings("AugmentCode", "KAssetManager");
                 settings.setValue(kOcioConfigSetting, filePath);
@@ -1047,6 +1126,8 @@ void PreviewOverlay::setupUi()
     if (ocioInputCombo) {
         connect(ocioInputCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int idx) {
             if (idx < 0) return;
+            ensurePlayer();
+            if (!m_player) return;
             const QString colorspace = ocioInputCombo->itemText(idx);
             m_player->setInputColorspace(colorspace);
 
@@ -1062,6 +1143,8 @@ void PreviewOverlay::setupUi()
     if (ocioDisplayCombo) {
         connect(ocioDisplayCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int idx) {
             if (idx < 0) return;
+            ensurePlayer();
+            if (!m_player) return;
             const QString display = ocioDisplayCombo->itemText(idx);
             m_player->setDisplay(display);
 
@@ -1083,6 +1166,8 @@ void PreviewOverlay::setupUi()
     if (ocioViewCombo) {
         connect(ocioViewCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int idx) {
             if (idx < 0) return;
+            ensurePlayer();
+            if (!m_player) return;
             const QString view = ocioViewCombo->itemText(idx);
             m_player->setView(view);
             // Save to settings for persistence
@@ -1096,6 +1181,8 @@ void PreviewOverlay::setupUi()
     // Loop mode control
     if (loopModeCombo) {
         connect(loopModeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int idx) {
+            ensurePlayer();
+            if (!m_player) return;
             TLRenderPlayer::LoopMode mode = TLRenderPlayer::LoopMode::Loop;
             switch (idx) {
                 case 0: mode = TLRenderPlayer::LoopMode::Loop; break;
@@ -1110,6 +1197,8 @@ void PreviewOverlay::setupUi()
     // Playback rate control
     if (playbackRateCombo) {
         connect(playbackRateCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int idx) {
+            ensurePlayer();
+            if (!m_player) return;
             static const double rates[] = {0.25, 0.5, 1.0, 1.5, 2.0, 4.0};
             if (idx >= 0 && idx < 6) {
                 m_player->setPlaybackRate(rates[idx]);
@@ -1121,6 +1210,8 @@ void PreviewOverlay::setupUi()
     // Exposure slider
     if (exposureSlider) {
         connect(exposureSlider, &QSlider::valueChanged, this, [this](int value) {
+            ensurePlayer();
+            if (!m_player) return;
             float exposure = value / 10.0f; // -10.0 to 10.0
             m_player->setExposure(exposure);
             if (exposureLabel) {
@@ -1133,6 +1224,8 @@ void PreviewOverlay::setupUi()
     // Gamma slider
     if (gammaSlider) {
         connect(gammaSlider, &QSlider::valueChanged, this, [this](int value) {
+            ensurePlayer();
+            if (!m_player) return;
             float gamma = value / 100.0f; // 0.1 to 4.0
             m_player->setGamma(gamma);
             if (gammaLabel) {
@@ -1143,150 +1236,6 @@ void PreviewOverlay::setupUi()
     }
 
     // Populate OCIO lists once we have a config loaded
-    connect(m_player, &TLRenderPlayer::colorspacesChanged, this, [this](const QStringList& colorspaces) {
-        populateOcioInputColorspaces(colorspaces);
-        if (!currentFilePath.isEmpty()) {
-            applyOcioInputDefaults(currentFilePath);
-        }
-    });
-    connect(m_player, &TLRenderPlayer::displaysChanged, this, [this](const QStringList& displays) {
-        if (!ocioDisplayCombo) return;
-        ocioDisplayCombo->blockSignals(true);
-        ocioDisplayCombo->clear();
-        ocioDisplayCombo->addItems(displays);
-        
-        // Try to restore last used display from settings
-        QSettings settings("AugmentCode", "KAssetManager");
-        const QString lastDisplay = settings.value("OCIO/LastDisplay").toString();
-        int idx = -1;
-        if (!lastDisplay.isEmpty()) {
-            idx = ocioDisplayCombo->findText(lastDisplay);
-        }
-        if (idx < 0) {
-            idx = ocioDisplayCombo->findText(m_player->display());
-        }
-        if (idx >= 0) {
-            ocioDisplayCombo->setCurrentIndex(idx);
-        }
-        ocioDisplayCombo->blockSignals(false);
-
-            // Ensure the views combo is populated for the selected display.
-            if (ocioViewCombo) {
-                const QString display = (idx >= 0) ? ocioDisplayCombo->itemText(idx)
-                                                   : (ocioDisplayCombo->count() > 0 ? ocioDisplayCombo->itemText(0) : QString());
-                const QStringList views = display.isEmpty() ? QStringList() : m_player->availableViews(display);
-                ocioViewCombo->blockSignals(true);
-                ocioViewCombo->clear();
-                ocioViewCombo->addItems(views);
-                
-                // Restore view from settings or use smart defaults
-                const QString lastView = settings.value("OCIO/LastView").toString();
-                int viewIdx = -1;
-                if (!lastView.isEmpty()) {
-                    viewIdx = ocioViewCombo->findText(lastView);
-                }
-                
-                // If no saved view, check for video file defaults
-                if (viewIdx < 0 && !currentFilePath.isEmpty()) {
-                    const QString ext = QFileInfo(currentFilePath).suffix().toLower();
-                    const int rec709Idx = ocioViewCombo->findText("Rec.709", Qt::MatchFixedString);
-                    const int srgbIdx = ocioViewCombo->findText("sRGB", Qt::MatchFixedString);
-                    if (isVideoExtension(ext)) {
-                        if (rec709Idx >= 0) {
-                            viewIdx = rec709Idx;
-                        } else if (srgbIdx >= 0) {
-                            viewIdx = srgbIdx;
-                        }
-                    } else if (srgbIdx >= 0) {
-                        viewIdx = srgbIdx;
-                    }
-                }
-                
-                if (viewIdx < 0) {
-                    viewIdx = ocioViewCombo->findText(m_player->view());
-                }
-                if (viewIdx >= 0) {
-                    ocioViewCombo->setCurrentIndex(viewIdx);
-                }
-                ocioViewCombo->blockSignals(false);
-            }
-    });
-
-        connect(m_player, &TLRenderPlayer::viewsChanged, this, [this](const QStringList& views) {
-            if (!ocioViewCombo) return;
-            ocioViewCombo->blockSignals(true);
-            ocioViewCombo->clear();
-            ocioViewCombo->addItems(views);
-            
-            // Try to restore last used view from settings
-            QSettings settings("AugmentCode", "KAssetManager");
-            const QString lastView = settings.value("OCIO/LastView").toString();
-            int viewIdx = -1;
-            
-            if (!lastView.isEmpty()) {
-                viewIdx = ocioViewCombo->findText(lastView);
-            }
-            
-            // If no saved view or saved view not found, check for video file defaults
-            if (viewIdx < 0 && !currentFilePath.isEmpty()) {
-                const QString ext = QFileInfo(currentFilePath).suffix().toLower();
-                const int rec709Idx = ocioViewCombo->findText("Rec.709", Qt::MatchFixedString);
-                const int srgbIdx = ocioViewCombo->findText("sRGB", Qt::MatchFixedString);
-                if (isVideoExtension(ext)) {
-                    if (rec709Idx >= 0) {
-                        viewIdx = rec709Idx;
-                    } else if (srgbIdx >= 0) {
-                        viewIdx = srgbIdx;
-                    }
-                } else if (srgbIdx >= 0) {
-                    viewIdx = srgbIdx;
-                }
-            }
-            
-            // Final fallback: use player's current view or first item
-            if (viewIdx < 0) {
-                viewIdx = ocioViewCombo->findText(m_player->view());
-            }
-            if (viewIdx >= 0) {
-                ocioViewCombo->setCurrentIndex(viewIdx);
-            }
-            ocioViewCombo->blockSignals(false);
-        });
-
-    // Default to bundled ACES config if it exists in the deployed bin folder
-    {
-        QSettings settings("AugmentCode", "KAssetManager");
-        const bool ocioEnabled = settings.value(kOcioEnabledSetting, true).toBool();
-        if (ocioEnableCheck) {
-            QSignalBlocker blocker(ocioEnableCheck);
-            ocioEnableCheck->setChecked(ocioEnabled);
-        }
-        m_player->setOCIOEnabled(ocioEnabled);
-
-        QString configPath = settings.value(kOcioConfigSetting).toString();
-        if (!configPath.isEmpty() && !QFileInfo::exists(configPath)) {
-            qWarning() << "[PreviewOverlay] OCIO config not found at" << configPath;
-            configPath.clear();
-        }
-        if (configPath.isEmpty()) {
-            configPath = findBundledAcesConfig();
-        }
-        if (!configPath.isEmpty()) {
-            m_player->setOCIOConfig(configPath);
-        } else {
-            qWarning() << "[PreviewOverlay] ACES OCIO config not found.";
-        }
-
-        // Restore last used OCIO display/view from settings
-        const QString lastDisplay = settings.value("OCIO/LastDisplay").toString();
-        const QString lastView = settings.value("OCIO/LastView").toString();
-        if (!lastDisplay.isEmpty()) {
-            m_player->setDisplay(lastDisplay);
-        }
-        if (!lastView.isEmpty()) {
-            m_player->setView(lastView);
-        }
-    }
 #endif
     
     // Initialize annotation system
@@ -1299,11 +1248,171 @@ void PreviewOverlay::setupUi()
         qDebug() << "[PreviewOverlay] Annotation added signal received - saving frame immediately";
         saveCurrentFrameAnnotations();
     });
+    connect(annotationLayer, &AnnotationLayer::annotationRemoved, this, [this](AnnotationItem* item) {
+        Q_UNUSED(item);
+        saveCurrentFrameAnnotations();
+    });
+    connect(annotationLayer, &AnnotationLayer::annotationsCleared, this, [this]() {
+        saveCurrentFrameAnnotations();
+    });
     
     setupAnnotationToolbar();
 }
 
 #ifdef HAVE_TLRENDER
+void PreviewOverlay::ensurePlayer()
+{
+    if (m_player) {
+        return;
+    }
+
+    TLRenderPlayer::initialize();
+    m_player = new TLRenderPlayer(this);
+
+    connect(m_player, &TLRenderPlayer::positionChanged, this, &PreviewOverlay::onPlayerPositionChanged);
+    connect(m_player, &TLRenderPlayer::durationChanged, this, &PreviewOverlay::onPlayerDurationChanged);
+    connect(m_player, &TLRenderPlayer::mediaInfoReady, this, &PreviewOverlay::onPlayerMediaInfo);
+    connect(m_player, &TLRenderPlayer::playbackStateChanged, this, &PreviewOverlay::onPlayerPlaybackStateChanged);
+    connect(m_player, &TLRenderPlayer::error, this, &PreviewOverlay::onPlayerError);
+    connect(m_player, &TLRenderPlayer::endOfStream, this, &PreviewOverlay::onPlayerEndOfStream);
+
+    connect(m_player, &TLRenderPlayer::colorspacesChanged, this, [this](const QStringList& colorspaces) {
+        populateOcioInputColorspaces(colorspaces);
+        if (!currentFilePath.isEmpty()) {
+            applyOcioInputDefaults(currentFilePath);
+        }
+    });
+    connect(m_player, &TLRenderPlayer::displaysChanged, this, [this](const QStringList& displays) {
+        if (!ocioDisplayCombo || !m_player) return;
+        ocioDisplayCombo->blockSignals(true);
+        ocioDisplayCombo->clear();
+        ocioDisplayCombo->addItems(displays);
+
+        QSettings settings("AugmentCode", "KAssetManager");
+        const QString lastDisplay = settings.value("OCIO/LastDisplay").toString();
+        int idx = !lastDisplay.isEmpty() ? ocioDisplayCombo->findText(lastDisplay) : -1;
+        if (idx < 0) {
+            idx = ocioDisplayCombo->findText(m_player->display());
+        }
+        if (idx >= 0) {
+            ocioDisplayCombo->setCurrentIndex(idx);
+        }
+        ocioDisplayCombo->blockSignals(false);
+
+        if (ocioViewCombo) {
+            const QString display = (idx >= 0) ? ocioDisplayCombo->itemText(idx)
+                                               : (ocioDisplayCombo->count() > 0 ? ocioDisplayCombo->itemText(0) : QString());
+            const QStringList views = display.isEmpty() ? QStringList() : m_player->availableViews(display);
+            ocioViewCombo->blockSignals(true);
+            ocioViewCombo->clear();
+            ocioViewCombo->addItems(views);
+
+            const QString lastView = settings.value("OCIO/LastView").toString();
+            int viewIdx = !lastView.isEmpty() ? ocioViewCombo->findText(lastView) : -1;
+            if (viewIdx < 0 && !currentFilePath.isEmpty()) {
+                const QString ext = QFileInfo(currentFilePath).suffix().toLower();
+                const int rec709Idx = ocioViewCombo->findText("Rec.709", Qt::MatchFixedString);
+                const int srgbIdx = ocioViewCombo->findText("sRGB", Qt::MatchFixedString);
+                if (isVideoExtension(ext)) {
+                    viewIdx = (rec709Idx >= 0) ? rec709Idx : srgbIdx;
+                } else if (srgbIdx >= 0) {
+                    viewIdx = srgbIdx;
+                }
+            }
+            if (viewIdx < 0) {
+                viewIdx = ocioViewCombo->findText(m_player->view());
+            }
+            if (viewIdx >= 0) {
+                ocioViewCombo->setCurrentIndex(viewIdx);
+            }
+            ocioViewCombo->blockSignals(false);
+        }
+    });
+    connect(m_player, &TLRenderPlayer::viewsChanged, this, [this](const QStringList& views) {
+        if (!ocioViewCombo || !m_player) return;
+        ocioViewCombo->blockSignals(true);
+        ocioViewCombo->clear();
+        ocioViewCombo->addItems(views);
+
+        QSettings settings("AugmentCode", "KAssetManager");
+        const QString lastView = settings.value("OCIO/LastView").toString();
+        int viewIdx = !lastView.isEmpty() ? ocioViewCombo->findText(lastView) : -1;
+        if (viewIdx < 0 && !currentFilePath.isEmpty()) {
+            const QString ext = QFileInfo(currentFilePath).suffix().toLower();
+            const int rec709Idx = ocioViewCombo->findText("Rec.709", Qt::MatchFixedString);
+            const int srgbIdx = ocioViewCombo->findText("sRGB", Qt::MatchFixedString);
+            if (isVideoExtension(ext)) {
+                viewIdx = (rec709Idx >= 0) ? rec709Idx : srgbIdx;
+            } else if (srgbIdx >= 0) {
+                viewIdx = srgbIdx;
+            }
+        }
+        if (viewIdx < 0) {
+            viewIdx = ocioViewCombo->findText(m_player->view());
+        }
+        if (viewIdx >= 0) {
+            ocioViewCombo->setCurrentIndex(viewIdx);
+        }
+        ocioViewCombo->blockSignals(false);
+    });
+
+    m_player->setVolume(0.5);
+
+    QSettings settings("AugmentCode", "KAssetManager");
+    const bool ocioEnabled = settings.value(kOcioEnabledSetting, true).toBool();
+    if (ocioEnableCheck) {
+        QSignalBlocker blocker(ocioEnableCheck);
+        ocioEnableCheck->setChecked(ocioEnabled);
+    }
+    m_player->setOCIOEnabled(ocioEnabled);
+
+    QString configPath = settings.value(kOcioConfigSetting).toString();
+    if (!configPath.isEmpty() && !QFileInfo::exists(configPath)) {
+        qWarning() << "[PreviewOverlay] OCIO config not found at" << configPath;
+        configPath.clear();
+    }
+    if (configPath.isEmpty()) {
+        configPath = findBundledAcesConfig();
+    }
+    if (!configPath.isEmpty()) {
+        m_player->setOCIOConfig(configPath);
+    } else {
+        qWarning() << "[PreviewOverlay] ACES OCIO config not found.";
+    }
+
+    const QString lastDisplay = settings.value("OCIO/LastDisplay").toString();
+    const QString lastView = settings.value("OCIO/LastView").toString();
+    if (!lastDisplay.isEmpty()) {
+        m_player->setDisplay(lastDisplay);
+    }
+    if (!lastView.isEmpty()) {
+        m_player->setView(lastView);
+    }
+
+    qDebug() << "[PreviewOverlay] TLRenderPlayer initialized with OCIO color management";
+}
+
+void PreviewOverlay::ensureRenderWidget()
+{
+    if (!m_player) {
+        return;
+    }
+
+    if (!m_renderWidget) {
+        m_renderWidget = new TLRenderViewport(this);
+        m_renderWidget->setFocusPolicy(Qt::NoFocus);
+        m_renderWidget->installEventFilter(this);
+        if (videoWidget && videoWidget->parentWidget()) {
+            QLayout* parentLayout = videoWidget->parentWidget()->layout();
+            if (parentLayout) {
+                parentLayout->replaceWidget(videoWidget, m_renderWidget);
+            }
+        }
+    }
+
+    m_renderWidget->setPlayer(m_player);
+}
+
 void PreviewOverlay::populateOcioInputColorspaces(const QStringList& colorspaces)
 {
     if (!ocioInputCombo) return;
@@ -1314,8 +1423,25 @@ void PreviewOverlay::populateOcioInputColorspaces(const QStringList& colorspaces
 
 QString PreviewOverlay::defaultOcioInputName(const QString& filePath) const
 {
+    const QStringList colorspaces = m_player ? m_player->availableColorspaces() : QStringList();
     const QString ext = QFileInfo(filePath).suffix().toLower();
-    return isVideoExtension(ext) ? kOcioInputRec709 : kOcioInputSrgb;
+    if (isVideoExtension(ext)) {
+        return findMatchingColorspace(colorspaces, {
+            QStringLiteral("Camera Rec.709"),
+            QStringLiteral("Rec.709"),
+            QStringLiteral("sRGB Encoded Rec.709"),
+            QStringLiteral("Gamma 2.4 Encoded Rec.709"),
+            QStringLiteral("Linear Rec.709"),
+            kOcioInputRec709
+        });
+    }
+
+    return findMatchingColorspace(colorspaces, {
+        QStringLiteral("sRGB Encoded Rec.709"),
+        QStringLiteral("sRGB"),
+        QStringLiteral("Linear Rec.709"),
+        kOcioInputSrgb
+    });
 }
 
 void PreviewOverlay::applyOcioInputDefaults(const QString& filePath)
@@ -1360,9 +1486,15 @@ void PreviewOverlay::applyOcioInputDefaults(const QString& filePath)
         }
     }
     if (selected.isEmpty() || !colorspaces.contains(selected)) {
-        if (!selected.isEmpty()) {
-            qWarning() << "[PreviewOverlay] OCIO input colorspace not found in config:" << selected;
+        if (category == OcioInputCategory::Bit8) {
+            selected = defaultOcioInputName(filePath);
         }
+        if (selected.isEmpty() && !colorspaces.isEmpty()) {
+            selected = colorspaces.first();
+        }
+    }
+
+    if (selected.isEmpty() || !colorspaces.contains(selected)) {
         return;
     }
 
@@ -1379,6 +1511,7 @@ void PreviewOverlay::showAsset(const QString &filePath, const QString &fileName,
 {
     // First, stop any ongoing playback (video, fallback, or sequence)
     stopPlayback();
+    resetAnnotationSession();
     detectedFps = 0.0;
     if (positionSlider) {
         positionSlider->clearCachedFrames();
@@ -1437,10 +1570,8 @@ void PreviewOverlay::showAsset(const QString &filePath, const QString &fileName,
     QStringList videoFormats = {"mp4", "avi", "mov", "mkv", "webm", "flv", "wmv", "m4v", "mxf"};
     isVideo = videoFormats.contains(currentFileType);
 
-    // Make sure widget is shown and sized before loading content
-    show();
-    raise();
-    setFocus();
+    // Make sure widget is shown and owns focus before loading content.
+    activatePreviewWindow(this);
 
     // Process events to ensure window is properly sized
 
@@ -1522,8 +1653,10 @@ void PreviewOverlay::showImage(const QString &filePath)
     if (navPrevBtn) navPrevBtn->hide();
     if (navNextBtn) navNextBtn->hide();
 
-    // CRITICAL: Stop any video playback
-    PLAYER_STOP();
+    // CRITICAL: Stop any video playback only when a player exists
+    if (m_player) {
+        PLAYER_STOP();
+    }
 
     // Check if this is an HDR/EXR image
     QFileInfo fileInfo(filePath);
@@ -1594,6 +1727,13 @@ void PreviewOverlay::showImage(const QString &filePath)
 
 void PreviewOverlay::showVideo(const QString &filePath)
 {
+#ifdef HAVE_TLRENDER
+    ensurePlayer();
+    if (!m_player) {
+        return;
+    }
+    ensureRenderWidget();
+#endif
     // Stop any existing playback
     PLAYER_STOP();
 
@@ -1604,21 +1744,20 @@ void PreviewOverlay::showVideo(const QString &filePath)
     if (pdfView) pdfView->hide();
 #endif
     if (imageView) imageView->hide();
+    if (stillImageView) stillImageView->hide();
 
-    // CRITICAL: Set render widget AFTER show() to ensure valid window handle
-    if (!m_renderWidget) {
-        m_renderWidget = new TLRenderViewport(this);
-        m_renderWidget->setPlayer(m_player);
-    }
     m_renderWidget->show();
     m_renderWidget->raise();
     if (videoWidget) videoWidget->hide(); // Hide the placeholder widget
+    activatePreviewWindow(this, m_renderWidget);
 
     // Anchor nav arrows to the video widget
     positionNavButtons(activeVideoWidget());
     setPlaybackControlsVisible(true);
     setControlsHeightForImage(false);
     setControlsVisible(true);
+    controlsPinned = false;
+    controlsHovering = false;
 
     // Cache bar is only for sequences
     if (cacheBar) cacheBar->hide();
@@ -1695,6 +1834,9 @@ void PreviewOverlay::onPlayPauseClicked()
             playSequence();
         }
     } else {
+        if (!m_player) {
+            return;
+        }
         // Handle video/tlRender playback
         auto state = PLAYER_STATE();
         qDebug() << "[PreviewOverlay] onPlayPauseClicked: current state=" << static_cast<int>(state);
@@ -1711,6 +1853,9 @@ void PreviewOverlay::onPlayPauseClicked()
             PLAYER_PLAY();
         }
     }
+    if (playbackControlsGroup) {
+        playbackControlsGroup->show();
+    }
     controlsTimer->start();
 }
 
@@ -1724,27 +1869,42 @@ void PreviewOverlay::onSliderMoved(int position)
     }
 
     // Video path - always do live scrubbing
-    PLAYER_SEEK(position);
-    
+    if (!m_player) {
+        return;
+    }
+
+    const double fps = detectedFps > 0.0 ? detectedFps : 24.0;
+    const qint64 targetFrame = qMax<qint64>(0, qRound64((position / 1000.0) * fps));
+    m_player->seekToFrame(targetFrame);
+    m_player->refreshCurrentFrame();
+    lastKnownVideoFrame = static_cast<int>(targetFrame);
+
     // Update timecode immediately during scrubbing
     lastKnownPosition = position;
     qint64 durationMs = PLAYER_DURATION();
     updateVideoTimeDisplays(position, durationMs);
-    
-    // Don't recapture frame during drag if in annotation mode (too slow)
-    // Will update on release
-    
+
+    if (annotationModeEnabled && isVideo) {
+        updateVideoAnnotationFrame();
+    }
+
     controlsTimer->start();
 }
 
 void PreviewOverlay::onVolumeChanged(int value)
 {
+    if (!m_player) {
+        return;
+    }
     m_player->setVolume(value / 100.0);
     controlsTimer->start();
 }
 
 void PreviewOverlay::onToggleMute()
 {
+    if (!m_player) {
+        return;
+    }
     const bool newMuted = !m_player->isMuted();
     m_player->setMuted(newMuted);
     if (muteBtn) {
@@ -1762,6 +1922,10 @@ void PreviewOverlay::onSliderPressed()
         return;
     }
 
+    if (!m_player) {
+        userSeeking = false;
+        return;
+    }
     wasPlayingBeforeSeek = (PLAYER_STATE() == PLAYER_STATE_PLAYING);
     // Capture position before pausing for seek
     lastKnownPosition = PLAYER_POSITION();
@@ -1778,15 +1942,22 @@ void PreviewOverlay::onSliderReleased()
         loadSequenceFrame(pos);
         if (wasPlayingBeforeSeek) playSequence();
         userSeeking = false;
+        controlsPinned = false;
         controlsTimer->start();
         return;
     }
 
-    PLAYER_SEEK(pos);
+    if (!m_player) {
+        userSeeking = false;
+        return;
+    }
+    const double fps = detectedFps > 0.0 ? detectedFps : 24.0;
+    const qint64 targetFrame = qMax<qint64>(0, qRound64((pos / 1000.0) * fps));
+    m_player->seekToFrame(targetFrame);
+    m_player->refreshCurrentFrame();
     
     // Calculate and explicitly track the frame number we seeked to
-    double fps = detectedFps > 0.0 ? detectedFps : 24.0;
-    lastKnownVideoFrame = static_cast<int>(qRound((pos / 1000.0) * fps));
+    lastKnownVideoFrame = static_cast<int>(targetFrame);
     qDebug() << "[PreviewOverlay] Seek to position" << pos << "ms - explicitly set frame to:" << lastKnownVideoFrame;
     
     // Update lastKnownPosition immediately for timecode display
@@ -1802,6 +1973,7 @@ void PreviewOverlay::onSliderReleased()
     }
     
     userSeeking = false;
+    controlsPinned = false;
     controlsTimer->start();
 }
 
@@ -1817,6 +1989,9 @@ void PreviewOverlay::onStepNextFrame()
     }
 
     // Player path - professional frame stepping
+    if (!m_player) {
+        return;
+    }
     m_player->stepForward();
     
     // Explicitly track frame number for frame-accurate annotations
@@ -1854,6 +2029,9 @@ void PreviewOverlay::onStepPrevFrame()
     }
 
     // Player path - professional frame stepping
+    if (!m_player) {
+        return;
+    }
     m_player->stepBackward();
     
     // Explicitly track frame number for frame-accurate annotations
@@ -1938,11 +2116,13 @@ void PreviewOverlay::setControlsVisible(bool visible)
     if (!controlsWidget) return;
     const bool allow = isVideo || isSequence;
     if (visible && allow) {
+        setControlsHeightForImage(false);
         controlsWidget->show();
+        if (playbackControlsGroup && isVideo) {
+            playbackControlsGroup->show();
+        }
     } else {
         controlsWidget->hide();
-        controlsWidget->setMinimumHeight(0);
-        controlsWidget->setMaximumHeight(0);
     }
     controlsWidget->updateGeometry();
 }
@@ -1961,10 +2141,14 @@ void PreviewOverlay::hideVideoWidgets()
 
 void PreviewOverlay::hideControls()
 {
-    // Never hide playback controls in full-screen previews
-    // Requirement: playback buttons must remain visible at all times
-    Q_UNUSED(this);
-    return; // no-op
+    const bool cursorInControls = controlsWidget && controlsWidget->isVisible() &&
+        controlsWidget->rect().contains(controlsWidget->mapFromGlobal(QCursor::pos()));
+
+    if (!controlsWidget || !isVideo || userSeeking || controlsPinned || controlsHovering || cursorInControls) {
+        return;
+    }
+
+    controlsWidget->hide();
 }
 
 void PreviewOverlay::updatePlayPauseButton()
@@ -2124,35 +2308,54 @@ void PreviewOverlay::navigatePrevious()
 
 void PreviewOverlay::keyPressEvent(QKeyEvent *event)
 {
+    bool handled = false;
+
     switch (event->key()) {
         case Qt::Key_Escape:
             // Ensure playback fully stops before closing overlay
             stopPlayback();
             emit closed();
+            handled = true;
             break;
         case Qt::Key_Left:
             // CTRL+Left: Step backward one frame
             if (event->modifiers() & Qt::ControlModifier) {
-                if (isVideo || isSequence) { onStepPrevFrame(); return; }
+                if (isVideo || isSequence) {
+                    onStepPrevFrame();
+                    handled = true;
+                    break;
+                }
                 break;
             }
             // Navigate to previous file (MainWindow will handle stopPlayback)
             navigatePrevious();
+            handled = true;
             break;
         case Qt::Key_Right:
             // CTRL+Right: Step forward one frame
             if (event->modifiers() & Qt::ControlModifier) {
-                if (isVideo || isSequence) { onStepNextFrame(); return; }
+                if (isVideo || isSequence) {
+                    onStepNextFrame();
+                    handled = true;
+                    break;
+                }
                 break;
             }
             // Navigate to next file (MainWindow will handle stopPlayback)
             navigateNext();
+            handled = true;
             break;
         case Qt::Key_Period: // '.' next frame
-            if (isVideo || isSequence) { onStepNextFrame(); return; }
+            if (isVideo || isSequence) {
+                onStepNextFrame();
+                handled = true;
+            }
             break;
         case Qt::Key_Comma: // ',' previous frame
-            if (isVideo || isSequence) { onStepPrevFrame(); return; }
+            if (isVideo || isSequence) {
+                onStepPrevFrame();
+                handled = true;
+            }
             break;
 
         // JKL scrubbing (NLE-style playback control)
@@ -2164,10 +2367,15 @@ void PreviewOverlay::keyPressEvent(QKeyEvent *event)
                     playSequence();
                 }
             } else if (isVideo) {
+                if (!m_player) {
+                    handled = true;
+                    break;
+                }
                 m_player->setPlaybackRate(-1.0);
                 PLAYER_PLAY();
             }
-            return;
+            handled = true;
+            break;
         case Qt::Key_K:
             // K = Pause/Stop
             if (isSequence) {
@@ -2175,9 +2383,14 @@ void PreviewOverlay::keyPressEvent(QKeyEvent *event)
                     pauseSequence();
                 }
             } else if (isVideo) {
+                if (!m_player) {
+                    handled = true;
+                    break;
+                }
                 PLAYER_PAUSE();
             }
-            return;
+            handled = true;
+            break;
         case Qt::Key_L:
             // L = Play forward
             if (isSequence) {
@@ -2186,6 +2399,10 @@ void PreviewOverlay::keyPressEvent(QKeyEvent *event)
                     playSequence();
                 }
             } else if (isVideo) {
+                if (!m_player) {
+                    handled = true;
+                    break;
+                }
                 // If already playing forward, just ensure rate is 1.0
                 if (PLAYER_STATE() == TLRenderPlayer::PlaybackState::Playing &&
                     m_player->playbackRate() > 0) {
@@ -2195,7 +2412,8 @@ void PreviewOverlay::keyPressEvent(QKeyEvent *event)
                     PLAYER_PLAY();
                 }
             }
-            return;
+            handled = true;
+            break;
 
 #ifdef HAVE_QT_PDF
         case Qt::Key_Up:
@@ -2215,10 +2433,18 @@ void PreviewOverlay::keyPressEvent(QKeyEvent *event)
             // Space toggles overlay visibility (consistent with File/Asset Manager)
             stopPlayback();
             emit closed();
+            handled = true;
             break;
         default:
-            QWidget::keyPressEvent(event);
+            break;
     }
+
+    if (handled) {
+        event->accept();
+        return;
+    }
+
+    QWidget::keyPressEvent(event);
 }
 
 void PreviewOverlay::resizeEvent(QResizeEvent *event)
@@ -2241,9 +2467,7 @@ void PreviewOverlay::resizeEvent(QResizeEvent *event)
         
         // Update annotation overlay geometry if enabled
         if (annotationModeEnabled && annotationOverlayView && annotationOverlayView->isVisible()) {
-            QPoint overlayPos = videoContainer->mapTo(this, QPoint(0, 0));
-            annotationOverlayView->setGeometry(QRect(overlayPos, videoContainer->size()));
-            annotationOverlayScene->setSceneRect(0, 0, videoContainer->width(), videoContainer->height());
+            syncAnnotationOverlayToVideo(annotationOverlayView, annotationOverlayScene, videoContainer);
         }
     }
 
@@ -2271,8 +2495,11 @@ void PreviewOverlay::mousePressEvent(QMouseEvent *event)
 
     if (isVideo) {
         // Show controls on click
+        controlsPinned = false;
         setControlsVisible(true);
         controlsTimer->start();
+        QWidget::mousePressEvent(event);
+        return;
     } else if (event->button() == Qt::MiddleButton) {
         // Start panning for images
         isPanning = true;
@@ -2282,8 +2509,29 @@ void PreviewOverlay::mousePressEvent(QMouseEvent *event)
     QWidget::mousePressEvent(event);
 }
 
+void PreviewOverlay::mouseMoveEvent(QMouseEvent *event)
+{
+    if (isVideo) {
+        setControlsVisible(true);
+        controlsTimer->start();
+    }
+    QWidget::mouseMoveEvent(event);
+}
+
+void PreviewOverlay::leaveEvent(QEvent *event)
+{
+    controlsHovering = false;
+    QWidget::leaveEvent(event);
+}
+
 void PreviewOverlay::wheelEvent(QWheelEvent *event)
 {
+    if (isVideo && m_renderWidget) {
+        m_renderWidget->zoomRelative(event->angleDelta().y() > 0 ? 1.15 : 0.85);
+        event->accept();
+        return;
+    }
+
     // Enable zoom for images and sequences (fallback if event reached overlay)
     if (stillImageView && stillImageView->isVisible() && !originalPixmap.isNull()) {
         double factor = event->angleDelta().y() > 0 ? 1.15 : 0.85;
@@ -2302,6 +2550,17 @@ void PreviewOverlay::wheelEvent(QWheelEvent *event)
 
 bool PreviewOverlay::eventFilter(QObject* watched, QEvent* event)
 {
+    if ((watched == controlsWidget || watched == positionSlider || watched == playPauseBtn) && isVideo) {
+        if (event->type() == QEvent::Enter || event->type() == QEvent::MouseMove) {
+            controlsHovering = true;
+            setControlsVisible(true);
+            controlsTimer->start();
+        } else if (event->type() == QEvent::Leave) {
+            controlsHovering = false;
+            controlsTimer->start();
+        }
+    }
+
     // Handle annotation mode mouse events on the scene
     if (annotationModeEnabled && (watched == imageView || (imageView && watched == imageView->viewport()) ||
                                   watched == stillImageView || (stillImageView && watched == stillImageView->viewport()) ||
@@ -2536,99 +2795,8 @@ void PreviewOverlay::zoomStillImage(double factor)
 
 void PreviewOverlay::showSequence(const QStringList &framePaths, const QString &sequenceName, int startFrame, int endFrame)
 {
-#ifdef HAVE_TLRENDER
-    // tlRender-native sequence playback.
-    // We intentionally do not use the legacy RAM cache / per-frame OIIO path here.
-    // This fixes slow/blank sequence preview when OIIO is compiled out and enables
-    // proper scrubbing/playback via the tlRender engine.
-
-    if (framePaths.isEmpty()) {
-        qWarning() << "[PreviewOverlay] showSequence called with empty frame list";
-        return;
-    }
-
-    currentFilePath = framePaths.first();
-    currentFileType = QFileInfo(currentFilePath).suffix().toLower();
-
-    // Calculate duration from known frame range (we already know start/end from sequence grouping)
-    const int totalFrames = endFrame - startFrame + 1;
-    const double defaultFps = 24.0;
-    const qint64 knownDurationMs = static_cast<qint64>((totalFrames / defaultFps) * 1000.0);
-    qDebug() << "[PreviewOverlay] Sequence range:" << startFrame << "-" << endFrame 
-             << "totalFrames:" << totalFrames << "durationMs:" << knownDurationMs;
-
-    // Treat sequences as video-like for timeline/scrubbing/controls.
-    isSequence = false;
-    isVideo = true;
-    sequencePlaying = false;
-
-    // Make sure widget is shown and sized before loading content
-    show();
-    raise();
-    setFocus();
-
-    // Anchor nav arrows to the render widget for sequences
-    if (m_renderWidget) {
-        positionNavButtons(m_renderWidget);
-    }
-
-    // Ensure image view is not used for tlRender sequences
-    imageView->hide();
-    if (videoWidget) videoWidget->hide();
-    if (m_renderWidget) m_renderWidget->show();
-
-    setPlaybackControlsVisible(true);
-    setControlsHeightForImage(false);
-    setControlsVisible(true);
-
-    // Hide legacy per-image tone-map colorspace controls; OCIO handles color
-    if (colorSpaceLabel) colorSpaceLabel->hide();
-    if (colorSpaceCombo) colorSpaceCombo->hide();
-
-    // Show OCIO controls for tlRender playback (sequences are treated like video here).
-    if (ocioEnableCheck) ocioEnableCheck->show();
-    if (ocioConfigBtn) ocioConfigBtn->show();
-    if (ocioInputLabel) ocioInputLabel->show();
-    if (ocioInputCombo) ocioInputCombo->show();
-    if (ocioDisplayLabel) ocioDisplayLabel->show();
-    if (ocioDisplayCombo) ocioDisplayCombo->show();
-    if (ocioViewLabel) ocioViewLabel->show();
-    if (ocioViewCombo) ocioViewCombo->show();
-
-    // Show playback control widgets row
-    if (playbackControlsGroup) {
-        playbackControlsGroup->show();
-    }
-
-    // Stop any existing playback and load the sequence pattern
-    PLAYER_STOP();
-
-    fileNameLabel->setText(sequenceName);
-    setWindowTitle(tr("Preview - %1").arg(sequenceName));
-
-    const QString patternPath = SequenceDetector::toHashPatternPath(framePaths.first());
-    qDebug() << "[PreviewOverlay] tlRender sequence load:" << framePaths.first() << "->" << patternPath;
-
-    // Set slider range immediately using known frame range (don't wait for tlRender)
-    positionSlider->setRange(0, static_cast<int>(knownDurationMs));
-    positionSlider->setValue(0);
-    positionSlider->setTimelineContext(true, defaultFps);
-    updateVideoTimeDisplays(0, knownDurationMs);
-    detectedFps = defaultFps;
-    if (fpsLabel) fpsLabel->setText(QString::number(defaultFps, 'f', 1) + " fps");
-
-    applyOcioInputDefaults(framePaths.first());
-    if (m_renderWidget) {
-        m_renderWidget->setFrameView(true);
-    }
-    m_player->load(patternPath);
-    // Do not auto-play sequences; keep same UX as legacy sequence preview.
-    m_player->pause();
-    updatePlayPauseButton();
-
-    controlsTimer->start();
-    return;
-#endif
+    stopPlayback();
+    resetAnnotationSession();
 
     isSequence = true;
     isVideo = false;
@@ -2639,6 +2807,14 @@ void PreviewOverlay::showSequence(const QStringList &framePaths, const QString &
     sequencePlaying = false;
     sequencePlayDirection = 1; // Default forward
 
+    if (!framePaths.isEmpty()) {
+        currentFilePath = framePaths.first();
+        currentFileType = QFileInfo(framePaths.first()).suffix().toLower();
+    } else {
+        currentFilePath = sequenceName;
+        currentFileType.clear();
+    }
+
     // Check if this is an HDR/EXR sequence
     if (!framePaths.isEmpty()) {
         QFileInfo fileInfo(framePaths.first());
@@ -2648,10 +2824,8 @@ void PreviewOverlay::showSequence(const QStringList &framePaths, const QString &
         isHDRImage = false;
     }
 
-    // Make sure widget is shown and sized before loading content
-    show();
-    raise();
-    setFocus();
+    // Make sure widget is shown and owns focus before loading content.
+    activatePreviewWindow(this, imageView);
 
     // Anchor nav arrows to the image viewport for sequences
     if (stillImageView) stillImageView->hide();
@@ -2669,6 +2843,8 @@ void PreviewOverlay::showSequence(const QStringList &framePaths, const QString &
     setPlaybackControlsVisible(true);
     setControlsHeightForImage(false);
     setControlsVisible(true);
+    controlsPinned = false;
+    controlsHovering = false;
     // Disable audio controls for image sequences (no audio)
     if (muteBtn) {
         muteBtn->setEnabled(false);
@@ -3006,18 +3182,36 @@ void PreviewOverlay::onSequenceTimerTick()
 
     // Handle looping
     if (currentSequenceFrame >= sequenceFramePaths.size()) {
-        currentSequenceFrame = 0;
-        // When looping, only kick prefetch if cache isn’t already full
-        if (frameCache && useCacheForSequences) {
-            const int need = qMin(frameCache->maxCacheSize(), sequenceFramePaths.size());
-            if (frameCache->cachedFrameCount() < need) {
-                qDebug() << "[PreviewOverlay] Sequence looped; cache not full, restarting prefetch";
-                frameCache->startPrefetch(0);
+        const int loopIndex = loopModeCombo ? loopModeCombo->currentIndex() : 0;
+        if (loopIndex == 1) {
+            stopSequence();
+            return;
+        }
+        if (loopIndex == 2) {
+            sequencePlayDirection = -1;
+            currentSequenceFrame = qMax(0, sequenceFramePaths.size() - 2);
+        } else {
+            currentSequenceFrame = 0;
+            if (frameCache && useCacheForSequences) {
+                const int need = qMin(frameCache->maxCacheSize(), sequenceFramePaths.size());
+                if (frameCache->cachedFrameCount() < need) {
+                    qDebug() << "[PreviewOverlay] Sequence looped; cache not full, restarting prefetch";
+                    frameCache->startPrefetch(0);
+                }
             }
         }
     } else if (currentSequenceFrame < 0) {
-        // Loop back to end when playing in reverse
-        currentSequenceFrame = sequenceFramePaths.size() - 1;
+        const int loopIndex = loopModeCombo ? loopModeCombo->currentIndex() : 0;
+        if (loopIndex == 1) {
+            stopSequence();
+            return;
+        }
+        if (loopIndex == 2) {
+            sequencePlayDirection = 1;
+            currentSequenceFrame = qMin(1, sequenceFramePaths.size() - 1);
+        } else {
+            currentSequenceFrame = sequenceFramePaths.size() - 1;
+        }
     }
 
     loadSequenceFrame(currentSequenceFrame);
@@ -3072,7 +3266,9 @@ void PreviewOverlay::stopPlayback()
     qDebug() << "[PreviewOverlay] Stopping playback";
 
     // Stop video playback
-    PLAYER_STOP();
+    if (m_player) {
+        PLAYER_STOP();
+    }
 
     // Stop sequence playback
     if (sequencePlaying) {
@@ -3107,6 +3303,9 @@ void PreviewOverlay::onDurationChanged(qint64 duration)
 
 void PreviewOverlay::onPlayerPositionChanged(qint64 positionMs)
 {
+    if (!m_player) {
+        return;
+    }
     qDebug() << "[PreviewOverlay] onPlayerPositionChanged:"
              << "positionMs=" << positionMs
              << "slider range=[" << positionSlider->minimum() << "," << positionSlider->maximum() << "]"
@@ -3161,6 +3360,14 @@ void PreviewOverlay::onPlayerMediaInfo(const TLRenderPlayer::MediaInfo& info)
         if (fpsLabel) fpsLabel->setText(QString::number(info.fps, 'f', 1) + " fps");
     }
 
+    if (annotationModeEnabled && isVideo && annotationOverlayView && annotationOverlayView->isVisible() &&
+        info.width > 0 && info.height > 0) {
+        annotationOverlayScene->setSceneRect(QRectF(0, 0, info.width, info.height));
+        if (QWidget* videoContainer = activeVideoWidget()) {
+            syncAnnotationOverlayToVideo(annotationOverlayView, annotationOverlayScene, videoContainer);
+        }
+    }
+
     // Enable/disable audio controls based on actual media
     if (muteBtn) {
         muteBtn->setEnabled(info.hasAudio);
@@ -3177,6 +3384,11 @@ void PreviewOverlay::onPlayerMediaInfo(const TLRenderPlayer::MediaInfo& info)
 
 void PreviewOverlay::onPlayerPlaybackStateChanged(TLRenderPlayer::PlaybackState state)
 {
+    if (!m_player && state != TLRenderPlayer::PlaybackState::Playing) {
+        if (playPauseBtn) playPauseBtn->setIcon(playIcon);
+        return;
+    }
+
     qDebug() << "[PreviewOverlay] tlRender state changed to:" << static_cast<int>(state);
 
     switch (state) {
@@ -3186,7 +3398,7 @@ void PreviewOverlay::onPlayerPlaybackStateChanged(TLRenderPlayer::PlaybackState 
         case TLRenderPlayer::PlaybackState::Paused:
         case TLRenderPlayer::PlaybackState::Stopped:
             if (playPauseBtn) playPauseBtn->setIcon(playIcon);
-            if (isVideo && lastKnownPosition >= 0) {
+            if (isVideo && m_player && lastKnownPosition >= 0) {
                 qint64 durationMs = m_player->duration();
                 updateVideoTimeDisplays(lastKnownPosition, durationMs);
             }
@@ -3204,8 +3416,17 @@ void PreviewOverlay::onPlayerError(const QString& errorString)
 void PreviewOverlay::onPlayerEndOfStream()
 {
     qDebug() << "[PreviewOverlay] tlRender end of stream reached";
-    m_player->stop();
-    m_player->seek(0);
+    if (!m_player) {
+        return;
+    }
+
+    const TLRenderPlayer::LoopMode loopMode = m_player->loopMode();
+    if (loopMode == TLRenderPlayer::LoopMode::Once) {
+        m_player->pause();
+    } else {
+        m_player->stop();
+        m_player->seek(0);
+    }
     if (playPauseBtn) playPauseBtn->setIcon(playIcon);
 }
 
@@ -3358,7 +3579,6 @@ void PreviewOverlay::showXlsx(const QString &filePath)
 {
     // Hide other content
     hideVideoWidgets();
-                        PLAYER_PLAY();
 #ifdef HAVE_QT_PDF
     if (pdfView) pdfView->hide();
 #endif
@@ -3367,7 +3587,6 @@ void PreviewOverlay::showXlsx(const QString &filePath)
     setControlsVisible(false);
     if (alphaCheck) alphaCheck->hide();
 
-                        PLAYER_PLAY();
     // Ensure overlay is visible for Office previews
     show();
     raise();
@@ -3867,17 +4086,38 @@ qint64 SequenceFrameCache::getAvailableRAM()
         return static_cast<qint64>(memInfo.ullAvailPhys / (1024 * 1024));
     }
 #elif defined(Q_OS_LINUX)
-    // Linux: Read from /proc/meminfo
+    struct sysinfo info;
+    if (sysinfo(&info) == 0) {
+        const qint64 unit = info.mem_unit > 0 ? static_cast<qint64>(info.mem_unit) : 1;
+        const qint64 availableBytes = static_cast<qint64>(info.totalram) * unit;
+        if (availableBytes > 0) {
+            return availableBytes / (1024 * 1024);
+        }
+    }
+
+    // Linux fallback: read from /proc/meminfo
     QFile file("/proc/meminfo");
     if (file.open(QIODevice::ReadOnly)) {
         QTextStream in(&file);
         while (!in.atEnd()) {
-            QString line = in.readLine();
+            const QString line = in.readLine().trimmed();
             if (line.startsWith("MemAvailable:")) {
-                QStringList parts = line.split(QRegularExpression("\\s+"));
+                const QRegularExpression re(QStringLiteral("^MemAvailable:\\s+(\\d+)\\s*kB$"), QRegularExpression::CaseInsensitiveOption);
+                const QRegularExpressionMatch match = re.match(line);
+                if (match.hasMatch()) {
+                    const qint64 kb = match.captured(1).toLongLong();
+                    if (kb > 0) {
+                        return kb / 1024; // Convert KB to MB
+                    }
+                }
+
+                const QStringList parts = line.split(QRegularExpression(QStringLiteral("\\s+")), Qt::SkipEmptyParts);
                 if (parts.size() >= 2) {
-                    qint64 kb = parts[1].toLongLong();
-                    return kb / 1024; // Convert KB to MB
+                    bool ok = false;
+                    const qint64 kb = parts[1].toLongLong(&ok);
+                    if (ok && kb > 0) {
+                        return kb / 1024;
+                    }
                 }
             }
         }
@@ -3940,12 +4180,9 @@ void PreviewOverlay::setupAnnotationToolbar()
                          "QPushButton:hover { background-color: #555; }"
                          "QPushButton:checked { background-color: #58a6ff; }";
     
-    // Load icons from Icons/Annotation folder
-    QString iconPath = QCoreApplication::applicationDirPath() + "/Icons/Annotation/";
-    
     // Selection/move tool
     QPushButton* selectToolBtn = new QPushButton(annotationToolbar);
-    selectToolBtn->setIcon(QIcon(iconPath + "cursor.png"));
+    selectToolBtn->setIcon(loadRawPngIcon(QStringLiteral("Annotation/cursor.png")));
     selectToolBtn->setIconSize(QSize(24, 24));
     selectToolBtn->setCheckable(true);
     selectToolBtn->setChecked(true); // Default mode
@@ -3963,7 +4200,7 @@ void PreviewOverlay::setupAnnotationToolbar()
     toolbarLayout->addWidget(selectToolBtn);
     
     penToolBtn = new QPushButton(annotationToolbar);
-    penToolBtn->setIcon(QIcon(iconPath + "paint.png"));
+    penToolBtn->setIcon(loadRawPngIcon(QStringLiteral("Annotation/paint.png")));
     penToolBtn->setIconSize(QSize(24, 24));
     penToolBtn->setCheckable(true);
     penToolBtn->setStyleSheet(buttonStyle);
@@ -3972,7 +4209,7 @@ void PreviewOverlay::setupAnnotationToolbar()
     toolbarLayout->addWidget(penToolBtn);
     
     textToolBtn = new QPushButton(annotationToolbar);
-    textToolBtn->setIcon(QIcon(iconPath + "text.png"));
+    textToolBtn->setIcon(loadRawPngIcon(QStringLiteral("Annotation/text.png")));
     textToolBtn->setIconSize(QSize(24, 24));
     textToolBtn->setCheckable(true);
     textToolBtn->setStyleSheet(buttonStyle);
@@ -3981,7 +4218,7 @@ void PreviewOverlay::setupAnnotationToolbar()
     toolbarLayout->addWidget(textToolBtn);
     
     rectangleToolBtn = new QPushButton(annotationToolbar);
-    rectangleToolBtn->setIcon(QIcon(iconPath + "Rectangle.png"));
+    rectangleToolBtn->setIcon(loadRawPngIcon(QStringLiteral("Annotation/Rectangle.png")));
     rectangleToolBtn->setIconSize(QSize(24, 24));
     rectangleToolBtn->setCheckable(true);
     rectangleToolBtn->setStyleSheet(buttonStyle);
@@ -3990,7 +4227,7 @@ void PreviewOverlay::setupAnnotationToolbar()
     toolbarLayout->addWidget(rectangleToolBtn);
     
     ellipseToolBtn = new QPushButton(annotationToolbar);
-    ellipseToolBtn->setIcon(QIcon(iconPath + "circle.png"));
+    ellipseToolBtn->setIcon(loadRawPngIcon(QStringLiteral("Annotation/circle.png")));
     ellipseToolBtn->setIconSize(QSize(24, 24));
     ellipseToolBtn->setCheckable(true);
     ellipseToolBtn->setStyleSheet(buttonStyle);
@@ -3999,7 +4236,7 @@ void PreviewOverlay::setupAnnotationToolbar()
     toolbarLayout->addWidget(ellipseToolBtn);
     
     arrowToolBtn = new QPushButton(annotationToolbar);
-    arrowToolBtn->setIcon(QIcon(iconPath + "arrow.png"));
+    arrowToolBtn->setIcon(loadRawPngIcon(QStringLiteral("Annotation/arrow.png")));
     arrowToolBtn->setIconSize(QSize(24, 24));
     arrowToolBtn->setCheckable(true);
     arrowToolBtn->setStyleSheet(buttonStyle);
@@ -4040,7 +4277,7 @@ void PreviewOverlay::setupAnnotationToolbar()
     
     // Undo/Redo buttons with icons
     undoBtn = new QPushButton(annotationToolbar);
-    undoBtn->setIcon(QIcon(iconPath + "undo.png"));
+    undoBtn->setIcon(loadRawPngIcon(QStringLiteral("Annotation/undo.png")));
     undoBtn->setIconSize(QSize(24, 24));
     undoBtn->setStyleSheet(buttonStyle);
     undoBtn->setToolTip("Undo (Ctrl+Z)");
@@ -4048,7 +4285,7 @@ void PreviewOverlay::setupAnnotationToolbar()
     toolbarLayout->addWidget(undoBtn);
     
     redoBtn = new QPushButton(annotationToolbar);
-    redoBtn->setIcon(QIcon(iconPath + "redo.png"));
+    redoBtn->setIcon(loadRawPngIcon(QStringLiteral("Annotation/redo.png")));
     redoBtn->setIconSize(QSize(24, 24));
     redoBtn->setStyleSheet(buttonStyle);
     redoBtn->setToolTip("Redo (Ctrl+Y)");
@@ -4057,7 +4294,7 @@ void PreviewOverlay::setupAnnotationToolbar()
     
     // Clear and save buttons with icons
     clearAnnotationsBtn = new QPushButton(annotationToolbar);
-    clearAnnotationsBtn->setIcon(QIcon(iconPath + "clear.png"));
+    clearAnnotationsBtn->setIcon(loadRawPngIcon(QStringLiteral("Annotation/clear.png")));
     clearAnnotationsBtn->setIconSize(QSize(24, 24));
     clearAnnotationsBtn->setStyleSheet(buttonStyle);
     clearAnnotationsBtn->setToolTip("Clear all annotations on current frame");
@@ -4065,7 +4302,7 @@ void PreviewOverlay::setupAnnotationToolbar()
     toolbarLayout->addWidget(clearAnnotationsBtn);
     
     saveFrameBtn = new QPushButton(annotationToolbar);
-    saveFrameBtn->setIcon(QIcon(iconPath + "save.png"));
+    saveFrameBtn->setIcon(loadRawPngIcon(QStringLiteral("Annotation/save.png")));
     saveFrameBtn->setIconSize(QSize(24, 24));
     saveFrameBtn->setStyleSheet(buttonStyle);
     saveFrameBtn->setToolTip("Save annotated frame (Ctrl+S)");
@@ -4073,7 +4310,7 @@ void PreviewOverlay::setupAnnotationToolbar()
     toolbarLayout->addWidget(saveFrameBtn);
     
     saveAllFramesBtn = new QPushButton(annotationToolbar);
-    saveAllFramesBtn->setIcon(QIcon(iconPath + "save all.png"));
+    saveAllFramesBtn->setIcon(loadRawPngIcon(QStringLiteral("Annotation/save all.png")));
     saveAllFramesBtn->setIconSize(QSize(24, 24));
     saveAllFramesBtn->setStyleSheet(buttonStyle);
     saveAllFramesBtn->setToolTip("Save all annotated frames");
@@ -4093,6 +4330,14 @@ void PreviewOverlay::enableAnnotationMode(bool enable)
     annotationModeEnabled = enable;
     
     if (enable) {
+        if (isVideo && !m_player) {
+            annotationModeEnabled = false;
+            if (toggleAnnotationBtn) {
+                toggleAnnotationBtn->setChecked(false);
+            }
+            return;
+        }
+
         // Show annotation toolbar
         if (annotationToolbar) {
             annotationToolbar->show();
@@ -4118,8 +4363,8 @@ void PreviewOverlay::enableAnnotationMode(bool enable)
             }
         }
         
-        // For videos, capture current frame and switch to imageView for annotation
-        // This works around Qt transparency issues with native video windows
+        // For videos, keep the live tlRender surface visible and draw annotations in a
+        // transparent overlay layered above it.
         if (isVideo) {
             // Initialize explicit frame tracking from current position
             double fps = detectedFps > 0.0 ? detectedFps : 24.0;
@@ -4127,23 +4372,27 @@ void PreviewOverlay::enableAnnotationMode(bool enable)
             qDebug() << "[PreviewOverlay] Entering annotation mode - initialized frame to:" << lastKnownVideoFrame;
             
             QImage videoFrame = m_player->getCurrentFrame();
+            const TLRenderPlayer::MediaInfo info = m_player->mediaInfo();
+            const QSize overlayFrameSize = !videoFrame.isNull()
+                ? videoFrame.size()
+                : QSize(info.width, info.height);
             if (!videoFrame.isNull()) {
                 originalPixmap = QPixmap::fromImage(videoFrame);
-                
-                // Switch from video widget to image view
-                hideVideoWidgets();
-        if (stillImageView) stillImageView->hide();
-        imageView->show();
-                
-                // Display captured frame in imageView
-                imageScene->clear();
-                imageItem = imageScene->addPixmap(originalPixmap);
-                imageScene->setSceneRect(originalPixmap.rect());
-                fitImageToView();
-                
-                qDebug() << "[PreviewOverlay] Video frame captured for annotation";
+            }
+
+            if (!overlayFrameSize.isEmpty()) {
+                annotationLayer->setScene(annotationOverlayScene);
+                annotationOverlayScene->setSceneRect(QRectF(QPointF(0, 0), QSizeF(overlayFrameSize)));
+                if (QWidget* videoContainer = activeVideoWidget()) {
+                    syncAnnotationOverlayToVideo(annotationOverlayView, annotationOverlayScene, videoContainer);
+                }
+                annotationOverlayView->show();
+                annotationOverlayView->raise();
+                activatePreviewWindow(this, annotationOverlayView);
+
+                qDebug() << "[PreviewOverlay] Video annotation overlay armed for live viewport";
             } else {
-                qWarning() << "[PreviewOverlay] Failed to capture video frame - annotation disabled";
+                qWarning() << "[PreviewOverlay] Failed to size video annotation overlay - annotation disabled";
                 toggleAnnotationBtn->setChecked(false);
                 annotationModeEnabled = false;
                 if (annotationToolbar) {
@@ -4151,12 +4400,12 @@ void PreviewOverlay::enableAnnotationMode(bool enable)
                 }
                 return;
             }
-            
-            // Use regular imageScene for video annotations
-            annotationLayer->setScene(imageScene);
         } else {
             // For images/sequences, use regular imageScene
             annotationLayer->setScene(imageScene);
+            if (annotationOverlayView) {
+                annotationOverlayView->hide();
+            }
         }
         
         // Enable scene interaction for annotations
@@ -4185,18 +4434,16 @@ void PreviewOverlay::enableAnnotationMode(bool enable)
         // For videos, restore video playback
         if (isVideo) {
             // Clear annotations from scene (they're saved in frameAnnotations)
+            const QSignalBlocker blocker(annotationLayer);
             annotationLayer->clearAnnotations();
-            
-            // Switch back to video widget
-            imageView->hide();
+            annotationLayer->setScene(imageScene);
+            if (annotationOverlayView) {
+                annotationOverlayView->hide();
+            }
             if (QWidget* videoContainer = activeVideoWidget()) {
                 videoContainer->show();
+                videoContainer->raise();
             }
-            
-            // Clear imageScene
-            imageScene->clear();
-            imageItem = nullptr;
-            originalPixmap = QPixmap();
             
             qDebug() << "[PreviewOverlay] Restored video playback from annotation mode";
         }
@@ -4210,6 +4457,43 @@ void PreviewOverlay::enableAnnotationMode(bool enable)
         
         // Set to None mode but DON'T clear annotations - just disable editing
         annotationLayer->setDrawMode(AnnotationLayer::None);
+    }
+}
+
+void PreviewOverlay::resetAnnotationSession()
+{
+    currentAnnotatedFrame = -1;
+    frameAnnotations.clear();
+    annotatedFrameIndices.clear();
+
+    annotationModeEnabled = false;
+
+    if (annotationLayer) {
+        const QSignalBlocker blocker(annotationLayer);
+        annotationLayer->clearAnnotations();
+        annotationLayer->setScene(imageScene);
+        annotationLayer->setDrawMode(AnnotationLayer::None);
+    }
+
+    if (annotationToolbar) {
+        annotationToolbar->hide();
+    }
+
+    if (annotationOverlayView) {
+        annotationOverlayView->hide();
+    }
+
+    if (toggleAnnotationBtn) {
+        const QSignalBlocker blocker(toggleAnnotationBtn);
+        toggleAnnotationBtn->setChecked(false);
+    }
+
+    if (positionSlider) {
+        positionSlider->clearAnnotatedFrames();
+    }
+
+    if (saveAllFramesBtn) {
+        saveAllFramesBtn->hide();
     }
 }
 
@@ -4271,7 +4555,7 @@ void PreviewOverlay::onClearAnnotations()
     annotationLayer->clearAnnotations();
     
     // Clear annotation marker for current frame
-    int frameIndex = isSequence ? currentAnnotatedFrame : 0;
+    int frameIndex = isSequence ? currentAnnotatedFrame : (isVideo ? currentAnnotatedFrame : 0);
     if (frameIndex >= 0) {
         frameAnnotations.remove(frameIndex);
         annotatedFrameIndices.remove(frameIndex);
@@ -4333,6 +4617,10 @@ void PreviewOverlay::onSaveAllAnnotatedFrames()
     
     // Save current frame/time state to restore later
     int originalFrame = isSequence ? currentSequenceFrame : (isVideo ? getVideoFrameNumber() : 0);
+    if (isVideo && !m_player) {
+        QMessageBox::warning(this, "Export Annotated Frames", "Video player is not available.");
+        return;
+    }
     bool wasPlaying = (PLAYER_STATE() == PLAYER_STATE_PLAYING);
     if (isVideo && wasPlaying) {
         PLAYER_PAUSE();
@@ -4480,7 +4768,9 @@ void PreviewOverlay::saveCurrentFrameAnnotations()
 void PreviewOverlay::loadFrameAnnotations(int frameIndex)
 {
     qDebug() << "[PreviewOverlay] Loading annotations for frame" << frameIndex;
-    
+
+    const QSignalBlocker blocker(annotationLayer);
+
     // Clear current annotations
     annotationLayer->clearAnnotations();
     
@@ -4499,6 +4789,9 @@ void PreviewOverlay::loadFrameAnnotations(int frameIndex)
 QImage PreviewOverlay::captureCurrentFrame()
 {
     if (isVideo) {
+        if (!m_player) {
+            return QImage();
+        }
         // For video, capture current frame from player
         QImage frame = m_player->getCurrentFrame();
         if (frame.isNull()) {
@@ -4553,7 +4846,7 @@ void PreviewOverlay::exportAnnotatedFrame(const QString& filePath, const QString
 
 int PreviewOverlay::getVideoFrameNumber() const
 {
-    if (!isVideo) return 0;
+    if (!isVideo || !m_player) return 0;
     
     // If we have an explicitly tracked frame number from seek/step operations,
     // use it directly for frame-perfect annotation positioning
@@ -4578,7 +4871,7 @@ int PreviewOverlay::getVideoFrameNumber() const
 
 void PreviewOverlay::updateVideoAnnotationFrame()
 {
-    if (!isVideo || !annotationModeEnabled) {
+    if (!isVideo || !annotationModeEnabled || !m_player) {
         return;
     }
     
@@ -4598,17 +4891,28 @@ void PreviewOverlay::updateVideoAnnotationFrame()
     // Capture new frame (this is slow but necessary for accuracy)
     // Use a single-shot timer to avoid blocking
     QTimer::singleShot(0, this, [this, newFrameIndex, previousFrame]() {
-        QImage videoFrame = m_player->getCurrentFrame();
-        if (!videoFrame.isNull() && imageItem) {
-            originalPixmap = QPixmap::fromImage(videoFrame);
-            imageItem->setPixmap(originalPixmap);
-            
-            // Load annotations for this frame
-            loadFrameAnnotations(newFrameIndex);
-            
-            qDebug() << "[PreviewOverlay] Updated video annotation frame at time" << newFrameIndex 
-                     << "- annotated frames:" << annotatedFrameIndices.size();
+        Q_UNUSED(previousFrame);
+        if (!m_player) {
+            return;
         }
+        QImage videoFrame = m_player->getCurrentFrame();
+        if (!videoFrame.isNull()) {
+            originalPixmap = QPixmap::fromImage(videoFrame);
+            if (!annotationOverlayScene->sceneRect().isEmpty() &&
+                annotationOverlayScene->sceneRect().size() != QSizeF(videoFrame.size())) {
+                annotationOverlayScene->setSceneRect(QRectF(QPointF(0, 0), QSizeF(videoFrame.size())));
+                if (QWidget* videoContainer = activeVideoWidget()) {
+                    syncAnnotationOverlayToVideo(annotationOverlayView, annotationOverlayScene, videoContainer);
+                }
+            }
+        }
+
+        loadFrameAnnotations(newFrameIndex);
+        if (annotationOverlayView && annotationOverlayView->isVisible()) {
+            annotationOverlayView->viewport()->update();
+        }
+
+        qDebug() << "[PreviewOverlay] Updated video annotation frame at time" << newFrameIndex
+                 << "- annotated frames:" << annotatedFrameIndices.size();
     });
 }
-

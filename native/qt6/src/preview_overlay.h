@@ -80,6 +80,7 @@ public:
     explicit CachedFrameSlider(Qt::Orientation orientation, QWidget *parent = nullptr)
         : QSlider(orientation, parent)
     {
+        setMouseTracking(true);
     }
 
     /**
@@ -168,6 +169,47 @@ public:
     }
 
 protected:
+    void mousePressEvent(QMouseEvent *event) override
+    {
+        if (event->button() == Qt::LeftButton) {
+            const int newValue = pixelPosToRangeValue(event->position().toPoint());
+            setSliderDown(true);
+            grabMouse();
+            setValue(newValue);
+            emit sliderPressed();
+            emit sliderMoved(newValue);
+            event->accept();
+            return;
+        }
+        QSlider::mousePressEvent(event);
+    }
+
+    void mouseMoveEvent(QMouseEvent *event) override
+    {
+        if (isSliderDown() && (event->buttons() & Qt::LeftButton)) {
+            const int newValue = pixelPosToRangeValue(event->position().toPoint());
+            setValue(newValue);
+            emit sliderMoved(newValue);
+            event->accept();
+            return;
+        }
+        QSlider::mouseMoveEvent(event);
+    }
+
+    void mouseReleaseEvent(QMouseEvent *event) override
+    {
+        if (event->button() == Qt::LeftButton && isSliderDown()) {
+            const int newValue = pixelPosToRangeValue(event->position().toPoint());
+            setValue(newValue);
+            setSliderDown(false);
+            releaseMouse();
+            emit sliderReleased();
+            event->accept();
+            return;
+        }
+        QSlider::mouseReleaseEvent(event);
+    }
+
     // Custom paint event to draw cached frame indicators
     // Draws a thin red line above the timeline groove showing which frames are in cache
     void paintEvent(QPaintEvent *event) override
@@ -277,6 +319,17 @@ protected:
     }
 
 private:
+    int pixelPosToRangeValue(const QPoint& pos) const
+    {
+        QStyleOptionSlider opt;
+        const_cast<CachedFrameSlider*>(this)->initStyleOption(&opt);
+        const QRect grooveRect = style()->subControlRect(QStyle::CC_Slider, &opt, QStyle::SC_SliderGroove, this);
+        const int span = qMax(1, grooveRect.width() - 1);
+        const int x = qBound(grooveRect.left(), pos.x(), grooveRect.right());
+        const double t = static_cast<double>(x - grooveRect.left()) / span;
+        return minimum() + qRound(t * (maximum() - minimum()));
+    }
+
     bool m_isVideo = true;
     double m_fps = 24.0;
     QSet<int> m_cachedFrames;
@@ -366,6 +419,8 @@ protected:
     void resizeEvent(QResizeEvent *event) override;
     void moveEvent(QMoveEvent *event) override;
     void mousePressEvent(QMouseEvent *event) override;
+    void mouseMoveEvent(QMouseEvent *event) override;
+    void leaveEvent(QEvent *event) override;
     void wheelEvent(QWheelEvent *event) override;
     bool eventFilter(QObject* watched, QEvent* event) override;
 
@@ -442,6 +497,7 @@ private:
     // Annotation helpers
     void setupAnnotationToolbar();
     void enableAnnotationMode(bool enable);
+    void resetAnnotationSession();
     void saveCurrentFrameAnnotations();
     void loadFrameAnnotations(int frameIndex);
     QImage captureCurrentFrame();
@@ -453,6 +509,8 @@ private:
     void populateOcioInputColorspaces(const QStringList& colorspaces);
     void applyOcioInputDefaults(const QString& filePath);
     QString defaultOcioInputName(const QString& filePath) const;
+    void ensurePlayer();
+    void ensureRenderWidget();
 #endif
 
     // UI Components
@@ -542,6 +600,8 @@ private:
     // Seek/step state
     bool userSeeking = false;
     bool wasPlayingBeforeSeek = false;
+    bool controlsPinned = false;
+    bool controlsHovering = false;
     double detectedFps = 0.0;
     qint64 lastKnownPosition = -1; // Store position for display during pause
     int lastKnownVideoFrame = -1; // Explicitly tracked frame number for annotation accuracy
@@ -711,4 +771,3 @@ private:
 };
 
 #endif // PREVIEW_OVERLAY_H
-
