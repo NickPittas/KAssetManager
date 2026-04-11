@@ -223,6 +223,7 @@ private slots:
     void onFmTreeChildrenFetched(const QModelIndex &parent); // Handle async tree fetch completion
 
 private:
+    QRect initialOverlayGeometry() const;
     QString fmPathForIndex(const QModelIndex& idx) const;
     QModelIndex fmIndexForPath(const QString& path);
     void fmRefreshTreeModel();
@@ -473,6 +474,7 @@ private:
     class QGraphicsScene *fmImageScene = nullptr;
     class QGraphicsPixmapItem *fmImageItem = nullptr;
     TLRenderViewport *fmVideoWidget = nullptr; // tlRender viewport for video playback
+    QWidget *fmPreviewContent = nullptr;
     // Additional preview widgets
     class QPlainTextEdit *fmTextView = nullptr;           // TXT/LOG
     class QTableView *fmCsvView = nullptr;                // CSV table
@@ -548,6 +550,8 @@ private:
     // Helpers
     void updateFmPreviewForIndex(const QModelIndex &idx);
     void clearFmPreview();
+    void ensureFmVideoPreview();
+    void ensurePmVideoPreview();
 
     // Dual-pane File Manager support
     FileManagerPane *fmSecondaryPane = nullptr;  // Secondary pane (optional, togglable)
@@ -619,6 +623,7 @@ private:
     class QGraphicsScene *pmImageScene = nullptr;
     class QGraphicsPixmapItem *pmImageItem = nullptr;
     TLRenderViewport *pmVideoWidget = nullptr;
+    QWidget *pmPreviewContent = nullptr;
     class TLRenderPlayer *pmTlRenderPlayer = nullptr;
     
     // Media controls

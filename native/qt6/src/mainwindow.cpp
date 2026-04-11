@@ -1113,6 +1113,7 @@ void MainWindow::setupUi()
 
     // Log viewer as dock widget at bottom (hidden by default)
     QDockWidget* logDock = new QDockWidget("Application Log", this);
+    logDock->setObjectName(QStringLiteral("applicationLogDock"));
     LogManager::instance().addLog("[TRACE] logDock created", "DEBUG");
     logDock->setAllowedAreas(Qt::BottomDockWidgetArea);
     logDock->setFeatures(QDockWidget::DockWidgetClosable);
@@ -1941,14 +1942,8 @@ void MainWindow::setupFileManagerUi()
     pv->addLayout(alphaRow);
 
     // Video widget for tlRender rendering
-    fmVideoWidget = new TLRenderViewport(fmPreviewPanel);
-    fmVideoWidget->setMinimumHeight(160);
-    fmVideoWidget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    fmVideoWidget->hide();
-
     // Create tlRender player for video playback
     fmTlRenderPlayer = new TLRenderPlayer(fmPreviewPanel);
-    fmVideoWidget->setPlayer(fmTlRenderPlayer);
 
     // Media controls (Explorer-like): Prev - Play/Pause - Next - Slider - Time - Audio
     QHBoxLayout *mc = new QHBoxLayout();
@@ -2051,13 +2046,12 @@ void MainWindow::setupFileManagerUi()
 
 
     // Center the preview content between title and controls
-    QWidget *previewContent = new QWidget(fmPreviewPanel);
-    QVBoxLayout *pc = new QVBoxLayout(previewContent);
+    fmPreviewContent = new QWidget(fmPreviewPanel);
+    QVBoxLayout *pc = new QVBoxLayout(fmPreviewContent);
     pc->setContentsMargins(0,0,0,0);
     pc->setSpacing(6);
     pc->addWidget(fmImageView, 1);
-    pc->addWidget(fmVideoWidget, 1);
-    pv->addWidget(previewContent);
+    pv->addWidget(fmPreviewContent);
     pv->addLayout(mc);
     // Hide media controls by default (only show for video/audio)
     if (fmPrevFrameBtn) fmPrevFrameBtn->hide();
@@ -2507,6 +2501,15 @@ void MainWindow::onFmTreeActivated(const QModelIndex &index)
 // Forward declarations for file-type helpers used by File Manager handlers
 static inline bool isImageFile(const QString &ext);
 static inline bool isVideoFile(const QString &ext);
+
+QRect MainWindow::initialOverlayGeometry() const
+{
+    const QRect base = frameGeometry().isValid() ? frameGeometry() : geometry();
+    const int width = qMax(960, static_cast<int>(base.width() * 0.8));
+    const int height = qMax(640, static_cast<int>(base.height() * 0.8));
+    const QPoint center = base.center();
+    return QRect(center.x() - width / 2, center.y() - height / 2, width, height);
+}
 static bool isPreviewOverlayViewable(const QString &ext);
 
 void MainWindow::onFmItemDoubleClicked(const QModelIndex &index)
@@ -2531,7 +2534,7 @@ void MainWindow::onFmItemDoubleClicked(const QModelIndex &index)
             if (!previewOverlay) {
                 previewOverlay = new PreviewOverlay(this);
                 // Center overlay to the app window instead of screen top-left
-                previewOverlay->setGeometry(geometry());
+                previewOverlay->setGeometry(initialOverlayGeometry());
                 connect(previewOverlay, &PreviewOverlay::closed, this, &MainWindow::closePreview);
                 connect(previewOverlay, &PreviewOverlay::navigateRequested, this, &MainWindow::changeFmPreview);
             } else {
@@ -2575,7 +2578,7 @@ void MainWindow::onFmItemDoubleClicked(const QModelIndex &index)
             }
             if (!imagePreviewOverlay) {
                 imagePreviewOverlay = new ImagePreviewOverlay(this);
-                imagePreviewOverlay->setGeometry(geometry());
+                imagePreviewOverlay->setGeometry(initialOverlayGeometry());
                 connect(imagePreviewOverlay, &ImagePreviewOverlay::closed, this, &MainWindow::closePreview);
                 connect(imagePreviewOverlay, &ImagePreviewOverlay::navigateRequested, this, &MainWindow::changeFmPreview);
             } else {
@@ -2590,7 +2593,7 @@ void MainWindow::onFmItemDoubleClicked(const QModelIndex &index)
             if (!previewOverlay) {
                 previewOverlay = new PreviewOverlay(this);
                 // Center overlay to the app window instead of screen top-left
-                previewOverlay->setGeometry(geometry());
+                previewOverlay->setGeometry(initialOverlayGeometry());
                 connect(previewOverlay, &PreviewOverlay::closed, this, &MainWindow::closePreview);
                 connect(previewOverlay, &PreviewOverlay::navigateRequested, this, &MainWindow::changeFmPreview);
             } else {
@@ -3578,7 +3581,7 @@ void MainWindow::onSecondaryPaneFileDoubleClicked(const QString &path)
         }
         if (!imagePreviewOverlay) {
             imagePreviewOverlay = new ImagePreviewOverlay(this);
-            imagePreviewOverlay->setGeometry(geometry());
+            imagePreviewOverlay->setGeometry(initialOverlayGeometry());
             connect(imagePreviewOverlay, &ImagePreviewOverlay::closed, this, &MainWindow::closePreview);
             connect(imagePreviewOverlay, &ImagePreviewOverlay::navigateRequested, this, &MainWindow::changeFmPreview);
         } else {
@@ -3592,7 +3595,7 @@ void MainWindow::onSecondaryPaneFileDoubleClicked(const QString &path)
         }
         if (!previewOverlay) {
             previewOverlay = new PreviewOverlay(this);
-            previewOverlay->setGeometry(geometry());
+            previewOverlay->setGeometry(initialOverlayGeometry());
             connect(previewOverlay, &PreviewOverlay::closed, this, &MainWindow::closePreview);
             connect(previewOverlay, &PreviewOverlay::navigateRequested, this, &MainWindow::changeFmPreview);
         } else {
@@ -4149,19 +4152,13 @@ void MainWindow::setupProjectManagerUi()
     pmImageView->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     
     // Video widget (hidden by default)
-    pmVideoWidget = new TLRenderViewport(pmPreviewPanel);
-    pmVideoWidget->setMinimumHeight(160);
-    pmVideoWidget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    pmVideoWidget->hide();
-    
     // Preview content container
-    QWidget *previewContent = new QWidget(pmPreviewPanel);
-    QVBoxLayout *pc = new QVBoxLayout(previewContent);
+    pmPreviewContent = new QWidget(pmPreviewPanel);
+    QVBoxLayout *pc = new QVBoxLayout(pmPreviewContent);
     pc->setContentsMargins(0, 0, 0, 0);
     pc->setSpacing(6);
     pc->addWidget(pmImageView, 1);
-    pc->addWidget(pmVideoWidget, 1);
-    pv->addWidget(previewContent);
+    pv->addWidget(pmPreviewContent);
     
     // Media controls
     QHBoxLayout *mc = new QHBoxLayout();
@@ -4220,7 +4217,6 @@ void MainWindow::setupProjectManagerUi()
     
     // Create tlRender player for video playback
     pmTlRenderPlayer = new TLRenderPlayer(pmPreviewPanel);
-    pmVideoWidget->setPlayer(pmTlRenderPlayer);
     
     // Sequence timer for image sequence playback
     pmSequenceTimer = new QTimer(pmPreviewPanel);
@@ -4708,7 +4704,7 @@ void MainWindow::onPmOpenOverlay()
         }
         if (!previewOverlay) {
             previewOverlay = new PreviewOverlay(this);
-            previewOverlay->setGeometry(geometry());
+            previewOverlay->setGeometry(initialOverlayGeometry());
             connect(previewOverlay, &PreviewOverlay::closed, this, &MainWindow::closePreview);
             connect(previewOverlay, &PreviewOverlay::navigateRequested, this, &MainWindow::changePmPreview);
         } else {
@@ -4741,7 +4737,7 @@ void MainWindow::onPmOpenOverlay()
             }
             if (!imagePreviewOverlay) {
                 imagePreviewOverlay = new ImagePreviewOverlay(this);
-                imagePreviewOverlay->setGeometry(geometry());
+                imagePreviewOverlay->setGeometry(initialOverlayGeometry());
                 connect(imagePreviewOverlay, &ImagePreviewOverlay::closed, this, &MainWindow::closePreview);
                 connect(imagePreviewOverlay, &ImagePreviewOverlay::navigateRequested, this, &MainWindow::changePmPreview);
             } else {
@@ -4755,7 +4751,7 @@ void MainWindow::onPmOpenOverlay()
             }
             if (!previewOverlay) {
                 previewOverlay = new PreviewOverlay(this);
-                previewOverlay->setGeometry(geometry());
+                previewOverlay->setGeometry(initialOverlayGeometry());
                 connect(previewOverlay, &PreviewOverlay::closed, this, &MainWindow::closePreview);
                 connect(previewOverlay, &PreviewOverlay::navigateRequested, this, &MainWindow::changePmPreview);
             } else {
@@ -5662,6 +5658,9 @@ void MainWindow::updatePmInfoPanel()
 
 void MainWindow::updatePmPreviewForIndex(const QModelIndex &idx)
 {
+    if (!pmPreviewPanel || !pmPreviewPanel->isVisible()) {
+        return;
+    }
     if (!idx.isValid()) {
         clearPmPreview();
         return;
@@ -5812,7 +5811,9 @@ void MainWindow::loadPmSequenceFrame(int index)
 
 void MainWindow::showPmVideo(const QString &filePath)
 {
-    if (!pmTlRenderPlayer || !pmVideoWidget) return;
+    if (!pmTlRenderPlayer) return;
+    ensurePmVideoPreview();
+    if (!pmVideoWidget) return;
     
     // Stop any previous playback
     pmTlRenderPlayer->stop();
@@ -5838,6 +5839,44 @@ void MainWindow::showPmVideo(const QString &filePath)
     // Load and play
     pmTlRenderPlayer->loadMedia(filePath);
     pmTlRenderPlayer->play();
+}
+
+void MainWindow::ensureFmVideoPreview()
+{
+    if (fmVideoWidget || !fmPreviewContent) {
+        return;
+    }
+
+    auto *layout = qobject_cast<QVBoxLayout*>(fmPreviewContent->layout());
+    if (!layout) {
+        return;
+    }
+
+    fmVideoWidget = new TLRenderViewport(fmPreviewPanel);
+    fmVideoWidget->setMinimumHeight(160);
+    fmVideoWidget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    fmVideoWidget->hide();
+    fmVideoWidget->setPlayer(fmTlRenderPlayer);
+    layout->insertWidget(1, fmVideoWidget, 1);
+}
+
+void MainWindow::ensurePmVideoPreview()
+{
+    if (pmVideoWidget || !pmPreviewContent) {
+        return;
+    }
+
+    auto *layout = qobject_cast<QVBoxLayout*>(pmPreviewContent->layout());
+    if (!layout) {
+        return;
+    }
+
+    pmVideoWidget = new TLRenderViewport(pmPreviewPanel);
+    pmVideoWidget->setMinimumHeight(160);
+    pmVideoWidget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    pmVideoWidget->hide();
+    pmVideoWidget->setPlayer(pmTlRenderPlayer);
+    layout->insertWidget(1, pmVideoWidget, 1);
 }
 
 void MainWindow::showPmImage(const QString &filePath)
@@ -5958,7 +5997,7 @@ void MainWindow::changePmPreview(int delta)
             }
             if (!previewOverlay) {
                 previewOverlay = new PreviewOverlay(this);
-                previewOverlay->setGeometry(geometry());
+                previewOverlay->setGeometry(initialOverlayGeometry());
                 connect(previewOverlay, &PreviewOverlay::closed, this, &MainWindow::closePreview);
                 connect(previewOverlay, &PreviewOverlay::navigateRequested, this, &MainWindow::changePmPreview);
             }
@@ -6005,7 +6044,7 @@ void MainWindow::changePmPreview(int delta)
                 }
                 if (!imagePreviewOverlay) {
                     imagePreviewOverlay = new ImagePreviewOverlay(this);
-                    imagePreviewOverlay->setGeometry(geometry());
+                    imagePreviewOverlay->setGeometry(initialOverlayGeometry());
                     connect(imagePreviewOverlay, &ImagePreviewOverlay::closed, this, &MainWindow::closePreview);
                     connect(imagePreviewOverlay, &ImagePreviewOverlay::navigateRequested, this, &MainWindow::changePmPreview);
                 }
@@ -6016,7 +6055,7 @@ void MainWindow::changePmPreview(int delta)
                 }
                 if (!previewOverlay) {
                     previewOverlay = new PreviewOverlay(this);
-                    previewOverlay->setGeometry(geometry());
+                    previewOverlay->setGeometry(initialOverlayGeometry());
                     connect(previewOverlay, &PreviewOverlay::closed, this, &MainWindow::closePreview);
                     connect(previewOverlay, &PreviewOverlay::navigateRequested, this, &MainWindow::changePmPreview);
                 }
@@ -7456,7 +7495,7 @@ void MainWindow::showPreview(int index)
         }
         if (!imagePreviewOverlay) {
             imagePreviewOverlay = new ImagePreviewOverlay(this);
-            imagePreviewOverlay->setGeometry(geometry());
+            imagePreviewOverlay->setGeometry(initialOverlayGeometry());
             connect(imagePreviewOverlay, &ImagePreviewOverlay::closed, this, &MainWindow::closePreview);
             connect(imagePreviewOverlay, &ImagePreviewOverlay::navigateRequested, this, &MainWindow::changePreview);
         } else {
@@ -7474,7 +7513,7 @@ void MainWindow::showPreview(int index)
     if (!previewOverlay) {
         previewOverlay = new PreviewOverlay(this);
         // Center overlay to the app window instead of screen top-left
-        previewOverlay->setGeometry(geometry());
+        previewOverlay->setGeometry(initialOverlayGeometry());
 
         connect(previewOverlay, &PreviewOverlay::closed, this, &MainWindow::closePreview);
         connect(previewOverlay, &PreviewOverlay::navigateRequested, this, &MainWindow::changePreview);
@@ -7625,7 +7664,7 @@ void MainWindow::changeFmPreview(int delta)
             }
             if (!imagePreviewOverlay) {
                 imagePreviewOverlay = new ImagePreviewOverlay(this);
-                imagePreviewOverlay->setGeometry(geometry());
+                imagePreviewOverlay->setGeometry(initialOverlayGeometry());
                 connect(imagePreviewOverlay, &ImagePreviewOverlay::closed, this, &MainWindow::closePreview);
                 connect(imagePreviewOverlay, &ImagePreviewOverlay::navigateRequested, this, &MainWindow::changeFmPreview);
             }
@@ -7637,7 +7676,7 @@ void MainWindow::changeFmPreview(int delta)
             }
             if (!previewOverlay) {
                 previewOverlay = new PreviewOverlay(this);
-                previewOverlay->setGeometry(geometry());
+                previewOverlay->setGeometry(initialOverlayGeometry());
                 connect(previewOverlay, &PreviewOverlay::closed, this, &MainWindow::closePreview);
                 connect(previewOverlay, &PreviewOverlay::navigateRequested, this, &MainWindow::changeFmPreview);
             }
@@ -7737,7 +7776,7 @@ void MainWindow::changeFmPreview(int delta)
                 }
                 if (!previewOverlay) {
                     previewOverlay = new PreviewOverlay(this);
-                    previewOverlay->setGeometry(geometry());
+                    previewOverlay->setGeometry(initialOverlayGeometry());
                     connect(previewOverlay, &PreviewOverlay::closed, this, &MainWindow::closePreview);
                     connect(previewOverlay, &PreviewOverlay::navigateRequested, this, &MainWindow::changeFmPreview);
                 }
@@ -10381,7 +10420,8 @@ if (isExcelFile(ext)) {
         if (isVideoFile(ext)) {
             fmCurrentPreviewPath = path;
             if (fmVideoWidget) {
-                fmVideoWidget->show();
+                ensureFmVideoPreview();
+                if (fmVideoWidget) fmVideoWidget->show();
                 // CRITICAL: Set video widget AFTER show() to ensure valid window handle
                 if (fmTlRenderPlayer) fmVideoWidget->setPlayer(fmTlRenderPlayer);
             }
@@ -10398,6 +10438,7 @@ if (isExcelFile(ext)) {
         if (fmMuteBtn) fmMuteBtn->show();
 
         if (fmTlRenderPlayer) {
+            ensureFmVideoPreview();
             fmTlRenderPlayer->loadMedia(path);
             fmTlRenderPlayer->pause();
             if (fmPlayPauseBtn) fmPlayPauseBtn->setIcon(icoMediaPlay(ThemeManager::instance().iconColor()));
@@ -10738,7 +10779,7 @@ void MainWindow::onFmOpenOverlay()
             }
             if (!imagePreviewOverlay) {
                 imagePreviewOverlay = new ImagePreviewOverlay(this);
-                imagePreviewOverlay->setGeometry(geometry());
+                imagePreviewOverlay->setGeometry(initialOverlayGeometry());
                 connect(imagePreviewOverlay, &ImagePreviewOverlay::closed, this, &MainWindow::closePreview);
                 connect(imagePreviewOverlay, &ImagePreviewOverlay::navigateRequested, this, &MainWindow::changeFmPreview);
             }
@@ -10750,7 +10791,7 @@ void MainWindow::onFmOpenOverlay()
             }
             if (!previewOverlay) {
                 previewOverlay = new PreviewOverlay(this);
-                previewOverlay->setGeometry(geometry());
+                previewOverlay->setGeometry(initialOverlayGeometry());
                 connect(previewOverlay, &PreviewOverlay::closed, this, &MainWindow::closePreview);
                 connect(previewOverlay, &PreviewOverlay::navigateRequested, this, &MainWindow::changeFmPreview);
             } else {
@@ -10804,7 +10845,7 @@ void MainWindow::onFmOpenOverlay()
             if (!previewOverlay) {
                 previewOverlay = new PreviewOverlay(this);
                 // Center overlay to the app window instead of screen top-left
-                previewOverlay->setGeometry(geometry());
+                previewOverlay->setGeometry(initialOverlayGeometry());
                 connect(previewOverlay, &PreviewOverlay::closed, this, &MainWindow::closePreview);
                 connect(previewOverlay, &PreviewOverlay::navigateRequested, this, &MainWindow::changeFmPreview);
             } else {

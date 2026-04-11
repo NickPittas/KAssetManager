@@ -7,12 +7,14 @@
 #include <QDateTime>
 #include <QStandardPaths>
 #include <QFileInfo>
+#include <QByteArray>
 #include <iostream>
 #include "mainwindow.h"
 #include "db.h"
 #include "log_manager.h"
 #include "progress_manager.h"
 #include "theme_manager.h"
+#include "platform_session.h"
 #ifdef HAVE_TLRENDER
 #include "media/tlrender_player.h"
 #endif
@@ -49,9 +51,28 @@ int main(int argc, char *argv[])
     // Enable OpenGL context sharing for multiple QOpenGLWidgets.
     QApplication::setAttribute(Qt::AA_ShareOpenGLContexts);
 
-    // Enable hardware-accelerated OpenGL rendering for smooth window resize/move
-    // This uses the system's native OpenGL driver for widget compositing
+#if defined(Q_OS_LINUX)
+    if (PlatformSession::isWayland() && PlatformSession::shouldForceRasterWidgetsOnWayland()) {
+        QApplication::setAttribute(Qt::AA_ForceRasterWidgets);
+    }
+    if (PlatformSession::isWayland() && qEnvironmentVariableIsEmpty("QT_WIDGETS_RHI")) {
+        // Qt's widget RHI path is the codepath emitting
+        // "Failed to create QRhi for QBackingStoreRhiSupport" on Fedora Wayland
+        // when a tlRender QOpenGLWidget preview is created on demand.
+        qputenv("QT_WIDGETS_RHI", QByteArrayLiteral("0"));
+    }
+#endif
+
+    // Use desktop OpenGL for widget-based playback surfaces.
+    // On Wayland we avoid forcing tlRender's global 4.1 default format, but still
+    // prefer the desktop GL backend so the tlRender QOpenGLWidget can create a context.
+#if !defined(Q_OS_LINUX)
     QApplication::setAttribute(Qt::AA_UseDesktopOpenGL);
+#elif defined(Q_OS_LINUX)
+    if (PlatformSession::isWayland() && PlatformSession::shouldUseDesktopOpenGLOnWayland()) {
+        QApplication::setAttribute(Qt::AA_UseDesktopOpenGL);
+    }
+#endif
 
 #ifdef HAVE_TLRENDER
     // Initialize tlRender before QApplication to ensure the default surface format
@@ -191,6 +212,7 @@ skip_new_init:
     LogManager::instance().addLog("[MAIN] MainWindow constructed");
     mainWindow.show();
     LogManager::instance().addLog("[MAIN] MainWindow shown");
+
     QObject::connect(&app, &QCoreApplication::aboutToQuit, []{ LogManager::instance().addLog("[MAIN] aboutToQuit"); });
     QTimer::singleShot(0, []{ LogManager::instance().addLog("[MAIN] Event loop entered"); });
 

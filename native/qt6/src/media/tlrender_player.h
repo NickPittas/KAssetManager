@@ -317,6 +317,7 @@ public:
      * @brief Tick the player (call from render loop)
      */
     void tick();
+    void refreshCurrentFrame();
 
     // ========================================================================
     // Frame Extraction (for thumbnails)

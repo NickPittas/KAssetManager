@@ -14,6 +14,7 @@
 #include <QWidget>
 #include <QVBoxLayout>
 #include <QPoint>
+#include <QLabel>
 #include <memory>
 
 #include "tlrender_player.h"
@@ -58,6 +59,8 @@ public:
      * @brief Enable/disable frame view (fit to window)
      */
     void setFrameView(bool enabled);
+    bool frameViewEnabled() const;
+    void zoomRelative(double factor);
 
     /**
      * @brief Get the native viewport for advanced access
@@ -86,8 +89,10 @@ protected:
 
 private slots:
     void onMediaLoaded(const TLRenderPlayer::MediaInfo& info);
+    void updateRasterFrame();
 
 private:
+    void ensureViewport();
     void setupViewportPlayer();
     
     TLRenderPlayer* m_player{nullptr};
@@ -97,11 +102,13 @@ private:
     std::shared_ptr<ftk::Style> m_style;
     tl::qtwidget::Viewport* m_viewport{nullptr};
 #endif
+    QLabel* m_rasterLabel{nullptr};
 
     QVBoxLayout* m_layout{nullptr};
 
     bool m_isPanning{false};
     QPoint m_lastPanPos;
+    double m_waylandZoom{1.0};
 };
 
 #endif // TLRENDER_VIEWPORT_H

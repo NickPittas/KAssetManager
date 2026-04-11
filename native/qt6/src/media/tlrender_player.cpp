@@ -17,6 +17,7 @@
 #include <QImage>
 #include <stdexcept>
 #include "video_metadata.h"
+#include "platform_session.h"
 
 #if defined(HAVE_FFMPEG) && HAVE_FFMPEG
 extern "C" {
@@ -111,9 +112,12 @@ void TLRenderPlayer::initialize()
 
         // Initialize tlRender with Qt Widgets integration.
         // This registers Qt metatypes and sets a sane default OpenGL surface format.
+        const bool useDefaultWaylandSurfaceFormat = PlatformSession::isWayland();
         tl::qtwidget::init(
             s_sharedContext,
-            tl::qt::DefaultSurfaceFormat::OpenGL_4_1_CoreProfile);
+            useDefaultWaylandSurfaceFormat
+                ? tl::qt::DefaultSurfaceFormat::None
+                : tl::qt::DefaultSurfaceFormat::OpenGL_4_1_CoreProfile);
 
         // Keep the shared context ticking via a precise Qt timer.
         // This must be created after QApplication exists.
@@ -1060,8 +1064,8 @@ tl::DisplayOptions TLRenderPlayer::currentDisplayOptions() const
 #ifdef HAVE_TLRENDER
     // EXR Display settings (exposure)
     if (m_exposure != 0.0f) {
-        options.exrDisplay.enabled = true;
-        options.exrDisplay.exposure = m_exposure;
+        options.exposure.enabled = true;
+        options.exposure.exposure = m_exposure;
     }
     
     // Levels settings (gamma)
@@ -1155,6 +1159,14 @@ void TLRenderPlayer::tick()
     if (m_context) {
         m_context->tick();
     }
+#endif
+}
+
+void TLRenderPlayer::refreshCurrentFrame()
+{
+#ifdef HAVE_TLRENDER
+    tick();
+    emit videoFramesChanged();
 #endif
 }
 
