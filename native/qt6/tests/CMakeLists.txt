@@ -1,4 +1,4 @@
-find_package(Qt6 REQUIRED COMPONENTS Test)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Sql Concurrent Test)
 
 # Test executable: test_simple
 add_executable(test_simple
@@ -155,3 +155,115 @@ add_test(NAME test_media_converter_worker COMMAND test_media_converter_worker)
 set_tests_properties(test_media_converter_worker PROPERTIES WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/install_run/bin")
 
 install(TARGETS test_media_converter_worker DESTINATION bin)
+
+# Test executable: test_virtual_drag
+add_executable(test_virtual_drag
+    test_virtual_drag.cpp
+    ../src/virtual_drag.cpp
+    ../src/virtual_drag.h
+)
+
+target_link_libraries(test_virtual_drag PRIVATE Qt6::Test Qt6::Core Qt6::Gui)
+
+target_include_directories(test_virtual_drag PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+
+add_test(NAME test_virtual_drag COMMAND test_virtual_drag)
+set_tests_properties(test_virtual_drag PROPERTIES WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/install_run/bin")
+
+install(TARGETS test_virtual_drag DESTINATION bin)
+
+# Test executable: test_drag_utils
+add_executable(test_drag_utils
+    test_drag_utils.cpp
+    ../src/drag_utils.cpp
+    ../src/drag_utils.h
+)
+
+target_link_libraries(test_drag_utils PRIVATE Qt6::Test Qt6::Core Qt6::Gui Qt6::Widgets)
+
+target_include_directories(test_drag_utils PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+
+add_test(NAME test_drag_utils COMMAND test_drag_utils)
+set_tests_properties(test_drag_utils PROPERTIES WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/install_run/bin")
+
+install(TARGETS test_drag_utils DESTINATION bin)
+
+# Test executable: test_everything_search
+add_executable(test_everything_search
+    test_everything_search.cpp
+    ../src/everything_search.cpp
+    ../src/everything_search.h
+)
+
+target_link_libraries(test_everything_search PRIVATE Qt6::Test Qt6::Core)
+
+target_include_directories(test_everything_search PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+
+add_test(NAME test_everything_search COMMAND test_everything_search)
+set_tests_properties(test_everything_search PROPERTIES WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/install_run/bin")
+
+install(TARGETS test_everything_search DESTINATION bin)
+
+# Test executable: test_icon_utils
+add_executable(test_icon_utils
+    test_icon_utils.cpp
+    ../src/icon_utils.cpp
+    ../src/icon_utils.h
+)
+
+set_property(TARGET test_icon_utils PROPERTY AUTOMOC ON)
+
+target_link_libraries(test_icon_utils PRIVATE Qt6::Test Qt6::Core Qt6::Gui Qt6::Widgets)
+
+target_include_directories(test_icon_utils PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+
+add_test(NAME test_icon_utils COMMAND test_icon_utils)
+set_tests_properties(test_icon_utils PROPERTIES WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/install_run/bin")
+
+install(TARGETS test_icon_utils DESTINATION bin)
+
+# Test executable: test_grid_scrub
+add_executable(test_grid_scrub
+    test_grid_scrub.cpp
+)
+
+target_link_libraries(test_grid_scrub PRIVATE Qt6::Test Qt6::Core Qt6::Widgets)
+
+target_include_directories(test_grid_scrub PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+
+add_test(NAME test_grid_scrub COMMAND test_grid_scrub)
+set_tests_properties(test_grid_scrub PROPERTIES WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/install_run/bin")
+
+install(TARGETS test_grid_scrub DESTINATION bin)
+
+# Test executable: test_platform_session
+add_executable(test_platform_session
+    test_platform_session.cpp
+)
+
+target_link_libraries(test_platform_session PRIVATE Qt6::Test Qt6::Core)
+
+target_include_directories(test_platform_session PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+
+add_test(NAME test_platform_session COMMAND test_platform_session)
+set_tests_properties(test_platform_session PROPERTIES WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/install_run/bin")
+
+install(TARGETS test_platform_session DESTINATION bin)
+
+# Test executable: test_annotation_items
+add_executable(test_annotation_items
+    test_annotation_items.cpp
+    ../src/annotation_items.cpp
+    ../src/annotation_items.h
+)
+
+set_property(TARGET test_annotation_items PROPERTY AUTOMOC ON)
+
+target_link_libraries(test_annotation_items PRIVATE Qt6::Test Qt6::Core Qt6::Gui Qt6::Widgets)
+
+target_include_directories(test_annotation_items PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+
+add_test(NAME test_annotation_items COMMAND test_annotation_items)
+set_tests_properties(test_annotation_items PROPERTIES WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/install_run/bin")
+
+install(TARGETS test_annotation_items DESTINATION bin)
