@@ -51,7 +51,7 @@ Each task was committed atomically:
 
 1. **task 1: Audit existing annotation implementation and current coverage** - `adc2597` (docs)
 2. **task 2: Implement minimal Wayland annotation fixes** - `7ba0b8f` (fix)
-3. **task 3: Validate with focused tests and summarize outcomes** - `TO_BE_FILLED` (test/docs)
+3. **task 3: Validate with focused tests and summarize outcomes** - `248d0d3` (test/docs)
 
 ## Files Created/Modified
 - `.planning/phases/03-preserve-annotation-on-video-and-sequences/03-01-audit.md` - recorded the partial-completion audit and remaining overlay gap
@@ -79,7 +79,7 @@ None - no external service configuration required.
 - Annotation persistence, export, and live overlay behavior are ready for manual Fedora 43 Wayland verification.
 - Recommended manual check: launch the Wayland build, annotate a video and an image sequence across multiple frames, then confirm scrubbing and export retain those drawings.
 
-## Self-Check: TO_BE_FILLED
+## Self-Check: PASSED
 
 ---
 *Phase: 03-preserve-annotation-on-video-and-sequences*
