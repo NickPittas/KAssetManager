@@ -10,6 +10,8 @@
 #include <QScreen>
 #include <QGuiApplication>
 #include <QHash>
+#include <QDir>
+#include <QFileInfo>
 
 // Icon generation helpers
 // Creates DPI-aware icons that render crisply on High DPI displays
@@ -43,26 +45,75 @@ QIcon mkIcon(const std::function<void(QPainter&, const QRectF&)>& draw, const QC
     return QIcon(pm);
 }
 
-QIcon loadPngIcon(const QString& filename, const QColor& targetColor)
+QString findIconPath(const QString& filename)
 {
-    // Try multiple possible locations for the icons folder
+    const QString appDir = QCoreApplication::applicationDirPath();
+    const QString baseName = QFileInfo(filename).fileName();
+    const QString normalized = filename.startsWith(QStringLiteral("media/"), Qt::CaseInsensitive)
+        ? QStringLiteral("Media/") + filename.mid(6)
+        : filename;
+    const QString lowerNormalized = normalized.toLower();
+
     QStringList searchPaths = {
-        QCoreApplication::applicationDirPath() + "/icons/" + filename,
-        QCoreApplication::applicationDirPath() + "/../icons/" + filename,
-        QCoreApplication::applicationDirPath() + "/../../icons/" + filename
+        appDir + "/Icons/" + normalized,
+        appDir + "/../Icons/" + normalized,
+        appDir + "/../../Icons/" + normalized,
+        appDir + "/../../../Icons/" + normalized,
+        appDir + "/icons/" + lowerNormalized,
+        appDir + "/../icons/" + lowerNormalized,
+        appDir + "/../../icons/" + lowerNormalized,
+        appDir + "/../../../icons/" + lowerNormalized,
+        appDir + "/Icons/Media/" + baseName,
+        appDir + "/../Icons/Media/" + baseName,
+        appDir + "/../../Icons/Media/" + baseName,
+        appDir + "/../../../Icons/Media/" + baseName,
+        appDir + "/Icons/Annotation/" + baseName,
+        appDir + "/../Icons/Annotation/" + baseName,
+        appDir + "/../../Icons/Annotation/" + baseName,
+        appDir + "/../../../Icons/Annotation/" + baseName,
+        appDir + "/../Resources/icons/" + normalized,
+        appDir + "/../../Resources/icons/" + normalized,
+        appDir + "/../../../Resources/icons/" + normalized,
+        QDir::currentPath() + "/Icons/" + normalized,
+        QDir::currentPath() + "/Icons/Media/" + baseName,
+        QDir::currentPath() + "/Icons/Annotation/" + baseName,
+        QDir::currentPath() + "/../Icons/" + normalized,
+        QDir::currentPath() + "/../Icons/Media/" + baseName,
+        QDir::currentPath() + "/../Icons/Annotation/" + baseName,
+        QDir::currentPath() + "/../../Icons/" + normalized,
+        QDir::currentPath() + "/../../Icons/Media/" + baseName,
+        QDir::currentPath() + "/../../Icons/Annotation/" + baseName,
+        QDir::currentPath() + "/../../../Icons/" + normalized,
+        QDir::currentPath() + "/../../../Icons/Media/" + baseName,
+        QDir::currentPath() + "/../../../Icons/Annotation/" + baseName
     };
 
-    QString foundPath;
     for (const QString& path : searchPaths) {
         if (QFile::exists(path)) {
-            foundPath = path;
-            break;
+            return path;
         }
     }
 
+    return QString();
+}
+
+QIcon loadRawPngIcon(const QString& filename)
+{
+    const QString foundPath = findIconPath(filename);
     if (foundPath.isEmpty()) {
-        qWarning() << "Failed to find icon:" << filename << "- searched paths:" << searchPaths;
-        // Return a fallback empty icon
+        qWarning() << "Failed to find raw icon:" << filename;
+        return QIcon();
+    }
+
+    return QIcon(foundPath);
+}
+
+QIcon loadPngIcon(const QString& filename, const QColor& targetColor)
+{
+    const QString foundPath = findIconPath(filename);
+
+    if (foundPath.isEmpty()) {
+        qWarning() << "Failed to find icon:" << filename;
         return QIcon();
     }
 

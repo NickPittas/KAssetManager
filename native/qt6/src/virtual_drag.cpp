@@ -1,5 +1,5 @@
-#ifdef _WIN32
 #include "virtual_drag.h"
+#ifdef _WIN32
 #include <windows.h>
 #include <shlobj.h>
 #include <shellapi.h>
@@ -485,6 +485,9 @@ bool startRealPathsDrag(const QVector<QString> &paths) {
 
 #else
 // Non-Windows stub
-namespace VirtualDrag { bool startVirtualDrag(const QVector<VirtualFile>&) { return false; } }
+namespace VirtualDrag {
+bool startVirtualDrag(const QVector<VirtualFile>&) { return false; }
+bool startRealPathsDrag(const QVector<QString>&) { return false; }
+bool startAdaptivePathsDrag(const QVector<QString>&, const QVector<QString>&) { return false; }
+}
 #endif
-

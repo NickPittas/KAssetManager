@@ -139,15 +139,25 @@ void syncAnnotationOverlayToVideo(QGraphicsView* overlayView,
         return;
     }
 
+    QRect displayedRect(QPoint(0, 0), videoContainer->size());
+    if (auto *renderViewport = qobject_cast<TLRenderViewport*>(videoContainer)) {
+        displayedRect = renderViewport->displayedContentRect();
+    }
+
     if (QWidget* parent = overlayView->parentWidget()) {
-        const QPoint overlayPos = videoContainer->mapTo(parent, QPoint(0, 0));
-        overlayView->setGeometry(QRect(overlayPos, videoContainer->size()));
+        const QPoint overlayPos = videoContainer->mapTo(parent, displayedRect.topLeft());
+        overlayView->setGeometry(QRect(overlayPos, displayedRect.size()));
     }
 
     if (overlayScene->sceneRect().isEmpty()) {
-        overlayScene->setSceneRect(QRectF(QPointF(0, 0), QSizeF(videoContainer->size())));
+        overlayScene->setSceneRect(QRectF(QPointF(0, 0), QSizeF(displayedRect.size())));
     }
 
+    // The overlay geometry already matches the displayed video rect. Fit the
+    // frame-space scene into that rect and let mapToScene() provide the only
+    // coordinate transform for annotation input.
+    overlayView->resetTransform();
+    overlayView->setSceneRect(overlayScene->sceneRect());
     overlayView->fitInView(overlayScene->sceneRect(), Qt::KeepAspectRatio);
 }
 
@@ -1407,6 +1417,8 @@ void PreviewOverlay::ensureRenderWidget()
             if (parentLayout) {
                 parentLayout->replaceWidget(videoWidget, m_renderWidget);
             }
+            videoWidget->hide();
+            videoWidget->setEnabled(false);
         }
     }
 
@@ -4388,6 +4400,14 @@ void PreviewOverlay::enableAnnotationMode(bool enable)
                 }
                 annotationOverlayView->show();
                 annotationOverlayView->raise();
+                if (controlsWidget) {
+                    controlsPinned = true;
+                    setControlsVisible(true);
+                    controlsWidget->raise();
+                }
+                if (annotationToolbar) {
+                    annotationToolbar->raise();
+                }
                 activatePreviewWindow(this, annotationOverlayView);
 
                 qDebug() << "[PreviewOverlay] Video annotation overlay armed for live viewport";
@@ -4420,8 +4440,8 @@ void PreviewOverlay::enableAnnotationMode(bool enable)
         currentAnnotatedFrame = frameIndex;
         loadFrameAnnotations(frameIndex);
         
-        // Set default to select mode (for moving/editing)
-        annotationLayer->setDrawMode(AnnotationLayer::Select);
+        // Keep the currently selected annotation tool/mode when entering annotation mode.
+        // Forcing Select here prevents drawing tools from working on video.
     } else {
         // Save annotations before closing editor
         saveCurrentFrameAnnotations();
@@ -4444,6 +4464,7 @@ void PreviewOverlay::enableAnnotationMode(bool enable)
                 videoContainer->show();
                 videoContainer->raise();
             }
+            controlsPinned = false;
             
             qDebug() << "[PreviewOverlay] Restored video playback from annotation mode";
         }

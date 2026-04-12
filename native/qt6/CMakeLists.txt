@@ -7,7 +7,11 @@ if(NOT DEFINED CMAKE_TOOLCHAIN_FILE)
         set(CMAKE_TOOLCHAIN_FILE "$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake" CACHE STRING "Vcpkg toolchain file")
         # Default triplet; can be overridden by user
         if(NOT DEFINED VCPKG_TARGET_TRIPLET)
-            set(VCPKG_TARGET_TRIPLET "x64-windows" CACHE STRING "Vcpkg target triplet")
+            if(WIN32)
+                set(VCPKG_TARGET_TRIPLET "x64-windows" CACHE STRING "Vcpkg target triplet")
+            else()
+                set(VCPKG_TARGET_TRIPLET "x64-linux" CACHE STRING "Vcpkg target triplet")
+            endif()
         endif()
         message(STATUS "Using vcpkg toolchain: ${CMAKE_TOOLCHAIN_FILE}")
         message(STATUS "Using vcpkg triplet: ${VCPKG_TARGET_TRIPLET}")
@@ -123,8 +127,12 @@ endif()
 set(_tlrender_candidates
     "${CMAKE_SOURCE_DIR}/../third_party/tlRender-build/install-Release"
     "${CMAKE_SOURCE_DIR}/../../third_party/tlRender-build/install-Release"
+    "${CMAKE_SOURCE_DIR}/../third_party/tlRender-install-Release"
+    "${CMAKE_SOURCE_DIR}/../../third_party/tlRender-install-Release"
     "${CMAKE_CURRENT_LIST_DIR}/../third_party/tlRender-build/install-Release"
     "${CMAKE_CURRENT_LIST_DIR}/../../third_party/tlRender-build/install-Release"
+    "${CMAKE_CURRENT_LIST_DIR}/../third_party/tlRender-install-Release"
+    "${CMAKE_CURRENT_LIST_DIR}/../../third_party/tlRender-install-Release"
 )
 foreach(_candidate IN LISTS _tlrender_candidates)
     get_filename_component(_abs_candidate "${_candidate}" ABSOLUTE)
@@ -140,12 +148,21 @@ if(TLRENDER_ROOT)
     list(PREPEND CMAKE_PREFIX_PATH "${TLRENDER_ROOT}" "${TLRENDER_ROOT}/share/ftk")
     message(STATUS "Using tlRender from ${TLRENDER_ROOT}")
     
-    # Force CMake to use tlRender's bundled ZLIB to avoid duplicate symbol issues
-    # tlRender bundles a static zlib that was used during its build
-    # We must set these as CACHE FORCE to override vcpkg's zlib
+    # Force CMake to use tlRender's bundled ZLIB to avoid duplicate symbol issues.
+    # The install layout differs by platform (.lib on Windows, libz.a on Linux).
+    set(_tlrender_zlib_library "")
+    if(WIN32 AND EXISTS "${TLRENDER_ROOT}/lib/zlib.lib")
+        set(_tlrender_zlib_library "${TLRENDER_ROOT}/lib/zlib.lib")
+    elseif(EXISTS "${TLRENDER_ROOT}/lib/libz.a")
+        set(_tlrender_zlib_library "${TLRENDER_ROOT}/lib/libz.a")
+    elseif(EXISTS "${TLRENDER_ROOT}/lib64/libz.a")
+        set(_tlrender_zlib_library "${TLRENDER_ROOT}/lib64/libz.a")
+    endif()
     set(ZLIB_ROOT "${TLRENDER_ROOT}" CACHE PATH "ZLIB root" FORCE)
-    set(ZLIB_LIBRARY "${TLRENDER_ROOT}/lib/zlib.lib" CACHE FILEPATH "ZLIB library" FORCE)
-    set(ZLIB_LIBRARY_RELEASE "${TLRENDER_ROOT}/lib/zlib.lib" CACHE FILEPATH "ZLIB Release library" FORCE)
+    if(_tlrender_zlib_library)
+        set(ZLIB_LIBRARY "${_tlrender_zlib_library}" CACHE FILEPATH "ZLIB library" FORCE)
+        set(ZLIB_LIBRARY_RELEASE "${_tlrender_zlib_library}" CACHE FILEPATH "ZLIB Release library" FORCE)
+    endif()
     set(ZLIB_INCLUDE_DIR "${TLRENDER_ROOT}/include" CACHE PATH "ZLIB include dir" FORCE)
     # Clear any cached found status
     unset(ZLIB_FOUND CACHE)
@@ -176,7 +193,8 @@ if(TLRENDER_ROOT)
 else()
     message(FATAL_ERROR "tlRender not found! tlRender is required for video/image sequence playback.\n"
         "Build tlRender by running:\n"
-        "  cd third_party/tlRender-build && .\\build-tlrender.ps1\n"
+        "  Linux: configure/build tlRender into third_party/tlRender-install-Release\n"
+        "  Windows: cd third_party/tlRender-build && .\\build-tlrender.ps1\n"
         "This will build tlRender with all dependencies including OpenColorIO and OpenImageIO.")
 endif()
 
@@ -442,7 +460,7 @@ endif()
 
 # OpenImageIO is provided by tlRender - no need to link separately
 
-# Link minizip-ng (vcpkg target) - separate from tlRender's bundled minizip-ng
+# Link minizip-ng from the tlRender install
 target_link_libraries(kassetmanagerqt PRIVATE MINIZIP::minizip-ng)
 target_compile_definitions(kassetmanagerqt PRIVATE HAVE_MINIZIP_NG)
 
@@ -456,10 +474,10 @@ endif()
 install(TARGETS kassetmanagerqt RUNTIME DESTINATION bin)
 
 # Install icons folder
-set(_ICONS_DIR "${CMAKE_SOURCE_DIR}/../../icons")
+set(_ICONS_DIR "${CMAKE_SOURCE_DIR}/../../Icons")
 if(EXISTS "${_ICONS_DIR}")
   install(DIRECTORY "${_ICONS_DIR}" DESTINATION bin)
-  message(STATUS "Icons folder will be installed to bin/icons directory")
+  message(STATUS "Icons folder will be installed to bin/Icons directory")
 else()
   message(WARNING "Icons folder not found at ${_ICONS_DIR}")
 endif()
@@ -579,12 +597,16 @@ if(BUILD_TESTS)
     add_subdirectory(tests)
 endif()
 
-# CPack configuration (NSIS + ZIP)
+# CPack configuration
 set(CPACK_PACKAGE_NAME "KAsset Manager Qt")
 set(CPACK_PACKAGE_VENDOR "KAM")
 set(CPACK_PACKAGE_VERSION ${PROJECT_VERSION})
 set(CPACK_PACKAGE_INSTALL_DIRECTORY "KAssetManagerQt")
-set(CPACK_GENERATOR "ZIP;NSIS")
+if(WIN32)
+  set(CPACK_GENERATOR "ZIP;NSIS")
+else()
+  set(CPACK_GENERATOR "TGZ")
+endif()
 include(CPack)
 
 

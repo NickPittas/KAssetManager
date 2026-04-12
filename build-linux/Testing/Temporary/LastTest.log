@@ -1,0 +1,29 @@
+Start testing: Apr 11 12:41 EEST
+----------------------------------------------------------
+14/15 Testing: test_platform_session
+14/15 Test: test_platform_session
+Command: "/home/npittas/KAssetManager/.worktrees/linux-port-fedora43-wt/build-linux/tests/test_platform_session"
+Directory: /home/npittas/KAssetManager/.worktrees/linux-port-fedora43-wt/build-linux/install_run/bin
+"test_platform_session" start time: Apr 11 12:41 EEST
+Output:
+----------------------------------------------------------
+********* Start testing of TestPlatformSession *********
+Config: Using QtTest library 6.10.3, Qt 6.10.3 (x86_64-little_endian-lp64 shared (dynamic) release build; by GCC 15.2.1 20260123 (Red Hat 15.2.1-7)), fedora 43
+PASS   : TestPlatformSession::initTestCase()
+PASS   : TestPlatformSession::detectsWaylandFromPlatformName()
+PASS   : TestPlatformSession::detectsWaylandFromSessionType()
+PASS   : TestPlatformSession::ignoresNonWaylandSessions()
+PASS   : TestPlatformSession::doesNotForceRasterWidgetsOnWayland()
+PASS   : TestPlatformSession::usesDesktopOpenGLOnWayland()
+PASS   : TestPlatformSession::cleanupTestCase()
+Totals: 7 passed, 0 failed, 0 skipped, 0 blacklisted, 0ms
+********* Finished testing of TestPlatformSession *********
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"test_platform_session" end time: Apr 11 12:41 EEST
+"test_platform_session" time elapsed: 00:00:00
+----------------------------------------------------------
+
+End testing: Apr 11 12:41 EEST

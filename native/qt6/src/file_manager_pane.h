@@ -149,6 +149,7 @@ private:
     void setupConnections();
     void updateNavigationButtons();
     void applyActiveStyle();
+    void ensureVideoPreview();
 
     // Sequence playback helpers
     void loadSequenceFrame(int index);
@@ -190,6 +191,7 @@ private:
     QGraphicsPixmapItem *m_imageItem = nullptr;
     TLRenderViewport *m_videoWidget = nullptr;
     TLRenderPlayer *m_tlrenderPlayer = nullptr;
+    QWidget *m_previewContent = nullptr;
     QPlainTextEdit *m_textView = nullptr;
     QTableView *m_csvView = nullptr;
     QStandardItemModel *m_csvModel = nullptr;

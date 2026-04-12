@@ -61,6 +61,7 @@ public:
     void setFrameView(bool enabled);
     bool frameViewEnabled() const;
     void zoomRelative(double factor);
+    QRect displayedContentRect() const;
 
     /**
      * @brief Get the native viewport for advanced access

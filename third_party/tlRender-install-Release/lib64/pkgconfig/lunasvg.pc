@@ -1,0 +1,11 @@
+prefix=${pcfiledir}/../../
+includedir=${prefix}/include
+libdir=${prefix}/lib64
+
+Name: LunaSVG
+Description: SVG rendering and manipulation library
+Version: 3.4.0
+
+Requires.private: plutovg
+Cflags: -I${includedir}/lunasvg -DLUNASVG_BUILD_STATIC
+Libs: -L${libdir} -llunasvg

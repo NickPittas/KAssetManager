@@ -7,7 +7,10 @@
 #include <QAbstractItemView>
 #include <QModelIndex>
 #include <QHash>
+#include <QString>
 #include <functional>
+
+#include "platform_session.h"
 
 /**
  * @brief Minimal overlay for showing scrub progress indicator.
@@ -42,6 +45,11 @@ public:
                         std::function<QString(const QModelIndex&)> resolver,
                         QObject *parent = nullptr);
     ~GridScrubController() override;
+
+    static bool shouldGrabMouseForSessionType(const QString &sessionType)
+    {
+        return !PlatformSession::isWayland(QString(), sessionType);
+    }
 
     void setSequenceGroupingEnabled(bool enabled);
     bool isSequenceGroupingEnabled() const;

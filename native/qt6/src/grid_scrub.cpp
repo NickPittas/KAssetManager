@@ -422,7 +422,9 @@ bool GridScrubController::handleCtrlScrub(const QPoint &pos)
     }
     const int clampedX = std::clamp(pos.x(), thumbRect.left(), thumbRect.right());
     const int clampedY = std::clamp(pos.y(), thumbRect.top(), thumbRect.bottom());
-    if (m_view && m_view->viewport() && (clampedX != pos.x() || clampedY != pos.y())) {
+    if (m_view && m_view->viewport() &&
+        !PlatformSession::isWayland() &&
+        (clampedX != pos.x() || clampedY != pos.y())) {
         m_warpingCursor = true;
         const QPoint clampedPoint(clampedX, clampedY);
         QCursor::setPos(m_view->viewport()->mapToGlobal(clampedPoint));
@@ -487,7 +489,7 @@ void GridScrubController::beginScrub()
         return;
     }
     m_scrubActive = true;
-    if (m_view && m_view->viewport() && !m_mouseGrabbed) {
+    if (m_view && m_view->viewport() && !m_mouseGrabbed && !PlatformSession::isWayland()) {
         m_view->viewport()->grabMouse();
         m_mouseGrabbed = true;
     }

@@ -15,6 +15,7 @@
 #include <QApplication>
 #include <QElapsedTimer>
 #include <QImage>
+#include <QSize>
 #include <stdexcept>
 #include "video_metadata.h"
 #include "platform_session.h"
@@ -46,7 +47,9 @@ extern "C" {
 #include <tlRender/Qt/PlayerObject.h>
 
 #include <ftk/Core/Context.h>
+#include <ftk/Core/Image.h>
 #include <ftk/Core/Path.h>
+#include <ftk/Core/Memory.h>
 #include <ftk/Core/LogSystem.h>
 #include <ftk/Core/FontSystem.h>
 
@@ -64,6 +67,78 @@ bool TLRenderPlayer::s_fontsInitialized = false;
 #ifdef HAVE_TLRENDER
 std::shared_ptr<ftk::Context> TLRenderPlayer::s_sharedContext;
 QPointer<tl::qt::ContextObject> TLRenderPlayer::s_contextObject;
+
+namespace {
+QImage imageToQImage(const std::shared_ptr<ftk::Image>& image)
+{
+    if (!image || !image->isValid()) {
+        return {};
+    }
+
+    const auto& info = image->getInfo();
+    const int width = info.size.w;
+    const int height = info.size.h;
+    if (width <= 0 || height <= 0) {
+        return {};
+    }
+
+    const uchar* data = image->getData();
+    if (!data) {
+        return {};
+    }
+
+    QImage out;
+    switch (info.type) {
+    case ftk::ImageType::L_U8: {
+        const int bytesPerLine = static_cast<int>(ftk::getAlignedByteCount(static_cast<size_t>(width), info.layout.alignment));
+        out = QImage(data, width, height, bytesPerLine, QImage::Format_Grayscale8).copy();
+        break;
+    }
+    case ftk::ImageType::RGB_U8: {
+        const int bytesPerLine = static_cast<int>(ftk::getAlignedByteCount(static_cast<size_t>(width) * 3, info.layout.alignment));
+        out = QImage(data, width, height, bytesPerLine, QImage::Format_RGB888).copy();
+        break;
+    }
+    case ftk::ImageType::RGBA_U8: {
+        const int bytesPerLine = static_cast<int>(ftk::getAlignedByteCount(static_cast<size_t>(width) * 4, info.layout.alignment));
+        out = QImage(data, width, height, bytesPerLine, QImage::Format_RGBA8888).copy();
+        break;
+    }
+    default:
+        return {};
+    }
+
+    if (info.layout.mirror.x || info.layout.mirror.y) {
+        Qt::Orientations orientations;
+        if (info.layout.mirror.x) {
+            orientations |= Qt::Horizontal;
+        }
+        if (info.layout.mirror.y) {
+            orientations |= Qt::Vertical;
+        }
+        out = out.flipped(orientations);
+    }
+
+    return out;
+}
+
+QImage currentVideoFramesToQImage(const std::vector<tl::VideoFrame>& frames, const QSize& targetSize)
+{
+    for (const auto& frame : frames) {
+        for (const auto& layer : frame.layers) {
+            QImage image = imageToQImage(layer.image);
+            if (image.isNull()) {
+                continue;
+            }
+            if (!targetSize.isEmpty()) {
+                image = image.scaled(targetSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+            }
+            return image;
+        }
+    }
+    return {};
+}
+} // namespace
 #endif
 
 // ============================================================================
@@ -1187,8 +1262,19 @@ void TLRenderPlayer::onUpdateTimer()
 
 QImage TLRenderPlayer::getCurrentFrame(const QSize& targetSize)
 {
+#ifdef HAVE_TLRENDER
+    {
+        QMutexLocker locker(&m_mutex);
+        QImage cachedFrame = currentVideoFramesToQImage(m_cachedVideoFrames, targetSize);
+        if (!cachedFrame.isNull()) {
+            return cachedFrame;
+        }
+    }
+#endif
+
     // For now, reuse the static thumbnail extraction when possible.
-    // Note: This will only work for regular video files (not sequence patterns).
+    // This remains the fallback when tlRender has no cached frame yet or the
+    // cached frame format is not handled above.
     if (m_currentPath.isEmpty()) {
         return QImage();
     }

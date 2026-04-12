@@ -422,14 +422,8 @@ void FileManagerPane::setupPreviewPanel()
     pv->addLayout(alphaRow);
 
     // Video widget (tlRender viewport)
-    m_videoWidget = new TLRenderViewport(m_previewPanel);
-    m_videoWidget->setMinimumHeight(0);  // Allow free resizing
-    m_videoWidget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    m_videoWidget->hide();
-
     // tlRender player
     m_tlrenderPlayer = new TLRenderPlayer(m_previewPanel);
-    m_videoWidget->setPlayer(m_tlrenderPlayer);
 
     // Media controls
     QHBoxLayout *mc = new QHBoxLayout();
@@ -541,12 +535,11 @@ void FileManagerPane::setupPreviewPanel()
     });
 
     // Preview content
-    QWidget *previewContent = new QWidget(m_previewPanel);
-    QVBoxLayout *pc = new QVBoxLayout(previewContent);
+    m_previewContent = new QWidget(m_previewPanel);
+    QVBoxLayout *pc = new QVBoxLayout(m_previewContent);
     pc->setContentsMargins(0, 0, 0, 0);
     pc->setSpacing(4);
     pc->addWidget(m_imageView, 1);
-    pc->addWidget(m_videoWidget, 1);
     pc->addWidget(m_textView, 1);
     pc->addWidget(m_csvView, 1);
 #if defined(HAVE_QT_PDF_WIDGETS)
@@ -554,7 +547,7 @@ void FileManagerPane::setupPreviewPanel()
 #endif
     pc->addWidget(m_svgView, 1);
 
-    pv->addWidget(previewContent);
+    pv->addWidget(m_previewContent);
     pv->addLayout(mc);
     pv->addLayout(docc);
 
@@ -1032,8 +1025,9 @@ void FileManagerPane::updatePreviewForIndex(const QModelIndex &idx)
     } else if (videoExts.contains(suffix)) {
         // Video preview
         if (m_tlrenderPlayer) {
+            ensureVideoPreview();
             m_tlrenderPlayer->loadMedia(filePath);
-            m_videoWidget->show();
+            if (m_videoWidget) m_videoWidget->show();
             m_playPauseBtn->show();
             m_positionSlider->show();
             m_timeLabel->show();
@@ -1124,6 +1118,25 @@ void FileManagerPane::clearPreview()
     m_infoCreated->clear();
     m_infoModified->clear();
     m_infoPermissions->clear();
+}
+
+void FileManagerPane::ensureVideoPreview()
+{
+    if (m_videoWidget || !m_previewContent) {
+        return;
+    }
+
+    auto *layout = qobject_cast<QVBoxLayout*>(m_previewContent->layout());
+    if (!layout) {
+        return;
+    }
+
+    m_videoWidget = new TLRenderViewport(m_previewPanel);
+    m_videoWidget->setMinimumHeight(0);
+    m_videoWidget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    m_videoWidget->hide();
+    m_videoWidget->setPlayer(m_tlrenderPlayer);
+    layout->insertWidget(1, m_videoWidget, 1);
 }
 
 void FileManagerPane::saveState(QSettings &settings, const QString &prefix)

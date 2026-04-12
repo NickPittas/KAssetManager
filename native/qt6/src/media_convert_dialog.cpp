@@ -67,6 +67,9 @@ void MediaConvertDialog::buildUi()
     m_verifyBtn->setToolTip("Verify sequence (full directory scan)");
     {
         QStringList paths = {
+            QCoreApplication::applicationDirPath() + "/Icons/Verify.png",
+            QCoreApplication::applicationDirPath() + "/../Icons/Verify.png",
+            QCoreApplication::applicationDirPath() + "/../../Icons/Verify.png",
             QCoreApplication::applicationDirPath() + "/icons/Verify.png",
             QCoreApplication::applicationDirPath() + "/../icons/Verify.png",
             QCoreApplication::applicationDirPath() + "/../../icons/Verify.png",
@@ -299,16 +302,20 @@ QString MediaConvertDialog::locateFfmpeg() const
 {
     // 1) Next to app
     QString d = QCoreApplication::applicationDirPath();
+    QString cand;
 #ifdef Q_OS_WIN
-    QString cand = QDir(d).filePath("ffmpeg.exe"); if (QFileInfo::exists(cand)) return cand;
+    const QString ffmpegName = QStringLiteral("ffmpeg.exe");
+#else
+    const QString ffmpegName = QStringLiteral("ffmpeg");
 #endif
+    cand = QDir(d).filePath(ffmpegName); if (QFileInfo::exists(cand)) return cand;
     // 2) third_party
-    cand = QDir(QCoreApplication::applicationDirPath()).filePath("../../third_party/ffmpeg/bin/ffmpeg.exe");
+    cand = QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("../../third_party/ffmpeg/bin/%1").arg(ffmpegName));
     if (QFileInfo::exists(cand)) return QFileInfo(cand).absoluteFilePath();
     // 3) FFMPEG_ROOT
     QString env = qEnvironmentVariable("FFMPEG_ROOT");
     if (!env.isEmpty()) {
-        cand = QDir(env).filePath("bin/ffmpeg.exe"); if (QFileInfo::exists(cand)) return QFileInfo(cand).absoluteFilePath();
+        cand = QDir(env).filePath(QStringLiteral("bin/%1").arg(ffmpegName)); if (QFileInfo::exists(cand)) return QFileInfo(cand).absoluteFilePath();
     }
     // 4) PATH
     return "ffmpeg";
@@ -625,4 +632,3 @@ void MediaConvertDialog::onVerifySequence()
     }
     m_status->setText("Verify: no image sequence in selection");
 }
-

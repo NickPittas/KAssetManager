@@ -291,6 +291,29 @@ void TLRenderViewport::zoomRelative(double factor)
 #endif
 }
 
+QRect TLRenderViewport::displayedContentRect() const
+{
+#ifdef HAVE_TLRENDER
+    if (m_rasterLabel) {
+        const QRect contents = m_rasterLabel->contentsRect();
+        const QPixmap pixmap = m_rasterLabel->pixmap();
+        if (pixmap.isNull()) {
+            return contents;
+        }
+
+        const QSize fitted = pixmap.size().scaled(contents.size(), Qt::KeepAspectRatio);
+        const QPoint topLeft(
+            contents.x() + (contents.width() - fitted.width()) / 2,
+            contents.y() + (contents.height() - fitted.height()) / 2);
+        return QRect(topLeft, fitted);
+    }
+    if (m_viewport) {
+        return m_viewport->geometry();
+    }
+#endif
+    return rect();
+}
+
 double TLRenderViewport::fps() const
 {
 #ifdef HAVE_TLRENDER

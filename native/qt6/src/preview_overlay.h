@@ -174,7 +174,6 @@ protected:
         if (event->button() == Qt::LeftButton) {
             const int newValue = pixelPosToRangeValue(event->position().toPoint());
             setSliderDown(true);
-            grabMouse();
             setValue(newValue);
             emit sliderPressed();
             emit sliderMoved(newValue);
@@ -202,7 +201,6 @@ protected:
             const int newValue = pixelPosToRangeValue(event->position().toPoint());
             setValue(newValue);
             setSliderDown(false);
-            releaseMouse();
             emit sliderReleased();
             event->accept();
             return;

@@ -30,12 +30,8 @@ bool DragUtils::startFileDrag(const QStringList &paths) {
     return VirtualDrag::startRealPathsDrag(v);
 #else
     // Fallback to Qt cross-platform drag (non-Windows)
-    QWindow *win = QGuiApplication::focusWindow();
-    if (!win) win = QGuiApplication::activeWindow();
-    QObject *dragParent = win ? static_cast<QObject*>(win) : static_cast<QObject*>(QGuiApplication::instance());
-
-    auto *drag = new QDrag(dragParent);
-    auto *mime = new QMimeData(drag);  // Set drag as parent for ownership
+    auto *drag = new QDrag(QApplication::instance());
+    auto *mime = new QMimeData();
     QList<QUrl> urls; urls.reserve(paths.size());
     for (const auto &p : paths) urls << QUrl::fromLocalFile(p);
     mime->setUrls(urls);
@@ -93,5 +89,3 @@ bool DragUtils::showInExplorer(const QString &path) {
     return QDesktopServices::openUrl(QUrl::fromLocalFile(fi.absolutePath()));
 #endif
 }
-
-
