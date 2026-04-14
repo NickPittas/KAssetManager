@@ -4,7 +4,6 @@
 #include <QFileInfo>
 #include <QDir>
 #include <QStandardPaths>
-#include <QTemporaryFile>
 #include <QTextStream>
 #include <QRegularExpression>
 #include <QSet>
@@ -518,5 +517,3 @@ bool MediaConverterWorker::buildCommand(const Task& t, QString& program, QString
     args << safePath(outPath);
     return true;
 }
-
-

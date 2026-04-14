@@ -60,7 +60,7 @@ add_library(MINIZIP::minizip-ng STATIC IMPORTED)
 
 set_target_properties(MINIZIP::minizip-ng PROPERTIES
   INTERFACE_INCLUDE_DIRECTORIES "${_IMPORT_PREFIX}/include/minizip-ng;${_IMPORT_PREFIX}/include/minizip-ng"
-  INTERFACE_LINK_LIBRARIES "/home/npittas/KAssetManager/.worktrees/linux-port-fedora43-wt/third_party/tlRender-install-Release/lib/libz.a"
+  INTERFACE_LINK_LIBRARIES "/home/npittas/KAssetManager/third_party/tlRender-install-Release/lib/libz.a"
 )
 
 # Load information for each installed configuration.

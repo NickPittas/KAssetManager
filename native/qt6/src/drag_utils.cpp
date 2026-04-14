@@ -8,6 +8,7 @@
 #include <QTemporaryDir>
 #include <QFile>
 #include <QDesktopServices>
+#include <QCoreApplication>
 #ifdef _WIN32
 #include <windows.h>
 #include <shellapi.h>
@@ -64,7 +65,9 @@ bool DragUtils::startVirtualDragSampleMulti() {
 }
 
 bool DragUtils::startVirtualDragSampleFallbackCFHDrop() {
-    QTemporaryDir tmp;
+    const QString tempRoot = QCoreApplication::applicationDirPath() + QStringLiteral("/data/tmp");
+    QDir().mkpath(tempRoot);
+    QTemporaryDir tmp(tempRoot + QStringLiteral("/drag-XXXXXX"));
     if (!tmp.isValid()) return false;
     const QString path = tmp.filePath("Virtual-From-App.txt");
     QFile f(path);

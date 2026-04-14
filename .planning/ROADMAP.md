@@ -14,7 +14,7 @@
 |-------|-------|--------|-----------|
 | 1     | 0/0   | Complete | 2026-04-10 |
 | 2     | 0/0   | Complete | 2026-04-10 |
-| 3     | 0/1   | Planned | |
+| 3     | 0/1   | Executing | |
 | 4     | 0/0   | Pending | |
 | 5     | 0/0   | Pending | |
 | 6     | 0/0   | Pending | |
@@ -33,12 +33,12 @@
 **Plans:** 0/0 plans complete
 
 ### Phase 3: Preserve Annotation On Video And Sequences
-**Goal:** Preserve annotation overlay behavior, frame sync, and exports for both video and image sequences under Wayland.
+**Goal:** Restore fullscreen preview overlay annotation behavior, playback UI correctness, frame sync, and exports for both video and image sequences under Wayland.
 **Requirements:** FEDORA43-ANNOTATION
-**Plans:** 0/1 plans executed
+**Plans:** 0/1 plans complete (active defect-resolution pass)
 
 Plans:
-- [x] **03-01** Audit, fix, and validate Wayland annotation behavior for video and sequence workflows
+- [ ] **03-01** Reproduce, fix, and validate fullscreen preview overlay annotation-tool failures and playback UI regressions on Wayland
 
 ### Phase 4: Preserve Thumbnail Generation And Scrubbing
 **Goal:** Restore thumbnails and scrubbing responsiveness on Linux.

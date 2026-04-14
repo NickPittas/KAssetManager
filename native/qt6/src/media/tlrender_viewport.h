@@ -15,9 +15,15 @@
 #include <QVBoxLayout>
 #include <QPoint>
 #include <QLabel>
-#include <memory>
+#include <QPainter>
+#include <QPixmap>
+#include <QTimer>
+#include <QPointer>
+#include <algorithm>
 
 #include "tlrender_player.h"
+#include "mpv_viewport.h"
+
 
 #ifdef HAVE_TLRENDER
 #include <tlRender/QtWidget/Viewport.h>
@@ -39,6 +45,8 @@ class TLRenderViewport : public QWidget
 public:
     explicit TLRenderViewport(QWidget* parent = nullptr);
     ~TLRenderViewport();
+
+    void prepareForMpvPlayback();
 
     /**
      * @brief Set the player to render
@@ -80,6 +88,12 @@ public:
      */
     size_t droppedFrames() const;
 
+    /**
+     * @brief Test-only access to the last raster-presented frame.
+     */
+    QImage currentRasterFrameForTest();
+    qint64 rasterPresentationRevisionForTest() const { return m_presentationRevision; }
+
 signals:
     void fpsChanged(double fps);
     void frameRendered();
@@ -93,10 +107,16 @@ private slots:
     void updateRasterFrame();
 
 private:
+    void ensureMpvViewport();
     void ensureViewport();
     void setupViewportPlayer();
-    
+    void syncPresentationTimer();
+    void syncBackendWidgetVisibility();
+    bool useMpvViewport() const;
+
+    QVBoxLayout* m_layout{nullptr};
     TLRenderPlayer* m_player{nullptr};
+    MpvViewport* m_mpvViewport{nullptr};
 
 #ifdef HAVE_TLRENDER
     std::shared_ptr<ftk::Context> m_context;
@@ -104,12 +124,14 @@ private:
     tl::qtwidget::Viewport* m_viewport{nullptr};
 #endif
     QLabel* m_rasterLabel{nullptr};
+    QTimer* m_presentationTimer = nullptr;
 
-    QVBoxLayout* m_layout{nullptr};
 
     bool m_isPanning{false};
     QPoint m_lastPanPos;
     double m_waylandZoom{1.0};
+    qint64 m_presentationRevision{0};
+    double m_mediaFps{24.0};
 };
 
 #endif // TLRENDER_VIEWPORT_H

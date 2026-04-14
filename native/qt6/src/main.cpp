@@ -8,6 +8,7 @@
 #include <QStandardPaths>
 #include <QFileInfo>
 #include <QByteArray>
+#include <clocale>
 #include <iostream>
 #include "mainwindow.h"
 #include "db.h"
@@ -39,6 +40,8 @@ extern "C" {
 
 int main(int argc, char *argv[])
 {
+    setlocale(LC_NUMERIC, "C");
+
     // High DPI Configuration - MUST be set before QApplication is created
     // Qt 6 enables High DPI scaling by default, but we need to configure it properly
     // to prevent blurry rendering and ensure consistent UI across different DPI displays.
@@ -74,12 +77,6 @@ int main(int argc, char *argv[])
     }
 #endif
 
-#ifdef HAVE_TLRENDER
-    // Initialize tlRender before QApplication to ensure the default surface format
-    // is set correctly for QOpenGLWidget usage.
-    TLRenderPlayer::initialize();
-#endif
-
     // Suppress FFmpeg error messages to prevent console spam
 #ifdef HAVE_FFMPEG_LOG
     av_log_set_level(AV_LOG_QUIET);
@@ -104,7 +101,7 @@ int main(int argc, char *argv[])
     // Install a top-level SEH filter to capture crashes and write a minidump
     SetUnhandledExceptionFilter([](EXCEPTION_POINTERS* ep) -> LONG {
         // Use persistent user data location for crash dumps
-        QString dataDir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+        QString dataDir = QCoreApplication::applicationDirPath() + "/data";
         QDir().mkpath(dataDir);
         QString dumpPath = dataDir + "/crash.dmp";
         HANDLE hFile = CreateFileW((LPCWSTR)dumpPath.utf16(), GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
@@ -142,7 +139,7 @@ int main(int argc, char *argv[])
 
     // Use persistent user data location for database (survives app updates)
     // On Windows: C:/Users/[Username]/AppData/Roaming/KAsset/KAsset Manager Qt/
-    const QString dataDir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    const QString dataDir = QCoreApplication::applicationDirPath() + "/data";
     QDir().mkpath(dataDir);
     const QString dbPath = dataDir + "/kasset.db";
 

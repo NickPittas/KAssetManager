@@ -2,7 +2,7 @@
 
 - [x] **FEDORA43-BASELINE**: Fedora Wayland app configure/build/startup baseline established
 - [x] **FEDORA43-PLAYBACK**: tlRender video and sequence playback validated on Wayland
-- [ ] **FEDORA43-ANNOTATION**: Annotation workflows work correctly on video and sequences under Wayland
+- [ ] **FEDORA43-ANNOTATION**: Annotation workflows work correctly on video and sequences under Wayland, with fullscreen preview overlay drawing tools, playback UI state, frame sync, and export behavior verified
 - [ ] **FEDORA43-THUMBNAILS**: Thumbnail generation and scrubbing work correctly on Linux
 - [ ] **FEDORA43-FILEOPS**: Linux file operations and file manager reveal behave natively
 - [ ] **FEDORA43-PROJECTS**: Project Manager and batch rename workflows validated on Linux

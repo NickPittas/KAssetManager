@@ -30,7 +30,7 @@ void ThumbnailCacheManager::loadSettings()
     QSettings s("AugmentCode", "KAssetManager");
     
     // Default cache directory: next to database in AppData
-    QString defaultCacheDir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/thumbnail_cache";
+    QString defaultCacheDir = QCoreApplication::applicationDirPath() + "/data/thumbnail_cache";
     m_cacheDirectory = s.value("ThumbnailCache/Directory", defaultCacheDir).toString();
     
     int width = s.value("ThumbnailCache/Width", 256).toInt();
@@ -339,4 +339,3 @@ void ThumbnailCacheManager::setThumbnailSize(const QSize& size)
     m_thumbnailSize = size;
     saveSettings();
 }
-

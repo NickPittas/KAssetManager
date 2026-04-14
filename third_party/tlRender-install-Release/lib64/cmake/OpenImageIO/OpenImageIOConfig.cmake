@@ -33,7 +33,7 @@ include(CMakeFindDependencyMacro)
 # add here all the find_dependency() whenever switching to config based dependencies
 if (NOT OFF AND NOT OPENIMAGEIO_CONFIG_DO_NOT_FIND_IMATH)
     find_dependency(Imath 3.2.1
-                    HINTS /home/npittas/KAssetManager/.worktrees/linux-port-fedora43-wt/third_party/tlRender-install-Release/lib64/cmake/Imath)
+                    HINTS /home/npittas/KAssetManager/third_party/tlRender-install-Release/lib64/cmake/Imath)
 endif ()
 
 if (NOT FALSE AND NOT ON)
@@ -65,8 +65,8 @@ endif ()
 # Compute the installation prefix relative to this file. Note that cmake files are installed
 # to ${CMAKE_INSTALL_LIBDIR}/cmake/${PROJECT_NAME} (see OIIO_CONFIG_INSTALL_DIR)
 get_filename_component(_CURR_INSTALL_LIBDIR "${CMAKE_CURRENT_LIST_DIR}/../../" ABSOLUTE)
-get_filename_component(_ABS_CMAKE_INSTALL_LIBDIR "/home/npittas/KAssetManager/.worktrees/linux-port-fedora43-wt/third_party/tlRender-install-Release/lib64" ABSOLUTE)
-get_filename_component(_ABS_CMAKE_INSTALL_INCLUDEDIR "/home/npittas/KAssetManager/.worktrees/linux-port-fedora43-wt/third_party/tlRender-install-Release/include" ABSOLUTE)
+get_filename_component(_ABS_CMAKE_INSTALL_LIBDIR "/home/npittas/KAssetManager/third_party/tlRender-install-Release/lib64" ABSOLUTE)
+get_filename_component(_ABS_CMAKE_INSTALL_INCLUDEDIR "/home/npittas/KAssetManager/third_party/tlRender-install-Release/include" ABSOLUTE)
 file(RELATIVE_PATH _INCLUDEDIR_RELATIVE_TO_LIBDIR
      "${_ABS_CMAKE_INSTALL_LIBDIR}" "${_ABS_CMAKE_INSTALL_INCLUDEDIR}")
 get_filename_component(_CURR_INSTALL_INCLUDE_DIR

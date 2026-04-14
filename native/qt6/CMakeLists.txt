@@ -78,8 +78,8 @@ endif()
 
 if(BUILD_APP)
 
-find_package(QT NAMES Qt6 REQUIRED COMPONENTS Widgets Multimedia MultimediaWidgets Sql Concurrent Svg SvgWidgets OpenGLWidgets)
-find_package(Qt6 REQUIRED COMPONENTS Widgets Multimedia MultimediaWidgets Sql Concurrent Svg SvgWidgets OpenGLWidgets)
+find_package(QT NAMES Qt6 REQUIRED COMPONENTS Widgets Multimedia MultimediaWidgets Sql Concurrent Svg SvgWidgets OpenGL OpenGLWidgets Quick QuickWidgets)
+find_package(Qt6 REQUIRED COMPONENTS Widgets Multimedia MultimediaWidgets Sql Concurrent Svg SvgWidgets OpenGL OpenGLWidgets Quick QuickWidgets)
 # Optional: Qt PDF (viewer) if available
 find_package(Qt6 QUIET COMPONENTS Pdf PdfWidgets)
 # ActiveQt (QAxObject) for Office-to-PDF conversion on Windows (optional)
@@ -335,6 +335,14 @@ qt_add_executable(kassetmanagerqt WIN32
     src/thumbnail_generator_worker.h
     src/thumbnail_generator_worker.cpp
     # tlRender integration - professional video/sequence playback with OCIO
+    src/media/media_player_types.h
+    src/media/libmpv_headers.h
+    src/media/libmpv_runtime.h
+    src/media/libmpv_runtime.cpp
+    src/media/mpv_player.h
+    src/media/mpv_player.cpp
+    src/media/mpv_viewport.h
+    src/media/mpv_viewport.cpp
     src/media/tlrender_player.h
     src/media/tlrender_player.cpp
     src/media/tlrender_widget.h
@@ -446,7 +454,10 @@ target_link_libraries(kassetmanagerqt PRIVATE
     Qt6::Concurrent
     Qt6::Svg
     Qt6::SvgWidgets
+    Qt6::OpenGL
     Qt6::OpenGLWidgets
+    Qt6::Quick
+    Qt6::QuickWidgets
 )
 # Link Qt PDF if available (widgets optional)
 if (TARGET Qt6::Pdf)

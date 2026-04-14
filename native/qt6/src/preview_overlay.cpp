@@ -2,6 +2,7 @@
 #include "icon_utils.h"
 #include "media/tlrender_player.h"
 #include "media/tlrender_viewport.h"
+#include "file_utils.h"
 // Compatibility macros for tlRender
 #define PLAYER_PTR m_player
 #define PLAYER_PLAY() do { if (m_player) m_player->play(); } while (0)
@@ -443,7 +444,7 @@ PreviewOverlay::PreviewOverlay(QWidget *parent)
     setFocusPolicy(Qt::StrongFocus);
     setMouseTracking(true);
 
-    // Auto-hide controls timer
+    // Controls remain visible during preview playback; timer kept inert for compatibility.
     controlsTimer = new QTimer(this);
     controlsTimer->setSingleShot(true);
     controlsTimer->setInterval(3000);
@@ -710,6 +711,9 @@ void PreviewOverlay::setupUi()
     controlsWidget->setStyleSheet("QWidget { background-color: rgba(0, 0, 0, 180); }");
     controlsWidget->setMinimumHeight(kControlsMinHeight);
     controlsWidget->setMaximumHeight(kControlsMaxHeight); // Flexible height to fit all controls
+    QSizePolicy controlsPolicy = controlsWidget->sizePolicy();
+    controlsPolicy.setRetainSizeWhenHidden(true);
+    controlsWidget->setSizePolicy(controlsPolicy);
     controlsWidget->installEventFilter(this);
     controlsWidget->hide();
 
@@ -1276,7 +1280,6 @@ void PreviewOverlay::ensurePlayer()
         return;
     }
 
-    TLRenderPlayer::initialize();
     m_player = new TLRenderPlayer(this);
 
     connect(m_player, &TLRenderPlayer::positionChanged, this, &PreviewOverlay::onPlayerPositionChanged);
@@ -1579,8 +1582,7 @@ void PreviewOverlay::showAsset(const QString &filePath, const QString &fileName,
     if (closeBtn) closeBtn->show();
 
     // Determine content type and route
-    QStringList videoFormats = {"mp4", "avi", "mov", "mkv", "webm", "flv", "wmv", "m4v", "mxf"};
-    isVideo = videoFormats.contains(currentFileType);
+    isVideo = FileUtils::isVideoFile(currentFileType);
 
     // Make sure widget is shown and owns focus before loading content.
     activatePreviewWindow(this);
@@ -1818,6 +1820,12 @@ void PreviewOverlay::showVideo(const QString &filePath)
     originalPixmap = QPixmap(); // Clear the pixmap
     fitPending = true;
 
+    // Reset video timeline state before the new media reports duration.
+    positionSlider->blockSignals(true);
+    positionSlider->setRange(0, 0);
+    positionSlider->setValue(0);
+    positionSlider->blockSignals(false);
+
     // Default timeline context while media info is loading
     positionSlider->setTimelineContext(true, 24.0);
 
@@ -1827,6 +1835,7 @@ void PreviewOverlay::showVideo(const QString &filePath)
 #endif
     if (m_renderWidget) {
         m_renderWidget->setFrameView(true);
+        m_renderWidget->prepareForMpvPlayback();
     }
     m_player->loadMedia(filePath);
     PLAYER_PLAY();
@@ -2133,8 +2142,13 @@ void PreviewOverlay::setControlsVisible(bool visible)
         if (playbackControlsGroup && isVideo) {
             playbackControlsGroup->show();
         }
-    } else {
+    } else if (!allow) {
         controlsWidget->hide();
+    } else {
+        controlsWidget->show();
+        if (playbackControlsGroup && isVideo) {
+            playbackControlsGroup->show();
+        }
     }
     controlsWidget->updateGeometry();
 }
@@ -2153,14 +2167,12 @@ void PreviewOverlay::hideVideoWidgets()
 
 void PreviewOverlay::hideControls()
 {
-    const bool cursorInControls = controlsWidget && controlsWidget->isVisible() &&
-        controlsWidget->rect().contains(controlsWidget->mapFromGlobal(QCursor::pos()));
-
-    if (!controlsWidget || !isVideo || userSeeking || controlsPinned || controlsHovering || cursorInControls) {
+    if (!controlsWidget || !isVideo || userSeeking || controlsPinned || controlsHovering) {
         return;
     }
 
-    controlsWidget->hide();
+    // Playback controls must remain visible during preview playback.
+    setControlsVisible(true);
 }
 
 void PreviewOverlay::updatePlayPauseButton()
@@ -2184,10 +2196,15 @@ void PreviewOverlay::positionNavButtons(QWidget* container)
 
     const bool videoCase = (container == videoWidget || container == m_renderWidget);
 
-    auto setupTopLevel = [this](QPushButton* b){
-        // Convert to a small top-level tool window that can float above native video
-        if (b->parentWidget() != this || !(b->windowFlags() & Qt::Tool)) {
-            b->setParent(this, Qt::FramelessWindowHint | Qt::Tool | Qt::WindowStaysOnTopHint);
+    // Keep video navigation arrows in the main overlay stacking context so
+    // they follow the same layering model as the annotation overlay.
+    auto setupOverlayChild = [this](QPushButton* b) {
+        if (!b) {
+            return;
+        }
+        if (b->parentWidget() != this || (b->windowFlags() & Qt::Window)) {
+            b->setParent(this);
+            b->setWindowFlags(Qt::Widget);
             b->setAttribute(Qt::WA_TranslucentBackground, true);
             b->setFocusPolicy(Qt::NoFocus);
             b->show();
@@ -2202,14 +2219,17 @@ void PreviewOverlay::positionNavButtons(QWidget* container)
     };
 
     if (videoCase) {
-        // Top-level tool windows: use global coordinates for Y from the overlay center
-        setupTopLevel(navPrevBtn);
-        setupTopLevel(navNextBtn);
-        const int yGlobal = mapToGlobal(QPoint(0, qMax(0, overlayCenterY))).y();
-        const int leftX  = container->mapToGlobal(QPoint(margin, 0)).x();
-        const int rightX = container->mapToGlobal(QPoint(qMax(0, container->width() - margin - navNextBtn->width()), 0)).x();
-        navPrevBtn->move(QPoint(leftX, yGlobal));
-        navNextBtn->move(QPoint(rightX, yGlobal));
+        setupOverlayChild(navPrevBtn);
+        setupOverlayChild(navNextBtn);
+
+        const QRect containerRect = QRect(container->mapTo(this, QPoint(0, 0)), container->size());
+        const int yInOverlay = qBound(0,
+            overlayCenterY,
+            qMax(0, height() - navPrevBtn->height()));
+        const int leftX = containerRect.left() + margin;
+        const int rightX = containerRect.right() - margin - navNextBtn->width() + 1;
+        navPrevBtn->move(QPoint(leftX, yInOverlay));
+        navNextBtn->move(QPoint(qMax(leftX + navPrevBtn->width(), rightX), yInOverlay));
         navPrevBtn->raise();
         navNextBtn->raise();
     } else {
@@ -2607,7 +2627,11 @@ bool PreviewOverlay::eventFilter(QObject* watched, QEvent* event)
             } else {
                 activeView = imageView;
             }
-            QPointF scenePos = activeView->mapToScene(mouseEvent->pos());
+            QPoint viewPos = mouseEvent->pos();
+            if (watched != activeView->viewport()) {
+                viewPos = activeView->mapFromGlobal(mouseEvent->globalPosition().toPoint());
+            }
+            QPointF scenePos = activeView->mapToScene(viewPos);
             
             // Create a scene mouse event
             QGraphicsSceneMouseEvent sceneMouseEvent(
@@ -3342,10 +3366,11 @@ void PreviewOverlay::onPlayerPositionChanged(qint64 positionMs)
 
 void PreviewOverlay::onPlayerDurationChanged(qint64 durationMs)
 {
-    // Only update if tlRender reports a valid duration AND it's larger than what we have
-    // (we may have pre-set the range from known sequence metadata)
-    if (durationMs > 0 && durationMs > positionSlider->maximum()) {
+    if (durationMs > 0) {
         positionSlider->setRange(0, static_cast<int>(durationMs));
+        if (positionSlider->value() > durationMs) {
+            positionSlider->setValue(static_cast<int>(durationMs));
+        }
     }
 }
 
@@ -3358,12 +3383,13 @@ void PreviewOverlay::onPlayerMediaInfo(const TLRenderPlayer::MediaInfo& info)
              << "Resolution:" << info.width << "x" << info.height
              << "Has Audio:" << info.hasAudio;
 
-    // Only update slider if tlRender reports a valid duration larger than what we have
-    // (we may have pre-set the range from known sequence metadata)
-    if (info.durationMs > 0 && info.durationMs > positionSlider->maximum()) {
+    if (info.durationMs > 0) {
         qDebug() << "[PreviewOverlay] Updating slider range to [0," << info.durationMs << "]";
         positionSlider->setRange(0, info.durationMs);
-    } else if (info.durationMs <= 0) {
+        if (positionSlider->value() > info.durationMs) {
+            positionSlider->setValue(info.durationMs);
+        }
+    } else {
         qDebug() << "[PreviewOverlay] tlRender reported invalid duration, keeping current range [0," << positionSlider->maximum() << "]";
     }
 
@@ -4193,20 +4219,20 @@ void PreviewOverlay::setupAnnotationToolbar()
                          "QPushButton:checked { background-color: #58a6ff; }";
     
     // Selection/move tool
-    QPushButton* selectToolBtn = new QPushButton(annotationToolbar);
+    selectToolBtn = new QPushButton(annotationToolbar);
     selectToolBtn->setIcon(loadRawPngIcon(QStringLiteral("Annotation/cursor.png")));
     selectToolBtn->setIconSize(QSize(24, 24));
     selectToolBtn->setCheckable(true);
     selectToolBtn->setChecked(true); // Default mode
     selectToolBtn->setStyleSheet(buttonStyle);
     selectToolBtn->setToolTip("Select and move annotations");
-    connect(selectToolBtn, &QPushButton::clicked, this, [this, selectToolBtn]() {
+    connect(selectToolBtn, &QPushButton::clicked, this, [this]() {
+        if (selectToolBtn) selectToolBtn->setChecked(true);
         penToolBtn->setChecked(false);
         textToolBtn->setChecked(false);
         rectangleToolBtn->setChecked(false);
         ellipseToolBtn->setChecked(false);
         arrowToolBtn->setChecked(false);
-        selectToolBtn->setChecked(true);
         annotationLayer->setDrawMode(AnnotationLayer::Select);
     });
     toolbarLayout->addWidget(selectToolBtn);
@@ -4400,6 +4426,17 @@ void PreviewOverlay::enableAnnotationMode(bool enable)
                 }
                 annotationOverlayView->show();
                 annotationOverlayView->raise();
+                annotationOverlayView->viewport()->update();
+                QTimer::singleShot(0, this, [this]() {
+                    if (!annotationModeEnabled || !isVideo || !annotationOverlayView || !annotationOverlayScene) {
+                        return;
+                    }
+                    if (QWidget* videoContainer = activeVideoWidget()) {
+                        syncAnnotationOverlayToVideo(annotationOverlayView, annotationOverlayScene, videoContainer);
+                    }
+                    annotationOverlayView->raise();
+                    annotationOverlayView->viewport()->update();
+                });
                 if (controlsWidget) {
                     controlsPinned = true;
                     setControlsVisible(true);
@@ -4408,6 +4445,8 @@ void PreviewOverlay::enableAnnotationMode(bool enable)
                 if (annotationToolbar) {
                     annotationToolbar->raise();
                 }
+                if (navPrevBtn) navPrevBtn->raise();
+                if (navNextBtn) navNextBtn->raise();
                 activatePreviewWindow(this, annotationOverlayView);
 
                 qDebug() << "[PreviewOverlay] Video annotation overlay armed for live viewport";
@@ -4439,6 +4478,31 @@ void PreviewOverlay::enableAnnotationMode(bool enable)
         int frameIndex = isSequence ? currentSequenceFrame : (isVideo ? getVideoFrameNumber() : 0);
         currentAnnotatedFrame = frameIndex;
         loadFrameAnnotations(frameIndex);
+
+        // Align the logical annotation mode with the currently checked toolbar state
+        // when entering a fresh annotation session. This avoids starting in None
+        // while the UI shows Select or another tool as active.
+        if (annotationLayer->currentMode() == AnnotationLayer::None) {
+            if (penToolBtn && penToolBtn->isChecked()) {
+                annotationLayer->setDrawMode(AnnotationLayer::Pen);
+            } else if (textToolBtn && textToolBtn->isChecked()) {
+                annotationLayer->setDrawMode(AnnotationLayer::Text);
+            } else if (rectangleToolBtn && rectangleToolBtn->isChecked()) {
+                annotationLayer->setDrawMode(AnnotationLayer::Rectangle);
+            } else if (ellipseToolBtn && ellipseToolBtn->isChecked()) {
+                annotationLayer->setDrawMode(AnnotationLayer::Ellipse);
+            } else if (arrowToolBtn && arrowToolBtn->isChecked()) {
+                annotationLayer->setDrawMode(AnnotationLayer::Arrow);
+            } else {
+                annotationLayer->setDrawMode(AnnotationLayer::Select);
+                if (selectToolBtn) selectToolBtn->setChecked(true);
+                if (penToolBtn) penToolBtn->setChecked(false);
+                if (textToolBtn) textToolBtn->setChecked(false);
+                if (rectangleToolBtn) rectangleToolBtn->setChecked(false);
+                if (ellipseToolBtn) ellipseToolBtn->setChecked(false);
+                if (arrowToolBtn) arrowToolBtn->setChecked(false);
+            }
+        }
         
         // Keep the currently selected annotation tool/mode when entering annotation mode.
         // Forcing Select here prevents drawing tools from working on video.
@@ -4465,6 +4529,12 @@ void PreviewOverlay::enableAnnotationMode(bool enable)
                 videoContainer->raise();
             }
             controlsPinned = false;
+            controlsHovering = false;
+            setControlsVisible(true);
+            if (playbackControlsGroup) {
+                playbackControlsGroup->show();
+            }
+            controlsTimer->start();
             
             qDebug() << "[PreviewOverlay] Restored video playback from annotation mode";
         }
@@ -4526,6 +4596,7 @@ void PreviewOverlay::onToggleAnnotation()
 void PreviewOverlay::onAnnotationToolSelected()
 {
     // Uncheck all tool buttons
+    if (selectToolBtn) selectToolBtn->setChecked(false);
     penToolBtn->setChecked(false);
     textToolBtn->setChecked(false);
     rectangleToolBtn->setChecked(false);
@@ -4547,6 +4618,8 @@ void PreviewOverlay::onAnnotationToolSelected()
             annotationLayer->setDrawMode(AnnotationLayer::Ellipse);
         } else if (clicked == arrowToolBtn) {
             annotationLayer->setDrawMode(AnnotationLayer::Arrow);
+        } else if (clicked == selectToolBtn) {
+            annotationLayer->setDrawMode(AnnotationLayer::Select);
         }
     }
 }
@@ -4810,10 +4883,13 @@ void PreviewOverlay::loadFrameAnnotations(int frameIndex)
 QImage PreviewOverlay::captureCurrentFrame()
 {
     if (isVideo) {
+        if (!originalPixmap.isNull()) {
+            return originalPixmap.toImage();
+        }
         if (!m_player) {
             return QImage();
         }
-        // For video, capture current frame from player
+        // For video fallback, capture current frame from player
         QImage frame = m_player->getCurrentFrame();
         if (frame.isNull()) {
             qWarning() << "[PreviewOverlay] Failed to capture video frame for annotation";

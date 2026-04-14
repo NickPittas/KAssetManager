@@ -274,7 +274,7 @@ void MediaConvertDialog::loadSettings()
     }
     if (outToSet.isEmpty()) {
         const QString last = s.value("MediaConvert/OutputDir").toString();
-        outToSet = last.isEmpty() ? QDir::homePath() : last;
+        outToSet = last.isEmpty() ? (QCoreApplication::applicationDirPath() + QStringLiteral("/data/exports")) : last;
     }
     m_outputDir->setText(outToSet);
     m_scaleW->setValue(s.value("MediaConvert/ScaleW", 0).toInt());

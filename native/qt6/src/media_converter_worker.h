@@ -105,4 +105,3 @@ private:
     qint64 m_estTotalFrames = 0;
     QElapsedTimer m_timer;
 };
-

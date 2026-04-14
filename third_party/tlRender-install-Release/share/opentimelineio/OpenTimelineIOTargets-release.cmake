@@ -9,11 +9,11 @@ set(CMAKE_IMPORT_FILE_VERSION 1)
 set_property(TARGET OTIO::opentimelineio APPEND PROPERTY IMPORTED_CONFIGURATIONS RELEASE)
 set_target_properties(OTIO::opentimelineio PROPERTIES
   IMPORTED_LINK_INTERFACE_LANGUAGES_RELEASE "CXX"
-  IMPORTED_LOCATION_RELEASE "/home/npittas/KAssetManager/.worktrees/linux-port-fedora43-wt/third_party/tlRender-install-Release/lib/libopentimelineio.a"
+  IMPORTED_LOCATION_RELEASE "/home/npittas/KAssetManager/third_party/tlRender-install-Release/lib/libopentimelineio.a"
   )
 
 list(APPEND _cmake_import_check_targets OTIO::opentimelineio )
-list(APPEND _cmake_import_check_files_for_OTIO::opentimelineio "/home/npittas/KAssetManager/.worktrees/linux-port-fedora43-wt/third_party/tlRender-install-Release/lib/libopentimelineio.a" )
+list(APPEND _cmake_import_check_files_for_OTIO::opentimelineio "/home/npittas/KAssetManager/third_party/tlRender-install-Release/lib/libopentimelineio.a" )
 
 # Commands beyond this point should not need to know the version.
 set(CMAKE_IMPORT_FILE_VERSION)

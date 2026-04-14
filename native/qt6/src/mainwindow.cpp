@@ -2798,7 +2798,7 @@ void MainWindow::onFmRefresh()
     // Clearing it causes all visible thumbnails to flicker and re-decode.
 
     // Re-read directory by flipping root path (only for manual F5 refresh)
-    QString tempPath = QDir::tempPath();
+    QString tempPath = QCoreApplication::applicationDirPath();
     fmDirModel->setRootPath(tempPath);
     fmDirModel->setRootPath(currentPath);
 
@@ -2826,7 +2826,7 @@ void MainWindow::onFmLightRefresh()
     if (fmDirModel) {
         QString currentPath = fmDirModel->rootPath();
         if (!currentPath.isEmpty()) {
-            QString tempPath = QDir::tempPath();
+            QString tempPath = QCoreApplication::applicationDirPath();
             fmDirModel->setRootPath(tempPath);
             fmDirModel->setRootPath(currentPath);
             
@@ -2904,7 +2904,7 @@ void MainWindow::onFmNewFolder()
     if (QDir().mkpath(path)) {
         // Refresh the file list and tree to show the new folder
         if (fmDirModel) {
-            QString tempPath = QDir::tempPath();
+            QString tempPath = QCoreApplication::applicationDirPath();
             fmDirModel->setRootPath(tempPath);
             fmDirModel->setRootPath(destDir);
             
@@ -3814,7 +3814,7 @@ void MainWindow::setupProjectManagerUi()
     LogManager::instance().addLog("[ProjectManager] Setting up Project Manager UI...", "INFO");
     
     // Initialize ProjectDB with separate database file
-    const QString dataDir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    const QString dataDir = QCoreApplication::applicationDirPath() + "/data";
     const QString projectsDbPath = dataDir + "/projects.db";
     if (!ProjectDB::instance().init(projectsDbPath)) {
         LogManager::instance().addLog("[ProjectManager] Failed to initialize ProjectDB at: " + projectsDbPath, "ERROR");

@@ -1,4 +1,4 @@
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Sql Concurrent Test)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Sql Concurrent Test OpenGL OpenGLWidgets)
 
 # Test executable: test_simple
 add_executable(test_simple
@@ -221,6 +221,79 @@ add_test(NAME test_icon_utils COMMAND test_icon_utils)
 set_tests_properties(test_icon_utils PROPERTIES WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/install_run/bin")
 
 install(TARGETS test_icon_utils DESTINATION bin)
+
+# Test executable: test_tlrender_playback_harness
+add_executable(test_tlrender_playback_harness
+    test_tlrender_playback_harness.cpp
+    ../src/file_utils.cpp
+    ../src/file_utils.h
+    ../src/media/tlrender_player.cpp
+    ../src/media/tlrender_player.h
+    ../src/media/media_player_types.h
+    ../src/media/libmpv_headers.h
+    ../src/media/libmpv_runtime.cpp
+    ../src/media/libmpv_runtime.h
+    ../src/media/mpv_player.cpp
+    ../src/media/mpv_player.h
+    ../src/media/mpv_viewport.cpp
+    ../src/media/mpv_viewport.h
+    ../src/media/tlrender_viewport.cpp
+    ../src/media/tlrender_viewport.h
+    ../src/video_metadata.cpp
+    ../src/video_metadata.h
+)
+
+set_property(TARGET test_tlrender_playback_harness PROPERTY AUTOMOC ON)
+
+target_link_libraries(test_tlrender_playback_harness PRIVATE
+    Qt6::Test
+    Qt6::Core
+    Qt6::Gui
+    Qt6::Widgets
+    Qt6::Multimedia
+    Qt6::MultimediaWidgets
+    Qt6::Sql
+    Qt6::Concurrent
+    Qt6::Svg
+    Qt6::SvgWidgets
+    Qt6::OpenGL
+    Qt6::OpenGLWidgets
+    Qt6::Quick
+    Qt6::QuickWidgets
+    tlRender::tlTimeline
+    tlRender::tlGL
+    tlRender::tlIO
+    tlRender::tlCore
+    tlRender::tlUI
+    tlRender::tlDevice
+    tlRender::tlQt
+    tlRender::tlQtWidget
+    MINIZIP::minizip-ng
+)
+
+target_include_directories(test_tlrender_playback_harness PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src
+)
+
+target_compile_definitions(test_tlrender_playback_harness PRIVATE
+    HAVE_TLRENDER=1
+    HAVE_OPENIMAGEIO=1
+    HAVE_OCIO=1
+    HAVE_FFMPEG
+)
+
+if(TLRENDER_FOUND)
+    if(TLRENDER_INCLUDE_DIR)
+        target_include_directories(test_tlrender_playback_harness PRIVATE ${TLRENDER_INCLUDE_DIR})
+    elseif(TLRENDER_ROOT)
+        target_include_directories(test_tlrender_playback_harness PRIVATE "${TLRENDER_ROOT}/include")
+    endif()
+endif()
+
+add_test(NAME test_tlrender_playback_harness COMMAND test_tlrender_playback_harness)
+set_tests_properties(test_tlrender_playback_harness PROPERTIES WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/install_run/bin")
+
+install(TARGETS test_tlrender_playback_harness DESTINATION bin)
 
 # Test executable: test_grid_scrub
 add_executable(test_grid_scrub

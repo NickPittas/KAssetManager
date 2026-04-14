@@ -14,6 +14,8 @@
 #include <atomic>
 #include <memory>
 
+class MpvPlayer;
+
 // Forward declarations for tlRender types
 namespace ftk {
     class Context;
@@ -94,6 +96,16 @@ public:
         bool hasAudio = false;
         int audioChannels = 0;
         int audioSampleRate = 0;
+    };
+
+    struct FrameAcquisitionStats {
+        qint64 cachedFrameConversions = 0;
+        qint64 fallbackExtractions = 0;
+        qint64 unsupportedCachedFrameTypes = 0;
+        int lastCachedImageType = -1;
+        qint64 lastCachedConversionNs = 0;
+        qint64 lastFallbackExtractionNs = 0;
+        qint64 lastGetCurrentFrameNs = 0;
     };
 
     explicit TLRenderPlayer(QObject* parent = nullptr);
@@ -280,6 +292,7 @@ public:
      * @brief Get the tlRender player (for widget rendering)
      */
     std::shared_ptr<tl::Player> player() const;
+    MpvPlayer* mpvPlayer() const;
 
     /**
      * @brief Get the Qt PlayerObject wrapper (for native viewports)
@@ -340,6 +353,9 @@ public:
      */
     static qint64 queryDuration(const QString& filePath);
 
+    FrameAcquisitionStats frameAcquisitionStatsForTest() const;
+    void resetFrameAcquisitionStatsForTest();
+
     // ========================================================================
     // Static Initialization
     // ========================================================================
@@ -377,16 +393,19 @@ private slots:
     void onUpdateTimer();
 
 private:
+    void ensureTlRenderContext();
     void setupContext();
     void updateMediaInfo();
     void updateOCIOLists();
     void applyOCIOOptions();
+    bool useMpvBackendForCurrentMedia(const QString& filePath) const;
 
     // tlRender objects
     std::shared_ptr<ftk::Context> m_context;
     std::shared_ptr<tl::System> m_system;
     std::shared_ptr<tl::Timeline> m_timeline;
     std::shared_ptr<tl::Player> m_player;
+    MpvPlayer* m_mpvPlayer{nullptr};
 
     // tlRender Qt integration (observes player + keeps context ticking).
     // Stored as QSharedPointer so it can be shared with native viewport.
@@ -394,6 +413,7 @@ private:
 
     // Cached frames for rendering (to avoid blocking calls on the UI thread).
     std::vector<tl::VideoFrame> m_cachedVideoFrames;
+    FrameAcquisitionStats m_frameAcquisitionStats;
 
     // State
     mutable QMutex m_mutex;

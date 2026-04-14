@@ -660,6 +660,7 @@ private:
     QGraphicsView* annotationOverlayView;
     QGraphicsScene* annotationOverlayScene;
     QPushButton* toggleAnnotationBtn;
+    QPushButton* selectToolBtn;
     QPushButton* penToolBtn;
     QPushButton* textToolBtn;
     QPushButton* rectangleToolBtn;

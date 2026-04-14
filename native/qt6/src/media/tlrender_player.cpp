@@ -6,6 +6,8 @@
  */
 
 #include "tlrender_player.h"
+#include "mpv_player.h"
+#include "file_utils.h"
 #include <QDebug>
 #include <QFileInfo>
 #include <QDir>
@@ -16,6 +18,10 @@
 #include <QElapsedTimer>
 #include <QImage>
 #include <QSize>
+#include <algorithm>
+#include <cmath>
+#include <limits>
+#include <cstdio>
 #include <stdexcept>
 #include "video_metadata.h"
 #include "platform_session.h"
@@ -69,7 +75,250 @@ std::shared_ptr<ftk::Context> TLRenderPlayer::s_sharedContext;
 QPointer<tl::qt::ContextObject> TLRenderPlayer::s_contextObject;
 
 namespace {
-QImage imageToQImage(const std::shared_ptr<ftk::Image>& image)
+
+TLRenderPlayer::PlaybackState toTlPlaybackState(media_player::PlaybackState state)
+{
+    switch (state) {
+    case media_player::PlaybackState::Playing:
+        return TLRenderPlayer::PlaybackState::Playing;
+    case media_player::PlaybackState::Paused:
+        return TLRenderPlayer::PlaybackState::Paused;
+    case media_player::PlaybackState::Stopped:
+    default:
+        return TLRenderPlayer::PlaybackState::Stopped;
+    }
+}
+
+media_player::LoopMode toMpvLoopMode(TLRenderPlayer::LoopMode mode)
+{
+    switch (mode) {
+    case TLRenderPlayer::LoopMode::Once:
+        return media_player::LoopMode::Once;
+    case TLRenderPlayer::LoopMode::PingPong:
+        return media_player::LoopMode::PingPong;
+    case TLRenderPlayer::LoopMode::Loop:
+    default:
+        return media_player::LoopMode::Loop;
+    }
+}
+
+TLRenderPlayer::MediaInfo toTlMediaInfo(const media_player::MediaInfo& info)
+{
+    TLRenderPlayer::MediaInfo out;
+    out.width = info.width;
+    out.height = info.height;
+    out.fps = info.fps;
+    out.durationMs = info.durationMs;
+    out.totalFrames = info.totalFrames;
+    out.codec = info.codec;
+    out.hasAudio = info.hasAudio;
+    out.audioChannels = info.audioChannels;
+    out.audioSampleRate = info.audioSampleRate;
+    return out;
+}
+
+struct YuvToRgbCoefficients
+{
+    float kr = 0.2126f;
+    float kb = 0.0722f;
+};
+
+YuvToRgbCoefficients getYuvToRgbCoefficients(ftk::YUVCoefficients coefficients)
+{
+    switch (coefficients) {
+    case ftk::YUVCoefficients::BT2020:
+        return { 0.2627f, 0.0593f };
+    case ftk::YUVCoefficients::REC709:
+    default:
+        return { 0.2126f, 0.0722f };
+    }
+}
+
+inline float clampUnit(float value)
+{
+    return std::clamp(value, 0.0f, 1.0f);
+}
+
+QSize fittedTargetSize(const QSize& sourceSize, const QSize& targetSize)
+{
+    if (sourceSize.isEmpty() || targetSize.isEmpty()) {
+        return sourceSize;
+    }
+    return sourceSize.scaled(targetSize, Qt::KeepAspectRatio);
+}
+
+template<typename Sample>
+QImage planarYuv422ToQImage(const std::shared_ptr<ftk::Image>& image, const QSize& targetSize = QSize())
+{
+    if (!image || !image->isValid()) {
+        return {};
+    }
+
+    const auto& info = image->getInfo();
+    const int width = info.size.w;
+    const int height = info.size.h;
+    if (width <= 0 || height <= 0) {
+        return {};
+    }
+
+    const uint8_t* base = image->getData();
+    if (!base) {
+        return {};
+    }
+
+    const int chromaWidth = (width + 1) / 2;
+    const size_t sampleBytes = sizeof(Sample);
+    const size_t yStride = ftk::getAlignedByteCount(static_cast<size_t>(width) * sampleBytes, info.layout.alignment);
+    const size_t uvStride = ftk::getAlignedByteCount(static_cast<size_t>(chromaWidth) * sampleBytes, info.layout.alignment);
+    const size_t yBytes = yStride * static_cast<size_t>(height);
+    const size_t uvBytes = uvStride * static_cast<size_t>(height);
+    const size_t totalBytes = yBytes + uvBytes * 2;
+    if (image->getByteCount() < totalBytes) {
+        return {};
+    }
+
+    const uint8_t* uBase = base + yBytes;
+    const uint8_t* vBase = uBase + uvBytes;
+    const auto coefficients = getYuvToRgbCoefficients(info.yuvCoefficients);
+    const float kg = 1.0f - coefficients.kr - coefficients.kb;
+    if (kg <= 0.0f) {
+        return {};
+    }
+
+    const float maxValue = static_cast<float>(std::numeric_limits<Sample>::max());
+    const float invMaxValue = 1.0f / maxValue;
+    const bool legalRange = info.videoLevels == ftk::VideoLevels::LegalRange;
+    const float yOffset = legalRange ? (16.0f / 255.0f) : 0.0f;
+    const float yScale = legalRange ? (255.0f / 219.0f) : 1.0f;
+    const float uvOffset = 0.5f;
+    const float uvScale = legalRange ? (255.0f / 224.0f) * 2.0f : 2.0f;
+    const float rFactor = 2.0f * (1.0f - coefficients.kr);
+    const float bFactor = 2.0f * (1.0f - coefficients.kb);
+    const float gUFactor = 2.0f * coefficients.kb * (1.0f - coefficients.kb) / kg;
+    const float gVFactor = 2.0f * coefficients.kr * (1.0f - coefficients.kr) / kg;
+
+    const QSize outputSize = fittedTargetSize(QSize(width, height), targetSize);
+    const int outputWidth = outputSize.width();
+    const int outputHeight = outputSize.height();
+    QImage out(outputWidth, outputHeight, QImage::Format_RGB32);
+    if (out.isNull()) {
+        return {};
+    }
+
+    for (int y = 0; y < outputHeight; ++y) {
+        const int srcY = std::min(height - 1, (y * height) / outputHeight);
+        const auto* yRow = reinterpret_cast<const Sample*>(base + yStride * static_cast<size_t>(srcY));
+        const auto* uRow = reinterpret_cast<const Sample*>(uBase + uvStride * static_cast<size_t>(srcY));
+        const auto* vRow = reinterpret_cast<const Sample*>(vBase + uvStride * static_cast<size_t>(srcY));
+        QRgb* dst = reinterpret_cast<QRgb*>(out.scanLine(y));
+
+        for (int x = 0; x < outputWidth; ++x) {
+            const int srcX = std::min(width - 1, (x * width) / outputWidth);
+            const float ySample = clampUnit((static_cast<float>(yRow[srcX]) * invMaxValue - yOffset) * yScale);
+            const float uSample = (static_cast<float>(uRow[srcX / 2]) * invMaxValue - uvOffset) * uvScale;
+            const float vSample = (static_cast<float>(vRow[srcX / 2]) * invMaxValue - uvOffset) * uvScale;
+
+            const float r = clampUnit(ySample + rFactor * vSample);
+            const float g = clampUnit(ySample - gUFactor * uSample - gVFactor * vSample);
+            const float b = clampUnit(ySample + bFactor * uSample);
+
+            dst[x] = qRgb(
+                static_cast<int>(std::lround(r * 255.0f)),
+                static_cast<int>(std::lround(g * 255.0f)),
+                static_cast<int>(std::lround(b * 255.0f)));
+        }
+    }
+
+    return out;
+}
+
+template<typename Sample>
+QImage planarYuv420ToQImage(const std::shared_ptr<ftk::Image>& image, const QSize& targetSize = QSize())
+{
+    if (!image || !image->isValid()) {
+        return {};
+    }
+
+    const auto& info = image->getInfo();
+    const int width = info.size.w;
+    const int height = info.size.h;
+    if (width <= 0 || height <= 0) {
+        return {};
+    }
+
+    const uint8_t* base = image->getData();
+    if (!base) {
+        return {};
+    }
+
+    const int chromaWidth = (width + 1) / 2;
+    const int chromaHeight = (height + 1) / 2;
+    const size_t sampleBytes = sizeof(Sample);
+    const size_t yStride = ftk::getAlignedByteCount(static_cast<size_t>(width) * sampleBytes, info.layout.alignment);
+    const size_t uvStride = ftk::getAlignedByteCount(static_cast<size_t>(chromaWidth) * sampleBytes, info.layout.alignment);
+    const size_t yBytes = yStride * static_cast<size_t>(height);
+    const size_t uvBytes = uvStride * static_cast<size_t>(chromaHeight);
+    const size_t totalBytes = yBytes + uvBytes * 2;
+    if (image->getByteCount() < totalBytes) {
+        return {};
+    }
+
+    const uint8_t* uBase = base + yBytes;
+    const uint8_t* vBase = uBase + uvBytes;
+    const auto coefficients = getYuvToRgbCoefficients(info.yuvCoefficients);
+    const float kg = 1.0f - coefficients.kr - coefficients.kb;
+    if (kg <= 0.0f) {
+        return {};
+    }
+
+    const float maxValue = static_cast<float>(std::numeric_limits<Sample>::max());
+    const float invMaxValue = 1.0f / maxValue;
+    const bool legalRange = info.videoLevels == ftk::VideoLevels::LegalRange;
+    const float yOffset = legalRange ? (16.0f / 255.0f) : 0.0f;
+    const float yScale = legalRange ? (255.0f / 219.0f) : 1.0f;
+    const float uvOffset = 0.5f;
+    const float uvScale = legalRange ? (255.0f / 224.0f) * 2.0f : 2.0f;
+    const float rFactor = 2.0f * (1.0f - coefficients.kr);
+    const float bFactor = 2.0f * (1.0f - coefficients.kb);
+    const float gUFactor = 2.0f * coefficients.kb * (1.0f - coefficients.kb) / kg;
+    const float gVFactor = 2.0f * coefficients.kr * (1.0f - coefficients.kr) / kg;
+
+    const QSize outputSize = fittedTargetSize(QSize(width, height), targetSize);
+    const int outputWidth = outputSize.width();
+    const int outputHeight = outputSize.height();
+    QImage out(outputWidth, outputHeight, QImage::Format_RGB32);
+    if (out.isNull()) {
+        return {};
+    }
+
+    for (int y = 0; y < outputHeight; ++y) {
+        const int srcY = std::min(height - 1, (y * height) / outputHeight);
+        const auto* yRow = reinterpret_cast<const Sample*>(base + yStride * static_cast<size_t>(srcY));
+        const auto* uRow = reinterpret_cast<const Sample*>(uBase + uvStride * static_cast<size_t>(srcY / 2));
+        const auto* vRow = reinterpret_cast<const Sample*>(vBase + uvStride * static_cast<size_t>(srcY / 2));
+        QRgb* dst = reinterpret_cast<QRgb*>(out.scanLine(y));
+
+        for (int x = 0; x < outputWidth; ++x) {
+            const int srcX = std::min(width - 1, (x * width) / outputWidth);
+            const float ySample = clampUnit((static_cast<float>(yRow[srcX]) * invMaxValue - yOffset) * yScale);
+            const float uSample = (static_cast<float>(uRow[srcX / 2]) * invMaxValue - uvOffset) * uvScale;
+            const float vSample = (static_cast<float>(vRow[srcX / 2]) * invMaxValue - uvOffset) * uvScale;
+
+            const float r = clampUnit(ySample + rFactor * vSample);
+            const float g = clampUnit(ySample - gUFactor * uSample - gVFactor * vSample);
+            const float b = clampUnit(ySample + bFactor * uSample);
+
+            dst[x] = qRgb(
+                static_cast<int>(std::lround(r * 255.0f)),
+                static_cast<int>(std::lround(g * 255.0f)),
+                static_cast<int>(std::lround(b * 255.0f)));
+        }
+    }
+
+    return out;
+}
+
+QImage imageToQImage(const std::shared_ptr<ftk::Image>& image, const QSize& targetSize = QSize())
 {
     if (!image || !image->isValid()) {
         return {};
@@ -104,19 +353,20 @@ QImage imageToQImage(const std::shared_ptr<ftk::Image>& image)
         out = QImage(data, width, height, bytesPerLine, QImage::Format_RGBA8888).copy();
         break;
     }
+    case ftk::ImageType::YUV_422P_U8:
+        out = planarYuv422ToQImage<uint8_t>(image, targetSize);
+        break;
+    case ftk::ImageType::YUV_422P_U16:
+        out = planarYuv422ToQImage<uint16_t>(image, targetSize);
+        break;
+    case ftk::ImageType::YUV_420P_U8:
+        out = planarYuv420ToQImage<uint8_t>(image, targetSize);
+        break;
+    case ftk::ImageType::YUV_420P_U16:
+        out = planarYuv420ToQImage<uint16_t>(image, targetSize);
+        break;
     default:
         return {};
-    }
-
-    if (info.layout.mirror.x || info.layout.mirror.y) {
-        Qt::Orientations orientations;
-        if (info.layout.mirror.x) {
-            orientations |= Qt::Horizontal;
-        }
-        if (info.layout.mirror.y) {
-            orientations |= Qt::Vertical;
-        }
-        out = out.flipped(orientations);
     }
 
     return out;
@@ -126,11 +376,11 @@ QImage currentVideoFramesToQImage(const std::vector<tl::VideoFrame>& frames, con
 {
     for (const auto& frame : frames) {
         for (const auto& layer : frame.layers) {
-            QImage image = imageToQImage(layer.image);
+            QImage image = imageToQImage(layer.image, targetSize);
             if (image.isNull()) {
                 continue;
             }
-            if (!targetSize.isEmpty()) {
+            if (!targetSize.isEmpty() && image.size() != fittedTargetSize(image.size(), targetSize)) {
                 image = image.scaled(targetSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
             }
             return image;
@@ -138,6 +388,7 @@ QImage currentVideoFramesToQImage(const std::vector<tl::VideoFrame>& frames, con
     }
     return {};
 }
+
 } // namespace
 #endif
 
@@ -148,20 +399,59 @@ QImage currentVideoFramesToQImage(const std::vector<tl::VideoFrame>& frames, con
 TLRenderPlayer::TLRenderPlayer(QObject* parent)
     : QObject(parent)
 {
+    m_mpvPlayer = new MpvPlayer(this);
+    fprintf(stderr, "[TLRenderPlayer] mpv available=%d error=%s\n",
+            m_mpvPlayer->isAvailable() ? 1 : 0,
+            m_mpvPlayer->availabilityError().toLocal8Bit().constData());
+    fflush(stderr);
+    if (m_mpvPlayer->isAvailable()) {
+        connect(m_mpvPlayer, &MpvPlayer::positionChanged, this, [this](qint64 positionMs) {
+            m_position = positionMs;
+            emit positionChanged(positionMs);
+        });
+        connect(m_mpvPlayer, &MpvPlayer::durationChanged, this, [this](qint64 durationMs) {
+            m_duration = durationMs;
+            emit durationChanged(durationMs);
+        });
+        connect(m_mpvPlayer, &MpvPlayer::currentFrameChanged, this, [this](qint64 frameNumber) {
+            m_currentFrame = frameNumber;
+            emit currentFrameChanged(frameNumber);
+        });
+        connect(m_mpvPlayer, &MpvPlayer::mediaInfoReady, this, [this](const media_player::MediaInfo& info) {
+            m_mediaInfo = toTlMediaInfo(info);
+            m_duration = m_mediaInfo.durationMs;
+            m_totalFrames = m_mediaInfo.totalFrames;
+            emit mediaInfoReady(m_mediaInfo);
+        });
+        connect(m_mpvPlayer, &MpvPlayer::playbackStateChanged, this, [this](media_player::PlaybackState state) {
+            m_playbackState = toTlPlaybackState(state);
+            emit playbackStateChanged(m_playbackState);
+        });
+        connect(m_mpvPlayer, &MpvPlayer::error, this, &TLRenderPlayer::error);
+        connect(m_mpvPlayer, &MpvPlayer::endOfStream, this, &TLRenderPlayer::endOfStream);
+        connect(m_mpvPlayer, &MpvPlayer::frameUpdated, this, &TLRenderPlayer::videoFramesChanged);
+    }
+
     // Create update timer for position updates
     m_updateTimer = new QTimer(this);
     m_updateTimer->setTimerType(Qt::PreciseTimer);
     m_updateTimer->setInterval(5); // keep tlRender context ticking consistently
     connect(m_updateTimer, &QTimer::timeout, this, &TLRenderPlayer::onUpdateTimer);
 
-#ifdef HAVE_TLRENDER
-    setupContext();
-#endif
 }
 
 TLRenderPlayer::~TLRenderPlayer()
 {
     unloadMedia();
+}
+
+void TLRenderPlayer::ensureTlRenderContext()
+{
+#ifdef HAVE_TLRENDER
+    if (!m_context) {
+        setupContext();
+    }
+#endif
 }
 
 void TLRenderPlayer::initialize()
@@ -243,7 +533,44 @@ void TLRenderPlayer::setupContext()
 
 void TLRenderPlayer::loadMedia(const QString& filePath)
 {
+    fprintf(stderr, "[TLRenderPlayer] loadMedia path=%s useMpv=%d mpvAvailable=%d\n",
+            filePath.toLocal8Bit().constData(),
+            useMpvBackendForCurrentMedia(filePath) ? 1 : 0,
+            (m_mpvPlayer && m_mpvPlayer->isAvailable()) ? 1 : 0);
+    fflush(stderr);
+    if (useMpvBackendForCurrentMedia(filePath) && m_mpvPlayer && m_mpvPlayer->isAvailable()) {
+        if (m_player) {
+            m_player->stop();
+            m_player.reset();
+        }
+        m_timeline.reset();
+        m_playerObject.clear();
+        m_updateTimer->stop();
+
+        QMutexLocker locker(&m_mutex);
+        m_currentPath = filePath;
+        m_frameAcquisitionStats = FrameAcquisitionStats();
+        m_cachedVideoFrames.clear();
+        locker.unlock();
+
+        m_mpvPlayer->setLoopMode(toMpvLoopMode(m_loopMode));
+        m_mpvPlayer->setVolume(m_volume);
+        m_mpvPlayer->setMuted(m_muted);
+        m_mpvPlayer->setPlaybackRate(m_playbackRate);
+        m_mpvPlayer->loadMedia(filePath);
+        return;
+    }
+
+    if (m_mpvPlayer && m_mpvPlayer->hasMedia()) {
+        m_mpvPlayer->unloadMedia();
+    }
 #ifdef HAVE_TLRENDER
+    ensureTlRenderContext();
+    if (!m_context) {
+        emit error(tr("Failed to initialize tlRender context"));
+        return;
+    }
+
     QMutexLocker locker(&m_mutex);
     
     // Reset any pending deferred playback from previous media
@@ -252,6 +579,7 @@ void TLRenderPlayer::loadMedia(const QString& filePath)
     
     // Clear cached frames from previous media to avoid stale data
     m_cachedVideoFrames.clear();
+    m_frameAcquisitionStats = FrameAcquisitionStats();
     
     // Stop any current playback
     if (m_player) {
@@ -471,13 +799,16 @@ void TLRenderPlayer::loadMedia(const QString& filePath)
         emit error(tr("Failed to load media: %1 - %2").arg(filePath, e.what()));
     }
 #else
-    Q_UNUSED(filePath)
+    Q_UNUSED(filePath);
     emit error(tr("tlRender support not available"));
 #endif
 }
 
 void TLRenderPlayer::unloadMedia()
 {
+    if (m_mpvPlayer && m_mpvPlayer->hasMedia()) {
+        m_mpvPlayer->unloadMedia();
+    }
 #ifdef HAVE_TLRENDER
     QMutexLocker locker(&m_mutex);
     
@@ -504,11 +835,15 @@ void TLRenderPlayer::unloadMedia()
     m_mediaInfo = MediaInfo();
 
     m_cachedVideoFrames.clear();
+    m_frameAcquisitionStats = FrameAcquisitionStats();
 #endif
 }
 
 bool TLRenderPlayer::hasMedia() const
 {
+    if (m_mpvPlayer && m_mpvPlayer->hasMedia()) {
+        return true;
+    }
 #ifdef HAVE_TLRENDER
     return m_player != nullptr;
 #else
@@ -523,6 +858,14 @@ QString TLRenderPlayer::currentMediaPath() const
 
 void TLRenderPlayer::updateMediaInfo()
 {
+    if (m_mpvPlayer && m_mpvPlayer->hasMedia()) {
+        m_mediaInfo = toTlMediaInfo(m_mpvPlayer->mediaInfo());
+        m_duration = m_mediaInfo.durationMs;
+        m_totalFrames = m_mediaInfo.totalFrames;
+        emit durationChanged(m_mediaInfo.durationMs);
+        emit mediaInfoReady(m_mediaInfo);
+        return;
+    }
 #ifdef HAVE_TLRENDER
     if (!m_player || !m_timeline) {
         qDebug() << "[TLRenderPlayer] updateMediaInfo: no player or timeline!";
@@ -583,6 +926,10 @@ void TLRenderPlayer::updateMediaInfo()
 
 void TLRenderPlayer::play()
 {
+    if (m_mpvPlayer && m_mpvPlayer->hasMedia()) {
+        m_mpvPlayer->play();
+        return;
+    }
 #ifdef HAVE_TLRENDER
     if (!m_player) {
         qDebug() << "[TLRenderPlayer::play] No player - cannot play";
@@ -637,6 +984,10 @@ void TLRenderPlayer::play()
 
 void TLRenderPlayer::pause()
 {
+    if (m_mpvPlayer && m_mpvPlayer->hasMedia()) {
+        m_mpvPlayer->pause();
+        return;
+    }
 #ifdef HAVE_TLRENDER
     if (!m_player) {
         qDebug() << "[TLRenderPlayer::pause] No player - cannot pause";
@@ -660,6 +1011,10 @@ void TLRenderPlayer::pause()
 
 void TLRenderPlayer::stop()
 {
+    if (m_mpvPlayer && m_mpvPlayer->hasMedia()) {
+        m_mpvPlayer->stop();
+        return;
+    }
 #ifdef HAVE_TLRENDER
     if (!m_player) return;
     
@@ -692,6 +1047,10 @@ void TLRenderPlayer::togglePlayback()
 
 void TLRenderPlayer::seek(qint64 positionMs)
 {
+    if (m_mpvPlayer && m_mpvPlayer->hasMedia()) {
+        m_mpvPlayer->seek(positionMs);
+        return;
+    }
 #ifdef HAVE_TLRENDER
     if (!m_player) return;
     
@@ -714,6 +1073,10 @@ void TLRenderPlayer::seek(qint64 positionMs)
 
 void TLRenderPlayer::seekToFrame(qint64 frameNumber)
 {
+    if (m_mpvPlayer && m_mpvPlayer->hasMedia()) {
+        m_mpvPlayer->seekToFrame(frameNumber);
+        return;
+    }
 #ifdef HAVE_TLRENDER
     if (!m_player) return;
     
@@ -734,10 +1097,14 @@ void TLRenderPlayer::seekToFrame(qint64 frameNumber)
 
 void TLRenderPlayer::setPlaybackRate(double rate)
 {
+    m_playbackRate = rate;
+    if (m_mpvPlayer && m_mpvPlayer->hasMedia()) {
+        m_mpvPlayer->setPlaybackRate(rate);
+        return;
+    }
 #ifdef HAVE_TLRENDER
     if (!m_player) return;
-    
-    m_playbackRate = rate;
+
     
     m_player->setSpeedMult(std::abs(rate));
     if (m_playbackState == PlaybackState::Playing) {
@@ -757,9 +1124,12 @@ double TLRenderPlayer::playbackRate() const
 
 void TLRenderPlayer::setLoopMode(LoopMode mode)
 {
-#ifdef HAVE_TLRENDER
     m_loopMode = mode;
-    
+    if (m_mpvPlayer && m_mpvPlayer->hasMedia()) {
+        m_mpvPlayer->setLoopMode(toMpvLoopMode(mode));
+        return;
+    }
+#ifdef HAVE_TLRENDER
     if (m_player) {
         switch (mode) {
             case LoopMode::Once:
@@ -783,6 +1153,10 @@ TLRenderPlayer::LoopMode TLRenderPlayer::loopMode() const
 
 void TLRenderPlayer::stepForward()
 {
+    if (m_mpvPlayer && m_mpvPlayer->hasMedia()) {
+        m_mpvPlayer->stepForward();
+        return;
+    }
 #ifdef HAVE_TLRENDER
     if (!m_player) return;
     m_player->frameNext();
@@ -791,6 +1165,10 @@ void TLRenderPlayer::stepForward()
 
 void TLRenderPlayer::stepBackward()
 {
+    if (m_mpvPlayer && m_mpvPlayer->hasMedia()) {
+        m_mpvPlayer->stepBackward();
+        return;
+    }
 #ifdef HAVE_TLRENDER
     if (!m_player) return;
     m_player->framePrev();
@@ -839,8 +1217,12 @@ void TLRenderPlayer::gotoEnd()
 
 void TLRenderPlayer::setVolume(float volume)
 {
-#ifdef HAVE_TLRENDER
     m_volume = qBound(0.0f, volume, 1.0f);
+    if (m_mpvPlayer && m_mpvPlayer->hasMedia()) {
+        m_mpvPlayer->setVolume(m_volume);
+        return;
+    }
+#ifdef HAVE_TLRENDER
     if (m_player) {
         m_player->setVolume(m_volume);
     }
@@ -854,8 +1236,12 @@ float TLRenderPlayer::volume() const
 
 void TLRenderPlayer::setMuted(bool muted)
 {
-#ifdef HAVE_TLRENDER
     m_muted = muted;
+    if (m_mpvPlayer && m_mpvPlayer->hasMedia()) {
+        m_mpvPlayer->setMuted(muted);
+        return;
+    }
+#ifdef HAVE_TLRENDER
     if (m_player) {
         m_player->setMute(muted);
     }
@@ -899,6 +1285,11 @@ qint64 TLRenderPlayer::totalFrames() const
 TLRenderPlayer::MediaInfo TLRenderPlayer::mediaInfo() const
 {
     return m_mediaInfo;
+}
+
+MpvPlayer* TLRenderPlayer::mpvPlayer() const
+{
+    return m_mpvPlayer;
 }
 
 // ============================================================================
@@ -1239,6 +1630,10 @@ void TLRenderPlayer::tick()
 
 void TLRenderPlayer::refreshCurrentFrame()
 {
+    if (m_mpvPlayer && m_mpvPlayer->hasMedia()) {
+        emit videoFramesChanged();
+        return;
+    }
 #ifdef HAVE_TLRENDER
     tick();
     emit videoFramesChanged();
@@ -1251,6 +1646,9 @@ void TLRenderPlayer::refreshCurrentFrame()
 
 void TLRenderPlayer::onUpdateTimer()
 {
+    if (m_mpvPlayer && m_mpvPlayer->hasMedia()) {
+        return;
+    }
 #ifdef HAVE_TLRENDER
     tick();
 #endif
@@ -1262,12 +1660,39 @@ void TLRenderPlayer::onUpdateTimer()
 
 QImage TLRenderPlayer::getCurrentFrame(const QSize& targetSize)
 {
+    QElapsedTimer timer;
+    timer.start();
+    if (m_mpvPlayer && m_mpvPlayer->hasMedia()) {
+        QImage frame = m_mpvPlayer->currentFrameImage();
+        if (!frame.isNull() && !targetSize.isEmpty()) {
+            frame = frame.scaled(targetSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+        }
+        return frame;
+    }
 #ifdef HAVE_TLRENDER
     {
         QMutexLocker locker(&m_mutex);
         QImage cachedFrame = currentVideoFramesToQImage(m_cachedVideoFrames, targetSize);
         if (!cachedFrame.isNull()) {
+            ++m_frameAcquisitionStats.cachedFrameConversions;
+            if (!m_cachedVideoFrames.empty() && !m_cachedVideoFrames.front().layers.empty() && m_cachedVideoFrames.front().layers.front().image) {
+                m_frameAcquisitionStats.lastCachedImageType = static_cast<int>(m_cachedVideoFrames.front().layers.front().image->getInfo().type);
+            }
+            m_frameAcquisitionStats.lastCachedConversionNs = timer.nsecsElapsed();
+            m_frameAcquisitionStats.lastGetCurrentFrameNs = m_frameAcquisitionStats.lastCachedConversionNs;
             return cachedFrame;
+        }
+
+        if (!m_cachedVideoFrames.empty()) {
+            for (const auto& frame : m_cachedVideoFrames) {
+                for (const auto& layer : frame.layers) {
+                    if (layer.image) {
+                        ++m_frameAcquisitionStats.unsupportedCachedFrameTypes;
+                        m_frameAcquisitionStats.lastCachedImageType = static_cast<int>(layer.image->getInfo().type);
+                        break;
+                    }
+                }
+            }
         }
     }
 #endif
@@ -1276,9 +1701,45 @@ QImage TLRenderPlayer::getCurrentFrame(const QSize& targetSize)
     // This remains the fallback when tlRender has no cached frame yet or the
     // cached frame format is not handled above.
     if (m_currentPath.isEmpty()) {
+#ifdef HAVE_TLRENDER
+        QMutexLocker locker(&m_mutex);
+        m_frameAcquisitionStats.lastGetCurrentFrameNs = timer.nsecsElapsed();
+#endif
         return QImage();
     }
-    return extractThumbnail(m_currentPath, targetSize, position());
+    const QImage fallback = extractThumbnail(m_currentPath, targetSize, position());
+#ifdef HAVE_TLRENDER
+    {
+        QMutexLocker locker(&m_mutex);
+        ++m_frameAcquisitionStats.fallbackExtractions;
+        m_frameAcquisitionStats.lastFallbackExtractionNs = timer.nsecsElapsed();
+        m_frameAcquisitionStats.lastGetCurrentFrameNs = m_frameAcquisitionStats.lastFallbackExtractionNs;
+    }
+#endif
+    return fallback;
+}
+
+bool TLRenderPlayer::useMpvBackendForCurrentMedia(const QString& filePath) const
+{
+    return FileUtils::isVideoFile(QFileInfo(filePath).suffix());
+}
+
+TLRenderPlayer::FrameAcquisitionStats TLRenderPlayer::frameAcquisitionStatsForTest() const
+{
+#ifdef HAVE_TLRENDER
+    QMutexLocker locker(&m_mutex);
+    return m_frameAcquisitionStats;
+#else
+    return TLRenderPlayer::FrameAcquisitionStats();
+#endif
+}
+
+void TLRenderPlayer::resetFrameAcquisitionStatsForTest()
+{
+#ifdef HAVE_TLRENDER
+    QMutexLocker locker(&m_mutex);
+    m_frameAcquisitionStats = TLRenderPlayer::FrameAcquisitionStats();
+#endif
 }
 
 QImage TLRenderPlayer::extractThumbnail(const QString& filePath, const QSize& targetSize, qint64 positionMs)
@@ -1452,9 +1913,9 @@ QImage TLRenderPlayer::extractThumbnail(const QString& filePath, const QSize& ta
 
     return out;
 #else
-    Q_UNUSED(filePath)
-    Q_UNUSED(targetSize)
-    Q_UNUSED(positionMs)
+    Q_UNUSED(filePath);
+    Q_UNUSED(targetSize);
+    Q_UNUSED(positionMs);
     return {};
 #endif
 }
@@ -1496,7 +1957,7 @@ qint64 TLRenderPlayer::queryDuration(const QString& filePath)
     avformat_close_input(&fmtCtx);
     return durationMs;
 #else
-    Q_UNUSED(filePath)
+    Q_UNUSED(filePath);
     return 0;
 #endif
 }

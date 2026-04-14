@@ -268,6 +268,7 @@ FreehandAnnotation::FreehandAnnotation(const QPainterPath& path, QGraphicsItem* 
 
 void FreehandAnnotation::addPoint(const QPointF& point)
 {
+    prepareGeometryChange();
     if (m_path.elementCount() == 0) {
         m_path.moveTo(point);
     } else {

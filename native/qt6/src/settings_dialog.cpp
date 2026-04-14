@@ -842,7 +842,7 @@ void SettingsDialog::onExportDatabase()
     QString fileName = QFileDialog::getSaveFileName(
         this,
         "Export Database",
-        QDir::homePath() + "/kassetmanager_backup.db",
+        QCoreApplication::applicationDirPath() + "/data/kassetmanager_backup.db",
         "SQLite Database (*.db)"
     );
 
@@ -860,7 +860,7 @@ void SettingsDialog::onImportDatabase()
     QString fileName = QFileDialog::getOpenFileName(
         this,
         "Import Database",
-        QDir::homePath(),
+        QCoreApplication::applicationDirPath() + "/data",
         "SQLite Database (*.db)"
     );
 
@@ -1065,6 +1065,5 @@ void SettingsDialog::updateSequenceCacheMemoryLabel()
 
     sequenceCacheMemoryLabel->setText(text);
 }
-
 
 

@@ -47,14 +47,14 @@ unset(_cmake_expected_targets)
 
 
 # The installation prefix configured by this project.
-set(_IMPORT_PREFIX "/home/npittas/KAssetManager/.worktrees/linux-port-fedora43-wt/third_party/tlRender-install-Release")
+set(_IMPORT_PREFIX "/home/npittas/KAssetManager/third_party/tlRender-install-Release")
 
 # Create imported target OTIO::opentimelineio
 add_library(OTIO::opentimelineio STATIC IMPORTED)
 
 set_target_properties(OTIO::opentimelineio PROPERTIES
   INTERFACE_COMPILE_DEFINITIONS "OTIO_STATIC"
-  INTERFACE_INCLUDE_DIRECTORIES "/home/npittas/KAssetManager/.worktrees/linux-port-fedora43-wt/third_party/tlRender-install-Release/include"
+  INTERFACE_INCLUDE_DIRECTORIES "/home/npittas/KAssetManager/third_party/tlRender-install-Release/include"
   INTERFACE_LINK_LIBRARIES "OTIO::opentime;Imath::Imath"
 )
 

@@ -19,10 +19,10 @@ void TestVirtualDrag::nonWindowsStubsReturnFalse()
     };
 
     QVERIFY(!VirtualDrag::startVirtualDrag(files));
-    QVERIFY(!VirtualDrag::startRealPathsDrag({QStringLiteral("/tmp/file.txt")}));
+    QVERIFY(!VirtualDrag::startRealPathsDrag({QStringLiteral("tests/fixtures/file.txt")}));
     QVERIFY(!VirtualDrag::startAdaptivePathsDrag(
-        {QStringLiteral("/tmp/frames/shot.1001.exr")},
-        {QStringLiteral("/tmp/frames")}));
+        {QStringLiteral("tests/fixtures/frames/shot.1001.exr")},
+        {QStringLiteral("tests/fixtures/frames")}));
 #endif
 }
 

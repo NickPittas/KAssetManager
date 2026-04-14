@@ -47,14 +47,14 @@ unset(_cmake_expected_targets)
 
 
 # The installation prefix configured by this project.
-set(_IMPORT_PREFIX "/home/npittas/KAssetManager/.worktrees/linux-port-fedora43-wt/third_party/tlRender-install-Release")
+set(_IMPORT_PREFIX "/home/npittas/KAssetManager/third_party/tlRender-install-Release")
 
 # Create imported target SVT-AV1::SVT-AV1-static
 add_library(SVT-AV1::SVT-AV1-static STATIC IMPORTED)
 
 set_target_properties(SVT-AV1::SVT-AV1-static PROPERTIES
   INTERFACE_COMPILE_DEFINITIONS "RTC_BUILD=0"
-  INTERFACE_INCLUDE_DIRECTORIES "/home/npittas/KAssetManager/.worktrees/linux-port-fedora43-wt/third_party/tlRender-install-Release/include/svt-av1"
+  INTERFACE_INCLUDE_DIRECTORIES "/home/npittas/KAssetManager/third_party/tlRender-install-Release/include/svt-av1"
   INTERFACE_LINK_LIBRARIES "\$<LINK_ONLY:Threads::Threads;m>"
 )
 

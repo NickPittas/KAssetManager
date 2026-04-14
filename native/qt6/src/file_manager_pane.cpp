@@ -714,7 +714,7 @@ void FileManagerPane::refresh()
     }
 
     // Force a model refresh by flipping the root path.
-    QString tempPath = QDir::tempPath();
+    QString tempPath = QCoreApplication::applicationDirPath();
     m_dirModel->setRootPath(tempPath);
     m_dirModel->setRootPath(path);
 
