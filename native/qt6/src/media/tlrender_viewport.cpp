@@ -58,29 +58,7 @@ TLRenderViewport::~TLRenderViewport()
 
 void TLRenderViewport::prepareForMpvPlayback()
 {
-    if (!m_player || !m_player->mpvPlayer() || !m_player->mpvPlayer()->isAvailable()) {
-        return;
-    }
-
-    ensureMpvViewport();
-    m_mpvViewport->setPlayer(m_player->mpvPlayer());
-    m_mpvViewport->setVisible(true);
-    m_mpvViewport->raise();
-#ifdef HAVE_TLRENDER
-    if (m_rasterLabel) {
-        m_rasterLabel->setVisible(false);
-    }
-    if (m_viewport) {
-        m_viewport->setVisible(false);
-    }
-#endif
-    m_mpvViewport->update();
-    QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
-    QTimer::singleShot(0, m_mpvViewport, [viewport = m_mpvViewport]() {
-        if (viewport) {
-            viewport->update();
-        }
-    });
+    return;
 }
 
 void TLRenderViewport::ensureMpvViewport()
@@ -95,8 +73,7 @@ void TLRenderViewport::ensureMpvViewport()
     m_mpvViewport->installEventFilter(this);
     m_layout->insertWidget(0, m_mpvViewport);
     connect(m_mpvViewport, &MpvViewport::frameRendered, this, [this]() {
-        ++m_presentationRevision;
-        emit frameRendered();
+        noteFrameRendered();
     });
 }
 
@@ -112,9 +89,26 @@ void TLRenderViewport::ensureFfmpegMovViewport()
     m_ffmpegMovViewport->installEventFilter(this);
     m_layout->insertWidget(0, m_ffmpegMovViewport);
     connect(m_ffmpegMovViewport, &FFmpegMovViewport::frameRendered, this, [this]() {
-        ++m_presentationRevision;
-        emit frameRendered();
+        noteFrameRendered();
     });
+}
+
+void TLRenderViewport::noteFrameRendered()
+{
+    ++m_presentationRevision;
+    ++m_measuredFpsFrames;
+    if (!m_measuredFpsTimer.isValid()) {
+        m_measuredFpsTimer.start();
+    } else {
+        const qint64 elapsed = m_measuredFpsTimer.elapsed();
+        if (elapsed >= 500) {
+            m_measuredFps = (m_measuredFpsFrames * 1000.0) / qMax<qint64>(1, elapsed);
+            emit fpsChanged(m_measuredFps);
+            m_measuredFpsFrames = 0;
+            m_measuredFpsTimer.restart();
+        }
+    }
+    emit frameRendered();
 }
 
 void TLRenderViewport::setPlayer(TLRenderPlayer* player)
@@ -140,22 +134,13 @@ void TLRenderViewport::setPlayer(TLRenderPlayer* player)
         m_ffmpegMovViewport->setPlayer(player ? player->ffmpegMovPlayer() : nullptr);
     }
 
-    syncBackendWidgetVisibility();
-
-    if (useFfmpegMovViewport()) {
-        return;
-    }
-    if (useMpvViewport()) {
-        return;
-    }
-
 #ifdef HAVE_TLRENDER
     if (player) {
         if (auto* mpvPlayer = player->mpvPlayer()) {
             connect(mpvPlayer, &MpvPlayer::viewportReadyChanged, this, [this](bool ready) {
                 syncBackendWidgetVisibility();
                 syncPresentationTimer();
-                if (ready) {
+                if (ready && m_player && m_player->mpvPlayer() && m_player->mpvPlayer()->hasMedia()) {
                     prepareForMpvPlayback();
                 }
             });
@@ -202,6 +187,19 @@ void TLRenderViewport::setPlayer(TLRenderPlayer* player)
 #else
     Q_UNUSED(player)
 #endif
+
+    syncBackendWidgetVisibility();
+    if (useFfmpegMovViewport()) {
+        if (m_ffmpegMovViewport) {
+            m_ffmpegMovViewport->update();
+        }
+        syncPresentationTimer();
+        return;
+    }
+    if (useMpvViewport()) {
+        syncPresentationTimer();
+        return;
+    }
 }
 
 void TLRenderViewport::onMediaLoaded(const TLRenderPlayer::MediaInfo& info)
@@ -584,14 +582,14 @@ QRect TLRenderViewport::displayedContentRect() const
 double TLRenderViewport::fps() const
 {
     if (useFfmpegMovViewport()) {
-        return 0.0;
+        return m_measuredFps;
     }
     if (useMpvViewport()) {
-        return 0.0;
+        return m_measuredFps;
     }
 #ifdef HAVE_TLRENDER
     if (m_rasterLabel && PlatformSession::shouldUseRasterPreviewFallbackOnWayland()) {
-        return 0.0;
+        return m_measuredFps;
     } else if (m_viewport) {
         return m_viewport->getFPS();
     }
@@ -711,8 +709,5 @@ bool TLRenderViewport::useFfmpegMovViewport() const
 
 bool TLRenderViewport::useMpvViewport() const
 {
-    return m_player
-        && m_player->mpvPlayer()
-        && m_player->mpvPlayer()->hasMedia()
-        && m_player->mpvPlayer()->isViewportReady();
+    return false;
 }

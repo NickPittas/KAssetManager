@@ -1,6 +1,8 @@
 #include "ffmpeg_mov_viewport.h"
 
+#include <QPaintEvent>
 #include <QPainter>
+#include <QResizeEvent>
 
 #include "ffmpeg_mov_player.h"
 
@@ -21,13 +23,16 @@ void FFmpegMovViewport::setPlayer(FFmpegMovPlayer* player)
     m_player = player;
     if (m_player) {
         connect(m_player, &FFmpegMovPlayer::frameUpdated, this, [this]() {
+            invalidateDisplayCache();
             update();
             emit frameRendered();
         });
         connect(m_player, &FFmpegMovPlayer::mediaInfoReady, this, [this](const media_player::MediaInfo&) {
+            invalidateDisplayCache();
             update();
         });
     }
+    invalidateDisplayCache();
     update();
 }
 
@@ -60,6 +65,40 @@ QImage FFmpegMovViewport::currentFrameForTest() const
     return m_player ? m_player->currentFrameImage() : QImage();
 }
 
+void FFmpegMovViewport::invalidateDisplayCache()
+{
+    m_displayPixmap = QPixmap();
+    m_sourceFrameSize = QSize();
+}
+
+void FFmpegMovViewport::updateDisplayCache()
+{
+    if (!m_player) {
+        invalidateDisplayCache();
+        return;
+    }
+
+    const QImage frame = m_player->currentFrameImage();
+    if (frame.isNull()) {
+        invalidateDisplayCache();
+        return;
+    }
+
+    const QRect targetRect = imageRect();
+    if (!targetRect.isValid() || targetRect.isEmpty()) {
+        invalidateDisplayCache();
+        return;
+    }
+
+    if (!m_displayPixmap.isNull() && m_sourceFrameSize == frame.size() && m_displayPixmap.size() == targetRect.size()) {
+        return;
+    }
+
+    const QImage scaled = frame.scaled(targetRect.size(), Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    m_displayPixmap = QPixmap::fromImage(scaled);
+    m_sourceFrameSize = frame.size();
+}
+
 void FFmpegMovViewport::paintEvent(QPaintEvent* event)
 {
     Q_UNUSED(event);
@@ -71,28 +110,34 @@ void FFmpegMovViewport::paintEvent(QPaintEvent* event)
         return;
     }
 
-    const QImage frame = m_player->currentFrameImage();
-    if (frame.isNull()) {
+    updateDisplayCache();
+    if (m_displayPixmap.isNull()) {
         return;
     }
 
-    painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
-    painter.drawImage(imageRect(), frame);
+    const QRect targetRect = imageRect();
+    if (!targetRect.isValid() || targetRect.isEmpty()) {
+        return;
+    }
+
+    painter.drawPixmap(targetRect, m_displayPixmap);
+}
+
+void FFmpegMovViewport::resizeEvent(QResizeEvent* event)
+{
+    QWidget::resizeEvent(event);
+    invalidateDisplayCache();
 }
 
 QRect FFmpegMovViewport::imageRect() const
 {
     const QRect contents = contentsRect();
-    if (!m_player) {
+    const QSize sourceSize = sourceImageSize();
+    if (!sourceSize.isValid()) {
         return contents;
     }
 
-    const QImage frame = m_player->currentFrameImage();
-    if (frame.isNull()) {
-        return contents;
-    }
-
-    QSize drawSize = frame.size().scaled(contents.size(), Qt::KeepAspectRatio);
+    QSize drawSize = sourceSize.scaled(contents.size(), Qt::KeepAspectRatio);
     if (!qFuzzyCompare(m_zoom, 1.0)) {
         drawSize = (drawSize * m_zoom).boundedTo(contents.size() * 10);
     }
@@ -101,4 +146,9 @@ QRect FFmpegMovViewport::imageRect() const
         contents.x() + (contents.width() - drawSize.width()) / 2,
         contents.y() + (contents.height() - drawSize.height()) / 2);
     return QRect(topLeft, drawSize);
+}
+
+QSize FFmpegMovViewport::sourceImageSize() const
+{
+    return m_player ? m_player->currentFrameSize() : QSize();
 }

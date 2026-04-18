@@ -1415,6 +1415,12 @@ void PreviewOverlay::ensureRenderWidget()
         m_renderWidget = new TLRenderViewport(this);
         m_renderWidget->setFocusPolicy(Qt::NoFocus);
         m_renderWidget->installEventFilter(this);
+        connect(m_renderWidget, &TLRenderViewport::fpsChanged, this, [this](double fps) {
+            currentPlaybackFps = fps;
+            if (fpsLabel && fps > 0.0 && isVideo && m_player && m_player->playbackState() == TLRenderPlayer::PlaybackState::Playing) {
+                fpsLabel->setText(QString::number(fps, 'f', 1) + " fps");
+            }
+        });
         if (videoWidget && videoWidget->parentWidget()) {
             QLayout* parentLayout = videoWidget->parentWidget()->layout();
             if (parentLayout) {
@@ -3394,7 +3400,7 @@ void PreviewOverlay::onPlayerMediaInfo(const TLRenderPlayer::MediaInfo& info)
 
     if (info.fps > 0.0) {
         detectedFps = info.fps;
-        if (fpsLabel) fpsLabel->setText(QString::number(info.fps, 'f', 1) + " fps");
+        if (fpsLabel && currentPlaybackFps <= 0.0) fpsLabel->setText(QString::number(info.fps, 'f', 1) + " fps");
     }
 
     if (annotationModeEnabled && isVideo && annotationOverlayView && annotationOverlayView->isVisible() &&

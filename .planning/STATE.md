@@ -3,41 +3,41 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 current_phase: 07
-current_phase_name: bundle-and-verify-converters
-current_plan: 07-01
-status: verification_pending
-last_updated: "2026-04-14T00:00:00Z"
-last_activity: 2026-04-14
+current_phase_name: package-the-fedora-43-wayland-appimage
+current_plan: none
+status: ready_for_next_phase
+last_updated: "2026-04-18T00:00:00Z"
+last_activity: 2026-04-18
 progress:
   total_phases: 9
-  completed_phases: 3
+  completed_phases: 7
   total_plans: 3
-  completed_plans: 0
-  percent: 33
+  completed_plans: 3
+  percent: 78
 ---
 
 # State
 
-**Current Phase:** 07
-**Current Phase Name:** bundle-and-verify-converters
-**Status:** Verification pending on Plan 07-01 after implementation landed; manual Linux bundled-converter verification remains outstanding while Phase 06 also awaits manual Linux verification
-**Current Plan:** 07-01
-**Total Plans in Phase:** 1
-**Last Activity:** 2026-04-14
-**Last Activity Description:** Plan 07-01 implementation is present in the current worktree, focused automated converter test coverage is in place, and manual Linux bundled-converter verification is still pending; Phase 06 still awaits manual Linux workflow verification before closure
+**Current Phase:** 08
+**Current Phase Name:** package-the-fedora-43-wayland-appimage
+**Status:** Ready for next phase after Linux playback, annotation, thumbnails, project workflows, and bundled converters were accepted in runtime verification
+**Current Plan:** none
+**Total Plans in Phase:** 0
+**Last Activity:** 2026-04-18
+**Last Activity Description:** Fedora 43 Wayland playback is now accepted within small measurement variance using the rewritten FFmpeg MOV player path, and the user also accepted annotation, export, thumbnails, Project Manager, Batch Rename, and bundled converter behavior in runtime checks
 
 ## Current Position
 
-Phase: 07 (bundle-and-verify-converters) — VERIFICATION PENDING
-Plan: 07-01
-Status: Verification pending on Plan 07-01 after implementation landed; manual Linux bundled-converter verification remains outstanding while Phase 06 also awaits manual Linux verification
-Current Phase: 07 - Bundle And Verify Converters
-Current Plan: 07-01
-Last activity: 2026-04-14 -- Plan 07-01 implementation is present in the current worktree, focused automated converter test coverage is in place, and manual Linux bundled-converter verification is still pending; Phase 06 still awaits manual Linux workflow verification before closure
+Phase: 08 (package-the-fedora-43-wayland-appimage) — READY TO START
+Plan: none
+Status: Ready for next phase after user-accepted Linux runtime verification of playback, annotation, thumbnails, project workflows, and bundled converters
+Current Phase: 08 - Package The Fedora 43 Wayland AppImage
+Current Plan: none
+Last activity: 2026-04-18 -- MOV playback is accepted within small variance across the validated fixture set after the FFmpeg MOV player rewrite, and the previously blocked Linux runtime workflows are accepted by user verification
 
 ## Performance Metrics
 
-Total plans completed: 0
+Total plans completed: 3
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|

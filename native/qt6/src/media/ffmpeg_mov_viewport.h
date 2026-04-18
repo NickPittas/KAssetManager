@@ -3,6 +3,7 @@
 
 #include <QWidget>
 #include <QImage>
+#include <QPixmap>
 #include <QRect>
 
 class FFmpegMovPlayer;
@@ -28,12 +29,18 @@ signals:
 
 protected:
     void paintEvent(QPaintEvent* event) override;
+    void resizeEvent(QResizeEvent* event) override;
 
 private:
     QRect imageRect() const;
+    QSize sourceImageSize() const;
+    void invalidateDisplayCache();
+    void updateDisplayCache();
 
     FFmpegMovPlayer* m_player{nullptr};
     double m_zoom{1.0};
+    QPixmap m_displayPixmap;
+    QSize m_sourceFrameSize;
 };
 
 #endif

@@ -244,6 +244,10 @@ add_executable(test_tlrender_playback_harness
     test_tlrender_playback_harness.cpp
     ../src/file_utils.cpp
     ../src/file_utils.h
+    ../src/media/ffmpeg_mov_player.cpp
+    ../src/media/ffmpeg_mov_player.h
+    ../src/media/ffmpeg_mov_viewport.cpp
+    ../src/media/ffmpeg_mov_viewport.h
     ../src/media/tlrender_player.cpp
     ../src/media/tlrender_player.h
     ../src/media/media_player_types.h

@@ -4,14 +4,28 @@
 #include <QObject>
 #include <QImage>
 #include <QMutex>
-#include <QTimer>
+#include <QChronoTimer>
+#include <QElapsedTimer>
 #include <QString>
 #include <QtGlobal>
 
+#include <chrono>
+#include <condition_variable>
+#include <deque>
+#include <mutex>
+#include <thread>
+
 #include "media_player_types.h"
+
+#if defined(HAVE_FFMPEG) && HAVE_FFMPEG
+extern "C" {
+#include <libavutil/pixfmt.h>
+}
+#endif
 
 struct AVCodecContext;
 struct AVFormatContext;
+struct AVBufferRef;
 struct AVFrame;
 struct AVPacket;
 struct SwsContext;
@@ -54,6 +68,7 @@ public:
     QString currentMediaPath() const { return m_currentPath; }
 
     QImage currentFrameImage() const;
+    QSize currentFrameSize() const;
 
 signals:
     void positionChanged(qint64 positionMs);
@@ -70,23 +85,45 @@ private slots:
     void syncAudioPosition(qint64 positionMs);
 
 private:
-    bool openMedia(const QString& filePath, QString* errorString);
+    struct BufferedFrame {
+        QImage image;
+        qint64 positionMs{0};
+        qint64 frameNumber{0};
+        qint64 pts{0};
+    };
+
+    bool openMedia(const QString& filePath, QString* errorString, bool allowHardwareDecoding = true);
     void closeMedia();
+    void startDecodeThread();
+    void stopDecodeThread();
+    void decodeThreadMain();
     void updatePlaybackTimer();
-    bool decodeNextFrame();
-    bool decodeFrameForTimestamp(int64_t targetTs, bool allowPastTarget);
+    bool decodeNextFrame(quint64 generation);
+    bool decodeFrameForTimestamp(int64_t targetTs, bool allowPastTarget, quint64 generation);
     bool seekInternal(qint64 positionMs, bool emitSignals);
-    bool presentDecodedFrame(AVFrame* frame);
+    bool presentDecodedFrame(AVFrame* frame, BufferedFrame* bufferedFrame);
+    bool queueBufferedFrame(BufferedFrame&& frame, quint64 generation, bool satisfySeek);
+    bool waitForSeekFrame(quint64 generation, BufferedFrame* frame, QString* errorString = nullptr);
+    bool takeBufferedFrameForPlayback(qint64 targetFrameNumber, BufferedFrame* frame, bool* reachedEndOfStream);
+    void presentBufferedFrame(const BufferedFrame& frame, bool emitSignals);
+    int decodeQueueCapacity() const;
+    void resetPlaybackClock();
+    bool fallbackToSoftwareDecoding(qint64 restartPositionMs, quint64 generation, bool satisfySeek, QString* errorString = nullptr);
+    bool ensureConversionContext(AVFrame* frame);
     qint64 timestampToMs(int64_t pts) const;
     int64_t msToTimestamp(qint64 positionMs) const;
     qint64 clampFrameNumber(qint64 frameNumber) const;
     void setPlaybackState(media_player::PlaybackState state);
     void clearPresentedFrame();
+    static AVPixelFormat selectHardwarePixelFormat(AVCodecContext* codecContext, const AVPixelFormat* pixelFormats);
 
     mutable QMutex m_frameMutex;
     QImage m_currentFrameImage;
 
-    QTimer* m_playbackTimer{nullptr};
+    QChronoTimer* m_playbackTimer{nullptr};
+    QElapsedTimer m_playbackClock;
+    std::chrono::nanoseconds m_nextPlaybackDeadline{std::chrono::nanoseconds::zero()};
+    qint64 m_playbackStartPositionMs{0};
     class QMediaPlayer* m_audioPlayer{nullptr};
     class QAudioOutput* m_audioOutput{nullptr};
     media_player::PlaybackState m_playbackState{media_player::PlaybackState::Stopped};
@@ -100,21 +137,40 @@ private:
     float m_volume{1.0f};
     bool m_muted{false};
     double m_playbackRate{1.0};
-    double m_stepAccumulator{0.0};
 
     AVFormatContext* m_formatContext{nullptr};
     AVCodecContext* m_codecContext{nullptr};
+    AVBufferRef* m_hwDeviceContext{nullptr};
     SwsContext* m_swsContext{nullptr};
     AVFrame* m_decodeFrame{nullptr};
-    AVFrame* m_rgbFrame{nullptr};
+    AVFrame* m_transferFrame{nullptr};
     AVPacket* m_packet{nullptr};
-    uint8_t* m_rgbBuffer{nullptr};
     int m_videoStreamIndex{-1};
     int m_timeBaseNum{0};
     int m_timeBaseDen{1};
     int m_frameRateNum{0};
     int m_frameRateDen{1};
+    int m_hwPixelFormat{-1};
+    int m_swsSourceFormat{-1};
+    int m_swsWidth{0};
+    int m_swsHeight{0};
     int64_t m_lastPresentedPts{-1};
+    bool m_hardwareDecodingActive{false};
+
+    std::mutex m_decodeMutex;
+    std::condition_variable m_decodeCondition;
+    std::deque<BufferedFrame> m_decodedFrames;
+    BufferedFrame m_seekResultFrame;
+    std::thread m_decodeThread;
+    bool m_decodeStopRequested{false};
+    bool m_seekPending{false};
+    bool m_seekInProgress{false};
+    bool m_seekFailed{false};
+    bool m_seekResultReady{false};
+    bool m_decodeAtEnd{false};
+    qint64 m_pendingSeekMs{0};
+    quint64 m_decodeGeneration{0};
+    QString m_pendingDecodeError;
 };
 
 #endif

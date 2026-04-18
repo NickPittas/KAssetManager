@@ -19,6 +19,7 @@
 #include <QPixmap>
 #include <QTimer>
 #include <QPointer>
+#include <QElapsedTimer>
 #include <algorithm>
 
 #include "ffmpeg_mov_viewport.h"
@@ -108,6 +109,7 @@ private slots:
     void updateRasterFrame();
 
 private:
+    void noteFrameRendered();
     void ensureMpvViewport();
     void ensureFfmpegMovViewport();
     void ensureViewport();
@@ -136,6 +138,9 @@ private:
     double m_waylandZoom{1.0};
     qint64 m_presentationRevision{0};
     double m_mediaFps{24.0};
+    QElapsedTimer m_measuredFpsTimer;
+    int m_measuredFpsFrames{0};
+    double m_measuredFps{0.0};
 };
 
 #endif // TLRENDER_VIEWPORT_H

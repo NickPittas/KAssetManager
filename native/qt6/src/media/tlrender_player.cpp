@@ -400,12 +400,8 @@ QImage currentVideoFramesToQImage(const std::vector<tl::VideoFrame>& frames, con
 TLRenderPlayer::TLRenderPlayer(QObject* parent)
     : QObject(parent)
 {
-    m_mpvPlayer = new MpvPlayer(this);
+    m_mpvPlayer = nullptr;
     m_ffmpegMovPlayer = new FFmpegMovPlayer(this);
-    fprintf(stderr, "[TLRenderPlayer] mpv available=%d error=%s\n",
-            m_mpvPlayer->isAvailable() ? 1 : 0,
-            m_mpvPlayer->availabilityError().toLocal8Bit().constData());
-    fflush(stderr);
     connect(m_ffmpegMovPlayer, &FFmpegMovPlayer::positionChanged, this, [this](qint64 positionMs) {
         m_position = positionMs;
         emit positionChanged(positionMs);
@@ -431,33 +427,6 @@ TLRenderPlayer::TLRenderPlayer(QObject* parent)
     connect(m_ffmpegMovPlayer, &FFmpegMovPlayer::error, this, &TLRenderPlayer::error);
     connect(m_ffmpegMovPlayer, &FFmpegMovPlayer::endOfStream, this, &TLRenderPlayer::endOfStream);
     connect(m_ffmpegMovPlayer, &FFmpegMovPlayer::frameUpdated, this, &TLRenderPlayer::videoFramesChanged);
-    if (m_mpvPlayer->isAvailable()) {
-        connect(m_mpvPlayer, &MpvPlayer::positionChanged, this, [this](qint64 positionMs) {
-            m_position = positionMs;
-            emit positionChanged(positionMs);
-        });
-        connect(m_mpvPlayer, &MpvPlayer::durationChanged, this, [this](qint64 durationMs) {
-            m_duration = durationMs;
-            emit durationChanged(durationMs);
-        });
-        connect(m_mpvPlayer, &MpvPlayer::currentFrameChanged, this, [this](qint64 frameNumber) {
-            m_currentFrame = frameNumber;
-            emit currentFrameChanged(frameNumber);
-        });
-        connect(m_mpvPlayer, &MpvPlayer::mediaInfoReady, this, [this](const media_player::MediaInfo& info) {
-            m_mediaInfo = toTlMediaInfo(info);
-            m_duration = m_mediaInfo.durationMs;
-            m_totalFrames = m_mediaInfo.totalFrames;
-            emit mediaInfoReady(m_mediaInfo);
-        });
-        connect(m_mpvPlayer, &MpvPlayer::playbackStateChanged, this, [this](media_player::PlaybackState state) {
-            m_playbackState = toTlPlaybackState(state);
-            emit playbackStateChanged(m_playbackState);
-        });
-        connect(m_mpvPlayer, &MpvPlayer::error, this, &TLRenderPlayer::error);
-        connect(m_mpvPlayer, &MpvPlayer::endOfStream, this, &TLRenderPlayer::endOfStream);
-        connect(m_mpvPlayer, &MpvPlayer::frameUpdated, this, &TLRenderPlayer::videoFramesChanged);
-    }
 
     // Create update timer for position updates
     m_updateTimer = new QTimer(this);
@@ -587,33 +556,6 @@ void TLRenderPlayer::loadMedia(const QString& filePath)
     }
     if (m_ffmpegMovPlayer && m_ffmpegMovPlayer->hasMedia()) {
         m_ffmpegMovPlayer->unloadMedia();
-    }
-    fprintf(stderr, "[TLRenderPlayer] loadMedia path=%s useMpv=%d mpvAvailable=%d\n",
-            filePath.toLocal8Bit().constData(),
-            useMpvBackendForCurrentMedia(filePath) ? 1 : 0,
-            (m_mpvPlayer && m_mpvPlayer->isAvailable()) ? 1 : 0);
-    fflush(stderr);
-    if (useMpvBackendForCurrentMedia(filePath) && m_mpvPlayer && m_mpvPlayer->isAvailable()) {
-        if (m_player) {
-            m_player->stop();
-            m_player.reset();
-        }
-        m_timeline.reset();
-        m_playerObject.clear();
-        m_updateTimer->stop();
-
-        QMutexLocker locker(&m_mutex);
-        m_currentPath = filePath;
-        m_frameAcquisitionStats = FrameAcquisitionStats();
-        m_cachedVideoFrames.clear();
-        locker.unlock();
-
-        m_mpvPlayer->setLoopMode(toMpvLoopMode(m_loopMode));
-        m_mpvPlayer->setVolume(m_volume);
-        m_mpvPlayer->setMuted(m_muted);
-        m_mpvPlayer->setPlaybackRate(m_playbackRate);
-        m_mpvPlayer->loadMedia(filePath);
-        return;
     }
 
     if (m_mpvPlayer && m_mpvPlayer->hasMedia()) {
