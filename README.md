@@ -1,10 +1,16 @@
 # KAsset Manager
 
-**Professional asset management software for Windows** - Organize, tag, rate, and manage digital assets including images (PNG, JPG, TIF, EXR, IFF, PSD), videos (MOV, MP4, AVI), and audio (MP3) files.
+**Professional asset management software for Windows, with a validated Fedora 43 KDE Wayland baseline** - Organize, tag, rate, and manage digital assets including images (PNG, JPG, TIF, EXR, IFF, PSD), videos (MOV, MP4, AVI), and audio (MP3) files.
 
 ## Overview
 
-KAsset Manager is a native Windows desktop application built with Qt 6 that provides a professional-grade solution for managing digital media assets. Whether you're a VFX artist, photographer, video editor, or content creator, KAsset Manager helps you organize, find, and preview your files efficiently.
+KAsset Manager is a native Qt 6 desktop application that provides a professional-grade solution for managing digital media assets. Whether you're a VFX artist, photographer, video editor, or content creator, KAsset Manager helps you organize, find, and preview your files efficiently.
+
+Current platform status:
+
+- Windows remains the primary packaged platform
+- Fedora 43 KDE Wayland is the current validated Linux baseline
+- Linux packaging currently targets AppImage first
 
 ### Key Features
 
@@ -112,6 +118,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-windows.ps1 
 ### Installation
 
 - [docs/INSTALL.md](docs/INSTALL.md) — Build and installation instructions
+- [docs/linux-wayland-validation.md](docs/linux-wayland-validation.md) — Fedora 43 Wayland validation notes, playback corpus, and AppImage status
 
 ### For Developers
 
@@ -161,7 +168,7 @@ SQLite database stored in persistent user data location (see [docs/INSTALL.md](d
 
 - Give the decoder a moment to cache the first frame (large EXR/ProRes files can take a second).
 - Check `debug.log` for `[LivePreview]` warnings about codecs or permissions.
-- Ensure the bundled tlRender runtime DLLs are present in the portable/installer build (tlRender/ftk/FFmpeg DLLs alongside the executable).
+- Ensure the bundled tlRender/runtime libraries are present in the packaged build (Windows portable/installer or Linux AppImage/AppDir runtime layout).
 
 **Import not working:**
 
@@ -197,7 +204,7 @@ SQLite database stored in persistent user data location (see [docs/INSTALL.md](d
 
 ## System Requirements
 
-- **OS**: Windows 10/11 (64-bit)
+- **OS**: Windows 10/11 (64-bit), Fedora 43 KDE Wayland validated baseline
 - **RAM**: 4GB minimum, 8GB+ recommended
 - **Disk**: 500MB for application plus space for cached previews
 - **Display**: 1920x1080 or higher recommended

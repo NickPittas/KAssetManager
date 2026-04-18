@@ -257,6 +257,8 @@ qt_add_executable(kassetmanagerqt WIN32
     src/log_manager.cpp
     src/progress_manager.h
     src/progress_manager.cpp
+    src/runtime_paths.h
+    src/runtime_paths.cpp
     src/tags_model.h
     src/preview_overlay.h
     src/preview_overlay.cpp
@@ -507,6 +509,62 @@ if(EXISTS "${_ACES_OCIO_DIR}")
   message(STATUS "ACES OCIO config will be installed to bin/OpenColorIO-Config-ACES-1.2")
 else()
   message(WARNING "ACES OCIO config folder not found at ${_ACES_OCIO_DIR}")
+endif()
+
+if(UNIX AND NOT APPLE)
+  set(_LINUX_PACKAGING_DIR "${CMAKE_CURRENT_SOURCE_DIR}/packaging/linux")
+  set(_APP_ICON_PNG "${CMAKE_SOURCE_DIR}/../../icon.png")
+
+  # Keep Linux assets in the install tree even before AppImage assembly.
+  set(_QT_CONF "${CMAKE_CURRENT_BINARY_DIR}/qt.conf")
+  file(WRITE "${_QT_CONF}" "[Paths]\nPlugins=../plugins\n")
+  install(FILES "${_QT_CONF}" DESTINATION bin)
+
+  if(EXISTS "${_LINUX_PACKAGING_DIR}/kassetmanager.desktop")
+    install(FILES "${_LINUX_PACKAGING_DIR}/kassetmanager.desktop" DESTINATION share/applications)
+  endif()
+
+  if(EXISTS "${_LINUX_PACKAGING_DIR}/AppRun.env")
+    install(FILES "${_LINUX_PACKAGING_DIR}/AppRun.env" DESTINATION share/kassetmanager)
+  endif()
+
+  if(EXISTS "${_APP_ICON_PNG}")
+    install(FILES "${_APP_ICON_PNG}" DESTINATION share/icons/hicolor/256x256/apps RENAME kassetmanager.png)
+  else()
+    message(WARNING "App icon not found at ${_APP_ICON_PNG}")
+  endif()
+
+  if(TLRENDER_ROOT)
+    foreach(_tlrender_lib_dir lib lib64)
+      if(EXISTS "${TLRENDER_ROOT}/${_tlrender_lib_dir}")
+        file(GLOB _TLRENDER_SO_FILES
+          "${TLRENDER_ROOT}/${_tlrender_lib_dir}/*.so"
+          "${TLRENDER_ROOT}/${_tlrender_lib_dir}/*.so.*")
+        if(_TLRENDER_SO_FILES)
+          install(FILES ${_TLRENDER_SO_FILES} DESTINATION lib)
+        endif()
+      endif()
+    endforeach()
+  endif()
+
+  set(_LINUX_FFMPEG_BIN "${CMAKE_SOURCE_DIR}/../../third_party/ffmpeg/bin")
+  if(EXISTS "${_LINUX_FFMPEG_BIN}/ffmpeg" AND EXISTS "${_LINUX_FFMPEG_BIN}/ffprobe")
+    install(PROGRAMS
+      "${_LINUX_FFMPEG_BIN}/ffmpeg"
+      "${_LINUX_FFMPEG_BIN}/ffprobe"
+      DESTINATION bin)
+  endif()
+
+  set(_LINUX_MAGICK_CANDIDATES
+    "${CMAKE_SOURCE_DIR}/../../third_party/imagemagick/bin/magick"
+    "${CMAKE_SOURCE_DIR}/../../third_party/imagemagick/magick"
+  )
+  foreach(_linux_magick IN LISTS _LINUX_MAGICK_CANDIDATES)
+    if(EXISTS "${_linux_magick}")
+      install(PROGRAMS "${_linux_magick}" DESTINATION bin)
+      break()
+    endif()
+  endforeach()
 endif()
 
 # Packaging: deploy Qt runtime. Prefer Qt6DeploySupport if available.

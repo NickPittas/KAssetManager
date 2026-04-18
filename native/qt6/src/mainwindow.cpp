@@ -19,6 +19,7 @@
 #include "file_ops.h"
 #include "file_ops_dialog.h"
 #include "log_manager.h"
+#include "runtime_paths.h"
 #include "sequence_detector.h"
 #include "context_preserver.h"
 #include "database_health_agent.h"
@@ -3913,8 +3914,7 @@ void MainWindow::setupProjectManagerUi()
     LogManager::instance().addLog("[ProjectManager] Setting up Project Manager UI...", "INFO");
     
     // Initialize ProjectDB with separate database file
-    const QString dataDir = QCoreApplication::applicationDirPath() + "/data";
-    const QString projectsDbPath = dataDir + "/projects.db";
+    const QString projectsDbPath = RuntimePaths::dataPath("projects.db");
     if (!ProjectDB::instance().init(projectsDbPath)) {
         LogManager::instance().addLog("[ProjectManager] Failed to initialize ProjectDB at: " + projectsDbPath, "ERROR");
         return;

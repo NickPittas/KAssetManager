@@ -1,4 +1,5 @@
 #include "thumbnail_cache_manager.h"
+#include "runtime_paths.h"
 #include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
@@ -29,9 +30,14 @@ void ThumbnailCacheManager::loadSettings()
 {
     QSettings s("AugmentCode", "KAssetManager");
     
-    // Default cache directory: next to database in AppData
-    QString defaultCacheDir = QCoreApplication::applicationDirPath() + "/data/thumbnail_cache";
+    const QString portableCacheDir = QDir(RuntimePaths::portableDataRoot()).filePath("thumbnail_cache");
+    const QString defaultCacheDir = RuntimePaths::dataPath("thumbnail_cache");
     m_cacheDirectory = s.value("ThumbnailCache/Directory", defaultCacheDir).toString();
+    if (m_cacheDirectory.isEmpty() ||
+        (QDir::cleanPath(m_cacheDirectory) == QDir::cleanPath(portableCacheDir) &&
+         QDir::cleanPath(defaultCacheDir) != QDir::cleanPath(portableCacheDir))) {
+        m_cacheDirectory = defaultCacheDir;
+    }
     
     int width = s.value("ThumbnailCache/Width", 256).toInt();
     int height = s.value("ThumbnailCache/Height", 256).toInt();
