@@ -1,4 +1,5 @@
 #include "oiio_image_loader.h"
+#include "image_memory_limits.h"
 #include <QFileInfo>
 #include <cmath>
 #include <stdexcept>
@@ -75,10 +76,8 @@ QImage OIIOImageLoader::loadImage(const QString& filePath, int maxWidth, int max
             return QImage();
         }
 
-        // Sanity check for extremely large images that could cause memory issues
-        constexpr qint64 kMaxPixels = 100000000; // 100 megapixels
-        if (static_cast<qint64>(width) * height > kMaxPixels) {
-            qWarning() << "[OIIOImageLoader] Image too large:" << width << "x" << height;
+        if (!ImageMemoryLimits::isImageWithinMemoryLimit(width, height, qMax(channels, 4), 2)) {
+            qWarning() << "[OIIOImageLoader] Image exceeds configured memory limit:" << width << "x" << height;
             return QImage();
         }
 
@@ -335,4 +334,3 @@ float OIIOImageLoader::clamp(float value, float min, float max) {
     if (value > max) return max;
     return value;
 }
-

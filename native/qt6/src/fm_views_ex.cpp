@@ -68,10 +68,12 @@ void FmGridViewEx::startDrag(Qt::DropActions supported)
     QSet<QString> folderSet;
     for (const QUrl &u : repUrls) if (u.isLocalFile()) folderSet.insert(QFileInfo(u.toLocalFile()).absoluteFilePath());
     QVector<QString> folderVec = QVector<QString>(folderSet.cbegin(), folderSet.cend());
+#ifdef _WIN32
     if (!frameVec.isEmpty() || !folderVec.isEmpty()) {
         VirtualDrag::startAdaptivePathsDrag(frameVec, folderVec);
+        return;
     }
-    return;
+#endif
     QMimeData* mime = new QMimeData();
     if (!dccTextLines.isEmpty()) {
         mime->setText(dccTextLines.join("\r\n"));
@@ -153,8 +155,32 @@ void FmListViewEx::startDrag(Qt::DropActions supported)
     QSet<QString> folderSet;
     for (const QUrl &u : repUrls) if (u.isLocalFile()) folderSet.insert(QFileInfo(u.toLocalFile()).absoluteFilePath());
     QVector<QString> folderVec = QVector<QString>(folderSet.cbegin(), folderSet.cend());
+#ifdef _WIN32
     if (!frameVec.isEmpty() || !folderVec.isEmpty()) {
         VirtualDrag::startAdaptivePathsDrag(frameVec, folderVec);
+        return;
     }
-    return;
+#endif
+
+    QMimeData* mime = new QMimeData();
+    if (!dccTextLines.isEmpty()) {
+        mime->setText(dccTextLines.join("\r\n"));
+        QByteArray uriData = dccUriLines.join("\r\n").toUtf8();
+        mime->setData("text/uri-list", uriData);
+    }
+    if (!repUrls.isEmpty()) mime->setUrls(repUrls);
+    if (!fullPaths.isEmpty()) {
+        QByteArray enc; QDataStream ds(&enc, QIODevice::WriteOnly); ds << fullPaths;
+        mime->setData("application/x-kasset-sequence-urls", enc);
+    }
+    QDrag* drag = new QDrag(this);
+    drag->setMimeData(mime);
+    const int itemCount = fullPaths.size();
+    QPixmap pm(60, 60); pm.fill(Qt::transparent);
+    QPainter pr(&pm); pr.setRenderHint(QPainter::Antialiasing);
+    pr.setBrush(QColor(88,166,255,200)); pr.setPen(Qt::NoPen); pr.drawRoundedRect(0,0,60,60,8,8);
+    pr.setPen(Qt::white); QFont f=pr.font(); f.setPixelSize(20); f.setBold(true); pr.setFont(f);
+    pr.drawText(QRect(0,0,60,60), Qt::AlignCenter, QString::number(itemCount)); pr.end();
+    drag->setPixmap(pm); drag->setHotSpot(QPoint(30,30));
+    drag->exec(supported, Qt::CopyAction);
 }

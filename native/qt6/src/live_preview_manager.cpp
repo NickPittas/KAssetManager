@@ -1,4 +1,5 @@
 #include "live_preview_manager.h"
+#include "image_memory_limits.h"
 
 #include "oiio_image_loader.h"
 #include "utils.h"
@@ -601,10 +602,8 @@ QImage LivePreviewManager::loadImageFrame(const Request& request, QString& error
         if (image.isNull()) {
             QImageReader sizeProbe(request.filePath);
             const QSize imageSize = sizeProbe.size();
-            const qint64 pixelCount = static_cast<qint64>(imageSize.width()) * static_cast<qint64>(imageSize.height());
-            constexpr qint64 kQtUnsafePreviewPixels = 100000000;
-            if (pixelCount > kQtUnsafePreviewPixels) {
-                error = QStringLiteral("Image too large for live preview");
+            if (!ImageMemoryLimits::isImageWithinMemoryLimit(imageSize.width(), imageSize.height())) {
+                error = ImageMemoryLimits::limitExceededMessage(QStringLiteral("Image exceeds the configured memory limit for live preview"));
                 return {};
             }
             qDebug() << "[LivePreview] OIIO failed to load, falling back to Qt:" << request.filePath;

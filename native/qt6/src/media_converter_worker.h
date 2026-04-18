@@ -84,6 +84,7 @@ private:
     // Build external command (ffmpeg or ImageMagick) and compute output path for given task
     bool buildCommand(const Task& t, QString& program, QString& outPath, QStringList& args, qint64& estDurationMs, QString& err) const;
     static bool probeDurationMs(const QString& ffmpeg, const QString& input, qint64& durMs, int& width, int& height, QString& err);
+    static QString resolveFfprobeForFfmpeg(const QString& ffmpegPath);
     static QString uniqueOutPath(const QString& basePath);
     static QString scaleFilterFor(const Task& t, bool isVideo);
     static double probeAvgFps(const QString& ffmpeg, const QString& input);

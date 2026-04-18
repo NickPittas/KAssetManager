@@ -78,8 +78,8 @@ endif()
 
 if(BUILD_APP)
 
-find_package(QT NAMES Qt6 REQUIRED COMPONENTS Widgets Multimedia MultimediaWidgets Sql Concurrent Svg SvgWidgets OpenGL OpenGLWidgets Quick QuickWidgets)
-find_package(Qt6 REQUIRED COMPONENTS Widgets Multimedia MultimediaWidgets Sql Concurrent Svg SvgWidgets OpenGL OpenGLWidgets Quick QuickWidgets)
+find_package(QT NAMES Qt6 REQUIRED COMPONENTS Widgets Multimedia MultimediaWidgets Sql Concurrent Svg SvgWidgets OpenGL OpenGLWidgets Quick QuickWidgets DBus)
+find_package(Qt6 REQUIRED COMPONENTS Widgets Multimedia MultimediaWidgets Sql Concurrent Svg SvgWidgets OpenGL OpenGLWidgets Quick QuickWidgets DBus)
 # Optional: Qt PDF (viewer) if available
 find_package(Qt6 QUIET COMPONENTS Pdf PdfWidgets)
 # ActiveQt (QAxObject) for Office-to-PDF conversion on Windows (optional)
@@ -293,6 +293,8 @@ qt_add_executable(kassetmanagerqt WIN32
     src/fm_views_ex.cpp
     src/file_manager_pane.h
     src/file_manager_pane.cpp
+    src/image_memory_limits.h
+    src/image_memory_limits.cpp
     src/oiio_image_loader.h
     src/oiio_image_loader.cpp
     src/project_folder_watcher.h
@@ -452,6 +454,7 @@ target_link_libraries(kassetmanagerqt PRIVATE
     Qt6::MultimediaWidgets
     Qt6::Sql
     Qt6::Concurrent
+    Qt6::DBus
     Qt6::Svg
     Qt6::SvgWidgets
     Qt6::OpenGL

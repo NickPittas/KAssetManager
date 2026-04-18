@@ -5,6 +5,8 @@ node_modules/
 # Build outputs
 dist/
 build/
+build-*/
+cmake-build-*/
 out/
 installer/
 
@@ -42,6 +44,11 @@ coverage/
 # Temporary files
 tmp/
 temp/
+__pycache__/
+*.pyc
+*.pyo
+*.tmp
+*.bak
 
 # Media and binary artifacts
 *.mov

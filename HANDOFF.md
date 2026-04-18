@@ -1,353 +1,445 @@
 # HANDOFF
 
 ## Purpose
-This handoff is for the next agent to continue the KAssetManager work without re-reading the full prior conversation.
+This handoff is for the next agent/harness to continue the project without rereading large parts of the repo or repeating the same failed investigation loops.
 
-Primary focus at handoff time:
-1. Preserve already fixed Phase 03 fullscreen preview/annotation/player UX regressions.
-2. Continue the remaining playback-core work for problematic MOV files under Wayland.
-3. Avoid the repeated-analysis loop that consumed excessive time/tokens in the prior session.
+The user explicitly asked for:
+- minimal rereads
+- no looping on the same files
+- bounded patch/build/test cycles only
+- use of the exact external media fixture path already provided
+- no broad filesystem searches outside the explicitly provided scope
+
+Current date context from the session: `2026-04-18`.
 
 ---
 
-## Mandatory workflow for next agent
-Read and follow these first:
-- `AGENTS.md`
+## Critical workflow constraints
+
+The next agent must follow these rules immediately:
+
+1. Read `AGENTS.md` first at task start.
+2. Read `.agent-workflow.md` at task start.
+3. Do **not** broad-search storage paths. The only approved fixture path used in this playback investigation is:
+   - `/mnt/ssd2/Tests/Videos/`
+4. Avoid repeated rereads of the same files unless a build/test failure points to them.
+5. Every cycle must end in one of:
+   - code patch
+   - build/test result
+   - blocker with exact evidence
+6. Revert failed fixes immediately.
+7. Use subagents for research/inspection as much as possible. Main-thread work should be patch/build/report.
+8. The user specifically complained about loops and repeated reading. Do not repeat that behavior.
+
+The user also created a persistent execution contract file:
 - `.agent-workflow.md`
-- `codemap.md`
-- `native/qt6/src/media/codemap.md`
-
-Operational rules already established in repo/session:
-- Do not assume anything.
-- Use only explicit paths/scopes from user.
-- Use subagents heavily for research/inspection whenever possible.
-- One active milestone at a time.
-- No repeated rereads unless a file changed or a test/build result points there.
-- Every cycle must end in one of: patch, build/test result, or blocker with exact evidence.
-- Revert failed fixes immediately.
 
 ---
 
-## Project-local fixture scope
-Use only project-local fixture roots for playback validation.
+## High-level project status
 
-Do not search mounted drives, home directories, temp directories, or any external storage trees.
+### Verified passing from user runtime checks
+These were manually verified by the user in the built app:
 
-Expected fixture root:
-- `native/qt6/tests/fixtures/videos/`
+- Annotation on video: pass
+- Annotation export: pass
+- Thumbnails/scrubbing: pass
+- Project Manager: pass
+- Batch Rename: pass
+- Bundled converters: pass
+- `MEGY_comp_4K_LL180_ap0_r709g24_v015.mov`: pass
 
-Known ffprobe characteristics from prior session:
-- `Blood_Hit_03.mov`: PNG / RGBA alpha MOV stress case.
-- `Sunshine 10sec Full Comp v3.mov`: ProRes 25fps target.
-- `Atmosphere-019.mov`: 4K-ish ProRes stress case.
-- `MEGY_comp_4K_LL180_ap0_r709g24_v015.mov`: HEVC-in-MOV large square case.
+### Remaining failing runtime cases
+The remaining practical blockers are now narrowed to **video playback only**:
+
+1. `Atmosphere-019.mov`
+   - fail
+   - user reported it does not play correctly
+   - later verification said side preview is also not working, same as full preview
+
+2. `Shot_0140_v005.mov`
+   - opens/plays but playback is still very choppy
+   - user estimated roughly 7–15 fps
+   - this is not acceptable
+
+### Phases effectively verified/passed by user
+These still need planning/state updates, but user runtime verification says they are practically good enough:
+
+- Phase 3 (annotation-related runtime checks): mostly passed
+- Phase 4: thumbnails/scrubbing passed
+- Phase 6: Project Manager passed; Batch Rename passed after fix
+- Phase 7: bundled converters passed
+
+### Phases still open beyond playback
+- Phase 8: AppImage build/runtime verification not completed
+- Phase 9: docs not completed
 
 ---
 
-## What was already fixed successfully
-These were user-validated as fixed during the session.
+## Planning-layer status
+Planning files were updated earlier in the session to reset Phase 03 around the real fullscreen/annotation defects. The exact planning docs involved were:
 
-### 1. Phase 03 fullscreen/player UI issues fixed
-Confirmed fixed by user:
-- wrong center play overlay / side nav arrows
-- timeline range staying too long after switching to shorter media
-- fullscreen zoom caused by controls hiding
-- controls autohide removed / controls always visible
-- first annotation-session initialization bug
+- `.planning/REQUIREMENTS.md`
+- `.planning/ROADMAP.md`
+- `.planning/STATE.md`
+- `.planning/phases/03-preserve-annotation-on-video-and-sequences/03-01-PLAN.md`
 
-### 2. Annotation behavior materially improved and fixed enough for reported issue
-Confirmed by user after bounded fixes:
-- first time opening annotation now works without requiring close/reopen
-- Select tool state bug was fixed earlier
-- annotation path no longer blocked by the original first-session failure
+Current practical state from user verification:
+- Batch Rename: pass
+- Annotation: pass
+- Export: pass
+- Thumbnails/scrubbing: pass
+- Bundled converters: pass
+- Remaining blocker: MOV playback
 
-### Main files that were changed during those successful fixes
-Review these first before touching preview/annotation again:
+The next agent should align planning state only after playback is resolved.
+
+---
+
+## What was fixed earlier and verified by the user
+
+These fixes were implemented earlier in the session and are **not** the current blocker:
+
+### Preview / annotation / UI fixes
+- Wrong center overlay / nav arrows issue fixed
+- Select tool state bug fixed
+- Annotation geometry/release update fixes added
+- First annotation-session initialization fixed
+- Timeline reset after switching to shorter media fixed
+- Controls/zoom bug fixed
+- Controls set to always visible
+- Annotation on video now works
+- Annotation export now works
+
+Key source areas touched earlier included:
 - `native/qt6/src/preview_overlay.cpp`
 - `native/qt6/src/preview_overlay.h`
 - `native/qt6/src/annotation_layer.cpp`
 - `native/qt6/src/annotation_items.h`
 - `native/qt6/src/annotation_items.cpp`
 
-### Key successful code areas from earlier work
-These were repeatedly cited in-session as the active/fixed paths:
-- annotation event forwarding and overlay sync in `native/qt6/src/preview_overlay.cpp:2596-2652`
-- first-session deferred overlay resync in `native/qt6/src/preview_overlay.cpp:4421-4439`
-- annotation mode entry sync in `native/qt6/src/preview_overlay.cpp:4462-4490`
-- video export frame preference in `native/qt6/src/preview_overlay.cpp:4868-4883`
-- annotation release geometry update in `native/qt6/src/annotation_layer.cpp:202-210`
-- geometry mutation fixes in `native/qt6/src/annotation_items.h:123-126`, `native/qt6/src/annotation_items.h:147-149`, `native/qt6/src/annotation_items.h:169-171`, `native/qt6/src/annotation_items.h:191-196`
-- freehand growth fix in `native/qt6/src/annotation_items.cpp:269-277`
+These are not the current investigation target unless a new regression appears.
 
-### Planning files that were updated earlier
-Phase 03 planning/status was revised to reflect real defect-driven scope:
-- `.planning/REQUIREMENTS.md`
-- `.planning/ROADMAP.md`
-- `.planning/STATE.md`
-- `.planning/phases/03-preserve-annotation-on-video-and-sequences/03-01-PLAN.md`
+### Batch Rename fix
+Batch Rename was failing earlier and was later reported by the user as passing.
 
----
+The fix was applied in:
+- `native/qt6/src/bulk_rename_dialog.cpp`
 
-## Build environment status
-A build recovery was completed earlier and was required before functional work could continue.
+Intent of the fix:
+- repair broken file-rename execution path
+- add destination-path conflict detection in preview so collisions are caught before apply
 
-### Important build facts
-- The stale `build-linux` tree was tied to another worktree and was not reliable.
-- A clean working build tree was established at:
-  - `build-linux-recovery-native-qt6`
-- The app was rebuilt successfully from that tree multiple times.
+User later verified:
+- Batch Rename: pass
 
-### Vendor CMake export fixes were applied earlier
-The following generated package/export files were patched to point to this checkout so configure/build would work again:
-- `third_party/tlRender-install-Release/lib/cmake/SVT-AV1/SVT-AV1-staticTargets.cmake`
-- `third_party/tlRender-install-Release/lib/cmake/SVT-AV1/SVT-AV1-staticTargets-release.cmake`
-- `third_party/tlRender-install-Release/lib/cmake/libjpeg-turbo/libjpeg-turboTargets.cmake`
-- `third_party/tlRender-install-Release/lib/cmake/libjpeg-turbo/libjpeg-turboTargets-release.cmake`
-- `third_party/tlRender-install-Release/lib64/cmake/OpenImageIO/OpenImageIOConfig.cmake`
-- `third_party/tlRender-install-Release/lib64/cmake/minizip-ng/minizip-ng.cmake`
-- `third_party/tlRender-install-Release/share/opentime/OpenTimeTargets.cmake`
-- `third_party/tlRender-install-Release/share/opentime/OpenTimeTargets-release.cmake`
-- `third_party/tlRender-install-Release/share/opentimelineio/OpenTimelineIOTargets.cmake`
-- `third_party/tlRender-install-Release/share/opentimelineio/OpenTimelineIOTargets-release.cmake`
-
-### Working build/run commands used in session
-From repo root:
-- build: `cmake --build build-linux-recovery-native-qt6 -j 2`
-- app run: `./build-linux-recovery-native-qt6/kassetmanagerqt`
-
-Note: there was repeated discussion that “build succeeded” only meant compile/link succeeded, not that overall quality/warnings were acceptable. Treat build output quality as its own gate.
+Do not reopen Batch Rename unless the user reports a new failure.
 
 ---
 
-## Playback-core work: what was done, what failed, and what remains
-This is the main unfinished workstream.
+## Playback investigation summary
 
-### Goal
-Fix real-time playback under Wayland for problematic MOV files, especially:
+### Exact external fixture root to use
+Only this fixture folder should be used for playback validation:
+- `/mnt/ssd2/Tests/Videos/`
+
+Representative files used during the session:
+- `/mnt/ssd2/Tests/Videos/Atmosphere-019.mov`
+- `/mnt/ssd2/Tests/Videos/Blood_Hit_03.mov`
+- `/mnt/ssd2/Tests/Videos/MEGY_comp_4K_LL180_ap0_r709g24_v015.mov`
+- `/mnt/ssd2/Tests/Videos/Sunshine 10sec Full Comp v3.mov`
+- `/mnt/ssd2/Tests/Videos/Shot_0140_v005.mov`
+
+### Important codec notes already observed in the session
+From `ffprobe` runs earlier in the session:
+- `Blood_Hit_03.mov`
+  - codec: png
+  - pixel format: rgba
+  - likely alpha-heavy stress case
+- `Sunshine 10sec Full Comp v3.mov`
+  - codec: prores
+  - pixel format: yuv422p10le
+  - 25 fps validation target
 - `Atmosphere-019.mov`
+  - codec: prores
+  - pixel format: yuv422p10le
+  - large/high-resolution stress case
 - `MEGY_comp_4K_LL180_ap0_r709g24_v015.mov`
+  - codec: hevc
+  - pixel format: yuv420p
+  - now passes in user runtime
 
-### Architecture established during investigation
-Wayland path uses raster fallback, not the native tlRender widget:
-- policy: `native/qt6/src/platform_session.h:38-41`
-- media architecture notes: `native/qt6/src/media/codemap.md:36-49`
-- raster widget creation: `native/qt6/src/media/tlrender_viewport.cpp:31-41`
-- raster frame pull path: `native/qt6/src/media/tlrender_viewport.cpp:153-173`
-- player frame acquisition path: `native/qt6/src/media/tlrender_player.cpp` around `getCurrentFrame(...)`
+### Playback harness implemented
+A real playback validation harness was added and is important context for the next agent.
 
-### Playback harness was added
-A real playback validation harness was created and is important for the next agent.
-
-Files added/changed for harness:
+Files added/updated for harnessing:
 - `native/qt6/tests/test_tlrender_playback_harness.cpp`
 - `native/qt6/tests/CMakeLists.txt`
 - `native/qt6/src/media/tlrender_viewport.h`
 - `native/qt6/src/media/tlrender_viewport.cpp`
-- `native/qt6/src/media/tlrender_player.h`
-- `native/qt6/src/media/tlrender_player.cpp`
 
-### What the harness measures
-The harness was designed to measure actual viewer-side raster-presented frame progression, not just transport state.
-The viewport seam exposes current raster frame / presentation revision for test observation.
+Harness purpose:
+- measure viewer-side rendered frame progression
+- avoid relying only on timeline/play/pause state
+- validate real playback behavior on the external MOV fixtures
 
-Key harness/seam references used throughout session:
-- viewport seam: `native/qt6/src/media/tlrender_viewport.h:84-89`
-- raster presentation observation: `native/qt6/src/media/tlrender_viewport.cpp:153-194`
-- harness file: `native/qt6/tests/test_tlrender_playback_harness.cpp`
-- test target wiring: `native/qt6/tests/CMakeLists.txt:225-283`
+### Important harness findings from earlier passes
+These findings drove the later playback investigation:
 
-### Important harness evolution
-1. Initial harness version was invalid because it failed even on files the app could play.
-2. Harness was corrected to better match the real app path.
-3. After correction, it produced usable evidence.
+1. The initial harness version was invalid because it failed on files the app could play.
+2. The corrected harness later produced useful results.
+3. For `Sunshine 10sec Full Comp v3.mov`, viewer-side distinct frame cadence under the Wayland raster path was below target.
+4. Telemetry added earlier showed repeated fallback extraction and unsupported cached image type handling on some paths.
+5. `MEGY_comp_4K_LL180_ap0_r709g24_v015.mov` eventually became a pass in user runtime.
+6. `Atmosphere-019.mov` and `Shot_0140_v005.mov` remained the real blockers.
 
-### Most trustworthy harness findings before the session derailed
-#### A. Alpha MOV progression path works better than originally feared
-`Blood_Hit_03.mov` progression test passed after harness correction.
-
-#### B. 25fps ProRes target under-delivered viewer cadence
-`Sunshine 10sec Full Comp v3.mov` failed the 25fps viewer-side cadence threshold.
-At one key checkpoint it showed approximately:
-- viewer distinct fps: ~21.00–21.50
-- render signals: ~48–49
-- distinct player frames: ~43–47
-- fallback extractions: ~48
-- last cached image type: `26`
-
-This led to mapping tlRender image type `26` as:
+### Important tlRender image-type insight already established
+One earlier investigation identified `lastCachedImageType = 26` and mapped it to:
 - `ftk::ImageType::YUV_422P_U16`
-from:
-- `third_party/tlRender-install-Release/include/ftk/Core/Image.h`
 
-Conclusion from that phase:
-- current converter in `native/qt6/src/media/tlrender_player.cpp:72-123` was too narrow.
-- cached-frame conversion only handled a few formats such as `L_U8`, `RGB_U8`, `RGBA_U8`.
-- ProRes path was repeatedly falling back instead of using a cheap cached conversion.
+This was relevant for ProRes 10-bit fallback/conversion work.
 
-#### C. Real problematic fixtures were later switched to Atmosphere + MEGY
-User clarified the actual problem fixtures were not the small alpha test or mp4 control, but:
+### Current conclusion after user feedback
+Despite various fallback/conversion experiments, the only files still materially blocking the product are:
 - `Atmosphere-019.mov`
-- `MEGY_comp_4K_LL180_ap0_r709g24_v015.mov`
+- `Shot_0140_v005.mov`
 
-Harness was expanded to cover those.
+The rest of the playback list is either passing or no longer the priority.
 
-### Critical findings from the later harness runs on actual problematic fixtures
-At the point just before the session derailed, the most useful evidence was:
+---
 
-#### Atmosphere
-- no longer primarily fallback-bound after one partial conversion improvement pass
-- but raster viewport was under-presenting frames badly
-- user-visible/path summary in-session: viewport emitted only a tiny number of render signals compared with player frame progression
+## Very important architectural conclusion from the late-session debugging
 
-One explicitly recorded result after a failed attempted patch/revert cycle:
-- fixture: `native/qt6/tests/fixtures/videos/Atmosphere-019.mov`
-- distinct viewer fps: `2.00`
-- distinct frames: `4`
-- render signals: `19`
-- distinct player frames: `7`
-- fallback extractions: `7`
-- referenced harness area: `native/qt6/tests/test_tlrender_playback_harness.cpp:223-244`
+The user forced a crucial clarification that should guide the next agent:
 
-Interpretation from session:
-- Atmosphere remaining gate is primarily the Wayland raster presentation/refresh path in `native/qt6/src/media/tlrender_viewport.cpp`, not just conversion.
+### mpv is intended for video, but is not initializing in the current runtime
+User-provided runtime log showed:
+- `useMpv=1`
+- `mpvAvailable=0`
+- repeated message: `Non-C locale detected. This is not supported. Call 'setlocale(LC_NUMERIC, "C");' in your code.`
 
-#### MEGY
-- still associated with unsupported cached conversion / insufficient conversion path quality
-- one explicitly recorded failed result after attempted patch/revert cycle:
-- fixture: `native/qt6/tests/fixtures/videos/MEGY_comp_4K_LL180_ap0_r709g24_v015.mov`
-- distinct viewer fps: `5.00`
-- distinct frames: `10`
-- render signals: `17`
-- distinct player frames: `9`
-- fallback extractions: `1`
-- referenced harness area: `native/qt6/tests/test_tlrender_playback_harness.cpp:272-293`
+This means:
+- video files are intended to use mpv when available
+- but mpv is failing to initialize in the current runtime
+- therefore playback falls back to the non-mpv tlRender path
 
-Interpretation from session:
-- MEGY still needed better cached conversion support for the relevant YUV420 path.
+### Consequence
+For the user’s current runtime:
+- the failing MOV playback behavior is currently happening on the **tlRender fallback path**, not on a working mpv path
+- changing mpv rendering behavior was the wrong priority while `mpvAvailable=0`
 
-### Failed playback patch that must NOT be blindly trusted
-A later bounded playback-core patch was attempted and then explicitly reported as failed and reverted.
-According to the last reliable session summary, the following files were attempted then reverted because harness validation still failed:
+### User’s final product direction
+The user explicitly concluded that continuing to salvage the broken/unreliable tlRender MOV path is likely a waste of effort and pushed toward:
+- finding a Wayland-capable alternative for MOV playback across important codec groups
+- or at minimum stopping blind attempts to fix generic tlRender behavior without codec-aware handling
+
+The user also argued correctly that not all MOV codecs should share the same playback settings.
+
+### Codec-group requirement from the user
+The user explicitly requested codec-aware handling such as:
+- interframe compressed codecs
+- ProRes / editing mezzanine / 10-bit YUV422
+- alpha-heavy codecs / PNG / RGBA / ProRes 4444-style content
+- high-bandwidth / uncompressed-like content
+- possibly different handling for audio-heavy files
+
+That requirement should be carried forward.
+
+---
+
+## What code was touched during playback work
+
+### Files touched during various playback attempts
+These were part of the playback investigation and may contain partial/experimental changes:
 - `native/qt6/src/media/tlrender_player.cpp`
-- `native/qt6/src/media/tlrender_viewport.cpp`
-- `native/qt6/src/media/tlrender_viewport.h`
-
-Therefore: do not assume the last attempted playback patch is present. Re-check actual working tree state before continuing.
-
-### Strongest remaining playback hypotheses at handoff
-1. `native/qt6/src/media/tlrender_player.cpp` still needs direct cached conversion support for a missing YUV420 cached frame path relevant to MEGY.
-2. `native/qt6/src/media/tlrender_viewport.cpp` needs a more reliable playback-driven raster refresh/presentation path on Wayland for Atmosphere.
-3. The earlier partial YUV422/ProRes conversion work may or may not still exist in tree; verify actual current diff before further edits.
-
-### Files the next agent must inspect first for playback continuation
 - `native/qt6/src/media/tlrender_player.h`
-- `native/qt6/src/media/tlrender_player.cpp`
-- `native/qt6/src/media/tlrender_viewport.h`
 - `native/qt6/src/media/tlrender_viewport.cpp`
+- `native/qt6/src/media/tlrender_viewport.h`
+- `native/qt6/src/media/mpv_player.cpp`
+- `native/qt6/src/media/mpv_viewport.cpp`
 - `native/qt6/tests/test_tlrender_playback_harness.cpp`
-- `third_party/tlRender-install-Release/include/ftk/Core/Image.h`
-- `native/qt6/tests/CMakeLists.txt`
+
+### Important caution
+Many playback attempts were made, some were reverted, some were ineffective, and some were superseded.
+The next agent should not assume every playback-related modification in the tree is valuable just because it exists.
+
+The safe interpretation is:
+- harness work is useful and should likely be kept
+- user-verified passes are trustworthy
+- mpv-side tweaks made while `mpvAvailable=0` are low-confidence and likely irrelevant until mpv availability is actually fixed
+- tlRender fallback tuning was partially informative but did not solve the core remaining blockers
 
 ---
 
-## What the next agent should do first
-Use subagents for research/inspection as requested by user.
+## Specific ineffective or superseded directions
+The next agent should avoid repeating these mistakes without new evidence:
 
-### Immediate execution sequence recommended
-1. Read `AGENTS.md` and `.agent-workflow.md`.
-2. Verify current git working tree state/diff only once.
-3. Inspect only the playback files listed above.
-4. Confirm whether the reverted failed playback patch is actually absent/present.
-5. Build and run the existing harness unchanged first, using only project-local fixture files.
-6. From that baseline, patch only:
-   - cached YUV420 conversion in `native/qt6/src/media/tlrender_player.cpp`
-   - raster presentation refresh behavior in `native/qt6/src/media/tlrender_viewport.cpp`
-7. Rebuild harness.
-8. Rerun harness.
-9. Keep only changes that improve measured viewer-side cadence.
-10. Revert immediately if no improvement.
+1. **Patching mpv render/logging behavior while mpv is unavailable**
+   - This did not materially fix `Shot_0140_v005.mov`
+   - Some mpv-only changes were explicitly reverted after failing validation
 
-### Validation command previously used successfully in build dir
-From `build-linux-recovery-native-qt6`:
-- `cmake --build . --target test_tlrender_playback_harness -j 2`
-- `./tests/test_tlrender_playback_harness`
+2. **Blind tlRender fallback micro-fixes without codec-aware grouping**
+   - Some experiments improved specific cases but did not solve the real remaining blockers
+
+3. **Repeated reread loops**
+   - This consumed a huge amount of time and user trust
+   - The user explicitly demanded that future work avoid this
+
+4. **Assuming all MOV failures are the same**
+   - User made it clear different MOV codec families need different handling
 
 ---
 
-## User expectations and constraints that must be honored
-- User is highly frustrated by repeated rereading/looping.
-- User explicitly asked for subagent-heavy workflow for reading/inspection.
-- User explicitly asked to avoid assumption and avoid broad search.
-- User explicitly requires no writes outside the project folder.
-- User wants a useful, sellable product and completion of all project phases.
-- User does not want more process noise in `AGENTS.md`; persistent execution rules were moved to `.agent-workflow.md`.
-- User demanded that if a patch fails validation it must be reverted immediately.
+## Current verified runtime matrix
 
-### Behavioral warning for next agent
-This session went badly because the agent repeatedly:
-- reread the same files
-- restated the same plan
-- delayed implementation
-- used main-thread analysis instead of subagents
+### Pass
+- `MEGY_comp_4K_LL180_ap0_r709g24_v015.mov`
+- Annotation on video
+- Annotation export
+- Thumbnails/scrubbing
+- Project Manager
+- Batch Rename
+- Bundled converters
 
-Do not repeat that. Use the execution contract.
+### Fail
+- `Atmosphere-019.mov`
+- `Shot_0140_v005.mov` (still too choppy)
+
+### Not current priority
+- `Blood_Hit_03.mov`
+- `Sunshine 10sec Full Comp v3.mov`
+
+These were important in earlier harness work but are not the user’s current blocking cases.
 
 ---
 
-## Files/documents that matter for full continuation
-### Repo policy / workflow
+## Commands used successfully in the session
+
+### Build app
+```bash
+cmake --build build-linux-recovery-native-qt6 --target kassetmanagerqt -j 2
+```
+
+### Run app
+```bash
+./build-linux-recovery-native-qt6/kassetmanagerqt
+```
+
+### Build harness target
+```bash
+cmake --build build-linux-recovery-native-qt6 --target test_tlrender_playback_harness -j 2
+```
+
+### Run harness from build dir
+```bash
+./tests/test_tlrender_playback_harness
+```
+
+---
+
+## Most important user directives to preserve
+
+These were not preferences; they were explicit behavioral corrections from the user.
+
+1. **Do not assume anything.**
+2. **Respect explicit paths and scope boundaries.**
+3. **Use subagents for research/inspection as much as possible.**
+4. **Do not reread files repeatedly.**
+5. **Do not broad-search external storage.** Only use `/mnt/ssd2/Tests/Videos/` for fixtures.
+6. **One bounded milestone at a time.**
+7. **Patch / build / test / revert** is preferred over analysis loops.
+8. **If a fix fails, revert it rather than leaving speculative code hanging.**
+9. **The next real engineering focus should be MOV playback only** until the remaining blockers are solved.
+10. The user explicitly became frustrated that too much time was spent rereading and not enough time spent implementing.
+
+---
+
+## Best next step for the next agent
+
+Do **not** restart from broad architecture reading.
+
+### Recommended next milestone
+Focus only on the remaining playback blockers:
+1. `Atmosphere-019.mov`
+2. `Shot_0140_v005.mov`
+
+### Recommended approach
+Given the final user feedback, the next agent should likely:
+
+1. confirm whether mpv initialization is still failing **after** the locale fix now present in `native/qt6/src/media/mpv_player.cpp`
+2. if mpv still does not initialize, stop spending time on mpv behavior tuning and treat the product as effectively running on the tlRender fallback path
+3. decide whether to:
+   - make tlRender codec-group aware in a more deliberate way, or
+   - introduce a different Wayland-capable playback strategy for important MOV codec groups
+4. keep validation strictly limited to:
+   - `/mnt/ssd2/Tests/Videos/Atmosphere-019.mov`
+   - `/mnt/ssd2/Tests/Videos/Shot_0140_v005.mov`
+
+### If using the harness again
+Use the existing playback harness, but keep fixture coverage focused on the actual failing files rather than the earlier broader set.
+
+---
+
+## Files the next agent is most likely to need
+
+### Workflow / state
 - `AGENTS.md`
 - `.agent-workflow.md`
+- `HANDOFF.md`
 
-### Planning / project state
+### Planning
 - `.planning/REQUIREMENTS.md`
 - `.planning/ROADMAP.md`
 - `.planning/STATE.md`
 - `.planning/phases/03-preserve-annotation-on-video-and-sequences/03-01-PLAN.md`
 
-### Annotation / fullscreen preview
+### Verified feature areas
 - `native/qt6/src/preview_overlay.cpp`
 - `native/qt6/src/preview_overlay.h`
 - `native/qt6/src/annotation_layer.cpp`
 - `native/qt6/src/annotation_items.h`
 - `native/qt6/src/annotation_items.cpp`
+- `native/qt6/src/bulk_rename_dialog.cpp`
 
-### Playback core / tests
-- `native/qt6/src/media/tlrender_player.h`
+### Playback core
 - `native/qt6/src/media/tlrender_player.cpp`
-- `native/qt6/src/media/tlrender_viewport.h`
+- `native/qt6/src/media/tlrender_player.h`
 - `native/qt6/src/media/tlrender_viewport.cpp`
-- `native/qt6/src/platform_session.h`
-- `native/qt6/tests/CMakeLists.txt`
-- `native/qt6/tests/test_tlrender_playback_harness.cpp`
-- `third_party/tlRender-install-Release/include/ftk/Core/Image.h`
-
-### Architecture references
-- `codemap.md`
-- `native/codemap.md`
-- `native/qt6/codemap.md`
-- `native/qt6/src/codemap.md`
+- `native/qt6/src/media/tlrender_viewport.h`
+- `native/qt6/src/media/mpv_player.cpp`
+- `native/qt6/src/media/mpv_player.h`
+- `native/qt6/src/media/mpv_viewport.cpp`
+- `native/qt6/src/media/mpv_viewport.h`
 - `native/qt6/src/media/codemap.md`
+- `native/qt6/tests/test_tlrender_playback_harness.cpp`
+- `native/qt6/tests/CMakeLists.txt`
+
+### File classification / preview routing
+- `native/qt6/src/file_utils.cpp`
+- `native/qt6/src/live_preview_manager.cpp`
+- `native/qt6/src/video_metadata.h`
+- `native/qt6/src/video_metadata.cpp`
+
+### Third-party type reference used earlier
+- `third_party/tlRender-install-Release/include/ftk/Core/Image.h`
 
 ---
 
-## Final concise state
-### Confirmed fixed by user
-- nav arrows
-- timeline reset after shorter media
-- fullscreen zoom regression
-- controls always visible
-- first annotation-session initialization
+## Final concise state for the next agent
 
-### Implemented but playback still unfinished
-- playback harness and viewport observation seam
-- telemetry for player frame acquisition path
-- several attempted playback-core fixes, including at least one failed/reverted patch cycle
+### Good
+- App builds locally
+- Annotation path works
+- Export works
+- Scrubbing/thumbnails work
+- Project Manager works
+- Batch Rename works
+- Bundled converters work
+- MEGY playback works
 
-### Main unresolved issue
-Wayland raster playback for the real problematic MOV fixtures remains under target and needs further bounded work in:
-- `native/qt6/src/media/tlrender_player.cpp`
-- `native/qt6/src/media/tlrender_viewport.cpp`
+### Bad
+- Atmosphere playback still fails
+- Shot_0140 playback still too choppy
 
-### Do next
-Resume only the playback-core milestone, using the harness and the two real fixtures as the gate.
+### Main lesson from this session
+Do not waste time on repeated rereads or on mpv tuning unless mpv is proven available at runtime. The remaining work must be tight, codec-aware, and validated only against the real failing files.

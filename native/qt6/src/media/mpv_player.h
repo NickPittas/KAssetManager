@@ -23,6 +23,7 @@ public:
     void loadMedia(const QString& filePath);
     void unloadMedia();
     bool hasMedia() const;
+    bool isViewportReady() const { return m_viewportReady; }
 
     void play();
     void pause();
@@ -63,6 +64,7 @@ signals:
     void error(const QString& errorString);
     void endOfStream();
     void frameUpdated();
+    void viewportReadyChanged(bool ready);
 
 private slots:
     void onMpvEvents();
@@ -73,6 +75,7 @@ private:
     void updatePlaybackStateFromPause(bool paused);
     void updateMediaInfoFromCore();
     double fpsOrDefault() const;
+    void setViewportReady(bool ready);
 
     const LibMpvRuntime& m_runtime;
     mpv_handle* m_mpv{nullptr};
@@ -89,6 +92,7 @@ private:
     qint64 m_totalFrames{0};
     float m_volume{1.0f};
     bool m_muted{false};
+    bool m_viewportReady{false};
     double m_playbackRate{1.0};
 };
 

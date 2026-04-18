@@ -64,9 +64,13 @@ void FileOpsProgressDialog::refreshList()
     for (const auto &it : items) {
         if (it.status == "Queued" || it.status == "In Progress") {
             anyActive = true;
-            QString text = QString("#%1  %2  (%3/%4)  %5")
+            const int percent = it.totalWork > 0
+                ? int((100.0 * double(it.completedWork)) / double(it.totalWork))
+                : 0;
+            QString text = QString("#%1  %2  %3%  (%4/%5 files)  %6")
                                .arg(it.id)
                                .arg(it.type == FileOpsQueue::Type::Copy ? "Copy" : it.type == FileOpsQueue::Type::Move ? "Move" : "Delete")
+                               .arg(percent)
                                .arg(it.completedFiles)
                                .arg(it.totalFiles)
                                .arg(it.status);
@@ -80,7 +84,7 @@ void FileOpsProgressDialog::refreshList()
     }
 }
 
-void FileOpsProgressDialog::onProgress(int current, int total, const QString& currentFile)
+void FileOpsProgressDialog::onProgress(qint64 current, qint64 total, const QString& currentFile)
 {
     if (total <= 0) { bar->setRange(0,0); return; }
     bar->setRange(0, 1000);
@@ -94,10 +98,11 @@ void FileOpsProgressDialog::onProgress(int current, int total, const QString& cu
 
 void FileOpsProgressDialog::onCurrentChanged(const FileOpsQueue::Item& item)
 {
+    const QString target = item.destination.isEmpty() ? QStringLiteral("current location") : item.destination;
     label->setText(QString("%1: %2 item(s) -> %3").arg(
         item.type == FileOpsQueue::Type::Copy ? "Copy" : item.type == FileOpsQueue::Type::Move ? "Move" : "Delete",
         QString::number(item.totalFiles),
-        item.destination));
+        target));
     // Indeterminate until we get explicit progress
     bar->setRange(0, 0);
     bar->setValue(0);
@@ -120,4 +125,3 @@ void FileOpsProgressDialog::onItemFinished(int, bool success, const QString& err
     }
     if (!anyActive) close();
 }
-

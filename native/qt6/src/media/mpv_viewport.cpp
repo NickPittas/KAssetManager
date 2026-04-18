@@ -45,7 +45,6 @@ public:
     {
         auto* item = static_cast<MpvQuickItem*>(fboItem);
         m_mpvHandle = item->mpvHandle();
-        MPV_LOG("synchronize: mpvHandle=%p", m_mpvHandle);
     }
 
     // Called on render thread when FBO needs (re)creation — GL context is valid here
@@ -65,16 +64,13 @@ public:
     // Called on render thread to render a frame into the FBO
     void render() override
     {
-        MPV_LOG("render: m_renderContext=%p", m_renderContext);
         if (!m_renderContext) {
             return;
         }
 
-        const uint64_t updateFlags = m_runtime.render_context_update(m_renderContext);
-        MPV_LOG("  render_context_update flags=%llu", static_cast<unsigned long long>(updateFlags));
+        m_runtime.render_context_update(m_renderContext);
 
         auto* fbo = framebufferObject();
-        MPV_LOG("  FBO handle=%u size=%dx%d", fbo->handle(), fbo->width(), fbo->height());
         const auto dpr = m_item->window() ? m_item->window()->devicePixelRatio() : 1.0;
         const int w = static_cast<int>(fbo->width() * dpr);
         const int h = static_cast<int>(fbo->height() * dpr);
@@ -91,10 +87,8 @@ public:
             {MPV_RENDER_PARAM_INVALID, nullptr}
         };
 
-        MPV_LOG("  calling render_context_render w=%d h=%d", w, h);
         m_runtime.render_context_render(m_renderContext, params);
         m_runtime.render_context_report_swap(m_renderContext);
-        MPV_LOG("  render_context_render returned");
 
         // Signal the item that a frame was rendered
         if (m_item) {

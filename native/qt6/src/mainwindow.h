@@ -228,6 +228,8 @@ private:
     QModelIndex fmIndexForPath(const QString& path);
     void fmRefreshTreeModel();
     void releaseAnyPreviewLocksForPaths(const QStringList& paths);
+    void queueFmFileOperation(const QStringList& sources, const QString& destDir, bool moveRequested);
+    void refreshFileManagerViewsForPaths(const QStringList& paths, const QString& destination = QString());
     void importToAssetLibrary(const QStringList& filePaths, const QStringList& folderPaths);
     void updateFmInfoPanel();
     void fmNavigateToPath(const QString& path, bool addToHistory = true);
@@ -508,6 +510,8 @@ private:
     // Helpers for tree/context operations
     QStringList getSelectedFmTreePaths() const;
     void onFmPasteInto(const QString& destDir);
+    bool confirmAndQueueFmDelete(const QStringList& paths, bool permanentDelete);
+    void showFileOpsDialog();
     void doPermanentDelete(const QStringList& paths);
 
     QSlider *fmPositionSlider;
@@ -676,6 +680,7 @@ private:
     void pmNavigateBack();
     void pmNavigateUp();
     QStringList getSelectedPmAssetPaths() const;
+    QString pmCurrentDestinationDir() const;
     void restoreProjectManagerState();
     void saveProjectManagerState(QSettings& s);
     QModelIndex pmIndexForProjectId(int projectId) const;

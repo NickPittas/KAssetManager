@@ -2,6 +2,7 @@
 #include "db.h"
 #include "i_asset_database.h"
 #include "log_manager.h"
+#include "project_path_utils.h"
 #include <QFileInfo>
 #include <QDir>
 #include <QDirIterator>
@@ -230,7 +231,7 @@ bool Importer::importFolderContents(const QString& dirPath, int targetFolderId) 
 
     // Helper to normalize paths for consistent comparison
     auto normalizePath = [](const QString& p) -> QString {
-        return QDir::cleanPath(p).toLower();
+        return ProjectPathUtils::keyForPath(p);
     };
 
     // Build subfolders directly under target folder (breadth-first)

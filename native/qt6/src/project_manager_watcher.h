@@ -85,6 +85,9 @@ private:
     
     // Project ID -> root watch path
     QHash<int, QString> m_projectPaths;
+
+    // Project ID -> exact watched directory paths
+    QHash<int, QStringList> m_projectWatchedDirs;
     
     // Watch path -> project ID (for quick lookup)
     QHash<QString, int> m_pathToProject;

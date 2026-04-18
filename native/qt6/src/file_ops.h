@@ -16,8 +16,10 @@ public:
         QStringList sources;
         QString destination; // For Copy/Move
         QString status; // Queued, In Progress, Completed, Cancelled, Failed
-        int completedFiles = 0;
-        int totalFiles = 0;
+        qint64 completedFiles = 0;
+        qint64 totalFiles = 0;
+        qint64 completedWork = 0;
+        qint64 totalWork = 0;
         QString currentFile;
         QString error;
         bool permanentDelete = false; // For Delete operations: true = permanent, false = Recycle Bin
@@ -39,7 +41,7 @@ public:
 
 signals:
     void queueChanged();
-    void progressChanged(int current, int total, const QString& currentFile);
+    void progressChanged(qint64 current, qint64 total, const QString& currentFile);
     void currentItemChanged(const FileOpsQueue::Item& item);
     void itemFinished(int id, bool success, const QString& error);
 
@@ -69,4 +71,3 @@ private:
     QFuture<void> m_future;
     QFutureWatcher<void> m_watcher;
 };
-

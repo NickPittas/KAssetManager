@@ -125,7 +125,7 @@ signals:
     void activated();  // Emitted when pane receives focus/click
     void fileDoubleClicked(const QString &path);
     void contextMenuRequested(const QPoint &globalPos);
-    void filesDropped(const QStringList &paths, const QString &targetDir);  // Emitted when files dropped
+    void filesDropped(const QStringList &paths, const QString &targetDir, bool moveRequested);  // Emitted when files dropped
 
 protected:
     void focusInEvent(QFocusEvent *event) override;

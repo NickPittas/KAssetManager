@@ -53,6 +53,7 @@ private:
     QLabel* cacheSizeLabel;
     QPushButton* clearCacheBtn;
     QSpinBox* maxCacheSizeSpin;
+    QSpinBox* imageMemoryLimitSpin;
 
     // Sequence cache settings
     QSpinBox* sequenceCacheSizeSpin;
@@ -89,4 +90,3 @@ private:
     QLabel* qtVersionLabel;
     QTextEdit* licensesText;
 };
-

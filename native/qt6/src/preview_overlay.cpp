@@ -1835,7 +1835,6 @@ void PreviewOverlay::showVideo(const QString &filePath)
 #endif
     if (m_renderWidget) {
         m_renderWidget->setFrameView(true);
-        m_renderWidget->prepareForMpvPlayback();
     }
     m_player->loadMedia(filePath);
     PLAYER_PLAY();

@@ -1,5 +1,6 @@
 #include "settings_dialog.h"
 #include "db.h"
+#include "image_memory_limits.h"
 #include "live_preview_manager.h"
 #include "thumbnail_cache_manager.h"
 #include "theme_manager.h"
@@ -159,6 +160,26 @@ void SettingsDialog::setupCacheTab()
     clearCacheBtn->setProperty("class", "danger");
     connect(clearCacheBtn, &QPushButton::clicked, this, &SettingsDialog::onClearCache);
     cacheLayout->addWidget(clearCacheBtn);
+
+    QHBoxLayout* imageMemoryLayout = new QHBoxLayout();
+    QLabel* imageMemoryLabel = new QLabel("Image memory limit:", cacheGroup);
+    imageMemoryLayout->addWidget(imageMemoryLabel);
+
+    imageMemoryLimitSpin = new QSpinBox(cacheGroup);
+    imageMemoryLimitSpin->setRange(512, 262144);
+    imageMemoryLimitSpin->setSingleStep(512);
+    imageMemoryLimitSpin->setSuffix(" MB");
+    imageMemoryLimitSpin->setValue(static_cast<int>(ImageMemoryLimits::configuredImageMemoryLimitMb()));
+    imageMemoryLayout->addWidget(imageMemoryLimitSpin);
+    imageMemoryLayout->addStretch();
+    cacheLayout->addLayout(imageMemoryLayout);
+
+    QLabel* imageMemoryHelp = new QLabel(
+        QString("Used when loading large source images for previews. Default on this machine: %1 MB.")
+            .arg(ImageMemoryLimits::defaultImageMemoryLimitMb()),
+        cacheGroup);
+    imageMemoryHelp->setWordWrap(true);
+    cacheLayout->addWidget(imageMemoryHelp);
 
     layout->addWidget(cacheGroup);
 
@@ -892,6 +913,10 @@ void SettingsDialog::loadSettings()
         themeCombo->setCurrentIndex(themeIndex);
     }
 
+    if (imageMemoryLimitSpin) {
+        imageMemoryLimitSpin->setValue(static_cast<int>(ImageMemoryLimits::configuredImageMemoryLimitMb()));
+    }
+
     if (ocioEnabledCheck) {
         ocioEnabledCheck->setChecked(s.value(kOcioEnabledSetting, true).toBool());
     }
@@ -953,6 +978,9 @@ void SettingsDialog::saveSettings()
         int cacheSize = maxCacheSizeSpin->value();
         LivePreviewManager::instance().setMaxCacheEntries(cacheSize);
         s.setValue("LivePreview/MaxCacheEntries", cacheSize);
+    }
+    if (imageMemoryLimitSpin) {
+        s.setValue("Images/MemoryLimitMB", imageMemoryLimitSpin->value());
     }
 
     // Save sequence cache settings
@@ -1065,5 +1093,4 @@ void SettingsDialog::updateSequenceCacheMemoryLabel()
 
     sequenceCacheMemoryLabel->setText(text);
 }
-
 

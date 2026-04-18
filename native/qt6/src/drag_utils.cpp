@@ -3,12 +3,18 @@
 #include <QMimeData>
 #include <QUrl>
 #include <QApplication>
+#include <QDir>
 #include <QFileInfo>
 #include <QDebug>
 #include <QTemporaryDir>
 #include <QFile>
 #include <QDesktopServices>
 #include <QCoreApplication>
+#ifdef Q_OS_LINUX
+#include <QDBusConnection>
+#include <QDBusInterface>
+#include <QDBusReply>
+#endif
 #ifdef _WIN32
 #include <windows.h>
 #include <shellapi.h>
@@ -87,6 +93,31 @@ bool DragUtils::showInExplorer(const QString &path) {
     HRESULT hr = SHOpenFolderAndSelectItems(pidl, 0, nullptr, 0);
     ILFree(pidl);
     return SUCCEEDED(hr);
+#elif defined(Q_OS_LINUX)
+    const QFileInfo fi(path);
+    const QString targetPath = fi.exists() ? fi.absoluteFilePath() : path;
+    const QUrl targetUrl = QUrl::fromLocalFile(targetPath);
+
+    QDBusInterface fileManager(
+        QStringLiteral("org.freedesktop.FileManager1"),
+        QStringLiteral("/org/freedesktop/FileManager1"),
+        QStringLiteral("org.freedesktop.FileManager1"),
+        QDBusConnection::sessionBus());
+
+    if (fileManager.isValid()) {
+        const QStringList uris{targetUrl.toString()};
+        const QDBusReply<void> reply = fileManager.call(
+            QStringLiteral("ShowItems"),
+            uris,
+            QString());
+        if (reply.isValid()) {
+            return true;
+        }
+        qWarning() << "[DragUtils] FileManager1 ShowItems failed for" << path << ':' << reply.error().message();
+    }
+
+    const QString fallbackPath = fi.isDir() ? fi.absoluteFilePath() : fi.absolutePath();
+    return QDesktopServices::openUrl(QUrl::fromLocalFile(fallbackPath));
 #else
     QFileInfo fi(path);
     return QDesktopServices::openUrl(QUrl::fromLocalFile(fi.absolutePath()));

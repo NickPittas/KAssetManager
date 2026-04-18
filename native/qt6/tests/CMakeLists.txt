@@ -25,6 +25,21 @@ target_include_directories(test_db PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
 
 add_test(NAME test_db COMMAND test_db)
 
+# Test executable: test_project_db
+add_executable(test_project_db
+    test_project_db.cpp
+    ../src/project_db.cpp
+    ../src/project_db.h
+    ../src/project_path_utils.h
+    ../src/log_manager.cpp
+    ../src/log_manager.h
+)
+
+target_link_libraries(test_project_db PRIVATE Qt6::Test Qt6::Sql Qt6::Core)
+target_include_directories(test_project_db PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+
+add_test(NAME test_project_db COMMAND test_project_db)
+
 # Test executable: test_models
 add_executable(test_models
     test_models.cpp
@@ -57,7 +72,7 @@ add_test(NAME test_sequence_detector COMMAND test_sequence_detector)
 set_tests_properties(test_sequence_detector PROPERTIES WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/install_run/bin")
 
 # Install test executables to bin directory
-install(TARGETS test_simple test_db test_models test_sequence_detector DESTINATION bin)
+install(TARGETS test_simple test_db test_project_db test_models test_sequence_detector DESTINATION bin)
 
 
 # Test executable: test_importer
@@ -105,6 +120,8 @@ add_executable(test_live_preview_manager
     test_live_preview_manager.cpp
     ../src/live_preview_manager.cpp
     ../src/live_preview_manager.h
+    ../src/image_memory_limits.cpp
+    ../src/image_memory_limits.h
     ../src/thumbnail_cache_manager.cpp
     ../src/thumbnail_cache_manager.h
     ../src/oiio_image_loader.cpp

@@ -15,6 +15,7 @@
 #include <QThread>
 #include <QSettings>
 
+#include "converter_tool_resolver.h"
 #include "media_converter_worker.h"
 
 class MediaConvertDialog : public QDialog {
@@ -43,8 +44,8 @@ private:
     void buildUi();
     void loadSettings();
     void saveSettings();
-    QString locateFfmpeg() const;
-    QString locateMagick() const;
+    ConverterToolResolution locateFfmpeg() const;
+    ConverterToolResolution locateMagick() const;
 
     bool validateAndBuildTasks(QVector<MediaConverterWorker::Task>& outTasks, QString& error);
     static bool isVideoExt(const QString& ext);
@@ -93,9 +94,8 @@ private:
 
     // Worker
     QThread m_thread; MediaConverterWorker* m_worker = nullptr;
-    QString m_ffmpeg;
-    QString m_magick;
+    ConverterToolResolution m_ffmpegResolution;
+    ConverterToolResolution m_magickResolution;
     int m_total = 0;
     bool m_running = false;
 };
-

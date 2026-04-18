@@ -12,6 +12,7 @@
 #include <QCoreApplication>
 #include <QKeyEvent>
 #include <QWindow>
+#include <QTimer>
 
 #ifdef HAVE_TLRENDER
 #include <tlRender/Timeline/Player.h>
@@ -63,6 +64,7 @@ void TLRenderViewport::prepareForMpvPlayback()
     ensureMpvViewport();
     m_mpvViewport->setPlayer(m_player->mpvPlayer());
     m_mpvViewport->setVisible(true);
+    m_mpvViewport->raise();
 #ifdef HAVE_TLRENDER
     if (m_rasterLabel) {
         m_rasterLabel->setVisible(false);
@@ -73,6 +75,11 @@ void TLRenderViewport::prepareForMpvPlayback()
 #endif
     m_mpvViewport->update();
     QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+    QTimer::singleShot(0, m_mpvViewport, [viewport = m_mpvViewport]() {
+        if (viewport) {
+            viewport->update();
+        }
+    });
 }
 
 void TLRenderViewport::ensureMpvViewport()
@@ -97,6 +104,9 @@ void TLRenderViewport::setPlayer(TLRenderPlayer* player)
     // Disconnect from previous player
     if (m_player) {
         disconnect(m_player, nullptr, this, nullptr);
+        if (m_player->mpvPlayer()) {
+            disconnect(m_player->mpvPlayer(), nullptr, this, nullptr);
+        }
     }
 
     if (m_presentationTimer) {
@@ -117,6 +127,15 @@ void TLRenderViewport::setPlayer(TLRenderPlayer* player)
 
 #ifdef HAVE_TLRENDER
     if (player) {
+        if (auto* mpvPlayer = player->mpvPlayer()) {
+            connect(mpvPlayer, &MpvPlayer::viewportReadyChanged, this, [this](bool ready) {
+                syncBackendWidgetVisibility();
+                syncPresentationTimer();
+                if (ready) {
+                    prepareForMpvPlayback();
+                }
+            });
+        }
         // Connect to media loaded signal to setup viewport when player has content
         connect(player, &TLRenderPlayer::mediaInfoReady, this, &TLRenderViewport::onMediaLoaded);
         connect(player, &TLRenderPlayer::playbackStateChanged, this, [this](TLRenderPlayer::PlaybackState) {
@@ -166,9 +185,8 @@ void TLRenderViewport::onMediaLoaded(const TLRenderPlayer::MediaInfo& info)
     m_mediaFps = info.fps > 0.0 ? info.fps : 24.0;
     syncBackendWidgetVisibility();
     if (useMpvViewport()) {
-        if (m_mpvViewport) {
-            m_mpvViewport->update();
-        }
+        prepareForMpvPlayback();
+        syncPresentationTimer();
         return;
     }
 #ifdef HAVE_TLRENDER
@@ -191,6 +209,9 @@ void TLRenderViewport::syncBackendWidgetVisibility()
     }
     if (m_mpvViewport) {
         m_mpvViewport->setVisible(mpvActive);
+    }
+    if (mpvActive && m_presentationTimer) {
+        m_presentationTimer->stop();
     }
 #ifdef HAVE_TLRENDER
     if (m_rasterLabel) {
@@ -218,7 +239,10 @@ void TLRenderViewport::syncPresentationTimer()
         m_presentationTimer->stop();
         return;
     }
-
+    if (m_player->mpvPlayer() && m_player->mpvPlayer()->hasMedia()) {
+        m_presentationTimer->stop();
+        return;
+    }
     if (m_player->playbackState() != TLRenderPlayer::PlaybackState::Playing) {
         m_presentationTimer->stop();
         return;
@@ -284,6 +308,9 @@ void TLRenderViewport::updateRasterFrame()
     }
 #ifdef HAVE_TLRENDER
     if (!m_rasterLabel || !m_player) {
+        return;
+    }
+    if (m_player->mpvPlayer() && m_player->mpvPlayer()->hasMedia()) {
         return;
     }
 
@@ -598,5 +625,8 @@ bool TLRenderViewport::eventFilter(QObject* watched, QEvent* event)
 
 bool TLRenderViewport::useMpvViewport() const
 {
-    return m_player && m_player->mpvPlayer() && m_player->mpvPlayer()->hasMedia();
+    return m_player
+        && m_player->mpvPlayer()
+        && m_player->mpvPlayer()->hasMedia()
+        && m_player->mpvPlayer()->isViewportReady();
 }

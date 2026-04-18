@@ -1,4 +1,5 @@
 #include "media_converter_worker.h"
+#include "converter_tool_resolver.h"
 #include "utils.h"
 
 #include <QFileInfo>
@@ -204,9 +205,7 @@ QString MediaConverterWorker::uniqueOutPath(const QString& basePath)
 bool MediaConverterWorker::probeDurationMs(const QString& ffmpeg, const QString& input, qint64& durMs, int& w, int& h, QString& err)
 {
     durMs = 0; w = 0; h = 0;
-    // Use ffprobe next to ffmpeg if possible
-    QString ffprobe = QFileInfo(ffmpeg).dir().filePath("ffprobe.exe");
-    if (!QFileInfo::exists(ffprobe)) ffprobe = "ffprobe"; // try PATH
+    const QString ffprobe = resolveFfprobeForFfmpeg(ffmpeg);
 
     QProcess p; QStringList a;
     a << "-v" << "error" << "-select_streams" << "v:0" << "-show_entries" << "stream=width,height" << "-of" << "default=nw=1:nk=1" << input;
@@ -228,11 +227,15 @@ bool MediaConverterWorker::probeDurationMs(const QString& ffmpeg, const QString&
     return true;
 }
 
+QString MediaConverterWorker::resolveFfprobeForFfmpeg(const QString& ffmpegPath)
+{
+    return resolveSiblingFfprobePath(ffmpegPath);
+}
+
 double MediaConverterWorker::probeAvgFps(const QString& ffmpeg, const QString& input)
 {
     // Use ffprobe to fetch avg_frame_rate as a rational (e.g., 30000/1001)
-    QString ffprobe = QFileInfo(ffmpeg).dir().filePath("ffprobe.exe");
-    if (!QFileInfo::exists(ffprobe)) ffprobe = "ffprobe";
+    const QString ffprobe = resolveFfprobeForFfmpeg(ffmpeg);
     QProcess p; QStringList a;
     a << "-v" << "error" << "-select_streams" << "v:0" << "-show_entries" << "stream=avg_frame_rate" << "-of" << "default=nw=1:nk=1" << input;
     p.start(ffprobe, a); p.waitForFinished(5000);
@@ -456,8 +459,7 @@ bool MediaConverterWorker::buildCommand(const Task& t, QString& program, QString
 
         // Determine if we should preserve alpha and set appropriate pixel format
         auto ffprobeHasAlpha = [&](const QString& inputPath)->bool {
-            QString ffprobe = QFileInfo(m_ffmpegPath).dir().filePath("ffprobe.exe");
-            if (!QFileInfo::exists(ffprobe)) ffprobe = "ffprobe";
+            const QString ffprobe = resolveFfprobeForFfmpeg(m_ffmpegPath);
             QProcess p; QStringList a;
             a << "-v" << "error" << "-select_streams" << "v:0" << "-show_entries" << "stream=pix_fmt" << "-of" << "default=nw=1:nk=1" << inputPath;
             p.start(ffprobe, a); p.waitForFinished(4000);

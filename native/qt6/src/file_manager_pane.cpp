@@ -12,16 +12,25 @@
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
+#include <QApplication>
+#include <QDataStream>
+#include <QDragEnterEvent>
+#include <QDragMoveEvent>
+#include <QDropEvent>
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QHeaderView>
 #include <QFileInfo>
 #include <QDir>
+#include <QMimeData>
 #include <QSettings>
 #include <QFrame>
 #include <QFontDatabase>
 #include <QTime>
+#include <QUrl>
 #include <QImageReader>
+
+#include <algorithm>
 
 #if defined(HAVE_QT_PDF)
 #include <QPdfDocument>
@@ -925,7 +934,7 @@ void FileManagerPane::pasteFromClipboard()
     QString destDir = currentPath();
     if (destDir.isEmpty()) return;
     
-    emit filesDropped(m_clipboardPaths, destDir);
+    emit filesDropped(m_clipboardPaths, destDir, m_clipboardCutMode);
     
     // Clear clipboard if it was a cut operation
     if (m_clipboardCutMode) {
@@ -1206,6 +1215,104 @@ bool FileManagerPane::eventFilter(QObject *watched, QEvent *event)
     if (event->type() == QEvent::FocusIn || event->type() == QEvent::MouseButtonPress) {
         setActive(true);
     }
+
+    const bool viewViewport = (m_gridView && watched == m_gridView->viewport()) ||
+                              (m_listView && watched == m_listView->viewport());
+    if (viewViewport) {
+        auto destinationForEvent = [this, watched](const QPoint &pos) {
+            QAbstractItemView *view = (m_gridView && watched == m_gridView->viewport())
+                ? static_cast<QAbstractItemView*>(m_gridView)
+                : static_cast<QAbstractItemView*>(m_listView);
+            QModelIndex idx = view ? view->indexAt(pos) : QModelIndex();
+            QModelIndex srcIdx = idx;
+            if (idx.isValid() && m_proxyModel && idx.model() == m_proxyModel) {
+                srcIdx = m_proxyModel->mapToSource(idx);
+            }
+
+            if (idx.isValid() && m_dirModel && m_dirModel->isDir(srcIdx)) {
+                return m_dirModel->filePath(srcIdx);
+            }
+            return currentPath();
+        };
+
+        auto decodeDroppedSources = [](const QMimeData *mimeData) {
+            QStringList sources;
+            if (!mimeData) return sources;
+            if (mimeData->hasFormat("application/x-kasset-sequence-urls")) {
+                QByteArray enc = mimeData->data("application/x-kasset-sequence-urls");
+                QDataStream ds(&enc, QIODevice::ReadOnly);
+                ds >> sources;
+            } else if (mimeData->hasUrls()) {
+                for (const QUrl &url : mimeData->urls()) {
+                    if (url.isLocalFile()) sources << url.toLocalFile();
+                }
+            }
+            sources.removeDuplicates();
+            return sources;
+        };
+
+        auto sameFolderOnly = [](const QStringList &sources, const QString &destDir) {
+            if (sources.isEmpty() || destDir.isEmpty()) return false;
+            const QString normDest = QDir(QDir::cleanPath(destDir)).absolutePath().toLower();
+            return std::all_of(sources.cbegin(), sources.cend(), [&](const QString &source) {
+                QString parent = QFileInfo(source).absoluteDir().absolutePath();
+                parent = QDir::cleanPath(parent).toLower();
+                return parent == normDest;
+            });
+        };
+
+        if (event->type() == QEvent::DragEnter) {
+            auto *dragEvent = static_cast<QDragEnterEvent*>(event);
+            if (dragEvent->mimeData()->hasUrls() || dragEvent->mimeData()->hasFormat("application/x-kasset-sequence-urls")) {
+                const QString destDir = destinationForEvent(dragEvent->position().toPoint());
+                const QStringList sources = decodeDroppedSources(dragEvent->mimeData());
+                if (sameFolderOnly(sources, destDir)) {
+                    dragEvent->setDropAction(Qt::IgnoreAction);
+                    dragEvent->accept();
+                    return true;
+                }
+                const bool moveRequested = dragEvent->keyboardModifiers().testFlag(Qt::ShiftModifier);
+                dragEvent->setDropAction(moveRequested ? Qt::MoveAction : Qt::CopyAction);
+                dragEvent->accept();
+                return true;
+            }
+        } else if (event->type() == QEvent::DragMove) {
+            auto *dragEvent = static_cast<QDragMoveEvent*>(event);
+            if (dragEvent->mimeData()->hasUrls() || dragEvent->mimeData()->hasFormat("application/x-kasset-sequence-urls")) {
+                const QString destDir = destinationForEvent(dragEvent->position().toPoint());
+                const QStringList sources = decodeDroppedSources(dragEvent->mimeData());
+                if (sameFolderOnly(sources, destDir)) {
+                    dragEvent->setDropAction(Qt::IgnoreAction);
+                    dragEvent->accept();
+                    return true;
+                }
+                const bool moveRequested = dragEvent->keyboardModifiers().testFlag(Qt::ShiftModifier);
+                dragEvent->setDropAction(moveRequested ? Qt::MoveAction : Qt::CopyAction);
+                dragEvent->accept();
+                return true;
+            }
+        } else if (event->type() == QEvent::Drop) {
+            auto *dropEvent = static_cast<QDropEvent*>(event);
+            const QString destDir = destinationForEvent(dropEvent->position().toPoint());
+            const QStringList sources = decodeDroppedSources(dropEvent->mimeData());
+            if (destDir.isEmpty() || sources.isEmpty()) {
+                return false;
+            }
+            if (sameFolderOnly(sources, destDir)) {
+                dropEvent->setDropAction(Qt::IgnoreAction);
+                dropEvent->accept();
+                return true;
+            }
+            const bool moveRequested = dropEvent->keyboardModifiers().testFlag(Qt::ShiftModifier)
+                || dropEvent->dropAction() == Qt::MoveAction
+                || dropEvent->proposedAction() == Qt::MoveAction;
+            emit filesDropped(sources, destDir, moveRequested);
+            dropEvent->setDropAction(moveRequested ? Qt::MoveAction : Qt::CopyAction);
+            dropEvent->accept();
+            return true;
+        }
+    }
+
     return QWidget::eventFilter(watched, event);
 }
 

@@ -34,6 +34,7 @@
 #include "project_sequence_grouping_proxy_model.h"
 #include "project_item_delegate.h"
 #include "project_db.h"
+#include "project_path_utils.h"
 #include "project_version_detector.h"
 #include "project_manager_watcher.h"
 
@@ -103,6 +104,7 @@ static size_t currentWorkingSetMB() {
 #include <QtConcurrent/QtConcurrentRun>
 #include <functional>
 #include <algorithm>
+#include <memory>
 #include <QMenu>
 #include <QAction>
 #include <QActionGroup>
@@ -2729,14 +2731,7 @@ void MainWindow::onFmDelete()
     }
     QStringList paths = selectedPathsForActiveFmPane();
     if (paths.isEmpty()) return;
-
-
-    // Ensure any preview locks are released before file ops
-    releaseAnyPreviewLocksForPaths(paths);
-    // Enqueue async delete
-    auto &q = FileOpsQueue::instance();
-    q.enqueueDelete(paths);
-
+    confirmAndQueueFmDelete(paths, false);
 }
 
 
@@ -2748,13 +2743,7 @@ void MainWindow::onFmDeletePermanent()
     }
     QStringList paths = selectedPathsForActiveFmPane();
     if (paths.isEmpty()) return;
-
-
-    // Ensure any preview locks are released before file ops
-    releaseAnyPreviewLocksForPaths(paths);
-    auto &q = FileOpsQueue::instance();
-    q.enqueueDeletePermanent(paths);
-
+    confirmAndQueueFmDelete(paths, true);
 }
 
 void MainWindow::onFmBackToParent()
@@ -2860,14 +2849,34 @@ void MainWindow::onFmRename()
     QFileInfo fi(p);
     bool ok = false;
     QString newName = QInputDialog::getText(this, "Rename", "New name:", QLineEdit::Normal, fi.fileName(), &ok);
-    if (!ok || newName.trimmed().isEmpty()) return;
-    QString dest = fi.absolutePath() + QDir::separator() + newName.trimmed();
+    const QString trimmedName = newName.trimmed();
+    if (!ok || trimmedName.isEmpty()) return;
+    if (trimmedName == fi.fileName()) {
+        statusBar()->showMessage("Name unchanged", 2000);
+        return;
+    }
+
+    const QString dest = fi.absolutePath() + QDir::separator() + trimmedName;
+    if (QFileInfo::exists(dest)) {
+        QMessageBox::warning(this, "Rename", QString("A file or folder named '%1' already exists.").arg(trimmedName));
+        return;
+    }
+
+    bool renamed = false;
     if (fi.isDir()) {
         QDir parent(fi.absolutePath());
-        parent.rename(fi.fileName(), newName.trimmed());
+        renamed = parent.rename(fi.fileName(), trimmedName);
     } else {
-        QFile::rename(p, dest);
+        renamed = QFile::rename(p, dest);
     }
+
+    if (!renamed) {
+        QMessageBox::warning(this, "Rename", QString("Failed to rename '%1' to '%2'.").arg(fi.fileName(), trimmedName));
+        return;
+    }
+
+    onFmLightRefresh();
+    statusBar()->showMessage("Renamed successfully", 2000);
 }
 
 void MainWindow::onFmBulkRename()
@@ -3035,6 +3044,7 @@ void MainWindow::showFmContextMenuAt(const QPoint &globalPos)
     QAction *renameA = menu.addAction("Rename", this, &MainWindow::onFmRename, QKeySequence(Qt::Key_F2));
     QAction *bulkRenameA = menu.addAction("Bulk Rename...", this, &MainWindow::onFmBulkRename);
     QAction *delA = menu.addAction("Delete", this, &MainWindow::onFmDelete, QKeySequence::Delete);
+    QAction *permDelA = menu.addAction("Permanent Delete", this, &MainWindow::onFmDeletePermanent, QKeySequence(Qt::SHIFT | Qt::Key_Delete));
     QAction *createFolderWithSel = menu.addAction("Create Folder with Selected Files", this, &MainWindow::onFmCreateFolderWithSelected);
     menu.addSeparator();
     QAction *addLibA = menu.addAction("Add to Asset Library", this, &MainWindow::onAddSelectionToAssetLibrary);
@@ -3056,6 +3066,7 @@ void MainWindow::showFmContextMenuAt(const QPoint &globalPos)
     renameA->setEnabled(selCount == 1);
     bulkRenameA->setEnabled(selCount >= 2);
     delA->setEnabled(hasSel);
+    permDelA->setEnabled(hasSel);
     pasteA->setEnabled(!fmClipboard.isEmpty());
     addLibA->setEnabled(hasSel);
     favA->setEnabled(hasSel);
@@ -3100,8 +3111,7 @@ void MainWindow::showFmContextMenuAt(const QPoint &globalPos)
     // Handle new context menu actions
     if (chosen == openInExplorerA && selCount == 1) {
         QString path = selectedPaths.first();
-        // Use explorer.exe /select to open Explorer and select the file
-        QProcess::startDetached("explorer.exe", QStringList() << "/select," << QDir::toNativeSeparators(path));
+        DragUtils::instance().showInExplorer(path);
     } else if (chosen == propertiesA && selCount == 1) {
         QString path = selectedPaths.first();
         // Use Windows Shell API to show Properties dialog
@@ -3192,12 +3202,10 @@ void MainWindow::onFmTreeContextMenu(const QPoint &pos)
         QStringList paths = getSelectedFmTreePaths();
         if (paths.isEmpty()) return;
 
-        releaseAnyPreviewLocksForPaths(paths);
-        FileOpsQueue::instance().enqueueDelete(paths);
+        confirmAndQueueFmDelete(paths, false);
 
     } else if (chosen == permDelA) {
         QStringList paths = getSelectedFmTreePaths();
-        releaseAnyPreviewLocksForPaths(paths);
         doPermanentDelete(paths);
     } else if (chosen == renameA) {
         QStringList paths = getSelectedFmTreePaths();
@@ -3205,9 +3213,24 @@ void MainWindow::onFmTreeContextMenu(const QPoint &pos)
         QFileInfo fi(paths.first());
         bool ok=false;
         QString newName = QInputDialog::getText(this, "Rename", "New name:", QLineEdit::Normal, fi.fileName(), &ok);
-        if (!ok || newName.trimmed().isEmpty()) return;
+        const QString trimmedName = newName.trimmed();
+        if (!ok || trimmedName.isEmpty()) return;
+        if (trimmedName == fi.fileName()) {
+            statusBar()->showMessage("Name unchanged", 2000);
+            return;
+        }
+        const QString dest = fi.absolutePath() + QDir::separator() + trimmedName;
+        if (QFileInfo::exists(dest)) {
+            QMessageBox::warning(this, "Rename", QString("A file or folder named '%1' already exists.").arg(trimmedName));
+            return;
+        }
         QDir parent(fi.absolutePath());
-        parent.rename(fi.fileName(), newName.trimmed());
+        if (!parent.rename(fi.fileName(), trimmedName)) {
+            QMessageBox::warning(this, "Rename", QString("Failed to rename '%1' to '%2'.").arg(fi.fileName(), trimmedName));
+            return;
+        }
+        onFmLightRefresh();
+        statusBar()->showMessage("Renamed successfully", 2000);
     } else if (chosen == newFolderA) {
         QDir dir(path);
         QString newPath = uniqueNameInDir(path, "New Folder");
@@ -3233,8 +3256,7 @@ void MainWindow::onFmTreeContextMenu(const QPoint &pos)
         }
         releaseAnyPreviewLocksForPaths(files);
         FileOpsQueue::instance().enqueueMove(files, folderPath);
-        if (!fileOpsDialog) fileOpsDialog = new FileOpsProgressDialog(this);
-        fileOpsDialog->show(); fileOpsDialog->raise(); fileOpsDialog->activateWindow();
+        showFileOpsDialog();
     } else if (chosen == addLibA) {
         onAddTreeSelectionToAssetLibrary();
     } else if (chosen == importPmA && isSingleFolder) {
@@ -3247,7 +3269,7 @@ void MainWindow::onFmTreeContextMenu(const QPoint &pos)
         onFmAddToFavorites();
     } else if (chosen == openInExplorerA && hasSelection && selectedPaths.size() == 1) {
         const QString p = selectedPaths.first();
-        QProcess::startDetached("explorer.exe", QStringList() << "/select," << QDir::toNativeSeparators(p));
+        DragUtils::instance().showInExplorer(p);
     } else if (chosen == propertiesA && hasSelection && selectedPaths.size() == 1) {
         const QString p = selectedPaths.first();
 #ifdef Q_OS_WIN
@@ -3284,19 +3306,60 @@ void MainWindow::onFmPasteInto(const QString& destDir)
     auto &q = FileOpsQueue::instance();
     if (fmClipboardCutMode) q.enqueueMove(fmClipboard, destDir);
     else q.enqueueCopy(fmClipboard, destDir);
-    if (!fileOpsDialog) fileOpsDialog = new FileOpsProgressDialog(this);
-    fileOpsDialog->show(); fileOpsDialog->raise(); fileOpsDialog->activateWindow();
+    showFileOpsDialog();
     fmClipboard.clear();
     fmClipboardCutMode = false;
+}
+
+bool MainWindow::confirmAndQueueFmDelete(const QStringList& paths, bool permanentDelete)
+{
+    if (paths.isEmpty()) return false;
+
+    const QString actionVerb = permanentDelete ? QStringLiteral("permanently delete")
+                                               : QStringLiteral("move to the Trash");
+    QString message;
+    if (paths.size() == 1) {
+        const QFileInfo info(paths.first());
+        const QString noun = info.isDir() ? QStringLiteral("folder") : QStringLiteral("file");
+        message = permanentDelete
+            ? QString("Are you sure you want to permanently delete the %1 '%2'?\n\nThis action cannot be undone.")
+                  .arg(noun, info.fileName())
+            : QString("Are you sure you want to move the %1 '%2' to the Trash?")
+                  .arg(noun, info.fileName());
+    } else {
+        message = permanentDelete
+            ? QString("Are you sure you want to permanently delete %1 selected items?\n\nThis action cannot be undone.").arg(paths.size())
+            : QString("Are you sure you want to move %1 selected items to the Trash?").arg(paths.size());
+    }
+
+    const auto reply = QMessageBox::question(
+        this,
+        permanentDelete ? tr("Permanent Delete") : tr("Delete"),
+        message,
+        QMessageBox::Yes | QMessageBox::No,
+        QMessageBox::No);
+    if (reply != QMessageBox::Yes) return false;
+
+    releaseAnyPreviewLocksForPaths(paths);
+    if (permanentDelete) FileOpsQueue::instance().enqueueDeletePermanent(paths);
+    else FileOpsQueue::instance().enqueueDelete(paths);
+    showFileOpsDialog();
+    statusBar()->showMessage(QString("Starting %1 of %2 item(s)...").arg(actionVerb).arg(paths.size()), 3000);
+    return true;
+}
+
+void MainWindow::showFileOpsDialog()
+{
+    if (!fileOpsDialog) fileOpsDialog = new FileOpsProgressDialog(this);
+    fileOpsDialog->show();
+    fileOpsDialog->raise();
+    fileOpsDialog->activateWindow();
 }
 
 void MainWindow::doPermanentDelete(const QStringList& paths)
 {
     if (paths.isEmpty()) return;
-    // Ensure any preview locks are released before file ops
-    releaseAnyPreviewLocksForPaths(paths);
-    FileOpsQueue::instance().enqueueDeletePermanent(paths);
-
+    confirmAndQueueFmDelete(paths, true);
 }
 
 
@@ -3320,6 +3383,52 @@ void MainWindow::releaseAnyPreviewLocksForPaths(const QStringList& paths)
             // still release any handles
             previewOverlay->stopPlayback();
         }
+    }
+}
+
+void MainWindow::queueFmFileOperation(const QStringList& sources, const QString& destDir, bool moveRequested)
+{
+    if (sources.isEmpty() || destDir.isEmpty()) return;
+
+    releaseAnyPreviewLocksForPaths(sources);
+    if (moveRequested) FileOpsQueue::instance().enqueueMove(sources, destDir);
+    else FileOpsQueue::instance().enqueueCopy(sources, destDir);
+
+    showFileOpsDialog();
+}
+
+void MainWindow::refreshFileManagerViewsForPaths(const QStringList& paths, const QString& destination)
+{
+    QSet<QString> dirs;
+    for (const QString &path : paths) {
+        QFileInfo info(path);
+        const QString dir = info.isDir() ? info.absolutePath() : info.absolutePath();
+        if (!dir.isEmpty()) dirs.insert(QDir::cleanPath(dir));
+    }
+    if (!destination.isEmpty()) {
+        dirs.insert(QDir::cleanPath(destination));
+    }
+
+    const QString primaryRoot = fmDirModel ? QDir::cleanPath(fmDirModel->rootPath()) : QString();
+    const QString secondaryRoot = fmSecondaryPane ? QDir::cleanPath(fmSecondaryPane->currentPath()) : QString();
+
+    bool refreshPrimary = false;
+    bool refreshSecondary = false;
+    for (const QString &dir : dirs) {
+        if (!primaryRoot.isEmpty() && dir == primaryRoot) refreshPrimary = true;
+        if (!secondaryRoot.isEmpty() && dir == secondaryRoot) refreshSecondary = true;
+        if (fmEverythingTreeModel) fmEverythingTreeModel->refreshPath(dir);
+    }
+
+    if (refreshPrimary) {
+        onFmLightRefresh();
+    }
+    if (refreshSecondary && fmSecondaryPane && (!refreshPrimary || secondaryRoot != primaryRoot)) {
+        fmSecondaryPane->refresh();
+    }
+
+    if (!dirs.isEmpty()) {
+        scheduleVisibleThumbProgressUpdate();
     }
 }
 
@@ -3353,8 +3462,7 @@ void MainWindow::onFmCreateFolderWithSelected()
     // Enqueue async move of selected into the new folder
     auto &q = FileOpsQueue::instance();
     q.enqueueMove(paths, folderPath);
-    if (!fileOpsDialog) fileOpsDialog = new FileOpsProgressDialog(this);
-    fileOpsDialog->show(); fileOpsDialog->raise(); fileOpsDialog->activateWindow();
+    showFileOpsDialog();
 }
 
 void MainWindow::onFmViewModeToggled()
@@ -3440,17 +3548,8 @@ void MainWindow::onFmToggleSecondPane(bool checked)
             });
 
             // Connect filesDropped for copy/move operations
-            connect(fmSecondaryPane, &FileManagerPane::filesDropped, this, [this](const QStringList &paths, const QString &destDir) {
-                // Determine if this is a cut (move) or copy operation
-                bool isCut = fmSecondaryPane->isClipboardCutMode();
-                
-                // Use FileOpsQueue for the operation
-                FileOpsQueue &queue = FileOpsQueue::instance();
-                if (isCut) {
-                    queue.enqueueMove(paths, destDir);
-                } else {
-                    queue.enqueueCopy(paths, destDir);
-                }
+            connect(fmSecondaryPane, &FileManagerPane::filesDropped, this, [this](const QStringList &paths, const QString &destDir, bool moveRequested) {
+                queueFmFileOperation(paths, destDir, moveRequested);
             });
             
             // Connect fileDoubleClicked to open preview overlay
@@ -4775,14 +4874,19 @@ void MainWindow::onPmAssetContextMenu(const QPoint &pos)
     // Get all selected items
     QModelIndexList selectedIndexes = view->selectionModel()->selectedIndexes();
     QStringList selectedPaths;
+    QStringList selectedRenamablePaths;
     QList<int> selectedAssetIds;
     
     for (const QModelIndex &idx : selectedIndexes) {
+        const bool isFolder = idx.data(ProjectAssetsModel::IsFolderRole).toBool();
         QString path = idx.data(ProjectAssetsModel::FilePathRole).toString();
         int assetId = idx.data(ProjectAssetsModel::IdRole).toInt();
         if (!path.isEmpty() && !selectedPaths.contains(path)) {
             selectedPaths.append(path);
             selectedAssetIds.append(assetId);
+            if (!isFolder) {
+                selectedRenamablePaths.append(path);
+            }
         }
     }
     
@@ -4823,6 +4927,9 @@ void MainWindow::onPmAssetContextMenu(const QPoint &pos)
     QAction *renameA = menu.addAction("Rename");
     renameA->setShortcut(QKeySequence(Qt::Key_F2));
     renameA->setEnabled(selCount == 1);
+
+    QAction *bulkRenameA = menu.addAction(QString("Bulk Rename (%1 item(s))...").arg(selectedRenamablePaths.size()));
+    bulkRenameA->setEnabled(selectedRenamablePaths.size() >= 2);
     
     QAction *deleteA = menu.addAction("Delete");
     deleteA->setShortcut(QKeySequence::Delete);
@@ -4858,10 +4965,17 @@ void MainWindow::onPmAssetContextMenu(const QPoint &pos)
         onPmPaste();
     } else if (chosen == renameA && selCount == 1) {
         onPmRename();
+    } else if (chosen == bulkRenameA && selectedRenamablePaths.size() >= 2) {
+        releaseAnyPreviewLocksForPaths(selectedRenamablePaths);
+        BulkRenameDialog dialog(selectedRenamablePaths, this);
+        if (dialog.exec() == QDialog::Accepted) {
+            onPmRefresh();
+            statusBar()->showMessage("Bulk rename completed", 3000);
+        }
     } else if (chosen == deleteA) {
         onPmDelete();
     } else if (chosen == showInExplorerA && selCount == 1) {
-        QProcess::startDetached("explorer.exe", {"/select,", QDir::toNativeSeparators(selectedPaths.first())});
+        DragUtils::instance().showInExplorer(selectedPaths.first());
     } else if (chosen == propertiesA && selCount == 1) {
         #ifdef Q_OS_WIN
         std::wstring wpath = selectedPaths.first().toStdWString();
@@ -5292,6 +5406,9 @@ void MainWindow::onPmVersionDropdownRequested(const QModelIndex &index, const QP
 
 void MainWindow::onPmRefresh()
 {
+    if (pmWatcher && pmCurrentProjectId > 0) {
+        pmWatcher->rescan(pmCurrentProjectId);
+    }
     if (pmProjectsModel) {
         pmProjectsModel->refresh();
     }
@@ -6162,6 +6279,50 @@ QStringList MainWindow::getSelectedPmAssetPaths() const
     return paths;
 }
 
+QString MainWindow::pmCurrentDestinationDir() const
+{
+    if (pmCurrentProjectId <= 0) {
+        return QString();
+    }
+
+    const Project project = ProjectDB::instance().getProject(pmCurrentProjectId);
+    const QString watchPath = QDir::cleanPath(project.watchPath);
+    if (watchPath.isEmpty()) {
+        return QString();
+    }
+
+    if (pmCurrentFolderId <= 0) {
+        return watchPath;
+    }
+
+    QStringList pathSegments;
+    int folderId = pmCurrentFolderId;
+    const int rootFolderId = ProjectDB::instance().getProjectRootFolderId(pmCurrentProjectId);
+
+    while (folderId > 0 && folderId != rootFolderId) {
+        QSqlQuery query(ProjectDB::instance().database());
+        query.prepare("SELECT name, parent_id FROM virtual_folders WHERE id = ?");
+        query.addBindValue(folderId);
+        if (!query.exec() || !query.next()) {
+            return watchPath;
+        }
+
+        pathSegments.prepend(query.value(0).toString());
+        folderId = query.value(1).toInt();
+    }
+
+    if (folderId != rootFolderId) {
+        return watchPath;
+    }
+
+    QString destination = watchPath;
+    for (const QString &segment : pathSegments) {
+        destination = QDir(destination).filePath(segment);
+    }
+
+    return QDir::cleanPath(destination);
+}
+
 void MainWindow::restoreProjectManagerState()
 {
     QSettings s("AugmentCode", "KAssetManager");
@@ -6290,7 +6451,7 @@ void MainWindow::navigateToProjectAsset(int projectId, int assetId, const QStrin
             match = (srcIdx.data(ProjectAssetsModel::IdRole).toInt() == assetId);
         }
         if (!match && !filePath.isEmpty()) {
-            match = srcIdx.data(ProjectAssetsModel::FilePathRole).toString().compare(filePath, Qt::CaseInsensitive) == 0;
+            match = ProjectPathUtils::pathsEqual(srcIdx.data(ProjectAssetsModel::FilePathRole).toString(), filePath);
         }
         if (match) {
             targetRow = row;
@@ -6336,17 +6497,7 @@ void MainWindow::onPmPaste()
 {
     if (pmClipboard.isEmpty()) return;
     
-    // Get current folder path from the first item's directory or project watch path
-    QString destDir;
-    if (pmCurrentProjectId > 0) {
-        QVector<Project> projects = ProjectDB::instance().listProjects();
-        for (const Project& p : projects) {
-            if (p.id == pmCurrentProjectId) {
-                destDir = p.watchPath;
-                break;
-            }
-        }
-    }
+    const QString destDir = pmCurrentDestinationDir();
     
     if (destDir.isEmpty()) {
         QMessageBox::warning(this, "Paste", "No destination folder available");
@@ -6367,9 +6518,7 @@ void MainWindow::onPmPaste()
         pmAssetsModel->setProjectId(pmCurrentProjectId);
     }
     
-    if (!fileOpsDialog) fileOpsDialog = new FileOpsProgressDialog(this);
-    fileOpsDialog->show();
-    fileOpsDialog->raise();
+    showFileOpsDialog();
     
     pmClipboard.clear();
     pmClipboardCutMode = false;
@@ -6395,8 +6544,7 @@ void MainWindow::onPmDelete()
     }
     
     FileOpsQueue::instance().enqueueDelete(paths);
-    if (!fileOpsDialog) fileOpsDialog = new FileOpsProgressDialog(this);
-    fileOpsDialog->show();
+    showFileOpsDialog();
 }
 
 void MainWindow::onPmRename()
@@ -6428,17 +6576,7 @@ void MainWindow::onPmRename()
 
 void MainWindow::onPmNewFolder()
 {
-    // Create folder in current project's watch path
-    QString destDir;
-    if (pmCurrentProjectId > 0) {
-        QVector<Project> projects = ProjectDB::instance().listProjects();
-        for (const Project& p : projects) {
-            if (p.id == pmCurrentProjectId) {
-                destDir = p.watchPath;
-                break;
-            }
-        }
-    }
+    const QString destDir = pmCurrentDestinationDir();
     
     if (destDir.isEmpty()) {
         QMessageBox::warning(this, "New Folder", "No project selected");
@@ -6633,10 +6771,18 @@ void MainWindow::setupConnections()
     connect(&DB::instance(), &DB::assetVersionsChanged,
             this, &MainWindow::onAssetVersionsChanged);
 
-    // Note: We intentionally do NOT refresh File Manager after file operations.
-    // QFileSystemModel has its own internal file watcher that auto-updates.
-    // Triggering onFmRefresh() would cause unnecessary 1sec+ delays after every operation.
-    // Use F5 or View > Refresh for manual refresh if needed.
+    auto &fileOpsQueue = FileOpsQueue::instance();
+    auto pendingFileOps = std::make_shared<QHash<int, FileOpsQueue::Item>>();
+    connect(&fileOpsQueue, &FileOpsQueue::currentItemChanged, this, [pendingFileOps](const FileOpsQueue::Item &item) {
+        pendingFileOps->insert(item.id, item);
+    });
+    connect(&fileOpsQueue, &FileOpsQueue::itemFinished, this, [this, pendingFileOps](int id, bool success, const QString &) {
+        const FileOpsQueue::Item item = pendingFileOps->take(id);
+        if (!success) {
+            return;
+        }
+        refreshFileManagerViewsForPaths(item.sources, item.destination);
+    });
 }
 
 
@@ -8592,6 +8738,17 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
     if (m_initializing) {
         return false; // do not intercept; let normal processing continue
     }
+
+    if (fmSecondaryPane && fmSecondaryPane->isVisible() && event->type() == QEvent::MouseButtonPress) {
+        if (watched == fmGridView || watched == fmListView ||
+            (fmGridView && watched == fmGridView->viewport()) ||
+            (fmListView && watched == fmListView->viewport()) ||
+            watched == fmPathBar || watched == fmPreviewPanel ||
+            watched == fmImageView || (fmImageView && watched == fmImageView->viewport()) ||
+            watched == fmPreviewContent || watched == fmTree || (fmTree && watched == fmTree->viewport())) {
+            setActiveFmPane(true);
+        }
+    }
     
     // Handle version badge clicks on Project Manager grid view
     if (pmAssetsGridView && watched == pmAssetsGridView->viewport()) {
@@ -8892,12 +9049,7 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
                 }
 
                 const bool shift = dropEvent->keyboardModifiers().testFlag(Qt::ShiftModifier);
-                // Ensure any preview locks are released before file ops
-                if (fmTlRenderPlayer) { fmTlRenderPlayer->stop(); }
-                if (shift) FileOpsQueue::instance().enqueueMove(sources, destDir);
-                else FileOpsQueue::instance().enqueueCopy(sources, destDir);
-                if (!fileOpsDialog) fileOpsDialog = new FileOpsProgressDialog(this);
-                fileOpsDialog->show(); fileOpsDialog->raise(); fileOpsDialog->activateWindow();
+                queueFmFileOperation(sources, destDir, shift);
                 statusBar()->showMessage(QString("Queued %1 item(s) for %2").arg(sources.size()).arg(shift ? "move" : "copy"), 3000);
             }
             dropEvent->setDropAction(dropEvent->keyboardModifiers().testFlag(Qt::ShiftModifier) ? Qt::MoveAction : Qt::CopyAction);
@@ -8998,12 +9150,7 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
                 }
 
                 const bool shift = dropEvent->keyboardModifiers().testFlag(Qt::ShiftModifier);
-                // Ensure any preview locks are released before file ops
-                if (fmTlRenderPlayer) { fmTlRenderPlayer->stop(); }
-                if (shift) FileOpsQueue::instance().enqueueMove(sources, destDir);
-                else       FileOpsQueue::instance().enqueueCopy(sources, destDir);
-                if (!fileOpsDialog) fileOpsDialog = new FileOpsProgressDialog(this);
-                fileOpsDialog->show(); fileOpsDialog->raise(); fileOpsDialog->activateWindow();
+                queueFmFileOperation(sources, destDir, shift);
                 statusBar()->showMessage(QString("Queued %1 item(s) for %2").arg(sources.size()).arg(shift ? "move" : "copy"), 3000);
             }
             dropEvent->setDropAction(dropEvent->keyboardModifiers().testFlag(Qt::ShiftModifier) ? Qt::MoveAction : Qt::CopyAction);

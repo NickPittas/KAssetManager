@@ -1,12 +1,22 @@
 #include "mpv_player.h"
 
-#include <QByteArray>
-#include <QFile>
-#include <QMetaObject>
-#include <QTimer>
+#include <filesystem>
+#include <cstdio>
+#include <cstdlib>
+#include <clocale>
 #include <QDebug>
+#include <QFile>
+#include <QTimer>
 
 namespace {
+struct MpvNumericLocaleGuard {
+    MpvNumericLocaleGuard() {
+        setlocale(LC_NUMERIC, "C");
+    }
+};
+
+const MpvNumericLocaleGuard g_mpvNumericLocaleGuard;
+
 constexpr uint64_t kObserveTimePos = 1;
 constexpr uint64_t kObserveDuration = 2;
 constexpr uint64_t kObservePause = 3;
@@ -23,6 +33,7 @@ MpvPlayer::MpvPlayer(QObject* parent)
     : QObject(parent)
     , m_runtime(LibMpvRuntime::instance())
 {
+
     if (!m_runtime.isAvailable()) {
         return;
     }
@@ -103,7 +114,6 @@ void MpvPlayer::onMpvEvents()
 
 void MpvPlayer::processEvent(mpv_event* event)
 {
-    qWarning() << "[MpvPlayer] event id=" << event->event_id;
     switch (event->event_id) {
     case MPV_EVENT_PROPERTY_CHANGE: {
         auto* prop = static_cast<mpv_event_property*>(event->data);
@@ -175,7 +185,6 @@ void MpvPlayer::processEvent(mpv_event* event)
         break;
     }
     case MPV_EVENT_FILE_LOADED:
-        qWarning() << "[MpvPlayer] FILE_LOADED";
         updateMediaInfoFromCore();
         emit mediaInfoReady(m_mediaInfo);
         break;
@@ -192,12 +201,10 @@ void MpvPlayer::processEvent(mpv_event* event)
         break;
     }
     case MPV_EVENT_VIDEO_RECONFIG:
-        qWarning() << "[MpvPlayer] VIDEO_RECONFIG";
         updateMediaInfoFromCore();
         emit mediaInfoReady(m_mediaInfo);
         break;
     case MPV_EVENT_PLAYBACK_RESTART:
-        qWarning() << "[MpvPlayer] PLAYBACK_RESTART";
         emit frameUpdated();
         break;
     default:
