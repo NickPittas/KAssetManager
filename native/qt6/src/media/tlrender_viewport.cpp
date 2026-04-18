@@ -3,6 +3,7 @@
  */
 
 #include "tlrender_viewport.h"
+#include "ffmpeg_mov_player.h"
 #include "tlrender_player.h"
 #include "platform_session.h"
 #include <QDebug>
@@ -99,6 +100,23 @@ void TLRenderViewport::ensureMpvViewport()
     });
 }
 
+void TLRenderViewport::ensureFfmpegMovViewport()
+{
+    if (m_ffmpegMovViewport) {
+        return;
+    }
+
+    m_ffmpegMovViewport = new FFmpegMovViewport(this);
+    m_ffmpegMovViewport->hide();
+    m_ffmpegMovViewport->setFocusPolicy(Qt::StrongFocus);
+    m_ffmpegMovViewport->installEventFilter(this);
+    m_layout->insertWidget(0, m_ffmpegMovViewport);
+    connect(m_ffmpegMovViewport, &FFmpegMovViewport::frameRendered, this, [this]() {
+        ++m_presentationRevision;
+        emit frameRendered();
+    });
+}
+
 void TLRenderViewport::setPlayer(TLRenderPlayer* player)
 {
     // Disconnect from previous player
@@ -118,9 +136,15 @@ void TLRenderViewport::setPlayer(TLRenderPlayer* player)
     if (m_mpvViewport) {
         m_mpvViewport->setPlayer(player ? player->mpvPlayer() : nullptr);
     }
+    if (m_ffmpegMovViewport) {
+        m_ffmpegMovViewport->setPlayer(player ? player->ffmpegMovPlayer() : nullptr);
+    }
 
     syncBackendWidgetVisibility();
 
+    if (useFfmpegMovViewport()) {
+        return;
+    }
     if (useMpvViewport()) {
         return;
     }
@@ -184,6 +208,10 @@ void TLRenderViewport::onMediaLoaded(const TLRenderPlayer::MediaInfo& info)
 {
     m_mediaFps = info.fps > 0.0 ? info.fps : 24.0;
     syncBackendWidgetVisibility();
+    if (useFfmpegMovViewport()) {
+        syncPresentationTimer();
+        return;
+    }
     if (useMpvViewport()) {
         prepareForMpvPlayback();
         syncPresentationTimer();
@@ -203,28 +231,42 @@ void TLRenderViewport::onMediaLoaded(const TLRenderPlayer::MediaInfo& info)
 void TLRenderViewport::syncBackendWidgetVisibility()
 {
     const bool mpvActive = useMpvViewport();
+    const bool ffmpegMovActive = useFfmpegMovViewport();
     if (mpvActive) {
         ensureMpvViewport();
         m_mpvViewport->setPlayer(m_player ? m_player->mpvPlayer() : nullptr);
     }
+    if (ffmpegMovActive) {
+        ensureFfmpegMovViewport();
+        m_ffmpegMovViewport->setPlayer(m_player ? m_player->ffmpegMovPlayer() : nullptr);
+    }
     if (m_mpvViewport) {
         m_mpvViewport->setVisible(mpvActive);
     }
-    if (mpvActive && m_presentationTimer) {
+    if (m_ffmpegMovViewport) {
+        m_ffmpegMovViewport->setVisible(ffmpegMovActive);
+    }
+    if ((mpvActive || ffmpegMovActive) && m_presentationTimer) {
         m_presentationTimer->stop();
     }
 #ifdef HAVE_TLRENDER
     if (m_rasterLabel) {
-        m_rasterLabel->setVisible(!mpvActive);
+        m_rasterLabel->setVisible(!mpvActive && !ffmpegMovActive);
     }
     if (m_viewport) {
-        m_viewport->setVisible(!mpvActive);
+        m_viewport->setVisible(!mpvActive && !ffmpegMovActive);
     }
 #endif
 }
 
 void TLRenderViewport::syncPresentationTimer()
 {
+    if (useFfmpegMovViewport()) {
+        if (m_presentationTimer) {
+            m_presentationTimer->stop();
+        }
+        return;
+    }
     if (useMpvViewport()) {
         if (m_presentationTimer) {
             m_presentationTimer->stop();
@@ -300,6 +342,12 @@ void TLRenderViewport::ensureViewport()
 
 void TLRenderViewport::updateRasterFrame()
 {
+    if (useFfmpegMovViewport()) {
+        if (m_ffmpegMovViewport) {
+            m_ffmpegMovViewport->update();
+        }
+        return;
+    }
     if (useMpvViewport()) {
         if (m_mpvViewport) {
             m_mpvViewport->update();
@@ -333,6 +381,9 @@ void TLRenderViewport::updateRasterFrame()
 
 QImage TLRenderViewport::currentRasterFrameForTest()
 {
+    if (useFfmpegMovViewport()) {
+        return m_ffmpegMovViewport ? m_ffmpegMovViewport->currentFrameForTest() : QImage();
+    }
     if (useMpvViewport()) {
         return m_mpvViewport ? m_mpvViewport->currentFrameForTest() : QImage();
     }
@@ -422,6 +473,12 @@ void TLRenderViewport::setOCIOOptions(const QString& configPath,
 
 void TLRenderViewport::setFrameView(bool enabled)
 {
+    if (useFfmpegMovViewport()) {
+        if (m_ffmpegMovViewport) {
+            m_ffmpegMovViewport->setFrameView(enabled);
+        }
+        return;
+    }
     if (useMpvViewport()) {
         if (m_mpvViewport) {
             m_mpvViewport->setFrameView(enabled);
@@ -446,6 +503,9 @@ void TLRenderViewport::setFrameView(bool enabled)
 
 bool TLRenderViewport::frameViewEnabled() const
 {
+    if (useFfmpegMovViewport()) {
+        return m_ffmpegMovViewport ? m_ffmpegMovViewport->frameViewEnabled() : true;
+    }
     if (useMpvViewport()) {
         return m_mpvViewport ? m_mpvViewport->frameViewEnabled() : true;
     }
@@ -462,6 +522,12 @@ bool TLRenderViewport::frameViewEnabled() const
 
 void TLRenderViewport::zoomRelative(double factor)
 {
+    if (useFfmpegMovViewport()) {
+        if (m_ffmpegMovViewport) {
+            m_ffmpegMovViewport->zoomRelative(factor);
+        }
+        return;
+    }
     if (useMpvViewport()) {
         if (m_mpvViewport) {
             m_mpvViewport->zoomRelative(factor);
@@ -488,6 +554,9 @@ void TLRenderViewport::zoomRelative(double factor)
 
 QRect TLRenderViewport::displayedContentRect() const
 {
+    if (useFfmpegMovViewport()) {
+        return m_ffmpegMovViewport ? m_ffmpegMovViewport->displayedContentRect() : rect();
+    }
     if (useMpvViewport()) {
         return m_mpvViewport ? m_mpvViewport->displayedContentRect() : rect();
     }
@@ -514,6 +583,9 @@ QRect TLRenderViewport::displayedContentRect() const
 
 double TLRenderViewport::fps() const
 {
+    if (useFfmpegMovViewport()) {
+        return 0.0;
+    }
     if (useMpvViewport()) {
         return 0.0;
     }
@@ -529,6 +601,9 @@ double TLRenderViewport::fps() const
 
 size_t TLRenderViewport::droppedFrames() const
 {
+    if (useFfmpegMovViewport()) {
+        return 0;
+    }
     if (useMpvViewport()) {
         return 0;
     }
@@ -543,6 +618,10 @@ size_t TLRenderViewport::droppedFrames() const
 void TLRenderViewport::resizeEvent(QResizeEvent* event)
 {
     QWidget::resizeEvent(event);
+    if (useFfmpegMovViewport() && m_ffmpegMovViewport) {
+        m_ffmpegMovViewport->update();
+        return;
+    }
     if (useMpvViewport() && m_mpvViewport) {
         m_mpvViewport->update();
         return;
@@ -554,7 +633,7 @@ void TLRenderViewport::resizeEvent(QResizeEvent* event)
 
 bool TLRenderViewport::eventFilter(QObject* watched, QEvent* event)
 {
-    if (watched == m_mpvViewport) {
+    if (watched == m_ffmpegMovViewport || watched == m_mpvViewport) {
         if (event->type() == QEvent::KeyPress || event->type() == QEvent::KeyRelease) {
             if (QWidget* overlay = parentWidget()) {
                 QCoreApplication::sendEvent(overlay, event);
@@ -621,6 +700,13 @@ bool TLRenderViewport::eventFilter(QObject* watched, QEvent* event)
     }
 #endif
     return QWidget::eventFilter(watched, event);
+}
+
+bool TLRenderViewport::useFfmpegMovViewport() const
+{
+    return m_player
+        && m_player->ffmpegMovPlayer()
+        && m_player->ffmpegMovPlayer()->hasMedia();
 }
 
 bool TLRenderViewport::useMpvViewport() const

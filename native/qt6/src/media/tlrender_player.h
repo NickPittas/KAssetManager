@@ -15,6 +15,7 @@
 #include <memory>
 
 class MpvPlayer;
+class FFmpegMovPlayer;
 
 // Forward declarations for tlRender types
 namespace ftk {
@@ -293,6 +294,7 @@ public:
      */
     std::shared_ptr<tl::Player> player() const;
     MpvPlayer* mpvPlayer() const;
+    FFmpegMovPlayer* ffmpegMovPlayer() const;
 
     /**
      * @brief Get the Qt PlayerObject wrapper (for native viewports)
@@ -406,6 +408,7 @@ private:
     std::shared_ptr<tl::Timeline> m_timeline;
     std::shared_ptr<tl::Player> m_player;
     MpvPlayer* m_mpvPlayer{nullptr};
+    FFmpegMovPlayer* m_ffmpegMovPlayer{nullptr};
 
     // tlRender Qt integration (observes player + keeps context ticking).
     // Stored as QSharedPointer so it can be shared with native viewport.

@@ -21,6 +21,7 @@
 #include <QPointer>
 #include <algorithm>
 
+#include "ffmpeg_mov_viewport.h"
 #include "tlrender_player.h"
 #include "mpv_viewport.h"
 
@@ -108,15 +109,18 @@ private slots:
 
 private:
     void ensureMpvViewport();
+    void ensureFfmpegMovViewport();
     void ensureViewport();
     void setupViewportPlayer();
     void syncPresentationTimer();
     void syncBackendWidgetVisibility();
+    bool useFfmpegMovViewport() const;
     bool useMpvViewport() const;
 
     QVBoxLayout* m_layout{nullptr};
     TLRenderPlayer* m_player{nullptr};
     MpvViewport* m_mpvViewport{nullptr};
+    FFmpegMovViewport* m_ffmpegMovViewport{nullptr};
 
 #ifdef HAVE_TLRENDER
     std::shared_ptr<ftk::Context> m_context;

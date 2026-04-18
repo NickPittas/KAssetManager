@@ -6,6 +6,7 @@
  */
 
 #include "tlrender_player.h"
+#include "ffmpeg_mov_player.h"
 #include "mpv_player.h"
 #include "file_utils.h"
 #include <QDebug>
@@ -400,10 +401,36 @@ TLRenderPlayer::TLRenderPlayer(QObject* parent)
     : QObject(parent)
 {
     m_mpvPlayer = new MpvPlayer(this);
+    m_ffmpegMovPlayer = new FFmpegMovPlayer(this);
     fprintf(stderr, "[TLRenderPlayer] mpv available=%d error=%s\n",
             m_mpvPlayer->isAvailable() ? 1 : 0,
             m_mpvPlayer->availabilityError().toLocal8Bit().constData());
     fflush(stderr);
+    connect(m_ffmpegMovPlayer, &FFmpegMovPlayer::positionChanged, this, [this](qint64 positionMs) {
+        m_position = positionMs;
+        emit positionChanged(positionMs);
+    });
+    connect(m_ffmpegMovPlayer, &FFmpegMovPlayer::durationChanged, this, [this](qint64 durationMs) {
+        m_duration = durationMs;
+        emit durationChanged(durationMs);
+    });
+    connect(m_ffmpegMovPlayer, &FFmpegMovPlayer::currentFrameChanged, this, [this](qint64 frameNumber) {
+        m_currentFrame = frameNumber;
+        emit currentFrameChanged(frameNumber);
+    });
+    connect(m_ffmpegMovPlayer, &FFmpegMovPlayer::mediaInfoReady, this, [this](const media_player::MediaInfo& info) {
+        m_mediaInfo = toTlMediaInfo(info);
+        m_duration = m_mediaInfo.durationMs;
+        m_totalFrames = m_mediaInfo.totalFrames;
+        emit mediaInfoReady(m_mediaInfo);
+    });
+    connect(m_ffmpegMovPlayer, &FFmpegMovPlayer::playbackStateChanged, this, [this](media_player::PlaybackState state) {
+        m_playbackState = toTlPlaybackState(state);
+        emit playbackStateChanged(m_playbackState);
+    });
+    connect(m_ffmpegMovPlayer, &FFmpegMovPlayer::error, this, &TLRenderPlayer::error);
+    connect(m_ffmpegMovPlayer, &FFmpegMovPlayer::endOfStream, this, &TLRenderPlayer::endOfStream);
+    connect(m_ffmpegMovPlayer, &FFmpegMovPlayer::frameUpdated, this, &TLRenderPlayer::videoFramesChanged);
     if (m_mpvPlayer->isAvailable()) {
         connect(m_mpvPlayer, &MpvPlayer::positionChanged, this, [this](qint64 positionMs) {
             m_position = positionMs;
@@ -533,6 +560,34 @@ void TLRenderPlayer::setupContext()
 
 void TLRenderPlayer::loadMedia(const QString& filePath)
 {
+    if (QFileInfo(filePath).suffix().compare(QStringLiteral("mov"), Qt::CaseInsensitive) == 0 && m_ffmpegMovPlayer) {
+        if (m_mpvPlayer && m_mpvPlayer->hasMedia()) {
+            m_mpvPlayer->unloadMedia();
+        }
+        if (m_player) {
+            m_player->stop();
+            m_player.reset();
+        }
+        m_timeline.reset();
+        m_playerObject.clear();
+        m_updateTimer->stop();
+
+        QMutexLocker locker(&m_mutex);
+        m_currentPath = filePath;
+        m_frameAcquisitionStats = FrameAcquisitionStats();
+        m_cachedVideoFrames.clear();
+        locker.unlock();
+
+        m_ffmpegMovPlayer->setLoopMode(toMpvLoopMode(m_loopMode));
+        m_ffmpegMovPlayer->setVolume(m_volume);
+        m_ffmpegMovPlayer->setMuted(m_muted);
+        m_ffmpegMovPlayer->setPlaybackRate(m_playbackRate);
+        m_ffmpegMovPlayer->loadMedia(filePath);
+        return;
+    }
+    if (m_ffmpegMovPlayer && m_ffmpegMovPlayer->hasMedia()) {
+        m_ffmpegMovPlayer->unloadMedia();
+    }
     fprintf(stderr, "[TLRenderPlayer] loadMedia path=%s useMpv=%d mpvAvailable=%d\n",
             filePath.toLocal8Bit().constData(),
             useMpvBackendForCurrentMedia(filePath) ? 1 : 0,
@@ -806,6 +861,9 @@ void TLRenderPlayer::loadMedia(const QString& filePath)
 
 void TLRenderPlayer::unloadMedia()
 {
+    if (m_ffmpegMovPlayer && m_ffmpegMovPlayer->hasMedia()) {
+        m_ffmpegMovPlayer->unloadMedia();
+    }
     if (m_mpvPlayer && m_mpvPlayer->hasMedia()) {
         m_mpvPlayer->unloadMedia();
     }
@@ -841,6 +899,9 @@ void TLRenderPlayer::unloadMedia()
 
 bool TLRenderPlayer::hasMedia() const
 {
+    if (m_ffmpegMovPlayer && m_ffmpegMovPlayer->hasMedia()) {
+        return true;
+    }
     if (m_mpvPlayer && m_mpvPlayer->hasMedia()) {
         return true;
     }
@@ -858,6 +919,14 @@ QString TLRenderPlayer::currentMediaPath() const
 
 void TLRenderPlayer::updateMediaInfo()
 {
+    if (m_ffmpegMovPlayer && m_ffmpegMovPlayer->hasMedia()) {
+        m_mediaInfo = toTlMediaInfo(m_ffmpegMovPlayer->mediaInfo());
+        m_duration = m_mediaInfo.durationMs;
+        m_totalFrames = m_mediaInfo.totalFrames;
+        emit durationChanged(m_mediaInfo.durationMs);
+        emit mediaInfoReady(m_mediaInfo);
+        return;
+    }
     if (m_mpvPlayer && m_mpvPlayer->hasMedia()) {
         m_mediaInfo = toTlMediaInfo(m_mpvPlayer->mediaInfo());
         m_duration = m_mediaInfo.durationMs;
@@ -926,6 +995,10 @@ void TLRenderPlayer::updateMediaInfo()
 
 void TLRenderPlayer::play()
 {
+    if (m_ffmpegMovPlayer && m_ffmpegMovPlayer->hasMedia()) {
+        m_ffmpegMovPlayer->play();
+        return;
+    }
     if (m_mpvPlayer && m_mpvPlayer->hasMedia()) {
         m_mpvPlayer->play();
         return;
@@ -984,6 +1057,10 @@ void TLRenderPlayer::play()
 
 void TLRenderPlayer::pause()
 {
+    if (m_ffmpegMovPlayer && m_ffmpegMovPlayer->hasMedia()) {
+        m_ffmpegMovPlayer->pause();
+        return;
+    }
     if (m_mpvPlayer && m_mpvPlayer->hasMedia()) {
         m_mpvPlayer->pause();
         return;
@@ -1011,6 +1088,10 @@ void TLRenderPlayer::pause()
 
 void TLRenderPlayer::stop()
 {
+    if (m_ffmpegMovPlayer && m_ffmpegMovPlayer->hasMedia()) {
+        m_ffmpegMovPlayer->stop();
+        return;
+    }
     if (m_mpvPlayer && m_mpvPlayer->hasMedia()) {
         m_mpvPlayer->stop();
         return;
@@ -1047,6 +1128,10 @@ void TLRenderPlayer::togglePlayback()
 
 void TLRenderPlayer::seek(qint64 positionMs)
 {
+    if (m_ffmpegMovPlayer && m_ffmpegMovPlayer->hasMedia()) {
+        m_ffmpegMovPlayer->seek(positionMs);
+        return;
+    }
     if (m_mpvPlayer && m_mpvPlayer->hasMedia()) {
         m_mpvPlayer->seek(positionMs);
         return;
@@ -1073,6 +1158,10 @@ void TLRenderPlayer::seek(qint64 positionMs)
 
 void TLRenderPlayer::seekToFrame(qint64 frameNumber)
 {
+    if (m_ffmpegMovPlayer && m_ffmpegMovPlayer->hasMedia()) {
+        m_ffmpegMovPlayer->seekToFrame(frameNumber);
+        return;
+    }
     if (m_mpvPlayer && m_mpvPlayer->hasMedia()) {
         m_mpvPlayer->seekToFrame(frameNumber);
         return;
@@ -1098,6 +1187,10 @@ void TLRenderPlayer::seekToFrame(qint64 frameNumber)
 void TLRenderPlayer::setPlaybackRate(double rate)
 {
     m_playbackRate = rate;
+    if (m_ffmpegMovPlayer && m_ffmpegMovPlayer->hasMedia()) {
+        m_ffmpegMovPlayer->setPlaybackRate(rate);
+        return;
+    }
     if (m_mpvPlayer && m_mpvPlayer->hasMedia()) {
         m_mpvPlayer->setPlaybackRate(rate);
         return;
@@ -1125,6 +1218,10 @@ double TLRenderPlayer::playbackRate() const
 void TLRenderPlayer::setLoopMode(LoopMode mode)
 {
     m_loopMode = mode;
+    if (m_ffmpegMovPlayer && m_ffmpegMovPlayer->hasMedia()) {
+        m_ffmpegMovPlayer->setLoopMode(toMpvLoopMode(mode));
+        return;
+    }
     if (m_mpvPlayer && m_mpvPlayer->hasMedia()) {
         m_mpvPlayer->setLoopMode(toMpvLoopMode(mode));
         return;
@@ -1153,6 +1250,10 @@ TLRenderPlayer::LoopMode TLRenderPlayer::loopMode() const
 
 void TLRenderPlayer::stepForward()
 {
+    if (m_ffmpegMovPlayer && m_ffmpegMovPlayer->hasMedia()) {
+        m_ffmpegMovPlayer->stepForward();
+        return;
+    }
     if (m_mpvPlayer && m_mpvPlayer->hasMedia()) {
         m_mpvPlayer->stepForward();
         return;
@@ -1165,6 +1266,10 @@ void TLRenderPlayer::stepForward()
 
 void TLRenderPlayer::stepBackward()
 {
+    if (m_ffmpegMovPlayer && m_ffmpegMovPlayer->hasMedia()) {
+        m_ffmpegMovPlayer->stepBackward();
+        return;
+    }
     if (m_mpvPlayer && m_mpvPlayer->hasMedia()) {
         m_mpvPlayer->stepBackward();
         return;
@@ -1177,6 +1282,12 @@ void TLRenderPlayer::stepBackward()
 
 void TLRenderPlayer::stepForwardBy(int frames)
 {
+    if (m_ffmpegMovPlayer && m_ffmpegMovPlayer->hasMedia()) {
+        for (int i = 0; i < frames; ++i) {
+            m_ffmpegMovPlayer->stepForward();
+        }
+        return;
+    }
 #ifdef HAVE_TLRENDER
     if (!m_player) return;
     for (int i = 0; i < frames; ++i) {
@@ -1187,6 +1298,12 @@ void TLRenderPlayer::stepForwardBy(int frames)
 
 void TLRenderPlayer::stepBackwardBy(int frames)
 {
+    if (m_ffmpegMovPlayer && m_ffmpegMovPlayer->hasMedia()) {
+        for (int i = 0; i < frames; ++i) {
+            m_ffmpegMovPlayer->stepBackward();
+        }
+        return;
+    }
 #ifdef HAVE_TLRENDER
     if (!m_player) return;
     for (int i = 0; i < frames; ++i) {
@@ -1197,6 +1314,10 @@ void TLRenderPlayer::stepBackwardBy(int frames)
 
 void TLRenderPlayer::gotoStart()
 {
+    if (m_ffmpegMovPlayer && m_ffmpegMovPlayer->hasMedia()) {
+        m_ffmpegMovPlayer->seek(0);
+        return;
+    }
 #ifdef HAVE_TLRENDER
     if (!m_player) return;
     m_player->gotoStart();
@@ -1205,6 +1326,10 @@ void TLRenderPlayer::gotoStart()
 
 void TLRenderPlayer::gotoEnd()
 {
+    if (m_ffmpegMovPlayer && m_ffmpegMovPlayer->hasMedia()) {
+        m_ffmpegMovPlayer->seek(m_ffmpegMovPlayer->duration());
+        return;
+    }
 #ifdef HAVE_TLRENDER
     if (!m_player) return;
     m_player->gotoEnd();
@@ -1218,6 +1343,10 @@ void TLRenderPlayer::gotoEnd()
 void TLRenderPlayer::setVolume(float volume)
 {
     m_volume = qBound(0.0f, volume, 1.0f);
+    if (m_ffmpegMovPlayer && m_ffmpegMovPlayer->hasMedia()) {
+        m_ffmpegMovPlayer->setVolume(m_volume);
+        return;
+    }
     if (m_mpvPlayer && m_mpvPlayer->hasMedia()) {
         m_mpvPlayer->setVolume(m_volume);
         return;
@@ -1237,6 +1366,10 @@ float TLRenderPlayer::volume() const
 void TLRenderPlayer::setMuted(bool muted)
 {
     m_muted = muted;
+    if (m_ffmpegMovPlayer && m_ffmpegMovPlayer->hasMedia()) {
+        m_ffmpegMovPlayer->setMuted(muted);
+        return;
+    }
     if (m_mpvPlayer && m_mpvPlayer->hasMedia()) {
         m_mpvPlayer->setMuted(muted);
         return;
@@ -1290,6 +1423,11 @@ TLRenderPlayer::MediaInfo TLRenderPlayer::mediaInfo() const
 MpvPlayer* TLRenderPlayer::mpvPlayer() const
 {
     return m_mpvPlayer;
+}
+
+FFmpegMovPlayer* TLRenderPlayer::ffmpegMovPlayer() const
+{
+    return m_ffmpegMovPlayer;
 }
 
 // ============================================================================
@@ -1630,6 +1768,10 @@ void TLRenderPlayer::tick()
 
 void TLRenderPlayer::refreshCurrentFrame()
 {
+    if (m_ffmpegMovPlayer && m_ffmpegMovPlayer->hasMedia()) {
+        emit videoFramesChanged();
+        return;
+    }
     if (m_mpvPlayer && m_mpvPlayer->hasMedia()) {
         emit videoFramesChanged();
         return;
@@ -1646,6 +1788,9 @@ void TLRenderPlayer::refreshCurrentFrame()
 
 void TLRenderPlayer::onUpdateTimer()
 {
+    if (m_ffmpegMovPlayer && m_ffmpegMovPlayer->hasMedia()) {
+        return;
+    }
     if (m_mpvPlayer && m_mpvPlayer->hasMedia()) {
         return;
     }
@@ -1662,6 +1807,13 @@ QImage TLRenderPlayer::getCurrentFrame(const QSize& targetSize)
 {
     QElapsedTimer timer;
     timer.start();
+    if (m_ffmpegMovPlayer && m_ffmpegMovPlayer->hasMedia()) {
+        QImage frame = m_ffmpegMovPlayer->currentFrameImage();
+        if (!frame.isNull() && !targetSize.isEmpty()) {
+            frame = frame.scaled(targetSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+        }
+        return frame;
+    }
     if (m_mpvPlayer && m_mpvPlayer->hasMedia()) {
         QImage frame = m_mpvPlayer->currentFrameImage();
         if (!frame.isNull() && !targetSize.isEmpty()) {
@@ -1721,7 +1873,8 @@ QImage TLRenderPlayer::getCurrentFrame(const QSize& targetSize)
 
 bool TLRenderPlayer::useMpvBackendForCurrentMedia(const QString& filePath) const
 {
-    return FileUtils::isVideoFile(QFileInfo(filePath).suffix());
+    const QString suffix = QFileInfo(filePath).suffix();
+    return FileUtils::isVideoFile(suffix) && suffix.compare(QStringLiteral("mov"), Qt::CaseInsensitive) != 0;
 }
 
 TLRenderPlayer::FrameAcquisitionStats TLRenderPlayer::frameAcquisitionStatsForTest() const

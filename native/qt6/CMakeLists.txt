@@ -345,6 +345,10 @@ qt_add_executable(kassetmanagerqt WIN32
     src/media/mpv_player.cpp
     src/media/mpv_viewport.h
     src/media/mpv_viewport.cpp
+    src/media/ffmpeg_mov_player.h
+    src/media/ffmpeg_mov_player.cpp
+    src/media/ffmpeg_mov_viewport.h
+    src/media/ffmpeg_mov_viewport.cpp
     src/media/tlrender_player.h
     src/media/tlrender_player.cpp
     src/media/tlrender_widget.h
