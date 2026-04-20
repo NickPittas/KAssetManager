@@ -657,11 +657,14 @@ void PreviewOverlay::setupUi()
     connect(nextFrameBtn, &QPushButton::clicked, this, &PreviewOverlay::onStepNextFrame);
     transportLayout->addWidget(nextFrameBtn);
 
-    // Audio controls group (right)
+    // Audio controls group (right), with loop/rate combos merged in
     QWidget *audioGroup = new QWidget(this);
     QHBoxLayout *audioLayout = new QHBoxLayout(audioGroup);
     audioLayout->setContentsMargins(0, 0, 0, 0);
     audioLayout->setSpacing(8);
+
+    audioLayout->addWidget(loopModeCombo);
+    audioLayout->addWidget(playbackRateCombo);
 
     muteBtn = new QPushButton(this);
     muteBtn->setIcon(audioIcon);
@@ -687,36 +690,25 @@ void PreviewOverlay::setupUi()
     connect(volumeSlider, &QSlider::valueChanged, this, &PreviewOverlay::onVolumeChanged);
     audioLayout->addWidget(volumeSlider);
 
-    // Bottom row grid to center transport and right-align audio
+    // Bottom row: transport spans full width (true center), audio overlaid on right
     QGridLayout *bottomGrid = new QGridLayout();
     bottomGrid->setContentsMargins(0, 0, 0, 0);
-    bottomGrid->setHorizontalSpacing(10);
+    bottomGrid->setHorizontalSpacing(0);
 
-    bottomGrid->setColumnStretch(0, 1); // left stretch
-    bottomGrid->setColumnStretch(1, 0); // center content
-    bottomGrid->setColumnStretch(2, 1); // right stretch (before audio)
-    bottomGrid->setColumnStretch(3, 0); // audio group
+    // Transport spans all columns so it centers in the full width
+    bottomGrid->addWidget(transport, 0, 0, 1, 2, Qt::AlignHCenter | Qt::AlignVCenter);
+    // Audio group in column 1 only, right-aligned (overlaps but doesn't affect transport center)
+    bottomGrid->addWidget(audioGroup, 0, 1, Qt::AlignRight | Qt::AlignVCenter);
 
-    bottomGrid->addWidget(transport, 0, 1, Qt::AlignHCenter | Qt::AlignVCenter);
-
-    bottomGrid->setColumnStretch(2, 0);
-
-    bottomGrid->addWidget(audioGroup, 0, 3, Qt::AlignRight | Qt::AlignVCenter);
+    bottomGrid->setColumnStretch(0, 1);
+    bottomGrid->setColumnStretch(1, 1);
 
     controlsLayout->addLayout(bottomGrid);
 
+    // playbackControlsGroup kept as a no-op container for existing show/hide calls
     playbackControlsGroup = new QWidget(this);
-    QHBoxLayout *playbackControlsLayout = new QHBoxLayout(playbackControlsGroup);
-    playbackControlsLayout->setContentsMargins(0, 0, 0, 0);
-    playbackControlsLayout->setSpacing(8);
-    playbackControlsLayout->addStretch();
-    playbackControlsLayout->addWidget(loopModeCombo);
-    playbackControlsLayout->addWidget(playbackRateCombo);
-    playbackControlsLayout->addStretch();
-    playbackControlsGroup->setFixedHeight(30);
+    playbackControlsGroup->setFixedHeight(0);
     playbackControlsGroup->hide();
-    controlsLayout->addWidget(playbackControlsGroup);
-    qDebug() << "[setupUi] playbackControlsGroup created and added to layout";
 
     mainLayout->addWidget(controlsWidget);
     // Overlay side navigation arrows
