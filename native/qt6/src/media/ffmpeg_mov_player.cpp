@@ -239,7 +239,7 @@ void FFmpegMovPlayer::stepBackward()
 
     BufferedFrame previousFrame;
     if (popBackwardFrame(&previousFrame)) {
-        presentBufferedFrame(previousFrame, true);
+        presentBufferedFrame(previousFrame, true, false);
         return;
     }
 
@@ -1037,7 +1037,7 @@ bool FFmpegMovPlayer::seekToTimestampInternal(int64_t targetTs, bool emitSignals
         return false;
     }
 
-    presentBufferedFrame(frame, emitSignals);
+    presentBufferedFrame(frame, emitSignals, false);
     if (m_mediaInfo.hasAudio) {
         syncAudioPosition(m_positionMs);
     }
@@ -1239,10 +1239,12 @@ bool FFmpegMovPlayer::takeBufferedFrameForPlayback(qint64 targetPositionMs, Buff
     return true;
 }
 
-void FFmpegMovPlayer::presentBufferedFrame(const BufferedFrame& frame, bool emitSignals)
+void FFmpegMovPlayer::presentBufferedFrame(const BufferedFrame& frame, bool emitSignals, bool pushToBackwardBuffer)
 {
     rememberPresentedFrame(frame);
-    pushBackwardFrame(frame);
+    if (pushToBackwardBuffer) {
+        pushBackwardFrame(frame);
+    }
 
     {
         QMutexLocker locker(&m_frameMutex);
@@ -1254,7 +1256,6 @@ void FFmpegMovPlayer::presentBufferedFrame(const BufferedFrame& frame, bool emit
     m_lastPresentedPts = frame.pts;
     m_positionMs = frame.positionMs;
     m_currentFrame = frame.frameNumber;
-    std::cerr << "[presentBufferedFrame] pts=" << frame.pts << " frame=" << frame.frameNumber << " imageSize=" << frame.image.size().width() << "x" << frame.image.size().height() << "\n";
 
     const qint64 positionMs = m_positionMs;
     const qint64 frameNumber = m_currentFrame;

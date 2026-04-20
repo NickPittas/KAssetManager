@@ -110,7 +110,7 @@ private:
     bool queueBufferedFrame(BufferedFrame&& frame, quint64 generation, bool satisfySeek);
     bool waitForSeekFrame(quint64 generation, BufferedFrame* frame, QString* errorString = nullptr);
     bool takeBufferedFrameForPlayback(qint64 targetPositionMs, BufferedFrame* frame, bool* reachedEndOfStream);
-    void presentBufferedFrame(const BufferedFrame& frame, bool emitSignals);
+    void presentBufferedFrame(const BufferedFrame& frame, bool emitSignals, bool pushToBackwardBuffer = true);
     void rememberPresentedFrame(const BufferedFrame& frame);
     bool takePreviousPresentedFrame(BufferedFrame* frame);
     void clearPresentedHistory();
