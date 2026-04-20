@@ -4,7 +4,6 @@
  * This uses tlRender's built-in qtwidget::Viewport which provides:
  * - Proper 5ms precision timer-driven rendering
  * - Internal player observation (no manual frame fetching)
- * - Built-in OCIO/LUT color pipeline
  * - Efficient dirty-flag based redraws
  */
 
@@ -14,9 +13,7 @@
 #include <QWidget>
 #include <QVBoxLayout>
 #include <QPoint>
-#include <QLabel>
-#include <QPainter>
-#include <QPixmap>
+#include <QImage>
 #include <QTimer>
 #include <QPointer>
 #include <QElapsedTimer>
@@ -38,7 +35,7 @@
  * @brief Qt wrapper around tlRender's native viewport
  *
  * This thin wrapper embeds tlRender's qtwidget::Viewport which handles
- * all rendering internally with proper timing and OCIO support.
+ * all rendering internally with proper timing.
  */
 class TLRenderViewport : public QWidget
 {
@@ -56,14 +53,6 @@ public:
      */
     void setPlayer(TLRenderPlayer* player);
     TLRenderPlayer* player() const { return m_player; }
-
-    /**
-     * @brief Set OCIO options on the viewport
-     */
-    void setOCIOOptions(const QString& configPath,
-                        const QString& inputColorSpace,
-                        const QString& display,
-                        const QString& view);
 
     /**
      * @brief Enable/disable frame view (fit to window)
@@ -94,6 +83,7 @@ public:
      * @brief Test-only access to the last raster-presented frame.
      */
     QImage currentRasterFrameForTest();
+    QImage currentPresentedFrameForTest();
     qint64 rasterPresentationRevisionForTest() const { return m_presentationRevision; }
 
 signals:
@@ -101,6 +91,7 @@ signals:
     void frameRendered();
 
 protected:
+    void paintEvent(QPaintEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
     bool eventFilter(QObject* watched, QEvent* event) override;
 
@@ -116,6 +107,7 @@ private:
     void setupViewportPlayer();
     void syncPresentationTimer();
     void syncBackendWidgetVisibility();
+    QRect rasterImageRect() const;
     bool useFfmpegMovViewport() const;
     bool useMpvViewport() const;
 
@@ -129,8 +121,8 @@ private:
     std::shared_ptr<ftk::Style> m_style;
     tl::qtwidget::Viewport* m_viewport{nullptr};
 #endif
-    QLabel* m_rasterLabel{nullptr};
     QTimer* m_presentationTimer = nullptr;
+    QImage m_rasterFrame;
 
 
     bool m_isPanning{false};

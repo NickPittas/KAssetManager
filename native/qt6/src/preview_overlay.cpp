@@ -162,194 +162,6 @@ void syncAnnotationOverlayToVideo(QGraphicsView* overlayView,
     overlayView->fitInView(overlayScene->sceneRect(), Qt::KeepAspectRatio);
 }
 
-#ifdef HAVE_TLRENDER
-const QString kOcioInputSrgb = QStringLiteral("sRGB");
-const QString kOcioInputRec709 = QStringLiteral("Rec.709");
-const QString kOcioEnabledSetting = QStringLiteral("OCIO/Enabled");
-const QString kOcioConfigSetting = QStringLiteral("OCIO/ConfigPath");
-const QString kOcioDefault8bitSetting = QStringLiteral("OCIO/DefaultInput8bit");
-const QString kOcioDefault16bitSetting = QStringLiteral("OCIO/DefaultInput16bit");
-const QString kOcioDefault32bitSetting = QStringLiteral("OCIO/DefaultInput32bit");
-const QString kOcioDefaultLogSetting = QStringLiteral("OCIO/DefaultInputLog");
-const QString kOcioLast8bitSetting = QStringLiteral("OCIO/LastInput8bit");
-const QString kOcioLast16bitSetting = QStringLiteral("OCIO/LastInput16bit");
-const QString kOcioLast32bitSetting = QStringLiteral("OCIO/LastInput32bit");
-const QString kOcioLastLogSetting = QStringLiteral("OCIO/LastInputLog");
-const QString kOcioLegacyVideoSetting = QStringLiteral("OCIO/LastInputColorspaceVideo");
-const QString kOcioLegacyOtherSetting = QStringLiteral("OCIO/LastInputColorspaceOther");
-
-enum class OcioInputCategory
-{
-    Bit8,
-    Bit16,
-    Bit32,
-    Log
-};
-
-bool isVideoExtension(const QString& ext)
-{
-    static const QStringList kVideoExtensions = {
-        "mp4", "avi", "mov", "mkv", "webm", "flv", "wmv", "m4v", "mxf"
-    };
-    return kVideoExtensions.contains(ext, Qt::CaseInsensitive);
-}
-
-bool isLogExtension(const QString& ext)
-{
-    static const QStringList kLogExtensions = {
-        "dpx", "cin", "cineon"
-    };
-    return kLogExtensions.contains(ext, Qt::CaseInsensitive);
-}
-
-int detectImageBitDepth(const QString& filePath)
-{
-#ifdef HAVE_OPENIMAGEIO
-    using namespace OIIO;
-    auto in = ImageInput::open(filePath.toStdString());
-    if (!in) {
-        return 0;
-    }
-    const ImageSpec& spec = in->spec();
-    in->close();
-    switch (spec.format.basetype) {
-        case TypeDesc::UINT8:
-            return 8;
-        case TypeDesc::UINT16:
-        case TypeDesc::HALF:
-            return 16;
-        case TypeDesc::FLOAT:
-        case TypeDesc::DOUBLE:
-            return 32;
-        default:
-            return 0;
-    }
-#else
-    Q_UNUSED(filePath);
-    return 0;
-#endif
-}
-
-OcioInputCategory ocioCategoryForFile(const QString& filePath)
-{
-    const QString ext = QFileInfo(filePath).suffix().toLower();
-    if (isLogExtension(ext)) {
-        return OcioInputCategory::Log;
-    }
-
-    const QStringList hdrExts = {"exr", "hdr", "pfm", "pic"};
-    if (hdrExts.contains(ext)) {
-        const int depth = detectImageBitDepth(filePath);
-        if (depth >= 32) {
-            return OcioInputCategory::Bit32;
-        }
-        if (depth == 16) {
-            return OcioInputCategory::Bit16;
-        }
-    }
-
-    return OcioInputCategory::Bit8;
-}
-
-QString ocioDefaultKey(OcioInputCategory category)
-{
-    switch (category) {
-        case OcioInputCategory::Bit8: return kOcioDefault8bitSetting;
-        case OcioInputCategory::Bit16: return kOcioDefault16bitSetting;
-        case OcioInputCategory::Bit32: return kOcioDefault32bitSetting;
-        case OcioInputCategory::Log: return kOcioDefaultLogSetting;
-    }
-    return QString();
-}
-
-QString ocioLastKey(OcioInputCategory category)
-{
-    switch (category) {
-        case OcioInputCategory::Bit8: return kOcioLast8bitSetting;
-        case OcioInputCategory::Bit16: return kOcioLast16bitSetting;
-        case OcioInputCategory::Bit32: return kOcioLast32bitSetting;
-        case OcioInputCategory::Log: return kOcioLastLogSetting;
-    }
-    return QString();
-}
-
-QString findMatchingColorspace(const QStringList& colorspaces, const QStringList& preferred)
-{
-    for (const QString& candidate : preferred) {
-        const int exactIdx = colorspaces.indexOf(candidate);
-        if (exactIdx >= 0) {
-            return colorspaces.at(exactIdx);
-        }
-    }
-
-    for (const QString& candidate : preferred) {
-        for (const QString& colorspace : colorspaces) {
-            if (colorspace.contains(candidate, Qt::CaseInsensitive) &&
-                !colorspace.contains(QStringLiteral("Display"), Qt::CaseInsensitive)) {
-                return colorspace;
-            }
-        }
-    }
-
-    return QString();
-}
-
-QString findBundledAcesConfig()
-{
-    const QString appDir = QCoreApplication::applicationDirPath();
-    const QStringList roots = {
-        appDir,
-        QDir(appDir).filePath(".."),
-        QDir(appDir).filePath("../.."),
-        QDir(appDir).filePath("../../.."),
-        QDir(appDir).filePath("../../../.."),
-        QDir::currentPath(),
-        QDir(QDir::currentPath()).filePath(".."),
-        QDir(QDir::currentPath()).filePath("../.."),
-        QDir(QDir::currentPath()).filePath("../../..")
-    };
-    const QStringList relPaths = {
-        QStringLiteral("OpenColorIO-Config-ACES-1.2/aces_1.2/config.ocio"),
-        QStringLiteral("OpenColorIO-Config-ACES-1.2/config.ocio"),
-        QStringLiteral("OpenColorIO/aces_1.2/config.ocio"),
-        QStringLiteral("ocio/config.ocio")
-    };
-    for (const QString& root : roots) {
-        for (const QString& relPath : relPaths) {
-            const QString candidate = QDir(root).filePath(relPath);
-            if (QFileInfo::exists(candidate)) {
-                return QDir::cleanPath(candidate);
-            }
-        }
-    }
-
-    const QStringList envVars = {QStringLiteral("OCIO"), QStringLiteral("OCIO_CONFIG")};
-    for (const QString& envVar : envVars) {
-        const QString candidate = qEnvironmentVariable(envVar.toUtf8().constData());
-        if (!candidate.isEmpty() && QFileInfo::exists(candidate)) {
-            return QDir::cleanPath(candidate);
-        }
-    }
-
-#if defined(Q_OS_LINUX)
-    const QStringList linuxFallbacks = {
-        QStringLiteral("/opt/BorisFX/MochaPro2026/resources/ocio/default/config.ocio"),
-        QStringLiteral("/opt/BorisFX/SapphireOFX/ocio/config.ocio"),
-        QStringLiteral("/opt/Nuke17.0v1/plugins/OCIOConfigs/configs/nuke-default/config.ocio"),
-        QStringLiteral("/opt/resolve/Fusion/LUTs/DefaultConfig.ocio"),
-        QStringLiteral("/usr/autodesk/maya2026/resources/OCIO-configs/Maya2022-default/config.ocio"),
-        QStringLiteral("/usr/autodesk/maya2026/resources/OCIO-configs/Maya-legacy/config.ocio")
-    };
-    for (const QString& candidate : linuxFallbacks) {
-        if (QFileInfo::exists(candidate)) {
-            return candidate;
-        }
-    }
-#endif
-
-    return QString();
-}
-#endif
 } // namespace
 
 // Load media icons from disk without recoloring.
@@ -432,8 +244,6 @@ PreviewOverlay::PreviewOverlay(QWidget *parent)
     , sequenceStartFrame(0)
     , sequenceEndFrame(0)
     , sequencePlaying(false)
-    , currentColorSpace(OIIOImageLoader::ColorSpace::sRGB)
-    , isHDRImage(false)
     , useCacheForSequences(true) // ENABLED - using QRecursiveMutex to fix deadlock
     , annotationLayer(nullptr)
     , annotationModeEnabled(false)
@@ -777,99 +587,6 @@ void PreviewOverlay::setupUi()
         controlsLayout->addLayout(timelineRow);
     }
 
-    // Optional colorspace selector (hidden until relevant)
-    colorSpaceLabel = new QLabel("Colorspace", this);
-    colorSpaceLabel->setStyleSheet("QLabel { color: white; font-size: 14px; padding: 0 5px; }");
-    colorSpaceLabel->hide();
-
-    colorSpaceCombo = new QComboBox(this);
-    // Order: sRGB, Rec.709, Linear
-    colorSpaceCombo->addItem("sRGB");
-    colorSpaceCombo->addItem("Rec.709");
-    colorSpaceCombo->addItem("Linear");
-    colorSpaceCombo->setCurrentIndex(0);
-    colorSpaceCombo->setFocusPolicy(Qt::NoFocus);
-    colorSpaceCombo->setStyleSheet(
-        "QComboBox { background-color: #333; color: white; border: 1px solid #555; "
-        "padding: 5px; border-radius: 3px; min-width: 100px; }"
-        "QComboBox::drop-down { border: none; }"
-        "QComboBox::down-arrow { image: none; border: none; }"
-        "QComboBox QAbstractItemView { background-color: #333; color: white; selection-background-color: #58a6ff; }"
-    );
-    colorSpaceCombo->hide();
-    connect(colorSpaceCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &PreviewOverlay::onColorSpaceChanged);
-
-#ifdef HAVE_TLRENDER
-    // OCIO controls (hidden until video/sequence playback)
-    ocioEnableCheck = new QCheckBox("OCIO", this);
-    ocioEnableCheck->setFocusPolicy(Qt::NoFocus);
-    ocioEnableCheck->setStyleSheet("QCheckBox { color: white; font-size: 14px; padding: 0 4px; }");
-    ocioEnableCheck->setChecked(true);
-    ocioEnableCheck->hide();
-
-    ocioConfigBtn = new QPushButton("Config…", this);
-    ocioConfigBtn->setFocusPolicy(Qt::NoFocus);
-    ocioConfigBtn->setStyleSheet(
-        "QPushButton { background-color: #444; color: white; font-size: 13px; border-radius: 6px; padding: 4px 8px; border: none; }"
-        "QPushButton:hover { background-color: #555; }"
-    );
-    ocioConfigBtn->hide();
-
-    ocioInputLabel = new QLabel("Input", this);
-    ocioInputLabel->setStyleSheet("QLabel { color: white; font-size: 14px; padding: 0 4px; }");
-    ocioInputLabel->hide();
-
-    ocioInputCombo = new QComboBox(this);
-    ocioInputCombo->setFocusPolicy(Qt::NoFocus);
-    ocioInputCombo->setEditable(true);
-    ocioInputCombo->setInsertPolicy(QComboBox::NoInsert);
-    ocioInputCombo->setStyleSheet(
-        "QComboBox { background-color: #333; color: white; border: 1px solid #555; padding: 5px; border-radius: 3px; min-width: 200px; }"
-        "QComboBox::drop-down { border: none; }"
-        "QComboBox::down-arrow { image: none; border: none; }"
-        "QComboBox QAbstractItemView { background-color: #333; color: white; selection-background-color: #58a6ff; }"
-    );
-    if (auto *edit = ocioInputCombo->lineEdit()) {
-        edit->setPlaceholderText("Search...");
-        edit->setClearButtonEnabled(true);
-    }
-    auto *ocioCompleter = new QCompleter(ocioInputCombo);
-    ocioCompleter->setModel(ocioInputCombo->model());
-    ocioCompleter->setCompletionMode(QCompleter::PopupCompletion);
-    ocioCompleter->setFilterMode(Qt::MatchContains);
-    ocioCompleter->setCaseSensitivity(Qt::CaseInsensitive);
-    ocioInputCombo->setCompleter(ocioCompleter);
-    ocioInputCombo->hide();
-
-    ocioDisplayLabel = new QLabel("Display", this);
-    ocioDisplayLabel->setStyleSheet("QLabel { color: white; font-size: 14px; padding: 0 4px; }");
-    ocioDisplayLabel->hide();
-
-    ocioDisplayCombo = new QComboBox(this);
-    ocioDisplayCombo->setFocusPolicy(Qt::NoFocus);
-    ocioDisplayCombo->setStyleSheet(
-        "QComboBox { background-color: #333; color: white; border: 1px solid #555; padding: 5px; border-radius: 3px; min-width: 120px; }"
-        "QComboBox::drop-down { border: none; }"
-        "QComboBox::down-arrow { image: none; border: none; }"
-        "QComboBox QAbstractItemView { background-color: #333; color: white; selection-background-color: #58a6ff; }"
-    );
-    ocioDisplayCombo->hide();
-
-    ocioViewLabel = new QLabel("View", this);
-    ocioViewLabel->setStyleSheet("QLabel { color: white; font-size: 14px; padding: 0 4px; }");
-    ocioViewLabel->hide();
-
-    ocioViewCombo = new QComboBox(this);
-    ocioViewCombo->setFocusPolicy(Qt::NoFocus);
-    ocioViewCombo->setStyleSheet(
-        "QComboBox { background-color: #333; color: white; border: 1px solid #555; padding: 5px; border-radius: 3px; min-width: 160px; }"
-        "QComboBox::drop-down { border: none; }"
-        "QComboBox::down-arrow { image: none; border: none; }"
-        "QComboBox QAbstractItemView { background-color: #333; color: white; selection-background-color: #58a6ff; }"
-    );
-    ocioViewCombo->hide();
-    
-    // Loop mode combo
     loopModeCombo = new QComboBox(this);
     loopModeCombo->setFocusPolicy(Qt::NoFocus);
     loopModeCombo->addItems({"Loop", "Once", "Ping-Pong"});
@@ -880,53 +597,17 @@ void PreviewOverlay::setupUi()
         "QComboBox::down-arrow { image: none; border: none; }"
         "QComboBox QAbstractItemView { background-color: #333; color: white; selection-background-color: #58a6ff; }"
     );
-    // Visibility managed by parent playbackControlsGroup
-    
-    // Playback rate combo
+
     playbackRateCombo = new QComboBox(this);
     playbackRateCombo->setFocusPolicy(Qt::NoFocus);
     playbackRateCombo->addItems({"0.25x", "0.5x", "1x", "1.5x", "2x", "4x"});
-    playbackRateCombo->setCurrentIndex(2); // Default to 1x
+    playbackRateCombo->setCurrentIndex(2);
     playbackRateCombo->setStyleSheet(
         "QComboBox { background-color: #333; color: white; border: 1px solid #555; padding: 5px; border-radius: 3px; min-width: 60px; }"
         "QComboBox::drop-down { border: none; }"
         "QComboBox::down-arrow { image: none; border: none; }"
         "QComboBox QAbstractItemView { background-color: #333; color: white; selection-background-color: #58a6ff; }"
     );
-    // Visibility managed by parent playbackControlsGroup
-    
-    // Exposure slider
-    exposureLabel = new QLabel("Exp: 0.0", this);
-    exposureLabel->setStyleSheet("QLabel { color: white; font-size: 12px; min-width: 55px; }");
-    // Visibility managed by parent playbackControlsGroup
-    
-    exposureSlider = new QSlider(Qt::Horizontal, this);
-    exposureSlider->setFocusPolicy(Qt::NoFocus);
-    exposureSlider->setRange(-100, 100); // -10.0 to 10.0 with 0.1 steps
-    exposureSlider->setValue(0);
-    exposureSlider->setFixedWidth(80);
-    exposureSlider->setStyleSheet(
-        "QSlider::groove:horizontal { background: #555; height: 4px; border-radius: 2px; }"
-        "QSlider::handle:horizontal { background: #fff; border: 1px solid #58a6ff; width: 10px; margin: -4px 0; border-radius: 5px; }"
-    );
-    // Visibility managed by parent playbackControlsGroup
-    
-    // Gamma slider
-    gammaLabel = new QLabel("γ: 1.0", this);
-    gammaLabel->setStyleSheet("QLabel { color: white; font-size: 12px; min-width: 45px; }");
-    // Visibility managed by parent playbackControlsGroup
-    
-    gammaSlider = new QSlider(Qt::Horizontal, this);
-    gammaSlider->setFocusPolicy(Qt::NoFocus);
-    gammaSlider->setRange(10, 400); // 0.1 to 4.0 with 0.01 steps
-    gammaSlider->setValue(100); // 1.0
-    gammaSlider->setFixedWidth(80);
-    gammaSlider->setStyleSheet(
-        "QSlider::groove:horizontal { background: #555; height: 4px; border-radius: 2px; }"
-        "QSlider::handle:horizontal { background: #fff; border: 1px solid #58a6ff; width: 10px; margin: -4px 0; border-radius: 5px; }"
-    );
-    // Visibility managed by parent playbackControlsGroup
-#endif
 
     // ========== ROW 3: Playback (center) + Audio (right) ==========
     // Transport (Prev - Play/Pause - Next)
@@ -1018,33 +699,12 @@ void PreviewOverlay::setupUi()
 
     bottomGrid->addWidget(transport, 0, 1, Qt::AlignHCenter | Qt::AlignVCenter);
 
-    // Keep color space controls in layout (hidden) between center and right
-    QWidget *csGroup = new QWidget(this);
-    QHBoxLayout *csLayout = new QHBoxLayout(csGroup);
-    csLayout->setContentsMargins(0, 0, 0, 0);
-    csLayout->setSpacing(6);
-    csLayout->addWidget(colorSpaceLabel);
-    csLayout->addWidget(colorSpaceCombo);
-#ifdef HAVE_TLRENDER
-    csLayout->addSpacing(8);
-    csLayout->addWidget(ocioEnableCheck);
-    csLayout->addWidget(ocioConfigBtn);
-    csLayout->addWidget(ocioInputLabel);
-    csLayout->addWidget(ocioInputCombo);
-    csLayout->addWidget(ocioDisplayLabel);
-    csLayout->addWidget(ocioDisplayCombo);
-    csLayout->addWidget(ocioViewLabel);
-    csLayout->addWidget(ocioViewCombo);
-#endif
-    // Do not forcibly hide the container; children visibility will control it
-    bottomGrid->addWidget(csGroup, 0, 2, Qt::AlignVCenter);
+    bottomGrid->setColumnStretch(2, 0);
 
     bottomGrid->addWidget(audioGroup, 0, 3, Qt::AlignRight | Qt::AlignVCenter);
 
     controlsLayout->addLayout(bottomGrid);
 
-#ifdef HAVE_TLRENDER
-    // Playback controls row (Loop, Rate, Exposure, Gamma) - added as separate row in controlsLayout
     playbackControlsGroup = new QWidget(this);
     QHBoxLayout *playbackControlsLayout = new QHBoxLayout(playbackControlsGroup);
     playbackControlsLayout->setContentsMargins(0, 0, 0, 0);
@@ -1052,19 +712,11 @@ void PreviewOverlay::setupUi()
     playbackControlsLayout->addStretch();
     playbackControlsLayout->addWidget(loopModeCombo);
     playbackControlsLayout->addWidget(playbackRateCombo);
-    playbackControlsLayout->addSpacing(16);
-    playbackControlsLayout->addWidget(exposureLabel);
-    playbackControlsLayout->addWidget(exposureSlider);
-    playbackControlsLayout->addWidget(gammaLabel);
-    playbackControlsLayout->addWidget(gammaSlider);
     playbackControlsLayout->addStretch();
     playbackControlsGroup->setFixedHeight(30);
-    playbackControlsGroup->hide(); // Hidden by default
-    
-    // Add directly to controls layout as a new row
+    playbackControlsGroup->hide();
     controlsLayout->addWidget(playbackControlsGroup);
     qDebug() << "[setupUi] playbackControlsGroup created and added to layout";
-#endif
 
     mainLayout->addWidget(controlsWidget);
     // Overlay side navigation arrows
@@ -1103,100 +755,13 @@ void PreviewOverlay::setupUi()
         navNextBtn->show();
     }
 
-#ifdef HAVE_TLRENDER
     // Delay all tlRender setup until a video/sequence is actually shown.
     // Creating the player or hidden GL surfaces up front is unstable on Wayland/NVIDIA.
 
-    // Wire OCIO controls
-    if (ocioEnableCheck) {
-        connect(ocioEnableCheck, &QCheckBox::toggled, this, [this](bool enabled) {
-            ensurePlayer();
-            if (!m_player) return;
-            m_player->setOCIOEnabled(enabled);
-            QSettings settings("AugmentCode", "KAssetManager");
-            settings.setValue(kOcioEnabledSetting, enabled);
-            if (controlsTimer) {
-                controlsTimer->start();
-            }
-        });
-    }
-    if (ocioConfigBtn) {
-        connect(ocioConfigBtn, &QPushButton::clicked, this, [this]() {
-            const QString filePath = QFileDialog::getOpenFileName(
-                this,
-                tr("Select OCIO config"),
-                QString(),
-                tr("OCIO Config (config.ocio);;All Files (*.*)")
-            );
-            if (!filePath.isEmpty()) {
-                ensurePlayer();
-                if (!m_player) return;
-                m_player->setOCIOConfig(filePath);
-                QSettings settings("AugmentCode", "KAssetManager");
-                settings.setValue(kOcioConfigSetting, filePath);
-            }
-        });
-    }
-    if (ocioInputCombo) {
-        connect(ocioInputCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int idx) {
-            if (idx < 0) return;
-            ensurePlayer();
-            if (!m_player) return;
-            const QString colorspace = ocioInputCombo->itemText(idx);
-            m_player->setInputColorspace(colorspace);
-
-            const OcioInputCategory category = ocioCategoryForFile(currentFilePath);
-            const QString settingsKey = ocioLastKey(category);
-            if (!settingsKey.isEmpty()) {
-                QSettings settings("AugmentCode", "KAssetManager");
-                settings.setValue(settingsKey, colorspace);
-            }
-            controlsTimer->start();
-        });
-    }
-    if (ocioDisplayCombo) {
-        connect(ocioDisplayCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int idx) {
-            if (idx < 0) return;
-            ensurePlayer();
-            if (!m_player) return;
-            const QString display = ocioDisplayCombo->itemText(idx);
-            m_player->setDisplay(display);
-
-            if (ocioViewCombo) {
-                const QStringList views = m_player->availableViews(display);
-                ocioViewCombo->blockSignals(true);
-                ocioViewCombo->clear();
-                ocioViewCombo->addItems(views);
-                // Try to keep the player's current view selected
-                const int viewIdx = ocioViewCombo->findText(m_player->view());
-                if (viewIdx >= 0) {
-                    ocioViewCombo->setCurrentIndex(viewIdx);
-                }
-                ocioViewCombo->blockSignals(false);
-            }
-            controlsTimer->start();
-        });
-    }
-    if (ocioViewCombo) {
-        connect(ocioViewCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int idx) {
-            if (idx < 0) return;
-            ensurePlayer();
-            if (!m_player) return;
-            const QString view = ocioViewCombo->itemText(idx);
-            m_player->setView(view);
-            // Save to settings for persistence
-            QSettings settings("AugmentCode", "KAssetManager");
-            settings.setValue("OCIO/LastView", view);
-            settings.setValue("OCIO/LastDisplay", m_player->display());
-            controlsTimer->start();
-        });
-    }
-    
     // Loop mode control
     if (loopModeCombo) {
         connect(loopModeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int idx) {
-            ensurePlayer();
-            if (!m_player) return;
+            if (!isVideo || !m_player) return;
             TLRenderPlayer::LoopMode mode = TLRenderPlayer::LoopMode::Loop;
             switch (idx) {
                 case 0: mode = TLRenderPlayer::LoopMode::Loop; break;
@@ -1211,8 +776,7 @@ void PreviewOverlay::setupUi()
     // Playback rate control
     if (playbackRateCombo) {
         connect(playbackRateCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int idx) {
-            ensurePlayer();
-            if (!m_player) return;
+            if (!isVideo || !m_player) return;
             static const double rates[] = {0.25, 0.5, 1.0, 1.5, 2.0, 4.0};
             if (idx >= 0 && idx < 6) {
                 m_player->setPlaybackRate(rates[idx]);
@@ -1220,37 +784,6 @@ void PreviewOverlay::setupUi()
             controlsTimer->start();
         });
     }
-    
-    // Exposure slider
-    if (exposureSlider) {
-        connect(exposureSlider, &QSlider::valueChanged, this, [this](int value) {
-            ensurePlayer();
-            if (!m_player) return;
-            float exposure = value / 10.0f; // -10.0 to 10.0
-            m_player->setExposure(exposure);
-            if (exposureLabel) {
-                exposureLabel->setText(QString("Exp: %1").arg(exposure, 0, 'f', 1));
-            }
-            controlsTimer->start();
-        });
-    }
-    
-    // Gamma slider
-    if (gammaSlider) {
-        connect(gammaSlider, &QSlider::valueChanged, this, [this](int value) {
-            ensurePlayer();
-            if (!m_player) return;
-            float gamma = value / 100.0f; // 0.1 to 4.0
-            m_player->setGamma(gamma);
-            if (gammaLabel) {
-                gammaLabel->setText(QString("γ: %1").arg(gamma, 0, 'f', 2));
-            }
-            controlsTimer->start();
-        });
-    }
-
-    // Populate OCIO lists once we have a config loaded
-#endif
     
     // Initialize annotation system
     annotationLayer = new AnnotationLayer(imageScene, this);
@@ -1273,7 +806,6 @@ void PreviewOverlay::setupUi()
     setupAnnotationToolbar();
 }
 
-#ifdef HAVE_TLRENDER
 void PreviewOverlay::ensurePlayer()
 {
     if (m_player) {
@@ -1289,120 +821,7 @@ void PreviewOverlay::ensurePlayer()
     connect(m_player, &TLRenderPlayer::error, this, &PreviewOverlay::onPlayerError);
     connect(m_player, &TLRenderPlayer::endOfStream, this, &PreviewOverlay::onPlayerEndOfStream);
 
-    connect(m_player, &TLRenderPlayer::colorspacesChanged, this, [this](const QStringList& colorspaces) {
-        populateOcioInputColorspaces(colorspaces);
-        if (!currentFilePath.isEmpty()) {
-            applyOcioInputDefaults(currentFilePath);
-        }
-    });
-    connect(m_player, &TLRenderPlayer::displaysChanged, this, [this](const QStringList& displays) {
-        if (!ocioDisplayCombo || !m_player) return;
-        ocioDisplayCombo->blockSignals(true);
-        ocioDisplayCombo->clear();
-        ocioDisplayCombo->addItems(displays);
-
-        QSettings settings("AugmentCode", "KAssetManager");
-        const QString lastDisplay = settings.value("OCIO/LastDisplay").toString();
-        int idx = !lastDisplay.isEmpty() ? ocioDisplayCombo->findText(lastDisplay) : -1;
-        if (idx < 0) {
-            idx = ocioDisplayCombo->findText(m_player->display());
-        }
-        if (idx >= 0) {
-            ocioDisplayCombo->setCurrentIndex(idx);
-        }
-        ocioDisplayCombo->blockSignals(false);
-
-        if (ocioViewCombo) {
-            const QString display = (idx >= 0) ? ocioDisplayCombo->itemText(idx)
-                                               : (ocioDisplayCombo->count() > 0 ? ocioDisplayCombo->itemText(0) : QString());
-            const QStringList views = display.isEmpty() ? QStringList() : m_player->availableViews(display);
-            ocioViewCombo->blockSignals(true);
-            ocioViewCombo->clear();
-            ocioViewCombo->addItems(views);
-
-            const QString lastView = settings.value("OCIO/LastView").toString();
-            int viewIdx = !lastView.isEmpty() ? ocioViewCombo->findText(lastView) : -1;
-            if (viewIdx < 0 && !currentFilePath.isEmpty()) {
-                const QString ext = QFileInfo(currentFilePath).suffix().toLower();
-                const int rec709Idx = ocioViewCombo->findText("Rec.709", Qt::MatchFixedString);
-                const int srgbIdx = ocioViewCombo->findText("sRGB", Qt::MatchFixedString);
-                if (isVideoExtension(ext)) {
-                    viewIdx = (rec709Idx >= 0) ? rec709Idx : srgbIdx;
-                } else if (srgbIdx >= 0) {
-                    viewIdx = srgbIdx;
-                }
-            }
-            if (viewIdx < 0) {
-                viewIdx = ocioViewCombo->findText(m_player->view());
-            }
-            if (viewIdx >= 0) {
-                ocioViewCombo->setCurrentIndex(viewIdx);
-            }
-            ocioViewCombo->blockSignals(false);
-        }
-    });
-    connect(m_player, &TLRenderPlayer::viewsChanged, this, [this](const QStringList& views) {
-        if (!ocioViewCombo || !m_player) return;
-        ocioViewCombo->blockSignals(true);
-        ocioViewCombo->clear();
-        ocioViewCombo->addItems(views);
-
-        QSettings settings("AugmentCode", "KAssetManager");
-        const QString lastView = settings.value("OCIO/LastView").toString();
-        int viewIdx = !lastView.isEmpty() ? ocioViewCombo->findText(lastView) : -1;
-        if (viewIdx < 0 && !currentFilePath.isEmpty()) {
-            const QString ext = QFileInfo(currentFilePath).suffix().toLower();
-            const int rec709Idx = ocioViewCombo->findText("Rec.709", Qt::MatchFixedString);
-            const int srgbIdx = ocioViewCombo->findText("sRGB", Qt::MatchFixedString);
-            if (isVideoExtension(ext)) {
-                viewIdx = (rec709Idx >= 0) ? rec709Idx : srgbIdx;
-            } else if (srgbIdx >= 0) {
-                viewIdx = srgbIdx;
-            }
-        }
-        if (viewIdx < 0) {
-            viewIdx = ocioViewCombo->findText(m_player->view());
-        }
-        if (viewIdx >= 0) {
-            ocioViewCombo->setCurrentIndex(viewIdx);
-        }
-        ocioViewCombo->blockSignals(false);
-    });
-
     m_player->setVolume(0.5);
-
-    QSettings settings("AugmentCode", "KAssetManager");
-    const bool ocioEnabled = settings.value(kOcioEnabledSetting, true).toBool();
-    if (ocioEnableCheck) {
-        QSignalBlocker blocker(ocioEnableCheck);
-        ocioEnableCheck->setChecked(ocioEnabled);
-    }
-    m_player->setOCIOEnabled(ocioEnabled);
-
-    QString configPath = settings.value(kOcioConfigSetting).toString();
-    if (!configPath.isEmpty() && !QFileInfo::exists(configPath)) {
-        qWarning() << "[PreviewOverlay] OCIO config not found at" << configPath;
-        configPath.clear();
-    }
-    if (configPath.isEmpty()) {
-        configPath = findBundledAcesConfig();
-    }
-    if (!configPath.isEmpty()) {
-        m_player->setOCIOConfig(configPath);
-    } else {
-        qWarning() << "[PreviewOverlay] ACES OCIO config not found.";
-    }
-
-    const QString lastDisplay = settings.value("OCIO/LastDisplay").toString();
-    const QString lastView = settings.value("OCIO/LastView").toString();
-    if (!lastDisplay.isEmpty()) {
-        m_player->setDisplay(lastDisplay);
-    }
-    if (!lastView.isEmpty()) {
-        m_player->setView(lastView);
-    }
-
-    qDebug() << "[PreviewOverlay] TLRenderPlayer initialized with OCIO color management";
 }
 
 void PreviewOverlay::ensureRenderWidget()
@@ -1434,100 +853,6 @@ void PreviewOverlay::ensureRenderWidget()
     m_renderWidget->setPlayer(m_player);
 }
 
-void PreviewOverlay::populateOcioInputColorspaces(const QStringList& colorspaces)
-{
-    if (!ocioInputCombo) return;
-    QSignalBlocker blocker(ocioInputCombo);
-    ocioInputCombo->clear();
-    ocioInputCombo->addItems(colorspaces);
-}
-
-QString PreviewOverlay::defaultOcioInputName(const QString& filePath) const
-{
-    const QStringList colorspaces = m_player ? m_player->availableColorspaces() : QStringList();
-    const QString ext = QFileInfo(filePath).suffix().toLower();
-    if (isVideoExtension(ext)) {
-        return findMatchingColorspace(colorspaces, {
-            QStringLiteral("Camera Rec.709"),
-            QStringLiteral("Rec.709"),
-            QStringLiteral("sRGB Encoded Rec.709"),
-            QStringLiteral("Gamma 2.4 Encoded Rec.709"),
-            QStringLiteral("Linear Rec.709"),
-            kOcioInputRec709
-        });
-    }
-
-    return findMatchingColorspace(colorspaces, {
-        QStringLiteral("sRGB Encoded Rec.709"),
-        QStringLiteral("sRGB"),
-        QStringLiteral("Linear Rec.709"),
-        kOcioInputSrgb
-    });
-}
-
-void PreviewOverlay::applyOcioInputDefaults(const QString& filePath)
-{
-    if (!m_player || !ocioInputCombo) return;
-    const QStringList colorspaces = m_player->availableColorspaces();
-    if (colorspaces.isEmpty()) return;
-
-    QSettings settings("AugmentCode", "KAssetManager");
-    const OcioInputCategory category = ocioCategoryForFile(filePath);
-    QString selected;
-    const QString lastKey = ocioLastKey(category);
-    const QString defaultKey = ocioDefaultKey(category);
-
-    if (!lastKey.isEmpty()) {
-        selected = settings.value(lastKey).toString();
-    }
-    if (selected.isEmpty() || !colorspaces.contains(selected)) {
-        if (!defaultKey.isEmpty()) {
-            selected = settings.value(defaultKey).toString();
-        }
-    }
-    if (selected.isEmpty() || !colorspaces.contains(selected)) {
-        if (category == OcioInputCategory::Bit8) {
-            selected = defaultOcioInputName(filePath);
-        } else {
-            const QString current = m_player->inputColorspace();
-            if (colorspaces.contains(current)) {
-                selected = current;
-            }
-        }
-    }
-    if (selected.isEmpty() || !colorspaces.contains(selected)) {
-        if (category == OcioInputCategory::Bit8) {
-            const QString legacyKey = isVideoExtension(QFileInfo(filePath).suffix().toLower())
-                ? kOcioLegacyVideoSetting
-                : kOcioLegacyOtherSetting;
-            const QString legacyValue = settings.value(legacyKey).toString();
-            if (colorspaces.contains(legacyValue)) {
-                selected = legacyValue;
-            }
-        }
-    }
-    if (selected.isEmpty() || !colorspaces.contains(selected)) {
-        if (category == OcioInputCategory::Bit8) {
-            selected = defaultOcioInputName(filePath);
-        }
-        if (selected.isEmpty() && !colorspaces.isEmpty()) {
-            selected = colorspaces.first();
-        }
-    }
-
-    if (selected.isEmpty() || !colorspaces.contains(selected)) {
-        return;
-    }
-
-    const int idx = ocioInputCombo->findText(selected);
-    if (idx >= 0) {
-        QSignalBlocker blocker(ocioInputCombo);
-        ocioInputCombo->setCurrentIndex(idx);
-    }
-    m_player->setInputColorspace(selected);
-}
-#endif
-
 void PreviewOverlay::showAsset(const QString &filePath, const QString &fileName, const QString &fileType)
 {
     // First, stop any ongoing playback (video, fallback, or sequence)
@@ -1545,19 +870,6 @@ void PreviewOverlay::showAsset(const QString &filePath, const QString &fileName,
     if (sequenceTimer->isActive()) {
         sequenceTimer->stop();
     }
-
-#ifdef HAVE_TLRENDER
-    // Default to hiding OCIO controls; showVideo()/showSequence(tlRender path) will enable them.
-    if (ocioEnableCheck) ocioEnableCheck->hide();
-    if (ocioConfigBtn) ocioConfigBtn->hide();
-    if (ocioInputLabel) ocioInputLabel->hide();
-    if (ocioInputCombo) ocioInputCombo->hide();
-    if (ocioDisplayLabel) ocioDisplayLabel->hide();
-    if (ocioDisplayCombo) ocioDisplayCombo->hide();
-    if (ocioViewLabel) ocioViewLabel->hide();
-    if (ocioViewCombo) ocioViewCombo->hide();
-#endif
-
     // Office parse-only previews
     if (fileType.compare("doc", Qt::CaseInsensitive) == 0) {
         currentFilePath = filePath;
@@ -1618,7 +930,6 @@ void PreviewOverlay::showAsset(const QString &filePath, const QString &fileName,
         setControlsVisible(false);
         if (alphaCheck) alphaCheck->hide();
         isVideo = false;
-        isHDRImage = false;
         originalPixmap = QPixmap();
         return;
     }
@@ -1639,7 +950,6 @@ void PreviewOverlay::showAsset(const QString &filePath, const QString &fileName,
         setControlsVisible(false);
         if (alphaCheck) alphaCheck->hide();
         isVideo = false;
-        isHDRImage = false;
         originalPixmap = QPixmap();
         return;
     }
@@ -1678,17 +988,11 @@ void PreviewOverlay::showImage(const QString &filePath)
         PLAYER_STOP();
     }
 
-    // Check if this is an HDR/EXR image
-    QFileInfo fileInfo(filePath);
-    QString ext = fileInfo.suffix().toLower();
-    isHDRImage = (ext == "exr" || ext == "hdr" || ext == "pic");
-
     // Try loading with OpenImageIO first for advanced formats
     QImage image;
     QPixmap newPixmap;
     if (OIIOImageLoader::isOIIOSupported(filePath)) {
-        // Load at full resolution for preview (no size limit) with current color space
-        image = OIIOImageLoader::loadImage(filePath, 0, 0, currentColorSpace);
+        image = OIIOImageLoader::loadImage(filePath, 0, 0);
         if (!image.isNull()) {
             newPixmap = QPixmap::fromImage(image);
         } else {
@@ -1699,7 +1003,6 @@ void PreviewOverlay::showImage(const QString &filePath)
     // Fall back to Qt's native loader if OIIO didn't work or isn't supported
     if (newPixmap.isNull()) {
         newPixmap = QPixmap(filePath);
-        isHDRImage = false; // Qt loader doesn't support HDR
     }
 
 
@@ -1733,10 +1036,7 @@ void PreviewOverlay::showImage(const QString &filePath)
         }
         imageScene->update();
 
-    // No controls for still images
     setPlaybackControlsVisible(false);
-    if (colorSpaceLabel) colorSpaceLabel->hide();
-    if (colorSpaceCombo) colorSpaceCombo->hide();
     setControlsVisible(false);
     } else {
         qWarning() << "[PreviewOverlay::showImage] Failed to load image:" << filePath;
@@ -1747,13 +1047,11 @@ void PreviewOverlay::showImage(const QString &filePath)
 
 void PreviewOverlay::showVideo(const QString &filePath)
 {
-#ifdef HAVE_TLRENDER
     ensurePlayer();
     if (!m_player) {
         return;
     }
     ensureRenderWidget();
-#endif
     // Stop any existing playback
     PLAYER_STOP();
 
@@ -1796,25 +1094,9 @@ void PreviewOverlay::showVideo(const QString &filePath)
     // Hide alpha toggle for videos
     if (alphaCheck) alphaCheck->hide();
 
-    // Hide legacy per-image tone-map colorspace selector for videos (OCIO handles color)
-    if (colorSpaceLabel) colorSpaceLabel->hide();
-    if (colorSpaceCombo) colorSpaceCombo->hide();
-
-    // Show OCIO controls for tlRender playback
-    if (ocioEnableCheck) ocioEnableCheck->show();
-    if (ocioConfigBtn) ocioConfigBtn->show();
-    if (ocioInputLabel) ocioInputLabel->show();
-    if (ocioInputCombo) ocioInputCombo->show();
-    if (ocioDisplayLabel) ocioDisplayLabel->show();
-    if (ocioDisplayCombo) ocioDisplayCombo->show();
-    if (ocioViewLabel) ocioViewLabel->show();
-    if (ocioViewCombo) ocioViewCombo->show();
-
-    // Show playback control widgets row
     qDebug() << "[showVideo] Playback controls check:"
              << "playbackControlsGroup:" << (playbackControlsGroup != nullptr)
-             << "loopModeCombo:" << (loopModeCombo != nullptr)
-             << "exposureSlider:" << (exposureSlider != nullptr);
+             << "loopModeCombo:" << (loopModeCombo != nullptr);
     if (playbackControlsGroup) { 
         playbackControlsGroup->show();
         playbackControlsGroup->setVisible(true);
@@ -1835,13 +1117,15 @@ void PreviewOverlay::showVideo(const QString &filePath)
     // Default timeline context while media info is loading
     positionSlider->setTimelineContext(true, 24.0);
 
-    // Load and play video with tlRender
-#ifdef HAVE_TLRENDER
-    applyOcioInputDefaults(filePath);
-#endif
     if (m_renderWidget) {
         m_renderWidget->setFrameView(true);
     }
+    if (playbackRateCombo) {
+        playbackRateCombo->blockSignals(true);
+        playbackRateCombo->setCurrentIndex(2);
+        playbackRateCombo->blockSignals(false);
+    }
+    m_player->setPlaybackRate(1.0);
     m_player->loadMedia(filePath);
     PLAYER_PLAY();
 
@@ -2856,15 +2140,6 @@ void PreviewOverlay::showSequence(const QStringList &framePaths, const QString &
         currentFileType.clear();
     }
 
-    // Check if this is an HDR/EXR sequence
-    if (!framePaths.isEmpty()) {
-        QFileInfo fileInfo(framePaths.first());
-        QString ext = fileInfo.suffix().toLower();
-        isHDRImage = (ext == "exr" || ext == "hdr" || ext == "pic");
-    } else {
-        isHDRImage = false;
-    }
-
     // Make sure widget is shown and owns focus before loading content.
     activatePreviewWindow(this, imageView);
 
@@ -2906,32 +2181,12 @@ void PreviewOverlay::showSequence(const QStringList &framePaths, const QString &
     fileNameLabel->setText(sequenceName);
     setWindowTitle(tr("Preview - %1").arg(sequenceName));
 
-    // Always show colorspace selector for image sequences.
-    // Default: EXR -> Linear; others -> sRGB (user-changeable).
-    colorSpaceLabel->show();
-    colorSpaceCombo->show();
-    if (!sequenceFramePaths.isEmpty()) {
-        QFileInfo fi(sequenceFramePaths.first());
-        const QString extLower = fi.suffix().toLower();
-        if (extLower == "exr") {
-            currentColorSpace = OIIOImageLoader::ColorSpace::Linear;
-            colorSpaceCombo->blockSignals(true);
-            colorSpaceCombo->setCurrentIndex(2); // Linear
-            colorSpaceCombo->blockSignals(false);
-        } else {
-            currentColorSpace = OIIOImageLoader::ColorSpace::sRGB;
-            colorSpaceCombo->blockSignals(true);
-            colorSpaceCombo->setCurrentIndex(0); // sRGB
-            colorSpaceCombo->blockSignals(false);
-        }
-    }
-
     // Clear cached frame visualization
     positionSlider->clearCachedFrames();
 
     // Initialize frame cache for this sequence (only if enabled)
     if (frameCache && useCacheForSequences) {
-        frameCache->setSequence(framePaths, currentColorSpace);
+        frameCache->setSequence(framePaths);
         qDebug() << "[PreviewOverlay] Frame cache initialized for sequence with" << framePaths.size() << "frames";
 
         // Prepare to receive cache progress updates (disconnect to avoid duplicates)
@@ -2970,7 +2225,7 @@ void PreviewOverlay::showSequence(const QStringList &framePaths, const QString &
         QString framePath = sequenceFramePaths[0];
         QImage image;
         if (OIIOImageLoader::isOIIOSupported(framePath)) {
-            image = OIIOImageLoader::loadImage(framePath, 0, 0, currentColorSpace);
+            image = OIIOImageLoader::loadImage(framePath, 0, 0);
             if (!image.isNull()) {
                 originalPixmap = QPixmap::fromImage(image);
             }
@@ -3049,7 +2304,7 @@ void PreviewOverlay::loadSequenceFrame(int frameIndex)
         QString framePath = sequenceFramePaths[frameIndex];
         QImage image;
         if (OIIOImageLoader::isOIIOSupported(framePath)) {
-            image = OIIOImageLoader::loadImage(framePath, 0, 0, currentColorSpace);
+            image = OIIOImageLoader::loadImage(framePath, 0, 0);
             if (!image.isNull()) {
                 originalPixmap = QPixmap::fromImage(image);
             } else {
@@ -3258,50 +2513,6 @@ void PreviewOverlay::onSequenceTimerTick()
     loadSequenceFrame(currentSequenceFrame);
 }
 
-void PreviewOverlay::onColorSpaceChanged(int index)
-{
-    qDebug() << "[PreviewOverlay] Color space changed to index:" << index;
-
-    // Update current color space
-    switch (index) {
-        case 0:
-            currentColorSpace = OIIOImageLoader::ColorSpace::sRGB;
-            qDebug() << "[PreviewOverlay] Switched to sRGB color space";
-            break;
-        case 1:
-            currentColorSpace = OIIOImageLoader::ColorSpace::Rec709;
-            qDebug() << "[PreviewOverlay] Switched to Rec.709 color space";
-            break;
-        case 2:
-            currentColorSpace = OIIOImageLoader::ColorSpace::Linear;
-            qDebug() << "[PreviewOverlay] Switched to Linear color space";
-            break;
-        default:
-            currentColorSpace = OIIOImageLoader::ColorSpace::sRGB;
-            break;
-    }
-
-    // Reload current frame/image with new color space
-    if (isSequence) {
-        qDebug() << "[PreviewOverlay] Reloading sequence frame with new color space";
-
-        // Clear cache and reinitialize with new color space (only if cache is enabled)
-        if (frameCache && useCacheForSequences) {
-            frameCache->setSequence(sequenceFramePaths, currentColorSpace);
-            // Clear cache visualization on the timeline and restart prefetch for accurate redraw
-            if (positionSlider) {
-                positionSlider->clearCachedFrames();
-            }
-            frameCache->startPrefetch(currentSequenceFrame);
-        }
-
-        loadSequenceFrame(currentSequenceFrame);
-    } else if (!currentFilePath.isEmpty() && isHDRImage) {
-        qDebug() << "[PreviewOverlay] Reloading image with new color space";
-        showImage(currentFilePath);
-    }
-}
-
 void PreviewOverlay::stopPlayback()
 {
     qDebug() << "[PreviewOverlay] Stopping playback";
@@ -3501,13 +2712,13 @@ void PreviewOverlay::showText(const QString &filePath)
             }
             // UTF-16 LE BOM
             if (n >= 2 && b[0] == 0xFF && b[1] == 0xFE) {
-                return QString::fromUtf16(reinterpret_cast<const ushort*>(b + 2), (n - 2) / 2);
+                return QString::fromUtf16(reinterpret_cast<const char16_t*>(b + 2), (n - 2) / 2);
             }
             // UTF-16 BE BOM
             if (n >= 2 && b[0] == 0xFE && b[1] == 0xFF) {
                 const int ulen = (n - 2) / 2;
-                QVector<ushort> buf; buf.resize(ulen);
-                for (int i = 0; i < ulen; ++i) buf[i] = (ushort(b[2 + 2*i]) << 8) | ushort(b[2 + 2*i + 1]);
+                QVector<char16_t> buf; buf.resize(ulen);
+                for (int i = 0; i < ulen; ++i) buf[i] = char16_t((ushort(b[2 + 2*i]) << 8) | ushort(b[2 + 2*i + 1]));
                 return QString::fromUtf16(buf.constData(), ulen);
             }
             // Heuristic: UTF-16 without BOM (look for lots of NULs at odd/even positions)
@@ -3520,10 +2731,10 @@ void PreviewOverlay::showText(const QString &filePath)
                 const bool le = (zeroOdd > zeroEven);
                 const int ulen = n / 2;
                 if (le) {
-                    return QString::fromUtf16(reinterpret_cast<const ushort*>(b), ulen);
+                    return QString::fromUtf16(reinterpret_cast<const char16_t*>(b), ulen);
                 } else {
-                    QVector<ushort> buf; buf.resize(ulen);
-                    for (int i = 0; i < ulen; ++i) buf[i] = (ushort(b[2*i]) << 8) | ushort(b[2*i + 1]);
+                    QVector<char16_t> buf; buf.resize(ulen);
+                    for (int i = 0; i < ulen; ++i) buf[i] = char16_t((ushort(b[2*i]) << 8) | ushort(b[2*i + 1]));
                     return QString::fromUtf16(buf.constData(), ulen);
                 }
             }
@@ -3538,15 +2749,6 @@ void PreviewOverlay::showText(const QString &filePath)
         textView->setPlainText(decodeText(data));
     } else {
         textView->setPlainText("Preview not available");
-            // Show OCIO controls for tlRender sequence playback
-            if (ocioEnableCheck) ocioEnableCheck->show();
-            if (ocioConfigBtn) ocioConfigBtn->show();
-            if (ocioInputLabel) ocioInputLabel->show();
-            if (ocioInputCombo) ocioInputCombo->show();
-            if (ocioDisplayLabel) ocioDisplayLabel->show();
-            if (ocioDisplayCombo) ocioDisplayCombo->show();
-            if (ocioViewLabel) ocioViewLabel->show();
-            if (ocioViewCombo) ocioViewCombo->show();
     }
     textView->show();
     positionNavButtons(textView);
@@ -3739,7 +2941,6 @@ void PreviewOverlay::moveEvent(QMoveEvent *event)
 
 SequenceFrameCache::SequenceFrameCache(QObject *parent)
     : QObject(parent)
-    , m_colorSpace(OIIOImageLoader::ColorSpace::sRGB)
     , m_cache(100 * 50 * 1024) // Max cost in KB: will be updated based on settings
     , m_threadPool(QThreadPool::globalInstance())
     , m_maxCacheSize(100)
@@ -3800,13 +3001,12 @@ SequenceFrameCache::~SequenceFrameCache()
     qDebug() << "[SequenceFrameCache::~SequenceFrameCache] Destructor complete";
 }
 
-void SequenceFrameCache::setSequence(const QStringList &framePaths, OIIOImageLoader::ColorSpace colorSpace)
+void SequenceFrameCache::setSequence(const QStringList &framePaths)
 {
     QMutexLocker locker(&m_mutex);
     stopPrefetch();
     clearCache();
     m_framePaths = framePaths;
-    m_colorSpace = colorSpace;
     m_currentFrame = 0;
     m_windowStart = 0;
     m_windowEnd = qMax(-1, qMin((int)framePaths.size()-1, m_maxCacheSize-1));
@@ -3982,7 +3182,7 @@ void SequenceFrameCache::scheduleFrameIfNeeded(int frameIndex, quint64 epoch, bo
     if (m_cache.contains(frameIndex) || m_pendingFrames.contains(frameIndex) || frameIndex < 0 || frameIndex >= m_framePaths.size()) return;
     m_pendingFrames.insert(frameIndex);
     QString framePath = m_framePaths[frameIndex];
-    FrameLoaderWorker *worker = new FrameLoaderWorker(this, frameIndex, framePath, m_colorSpace, epoch);
+    FrameLoaderWorker *worker = new FrameLoaderWorker(this, frameIndex, framePath, epoch);
     
     // CRITICAL: Use Qt::QueuedConnection with context object to ensure auto-disconnect
     // This prevents crashes when SequenceFrameCache is destroyed while workers are running
@@ -4032,7 +3232,7 @@ QPixmap SequenceFrameCache::loadFrame(int frameIndex)
 
     // Try OpenImageIO first for supported formats
     if (OIIOImageLoader::isOIIOSupported(framePath)) {
-        image = OIIOImageLoader::loadImage(framePath, 0, 0, m_colorSpace);
+        image = OIIOImageLoader::loadImage(framePath, 0, 0);
     }
 
     // Fall back to Qt loader
@@ -4053,11 +3253,11 @@ QPixmap SequenceFrameCache::loadFrame(int frameIndex)
 // ============================================================================
 
 FrameLoaderWorker::FrameLoaderWorker(SequenceFrameCache *cache, int frameIndex,
-                                     const QString &framePath, OIIOImageLoader::ColorSpace colorSpace, quint64 epoch)
+                                     const QString &framePath,
+                                     quint64 epoch)
     : m_cache(cache)
     , m_frameIndex(frameIndex)
     , m_framePath(framePath)
-    , m_colorSpace(colorSpace)
     , m_epoch(epoch)
 {
     setAutoDelete(true);
@@ -4080,7 +3280,7 @@ void FrameLoaderWorker::run()
 
     // Try OpenImageIO first for supported formats
     if (OIIOImageLoader::isOIIOSupported(m_framePath)) {
-        image = OIIOImageLoader::loadImage(m_framePath, 0, 0, m_colorSpace);
+        image = OIIOImageLoader::loadImage(m_framePath, 0, 0);
         // Re-check cancellation after potentially expensive I/O
         if (!cache->isEpochCurrent(m_epoch)) {
             return;

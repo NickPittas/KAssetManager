@@ -4,6 +4,7 @@
 #include <QDebug>
 #include <QFile>
 #include <QFileInfo>
+#include <QMetaObject>
 #include <QMediaPlayer>
 #include <QMutexLocker>
 #include <QThread>
@@ -25,7 +26,8 @@ extern "C" {
 namespace {
 
 constexpr double kDefaultFps = 24.0;
-constexpr int kDecodeQueueFrames = 8;
+constexpr int kDecodeQueueFrames = 32;
+constexpr int kPresentedHistoryFrames = 64;
 
 #if defined(HAVE_FFMPEG) && HAVE_FFMPEG && defined(Q_OS_LINUX)
 constexpr AVHWDeviceType kPreferredHwDeviceType = AV_HWDEVICE_TYPE_VAAPI;
@@ -92,7 +94,7 @@ void FFmpegMovPlayer::loadMedia(const QString& filePath)
     unloadMedia();
 
     QString errorString;
-    if (!openMedia(filePath, &errorString)) {
+    if (!openMedia(filePath, &errorString, false)) {
         emit error(errorString.isEmpty() ? tr("Failed to open MOV media") : errorString);
         return;
     }
@@ -141,6 +143,7 @@ void FFmpegMovPlayer::unloadMedia()
     m_currentFrame = 0;
     m_totalFrames = 0;
     m_lastPresentedPts = -1;
+    clearPresentedHistory();
     m_playbackClock.invalidate();
     m_nextPlaybackDeadline = std::chrono::nanoseconds::zero();
     m_playbackStartPositionMs = 0;
@@ -162,9 +165,13 @@ void FFmpegMovPlayer::play()
     setPlaybackState(media_player::PlaybackState::Playing);
     resetPlaybackClock();
     if (m_audioPlayer && m_mediaInfo.hasAudio) {
-        syncAudioPosition(m_positionMs);
-        m_audioPlayer->setPlaybackRate(std::abs(m_playbackRate));
-        m_audioPlayer->play();
+        if (m_playbackRate < 0.0) {
+            m_audioPlayer->pause();
+        } else {
+            syncAudioPosition(m_positionMs);
+            m_audioPlayer->setPlaybackRate(std::abs(m_playbackRate));
+            m_audioPlayer->play();
+        }
     }
     updatePlaybackTimer();
 }
@@ -214,9 +221,7 @@ void FFmpegMovPlayer::seekToFrame(qint64 frameNumber)
         return;
     }
 
-    const double fps = m_mediaInfo.fps > 0.0 ? m_mediaInfo.fps : kDefaultFps;
-    const qint64 targetMs = qRound64((clampFrameNumber(frameNumber) * 1000.0) / fps);
-    seekInternal(targetMs, true);
+    seekToTimestampInternal(frameToTimestamp(frameNumber), true);
 }
 
 void FFmpegMovPlayer::stepForward()
@@ -226,7 +231,20 @@ void FFmpegMovPlayer::stepForward()
 
 void FFmpegMovPlayer::stepBackward()
 {
-    seekToFrame(m_currentFrame - 1);
+    if (!hasMedia()) {
+        return;
+    }
+
+    BufferedFrame previousFrame;
+    if (takePreviousPresentedFrame(&previousFrame)) {
+        presentBufferedFrame(previousFrame, true);
+        return;
+    }
+
+    const int64_t targetTs = (m_lastPresentedPts != AV_NOPTS_VALUE && m_lastPresentedPts > 0)
+        ? m_lastPresentedPts
+        : frameToTimestamp(clampFrameNumber(m_currentFrame));
+    seekToTimestampInternal(targetTs, true, true);
 }
 
 void FFmpegMovPlayer::setPlaybackRate(double rate)
@@ -268,6 +286,26 @@ QImage FFmpegMovPlayer::currentFrameImage() const
     return m_currentFrameImage;
 }
 
+QImage FFmpegMovPlayer::currentFrameImage(const QSize& targetSize)
+{
+    QMutexLocker locker(&m_frameMutex);
+    if (targetSize.isEmpty()) {
+        m_requestedFrameTargetSize = QSize();
+        return m_currentFrameImage;
+    }
+    if (!m_currentFrameScaledImage.isNull() && m_currentFrameScaledTargetSize == targetSize) {
+        return m_currentFrameScaledImage;
+    }
+
+    m_requestedFrameTargetSize = targetSize;
+    if (!m_currentFrameImage.isNull()) {
+        m_currentFrameScaledImage = m_currentFrameImage.scaled(targetSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+        m_currentFrameScaledTargetSize = targetSize;
+        return m_currentFrameScaledImage;
+    }
+    return m_currentFrameImage;
+}
+
 QSize FFmpegMovPlayer::currentFrameSize() const
 {
     QMutexLocker locker(&m_frameMutex);
@@ -290,6 +328,7 @@ void FFmpegMovPlayer::startDecodeThread()
         m_seekResultReady = false;
         m_decodeAtEnd = false;
         m_pendingSeekMs = 0;
+        m_pendingSeekTs = 0;
         m_decodeGeneration = 0;
         m_pendingDecodeError.clear();
     }
@@ -320,6 +359,7 @@ void FFmpegMovPlayer::stopDecodeThread()
     m_seekResultReady = false;
     m_decodeAtEnd = false;
     m_pendingSeekMs = 0;
+    m_pendingSeekTs = 0;
     m_pendingDecodeError.clear();
 }
 
@@ -329,6 +369,8 @@ void FFmpegMovPlayer::decodeThreadMain()
     for (;;) {
         quint64 generation = 0;
         qint64 seekPositionMs = 0;
+        int64_t seekTimestamp = 0;
+        bool preferPreviousFrame = false;
         bool handleSeek = false;
 
         {
@@ -347,6 +389,8 @@ void FFmpegMovPlayer::decodeThreadMain()
             if (m_seekPending) {
                 handleSeek = true;
                 seekPositionMs = m_pendingSeekMs;
+                seekTimestamp = m_pendingSeekTs;
+                preferPreviousFrame = m_pendingSeekPreferPreviousFrame;
                 generation = m_decodeGeneration;
                 m_seekPending = false;
                 m_seekInProgress = true;
@@ -364,11 +408,11 @@ void FFmpegMovPlayer::decodeThreadMain()
             QString errorString;
             bool ok = false;
             const qint64 clampedMs = qBound<qint64>(0, seekPositionMs, qMax<qint64>(0, m_durationMs));
-            const int64_t targetTs = msToTimestamp(clampedMs);
+            const int64_t targetTs = seekTimestamp > 0 ? seekTimestamp : msToTimestamp(clampedMs);
             const int seekResult = av_seek_frame(m_formatContext, m_videoStreamIndex, targetTs, AVSEEK_FLAG_BACKWARD);
             if (seekResult >= 0) {
                 avcodec_flush_buffers(m_codecContext);
-                ok = decodeFrameForTimestamp(targetTs, clampedMs == 0, generation);
+                ok = decodeFrameForTimestamp(targetTs, clampedMs == 0, generation, preferPreviousFrame);
                 if (!ok && errorString.isEmpty()) {
                     errorString = tr("Failed to decode seek target from %1").arg(m_currentPath);
                 }
@@ -414,7 +458,7 @@ void FFmpegMovPlayer::onPlaybackTick()
     }
 
     if (m_playbackRate < 0.0) {
-        seekToFrame(m_currentFrame - 1);
+        stepBackward();
         return;
     }
 
@@ -426,12 +470,20 @@ void FFmpegMovPlayer::onPlaybackTick()
         0,
         m_playbackStartPositionMs + qRound64(static_cast<double>(elapsedMs) * m_playbackRate),
         qMax<qint64>(0, m_durationMs));
-    const qint64 targetFrameNumber = clampFrameNumber(qRound64((targetPositionMs / 1000.0) * fps));
-
     BufferedFrame frame;
     bool reachedEndOfStream = false;
-    if (takeBufferedFrameForPlayback(targetFrameNumber, &frame, &reachedEndOfStream)) {
+    bool presentedFrame = false;
+    int catchUpFramesRemaining = decodeQueueCapacity();
+    while (catchUpFramesRemaining-- > 0
+           && takeBufferedFrameForPlayback(targetPositionMs, &frame, &reachedEndOfStream)) {
         presentBufferedFrame(frame, true);
+        presentedFrame = true;
+        if (frame.positionMs >= targetPositionMs) {
+            break;
+        }
+    }
+
+    if (presentedFrame) {
         if (m_mediaInfo.hasAudio) {
             syncAudioPosition(m_positionMs);
         }
@@ -631,7 +683,9 @@ bool FFmpegMovPlayer::openMedia(const QString& filePath, QString* errorString, b
     m_transferFrame = transferFrame;
     m_packet = packet;
     m_videoStreamIndex = videoStreamIndex;
-    const AVRational frameRate = av_guess_frame_rate(formatContext, videoStream, nullptr);
+    const AVRational frameRate = (videoStream->avg_frame_rate.num > 0 && videoStream->avg_frame_rate.den > 0)
+        ? videoStream->avg_frame_rate
+        : av_guess_frame_rate(formatContext, videoStream, nullptr);
     m_timeBaseNum = videoStream->time_base.num;
     m_timeBaseDen = videoStream->time_base.den;
     m_frameRateNum = frameRate.num;
@@ -731,7 +785,7 @@ void FFmpegMovPlayer::updatePlaybackTimer()
     const auto delay = std::max(std::chrono::nanoseconds::zero(), m_nextPlaybackDeadline - nowNs);
     m_playbackTimer->setInterval(delay);
     m_playbackTimer->start();
-    m_nextPlaybackDeadline += frameDurationNs;
+    m_nextPlaybackDeadline = std::max(m_nextPlaybackDeadline, nowNs) + frameDurationNs;
 }
 
 bool FFmpegMovPlayer::decodeNextFrame(quint64 generation)
@@ -817,7 +871,7 @@ bool FFmpegMovPlayer::decodeNextFrame(quint64 generation)
     return false;
 }
 
-bool FFmpegMovPlayer::decodeFrameForTimestamp(int64_t targetTs, bool allowPastTarget, quint64 generation)
+bool FFmpegMovPlayer::decodeFrameForTimestamp(int64_t targetTs, bool allowPastTarget, quint64 generation, bool preferPreviousFrame)
 {
 #if defined(HAVE_FFMPEG) && HAVE_FFMPEG
     if (!hasMedia()) {
@@ -826,6 +880,8 @@ bool FFmpegMovPlayer::decodeFrameForTimestamp(int64_t targetTs, bool allowPastTa
 
     bool inputEof = false;
     bool packetPending = false;
+    BufferedFrame previousFrame;
+    bool hasPreviousFrame = false;
 
     while (true) {
         int ret = 0;
@@ -833,18 +889,34 @@ bool FFmpegMovPlayer::decodeFrameForTimestamp(int64_t targetTs, bool allowPastTa
             const int64_t pts = (m_decodeFrame->best_effort_timestamp != AV_NOPTS_VALUE)
                 ? m_decodeFrame->best_effort_timestamp
                 : m_decodeFrame->pts;
-            if (!allowPastTarget && pts != AV_NOPTS_VALUE && pts < targetTs) {
-                continue;
-            }
 
             BufferedFrame frame;
             if (!presentDecodedFrame(m_decodeFrame, &frame)) {
+                continue;
+            }
+
+            if (preferPreviousFrame && pts != AV_NOPTS_VALUE) {
+                if (pts < targetTs) {
+                    previousFrame = frame;
+                    hasPreviousFrame = true;
+                    continue;
+                }
+
+                if (hasPreviousFrame) {
+                    return queueBufferedFrame(std::move(previousFrame), generation, true);
+                }
+            }
+
+            if (!allowPastTarget && pts != AV_NOPTS_VALUE && pts < targetTs) {
                 continue;
             }
             return queueBufferedFrame(std::move(frame), generation, true);
         }
 
         if (ret == AVERROR_EOF) {
+            if (preferPreviousFrame && hasPreviousFrame) {
+                return queueBufferedFrame(std::move(previousFrame), generation, true);
+            }
             return false;
         }
         if (ret != AVERROR(EAGAIN) && ret < 0) {
@@ -911,9 +983,26 @@ bool FFmpegMovPlayer::seekInternal(qint64 positionMs, bool emitSignals)
         return false;
     }
 
-    const qint64 clampedMs = qBound<qint64>(0, positionMs, qMax<qint64>(0, m_durationMs));
+    return seekToTimestampInternal(msToTimestamp(positionMs), emitSignals);
+#else
+    Q_UNUSED(positionMs);
+    Q_UNUSED(emitSignals);
+    return false;
+#endif
+}
+
+bool FFmpegMovPlayer::seekToTimestampInternal(int64_t targetTs, bool emitSignals, bool preferPreviousFrame)
+{
+#if defined(HAVE_FFMPEG) && HAVE_FFMPEG
+    if (!hasMedia()) {
+        return false;
+    }
+
+    const qint64 clampedMs = qBound<qint64>(0, timestampToMs(targetTs), qMax<qint64>(0, m_durationMs));
+    const int64_t clampedTs = qMax<int64_t>(0, targetTs);
     const bool wasPlaying = m_playbackState == media_player::PlaybackState::Playing;
     m_playbackTimer->stop();
+    clearPresentedHistory();
 
     quint64 generation = 0;
     {
@@ -921,6 +1010,8 @@ bool FFmpegMovPlayer::seekInternal(qint64 positionMs, bool emitSignals)
         ++m_decodeGeneration;
         generation = m_decodeGeneration;
         m_pendingSeekMs = clampedMs;
+        m_pendingSeekTs = clampedTs;
+        m_pendingSeekPreferPreviousFrame = preferPreviousFrame;
         m_seekPending = true;
         m_seekInProgress = false;
         m_seekFailed = false;
@@ -951,7 +1042,7 @@ bool FFmpegMovPlayer::seekInternal(qint64 positionMs, bool emitSignals)
     }
     return true;
 #else
-    Q_UNUSED(positionMs);
+    Q_UNUSED(targetTs);
     Q_UNUSED(emitSignals);
     return false;
 #endif
@@ -985,13 +1076,17 @@ bool FFmpegMovPlayer::presentDecodedFrame(AVFrame* frame, BufferedFrame* buffere
         return false;
     }
 
-    QImage image(readableFrame->width, readableFrame->height, QImage::Format_ARGB32);
-    if (image.isNull()) {
+    const QSize frameSize(readableFrame->width, readableFrame->height);
+    if (m_conversionScratchImage.size() != frameSize
+        || m_conversionScratchImage.format() != QImage::Format_ARGB32) {
+        m_conversionScratchImage = QImage(frameSize, QImage::Format_ARGB32);
+    }
+    if (m_conversionScratchImage.isNull()) {
         return false;
     }
 
-    uint8_t* dstData[4] = { image.bits(), nullptr, nullptr, nullptr };
-    int dstLinesize[4] = { static_cast<int>(image.bytesPerLine()), 0, 0, 0 };
+    uint8_t* dstData[4] = { m_conversionScratchImage.bits(), nullptr, nullptr, nullptr };
+    int dstLinesize[4] = { static_cast<int>(m_conversionScratchImage.bytesPerLine()), 0, 0, 0 };
     sws_scale(
         m_swsContext,
         readableFrame->data,
@@ -1010,9 +1105,20 @@ bool FFmpegMovPlayer::presentDecodedFrame(AVFrame* frame, BufferedFrame* buffere
         : 0;
     const qint64 positionMs = pts != AV_NOPTS_VALUE ? timestampToMs(pts) : fallbackPositionMs;
 
-    bufferedFrame->image = std::move(image);
+    bufferedFrame->image = m_conversionScratchImage.copy();
+    if (!bufferedFrame->image.isNull()) {
+        QSize targetSize;
+        {
+            QMutexLocker locker(&m_frameMutex);
+            targetSize = m_requestedFrameTargetSize;
+        }
+        if (targetSize.isValid()) {
+            bufferedFrame->scaledImage = bufferedFrame->image.scaled(targetSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+            bufferedFrame->scaledTargetSize = targetSize;
+        }
+    }
     bufferedFrame->positionMs = positionMs;
-    bufferedFrame->frameNumber = clampFrameNumber(qRound64((positionMs / 1000.0) * fps));
+    bufferedFrame->frameNumber = timestampToFrame(pts, positionMs);
     bufferedFrame->pts = pts != AV_NOPTS_VALUE ? pts : 0;
     return true;
 #else
@@ -1024,7 +1130,7 @@ bool FFmpegMovPlayer::presentDecodedFrame(AVFrame* frame, BufferedFrame* buffere
 
 bool FFmpegMovPlayer::queueBufferedFrame(BufferedFrame&& frame, quint64 generation, bool satisfySeek)
 {
-    std::lock_guard<std::mutex> lock(m_decodeMutex);
+    std::unique_lock<std::mutex> lock(m_decodeMutex);
     if (m_decodeStopRequested || generation != m_decodeGeneration) {
         return false;
     }
@@ -1039,8 +1145,18 @@ bool FFmpegMovPlayer::queueBufferedFrame(BufferedFrame&& frame, quint64 generati
         return true;
     }
 
-    if (m_decodedFrames.size() >= static_cast<size_t>(decodeQueueCapacity())) {
-        return false;
+    while (m_decodedFrames.size() >= static_cast<size_t>(decodeQueueCapacity())) {
+        m_decodeCondition.wait(lock, [this, generation]() {
+            return m_decodeStopRequested
+                || generation != m_decodeGeneration
+                || m_seekPending
+                || m_seekInProgress
+                || m_decodedFrames.size() < static_cast<size_t>(decodeQueueCapacity());
+        });
+
+        if (m_decodeStopRequested || generation != m_decodeGeneration || m_seekPending || m_seekInProgress) {
+            return false;
+        }
     }
 
     m_decodedFrames.emplace_back(std::move(frame));
@@ -1083,32 +1199,9 @@ bool FFmpegMovPlayer::waitForSeekFrame(quint64 generation, BufferedFrame* frame,
     return true;
 }
 
-bool FFmpegMovPlayer::takeBufferedFrameForPlayback(qint64 targetFrameNumber, BufferedFrame* frame, bool* reachedEndOfStream)
+bool FFmpegMovPlayer::takeBufferedFrameForPlayback(qint64 targetPositionMs, BufferedFrame* frame, bool* reachedEndOfStream)
 {
     std::lock_guard<std::mutex> lock(m_decodeMutex);
-    if (!m_decodedFrames.empty()) {
-        size_t selectedIndex = 0;
-        qint64 bestDistance = std::llabs(m_decodedFrames.front().frameNumber - targetFrameNumber);
-        for (size_t i = 1; i < m_decodedFrames.size(); ++i) {
-            const qint64 candidateFrameNumber = m_decodedFrames[i].frameNumber;
-            const qint64 candidateDistance = std::llabs(candidateFrameNumber - targetFrameNumber);
-            if (candidateFrameNumber <= targetFrameNumber) {
-                selectedIndex = i;
-                bestDistance = candidateDistance;
-                continue;
-            }
-            if (selectedIndex == 0 && candidateDistance < bestDistance) {
-                selectedIndex = i;
-                bestDistance = candidateDistance;
-            }
-            break;
-        }
-        while (selectedIndex > 0 && !m_decodedFrames.empty()) {
-            m_decodedFrames.pop_front();
-            --selectedIndex;
-        }
-    }
-
     if (m_decodedFrames.empty()) {
         if (reachedEndOfStream) {
             *reachedEndOfStream = m_decodeAtEnd && !m_seekPending && !m_seekInProgress;
@@ -1116,10 +1209,23 @@ bool FFmpegMovPlayer::takeBufferedFrameForPlayback(qint64 targetFrameNumber, Buf
         return false;
     }
 
-    if (frame) {
-        *frame = std::move(m_decodedFrames.front());
+    if (m_decodedFrames.front().positionMs > targetPositionMs) {
+        if (reachedEndOfStream) {
+            *reachedEndOfStream = false;
+        }
+        return false;
     }
-    m_decodedFrames.pop_front();
+
+    size_t selectedIndex = 0;
+    while (selectedIndex + 1 < m_decodedFrames.size()
+           && m_decodedFrames[selectedIndex + 1].positionMs <= targetPositionMs) {
+        ++selectedIndex;
+    }
+
+    if (frame) {
+        *frame = std::move(m_decodedFrames[selectedIndex]);
+    }
+    m_decodedFrames.erase(m_decodedFrames.begin(), m_decodedFrames.begin() + static_cast<std::ptrdiff_t>(selectedIndex + 1));
     if (reachedEndOfStream) {
         *reachedEndOfStream = false;
     }
@@ -1129,24 +1235,67 @@ bool FFmpegMovPlayer::takeBufferedFrameForPlayback(qint64 targetFrameNumber, Buf
 
 void FFmpegMovPlayer::presentBufferedFrame(const BufferedFrame& frame, bool emitSignals)
 {
+    rememberPresentedFrame(frame);
+
     {
         QMutexLocker locker(&m_frameMutex);
         m_currentFrameImage = frame.image;
+        m_currentFrameScaledImage = frame.scaledImage;
+        m_currentFrameScaledTargetSize = frame.scaledTargetSize;
     }
 
     m_lastPresentedPts = frame.pts;
     m_positionMs = frame.positionMs;
     m_currentFrame = frame.frameNumber;
-    emit frameUpdated();
-    if (emitSignals) {
-        emit positionChanged(m_positionMs);
-        emit currentFrameChanged(m_currentFrame);
-    }
+
+    const qint64 positionMs = m_positionMs;
+    const qint64 frameNumber = m_currentFrame;
+    QMetaObject::invokeMethod(this,
+                              [this, emitSignals, positionMs, frameNumber]() {
+                                  emit frameUpdated();
+                                  if (emitSignals) {
+                                      emit positionChanged(positionMs);
+                                      emit currentFrameChanged(frameNumber);
+                                  }
+                              },
+                              Qt::QueuedConnection);
 }
 
 int FFmpegMovPlayer::decodeQueueCapacity() const
 {
     return kDecodeQueueFrames;
+}
+
+void FFmpegMovPlayer::rememberPresentedFrame(const BufferedFrame& frame)
+{
+    std::lock_guard<std::mutex> lock(m_decodeMutex);
+    if (!m_presentedFrames.empty() && m_presentedFrames.back().pts == frame.pts) {
+        return;
+    }
+    m_presentedFrames.push_back(frame);
+    while (m_presentedFrames.size() > static_cast<size_t>(kPresentedHistoryFrames)) {
+        m_presentedFrames.pop_front();
+    }
+}
+
+bool FFmpegMovPlayer::takePreviousPresentedFrame(BufferedFrame* frame)
+{
+    std::lock_guard<std::mutex> lock(m_decodeMutex);
+    if (m_presentedFrames.size() < 2) {
+        return false;
+    }
+
+    m_presentedFrames.pop_back();
+    if (frame) {
+        *frame = m_presentedFrames.back();
+    }
+    return true;
+}
+
+void FFmpegMovPlayer::clearPresentedHistory()
+{
+    std::lock_guard<std::mutex> lock(m_decodeMutex);
+    m_presentedFrames.clear();
 }
 
 void FFmpegMovPlayer::resetPlaybackClock()
@@ -1190,8 +1339,8 @@ bool FFmpegMovPlayer::fallbackToSoftwareDecoding(qint64 restartPositionMs, quint
 
     avcodec_flush_buffers(m_codecContext);
     const bool ok = satisfySeek
-        ? decodeFrameForTimestamp(targetTs, clampedMs == 0, generation)
-        : decodeFrameForTimestamp(targetTs, true, generation);
+        ? decodeFrameForTimestamp(targetTs, clampedMs == 0, generation, clampedMs != 0)
+        : decodeFrameForTimestamp(targetTs, true, generation, false);
     if (!ok && errorString) {
         *errorString = tr("Failed to resume MOV playback in software mode for %1").arg(currentPath);
     }
@@ -1294,6 +1443,40 @@ int64_t FFmpegMovPlayer::msToTimestamp(qint64 positionMs) const
 #endif
 }
 
+int64_t FFmpegMovPlayer::frameToTimestamp(qint64 frameNumber) const
+{
+#if defined(HAVE_FFMPEG) && HAVE_FFMPEG
+    const qint64 clampedFrame = clampFrameNumber(frameNumber);
+    if (m_frameRateNum <= 0 || m_frameRateDen <= 0 || m_timeBaseNum <= 0 || m_timeBaseDen <= 0) {
+        return msToTimestamp(qRound64((clampedFrame * 1000.0) / (m_mediaInfo.fps > 0.0 ? m_mediaInfo.fps : kDefaultFps)));
+    }
+
+    const double seconds = (static_cast<double>(clampedFrame) * m_frameRateDen) / m_frameRateNum;
+    return qMax<int64_t>(0, qRound64(seconds * m_timeBaseDen / m_timeBaseNum));
+#else
+    Q_UNUSED(frameNumber);
+    return 0;
+#endif
+}
+
+qint64 FFmpegMovPlayer::timestampToFrame(int64_t pts, qint64 fallbackPositionMs) const
+{
+#if defined(HAVE_FFMPEG) && HAVE_FFMPEG
+    if (pts != AV_NOPTS_VALUE && m_frameRateNum > 0 && m_frameRateDen > 0 && m_timeBaseNum > 0 && m_timeBaseDen > 0) {
+        const double seconds = (static_cast<double>(pts) * m_timeBaseNum) / m_timeBaseDen;
+        const double frameValue = seconds * m_frameRateNum / m_frameRateDen;
+        return clampFrameNumber(qRound64(frameValue));
+    }
+
+    const double fps = m_mediaInfo.fps > 0.0 ? m_mediaInfo.fps : kDefaultFps;
+    return clampFrameNumber(qRound64((fallbackPositionMs / 1000.0) * fps));
+#else
+    Q_UNUSED(pts);
+    Q_UNUSED(fallbackPositionMs);
+    return 0;
+#endif
+}
+
 qint64 FFmpegMovPlayer::clampFrameNumber(qint64 frameNumber) const
 {
     const qint64 maxFrame = qMax<qint64>(0, m_totalFrames - 1);
@@ -1313,6 +1496,9 @@ void FFmpegMovPlayer::clearPresentedFrame()
 {
     QMutexLocker locker(&m_frameMutex);
     m_currentFrameImage = QImage();
+    m_currentFrameScaledImage = QImage();
+    m_currentFrameScaledTargetSize = QSize();
+    m_requestedFrameTargetSize = QSize();
 }
 
 void FFmpegMovPlayer::syncAudioPosition(qint64 positionMs)

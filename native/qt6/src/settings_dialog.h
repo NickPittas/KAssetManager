@@ -35,14 +35,10 @@ private:
     void setupGeneralTab();
     void setupCacheTab();
     void setupViewTab();
-    void setupColorTab();
     void setupShortcutsTab();
     void setupExternalAppsTab();
     void setupAboutTab();
     void loadSettings();
-    void refreshOcioDefaults();
-    QStringList loadOcioColorspaces(const QString& configPath) const;
-    void setSearchableCombo(QComboBox* combo) const;
 
     QTabWidget* tabWidget;
 
@@ -66,16 +62,6 @@ private:
     QSpinBox* thumbnailSizeSpin;
     QCheckBox* showFileExtensionsCheck;
     QCheckBox* showSequenceOverlayCheck;
-
-    // Color tab
-    QLineEdit* ocioConfigPathEdit = nullptr;
-    QPushButton* ocioConfigBrowseBtn = nullptr;
-    QPushButton* ocioConfigBundledBtn = nullptr;
-    QCheckBox* ocioEnabledCheck = nullptr;
-    QComboBox* ocioDefault8bitCombo = nullptr;
-    QComboBox* ocioDefault16bitCombo = nullptr;
-    QComboBox* ocioDefault32bitCombo = nullptr;
-    QComboBox* ocioDefaultLogCombo = nullptr;
 
     // Shortcuts tab (editable)
     QTableWidget* fmShortcutsTable;

@@ -338,7 +338,7 @@ qt_add_executable(kassetmanagerqt WIN32
     src/thumbnail_generator_dialog.cpp
     src/thumbnail_generator_worker.h
     src/thumbnail_generator_worker.cpp
-    # tlRender integration - professional video/sequence playback with OCIO
+    # tlRender integration - professional video/sequence playback
     src/media/media_player_types.h
     src/media/libmpv_headers.h
     src/media/libmpv_runtime.h
@@ -353,8 +353,6 @@ qt_add_executable(kassetmanagerqt WIN32
     src/media/ffmpeg_mov_viewport.cpp
     src/media/tlrender_player.h
     src/media/tlrender_player.cpp
-    src/media/tlrender_widget.h
-    src/media/tlrender_widget.cpp
     src/media/tlrender_viewport.h
     src/media/tlrender_viewport.cpp
     src/theme_manager.h
@@ -404,7 +402,7 @@ if(TLRENDER_FOUND)
         tlRender::tlUI          # UI widgets
         tlRender::tlDevice      # Device handling
     )
-    
+
     # Link Qt integration libraries if available
     if(TLRENDER_HAS_QT)
         target_link_libraries(kassetmanagerqt PRIVATE
@@ -412,16 +410,15 @@ if(TLRENDER_FOUND)
             tlRender::tlQtWidget    # Qt widget implementations (Viewport, etc.)
         )
     endif()
-    
+
     # Add compile definitions to enable tlRender + bundled deps code paths.
     # NOTE: We intentionally rely on tlRender's bundled dependencies to avoid ABI/version mixing.
-    # These are used throughout the app (thumbnails, still-image preview, OCIO UI lists).
+    # These are used throughout the app (thumbnails and still-image preview).
     target_compile_definitions(kassetmanagerqt PRIVATE
       HAVE_TLRENDER=1
       HAVE_OPENIMAGEIO=1
-      HAVE_OCIO=1
     )
-    
+
     # Windows system libraries required by tlRender dependencies
     if(WIN32)
         target_link_libraries(kassetmanagerqt PRIVATE
@@ -442,8 +439,8 @@ if(TLRENDER_FOUND)
             dwmapi
         )
     endif()
-    
-    message(STATUS "tlRender linked via imported targets with OCIO color management")
+
+    message(STATUS "tlRender linked via imported targets")
 endif()
 
 # FFmpeg is provided by tlRender as a transitive dependency
@@ -502,15 +499,6 @@ else()
   message(WARNING "Icons folder not found at ${_ICONS_DIR}")
 endif()
 
-# Install bundled ACES OCIO config (ships with repo) so the portable build has a known-good config.
-set(_ACES_OCIO_DIR "${CMAKE_SOURCE_DIR}/../../OpenColorIO-Config-ACES-1.2")
-if(EXISTS "${_ACES_OCIO_DIR}")
-  install(DIRECTORY "${_ACES_OCIO_DIR}" DESTINATION bin)
-  message(STATUS "ACES OCIO config will be installed to bin/OpenColorIO-Config-ACES-1.2")
-else()
-  message(WARNING "ACES OCIO config folder not found at ${_ACES_OCIO_DIR}")
-endif()
-
 if(UNIX AND NOT APPLE)
   set(_LINUX_PACKAGING_DIR "${CMAKE_CURRENT_SOURCE_DIR}/packaging/linux")
   set(_APP_ICON_PNG "${CMAKE_SOURCE_DIR}/../../icon.png")
@@ -519,6 +507,15 @@ if(UNIX AND NOT APPLE)
   set(_QT_CONF "${CMAKE_CURRENT_BINARY_DIR}/qt.conf")
   file(WRITE "${_QT_CONF}" "[Paths]\nPlugins=../plugins\n")
   install(FILES "${_QT_CONF}" DESTINATION bin)
+
+  # The packaged layout needs qt.conf in the install tree, but keeping the same
+  # file beside the build-tree executable breaks normal local runs because the
+  # referenced ../plugins path does not exist there.
+  add_custom_command(
+    TARGET kassetmanagerqt POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E rm -f "${_QT_CONF}"
+    COMMENT "Removing build-tree qt.conf to preserve normal local Qt plugin discovery"
+  )
 
   if(EXISTS "${_LINUX_PACKAGING_DIR}/kassetmanager.desktop")
     install(FILES "${_LINUX_PACKAGING_DIR}/kassetmanager.desktop" DESTINATION share/applications)

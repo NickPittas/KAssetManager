@@ -7,7 +7,8 @@
 #include "tlrender_player.h"
 #include "platform_session.h"
 #include <QDebug>
-#include <QPixmap>
+#include <QPainter>
+#include <QPaintEvent>
 #include <QResizeEvent>
 #include <QMouseEvent>
 #include <QCoreApplication>
@@ -37,14 +38,9 @@ TLRenderViewport::TLRenderViewport(QWidget* parent)
 
 #ifdef HAVE_TLRENDER
     if (PlatformSession::shouldUseRasterPreviewFallbackOnWayland()) {
-        m_rasterLabel = new QLabel(this);
-        m_rasterLabel->setAlignment(Qt::AlignCenter);
-        m_rasterLabel->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-        m_rasterLabel->setMinimumSize(QSize(0, 0));
-        m_rasterLabel->setFocusPolicy(Qt::StrongFocus);
-        m_rasterLabel->installEventFilter(this);
-        m_rasterLabel->setStyleSheet(QStringLiteral("QLabel { background: #111; color: #888; }") );
-        m_layout->addWidget(m_rasterLabel);
+        setAttribute(Qt::WA_OpaquePaintEvent, true);
+        setAutoFillBackground(false);
+        installEventFilter(this);
     }
 #else
     qWarning() << "[TLRenderViewport] tlRender not available";
@@ -151,26 +147,16 @@ void TLRenderViewport::setPlayer(TLRenderPlayer* player)
             syncPresentationTimer();
         });
         
-        // Connect to OCIO changes
-        connect(player, &TLRenderPlayer::ocioOptionsChanged, this, [this]() {
-            if (m_viewport && m_player) {
-                m_viewport->setOCIOOptions(m_player->currentOCIOOptions());
-            }
-        });
-        
-        // Connect to video frames changed (for exposure/gamma updates)
         connect(player, &TLRenderPlayer::videoFramesChanged, this, [this]() {
-            if (m_rasterLabel && m_player && PlatformSession::shouldUseRasterPreviewFallbackOnWayland()) {
+            if (PlatformSession::shouldUseRasterPreviewFallbackOnWayland() && m_player) {
                 if (m_player->playbackState() != TLRenderPlayer::PlaybackState::Playing) {
                     updateRasterFrame();
                 }
-            } else if (m_viewport && m_player) {
-                m_viewport->setDisplayOptions(std::vector<tl::DisplayOptions>{m_player->currentDisplayOptions()});
             }
         });
         
         // If player already has media loaded, setup now
-        if (m_rasterLabel && PlatformSession::shouldUseRasterPreviewFallbackOnWayland()) {
+        if (PlatformSession::shouldUseRasterPreviewFallbackOnWayland()) {
             updateRasterFrame();
             syncPresentationTimer();
         } else if (player->playerObject()) {
@@ -216,7 +202,7 @@ void TLRenderViewport::onMediaLoaded(const TLRenderPlayer::MediaInfo& info)
         return;
     }
 #ifdef HAVE_TLRENDER
-    if (m_rasterLabel && PlatformSession::shouldUseRasterPreviewFallbackOnWayland()) {
+    if (PlatformSession::shouldUseRasterPreviewFallbackOnWayland()) {
         updateRasterFrame();
         syncPresentationTimer();
     } else {
@@ -248,9 +234,6 @@ void TLRenderViewport::syncBackendWidgetVisibility()
         m_presentationTimer->stop();
     }
 #ifdef HAVE_TLRENDER
-    if (m_rasterLabel) {
-        m_rasterLabel->setVisible(!mpvActive && !ffmpegMovActive);
-    }
     if (m_viewport) {
         m_viewport->setVisible(!mpvActive && !ffmpegMovActive);
     }
@@ -275,7 +258,7 @@ void TLRenderViewport::syncPresentationTimer()
     if (!m_presentationTimer) {
         return;
     }
-    if (!m_rasterLabel || !m_player || !PlatformSession::shouldUseRasterPreviewFallbackOnWayland()) {
+    if (!m_player || !PlatformSession::shouldUseRasterPreviewFallbackOnWayland()) {
         m_presentationTimer->stop();
         return;
     }
@@ -302,7 +285,7 @@ void TLRenderViewport::syncPresentationTimer()
 void TLRenderViewport::ensureViewport()
 {
 #ifdef HAVE_TLRENDER
-    if (m_rasterLabel && PlatformSession::shouldUseRasterPreviewFallbackOnWayland()) {
+    if (PlatformSession::shouldUseRasterPreviewFallbackOnWayland()) {
         return;
     }
     if (m_viewport) {
@@ -353,28 +336,48 @@ void TLRenderViewport::updateRasterFrame()
         return;
     }
 #ifdef HAVE_TLRENDER
-    if (!m_rasterLabel || !m_player) {
+    if (!m_player || !PlatformSession::shouldUseRasterPreviewFallbackOnWayland()) {
         return;
     }
     if (m_player->mpvPlayer() && m_player->mpvPlayer()->hasMedia()) {
         return;
     }
 
-    const QSize targetSize = m_rasterLabel->size().isValid() ? m_rasterLabel->size() : size();
+    const QSize targetSize = size();
     const QImage frame = m_player->getCurrentFrame(targetSize);
     if (frame.isNull()) {
         return;
     }
 
-    QPixmap pixmap = QPixmap::fromImage(frame);
-    if (!targetSize.isEmpty()) {
-        const QSize scaled = pixmap.size().scaled(targetSize * m_waylandZoom, Qt::KeepAspectRatio);
-        pixmap = pixmap.scaled(scaled, Qt::KeepAspectRatio, Qt::SmoothTransformation);
-    }
-    m_rasterLabel->setPixmap(pixmap);
+    m_rasterFrame = frame;
     ++m_presentationRevision;
+    update();
     emit frameRendered();
 #endif
+}
+
+void TLRenderViewport::paintEvent(QPaintEvent* event)
+{
+    QWidget::paintEvent(event);
+
+    if (!PlatformSession::shouldUseRasterPreviewFallbackOnWayland() || useFfmpegMovViewport() || useMpvViewport()) {
+        return;
+    }
+
+    QPainter painter(this);
+    painter.fillRect(rect(), QColor(17, 17, 17));
+
+    if (m_rasterFrame.isNull()) {
+        return;
+    }
+
+    const QRect targetRect = rasterImageRect();
+    if (!targetRect.isValid() || targetRect.isEmpty()) {
+        return;
+    }
+
+    painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+    painter.drawImage(targetRect, m_rasterFrame);
 }
 
 QImage TLRenderViewport::currentRasterFrameForTest()
@@ -385,21 +388,26 @@ QImage TLRenderViewport::currentRasterFrameForTest()
     if (useMpvViewport()) {
         return m_mpvViewport ? m_mpvViewport->currentFrameForTest() : QImage();
     }
-#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
-    if (!m_rasterLabel || !m_rasterLabel->pixmap()) {
-        return {};
+    return m_rasterFrame;
+}
+
+QImage TLRenderViewport::currentPresentedFrameForTest()
+{
+    if (useFfmpegMovViewport()) {
+        return m_ffmpegMovViewport ? m_ffmpegMovViewport->currentFrameForTest() : QImage();
     }
-    return m_rasterLabel->pixmap().toImage();
-#else
-    if (!m_rasterLabel) {
-        return {};
+    if (useMpvViewport()) {
+        return m_mpvViewport ? m_mpvViewport->currentFrameForTest() : QImage();
     }
-    const QPixmap* pixmap = m_rasterLabel->pixmap();
-    if (!pixmap) {
-        return {};
+#ifdef HAVE_TLRENDER
+    if (PlatformSession::shouldUseRasterPreviewFallbackOnWayland()) {
+        return currentRasterFrameForTest();
     }
-    return pixmap->toImage();
+    if (m_viewport) {
+        return m_viewport->grab().toImage();
+    }
 #endif
+    return {};
 }
 
 void TLRenderViewport::setupViewportPlayer()
@@ -430,42 +438,7 @@ void TLRenderViewport::setupViewportPlayer()
     // Set the shared player on native viewport
     m_viewport->setPlayer(playerObj);
     
-    // Apply current OCIO options from player
-    m_viewport->setOCIOOptions(m_player->currentOCIOOptions());
-    
-    // Apply current display options (exposure/gamma) from player
-    m_viewport->setDisplayOptions(std::vector<tl::DisplayOptions>{m_player->currentDisplayOptions()});
-    
     qDebug() << "[TLRenderViewport] Viewport player setup complete";
-#endif
-}
-
-void TLRenderViewport::setOCIOOptions(const QString& configPath,
-                                       const QString& inputColorSpace,
-                                       const QString& display,
-                                       const QString& view)
-{
-#ifdef HAVE_TLRENDER
-    if (!m_viewport) return;
-
-    tl::OCIOOptions options;
-    options.enabled = !configPath.isEmpty();
-    options.fileName = configPath.toStdString();
-    options.input = inputColorSpace.toStdString();
-    options.display = display.toStdString();
-    options.view = view.toStdString();
-    
-    m_viewport->setOCIOOptions(options);
-    qDebug() << "[TLRenderViewport] OCIO options set:"
-             << "config=" << configPath
-             << "input=" << inputColorSpace
-             << "display=" << display
-             << "view=" << view;
-#else
-    Q_UNUSED(configPath)
-    Q_UNUSED(inputColorSpace)
-    Q_UNUSED(display)
-    Q_UNUSED(view)
 #endif
 }
 
@@ -484,7 +457,7 @@ void TLRenderViewport::setFrameView(bool enabled)
         return;
     }
 #ifdef HAVE_TLRENDER
-    if (m_rasterLabel && PlatformSession::shouldUseRasterPreviewFallbackOnWayland()) {
+    if (PlatformSession::shouldUseRasterPreviewFallbackOnWayland()) {
         if (enabled) {
             m_waylandZoom = 1.0;
             updateRasterFrame();
@@ -508,7 +481,7 @@ bool TLRenderViewport::frameViewEnabled() const
         return m_mpvViewport ? m_mpvViewport->frameViewEnabled() : true;
     }
 #ifdef HAVE_TLRENDER
-    if (m_rasterLabel && PlatformSession::shouldUseRasterPreviewFallbackOnWayland()) {
+    if (PlatformSession::shouldUseRasterPreviewFallbackOnWayland()) {
         return qFuzzyCompare(m_waylandZoom, 1.0);
     }
     if (m_viewport) {
@@ -533,9 +506,9 @@ void TLRenderViewport::zoomRelative(double factor)
         return;
     }
 #ifdef HAVE_TLRENDER
-    if (m_rasterLabel && PlatformSession::shouldUseRasterPreviewFallbackOnWayland()) {
+    if (PlatformSession::shouldUseRasterPreviewFallbackOnWayland()) {
         m_waylandZoom = qBound(0.1, m_waylandZoom * factor, 10.0);
-        updateRasterFrame();
+        update();
         return;
     }
     if (m_viewport) {
@@ -559,18 +532,8 @@ QRect TLRenderViewport::displayedContentRect() const
         return m_mpvViewport ? m_mpvViewport->displayedContentRect() : rect();
     }
 #ifdef HAVE_TLRENDER
-    if (m_rasterLabel) {
-        const QRect contents = m_rasterLabel->contentsRect();
-        const QPixmap pixmap = m_rasterLabel->pixmap();
-        if (pixmap.isNull()) {
-            return contents;
-        }
-
-        const QSize fitted = pixmap.size().scaled(contents.size(), Qt::KeepAspectRatio);
-        const QPoint topLeft(
-            contents.x() + (contents.width() - fitted.width()) / 2,
-            contents.y() + (contents.height() - fitted.height()) / 2);
-        return QRect(topLeft, fitted);
+    if (PlatformSession::shouldUseRasterPreviewFallbackOnWayland()) {
+        return rasterImageRect();
     }
     if (m_viewport) {
         return m_viewport->geometry();
@@ -588,7 +551,7 @@ double TLRenderViewport::fps() const
         return m_measuredFps;
     }
 #ifdef HAVE_TLRENDER
-    if (m_rasterLabel && PlatformSession::shouldUseRasterPreviewFallbackOnWayland()) {
+    if (PlatformSession::shouldUseRasterPreviewFallbackOnWayland()) {
         return m_measuredFps;
     } else if (m_viewport) {
         return m_viewport->getFPS();
@@ -624,9 +587,27 @@ void TLRenderViewport::resizeEvent(QResizeEvent* event)
         m_mpvViewport->update();
         return;
     }
-    if (m_rasterLabel && PlatformSession::shouldUseRasterPreviewFallbackOnWayland()) {
+    if (PlatformSession::shouldUseRasterPreviewFallbackOnWayland()) {
         updateRasterFrame();
     }
+}
+
+QRect TLRenderViewport::rasterImageRect() const
+{
+    const QRect contents = contentsRect();
+    if (m_rasterFrame.isNull()) {
+        return contents;
+    }
+
+    QSize drawSize = m_rasterFrame.size().scaled(contents.size(), Qt::KeepAspectRatio);
+    if (!qFuzzyCompare(m_waylandZoom, 1.0)) {
+        drawSize = (drawSize * m_waylandZoom).boundedTo(contents.size() * 10);
+    }
+
+    const QPoint topLeft(
+        contents.x() + (contents.width() - drawSize.width()) / 2,
+        contents.y() + (contents.height() - drawSize.height()) / 2);
+    return QRect(topLeft, drawSize);
 }
 
 bool TLRenderViewport::eventFilter(QObject* watched, QEvent* event)
@@ -640,7 +621,7 @@ bool TLRenderViewport::eventFilter(QObject* watched, QEvent* event)
         }
     }
 #ifdef HAVE_TLRENDER
-    if (watched == m_viewport || watched == m_rasterLabel) {
+    if (watched == m_viewport || watched == this) {
         if (event->type() == QEvent::KeyPress || event->type() == QEvent::KeyRelease) {
             auto *keyEvent = static_cast<QKeyEvent*>(event);
             if (QWidget *overlay = parentWidget()) {
@@ -673,7 +654,7 @@ bool TLRenderViewport::eventFilter(QObject* watched, QEvent* event)
         } else if (event->type() == QEvent::MouseMove) {
             QMouseEvent* mouseEvent = static_cast<QMouseEvent*>(event);
             if (m_isPanning && (mouseEvent->buttons() & Qt::MiddleButton)) {
-                if (m_rasterLabel && PlatformSession::shouldUseRasterPreviewFallbackOnWayland()) {
+                if (PlatformSession::shouldUseRasterPreviewFallbackOnWayland()) {
                     return true;
                 }
                 const QPoint delta = mouseEvent->pos() - m_lastPanPos;
@@ -702,6 +683,9 @@ bool TLRenderViewport::eventFilter(QObject* watched, QEvent* event)
 
 bool TLRenderViewport::useFfmpegMovViewport() const
 {
+    if (PlatformSession::shouldUseRasterPreviewFallbackOnWayland()) {
+        return false;
+    }
     return m_player
         && m_player->ffmpegMovPlayer()
         && m_player->ffmpegMovPlayer()->hasMedia();

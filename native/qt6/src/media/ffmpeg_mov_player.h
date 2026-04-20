@@ -68,6 +68,7 @@ public:
     QString currentMediaPath() const { return m_currentPath; }
 
     QImage currentFrameImage() const;
+    QImage currentFrameImage(const QSize& targetSize);
     QSize currentFrameSize() const;
 
 signals:
@@ -87,6 +88,8 @@ private slots:
 private:
     struct BufferedFrame {
         QImage image;
+        QImage scaledImage;
+        QSize scaledTargetSize;
         qint64 positionMs{0};
         qint64 frameNumber{0};
         qint64 pts{0};
@@ -99,19 +102,25 @@ private:
     void decodeThreadMain();
     void updatePlaybackTimer();
     bool decodeNextFrame(quint64 generation);
-    bool decodeFrameForTimestamp(int64_t targetTs, bool allowPastTarget, quint64 generation);
+    bool decodeFrameForTimestamp(int64_t targetTs, bool allowPastTarget, quint64 generation, bool preferPreviousFrame = false);
     bool seekInternal(qint64 positionMs, bool emitSignals);
+    bool seekToTimestampInternal(int64_t targetTs, bool emitSignals, bool preferPreviousFrame = false);
     bool presentDecodedFrame(AVFrame* frame, BufferedFrame* bufferedFrame);
     bool queueBufferedFrame(BufferedFrame&& frame, quint64 generation, bool satisfySeek);
     bool waitForSeekFrame(quint64 generation, BufferedFrame* frame, QString* errorString = nullptr);
-    bool takeBufferedFrameForPlayback(qint64 targetFrameNumber, BufferedFrame* frame, bool* reachedEndOfStream);
+    bool takeBufferedFrameForPlayback(qint64 targetPositionMs, BufferedFrame* frame, bool* reachedEndOfStream);
     void presentBufferedFrame(const BufferedFrame& frame, bool emitSignals);
+    void rememberPresentedFrame(const BufferedFrame& frame);
+    bool takePreviousPresentedFrame(BufferedFrame* frame);
+    void clearPresentedHistory();
     int decodeQueueCapacity() const;
     void resetPlaybackClock();
     bool fallbackToSoftwareDecoding(qint64 restartPositionMs, quint64 generation, bool satisfySeek, QString* errorString = nullptr);
     bool ensureConversionContext(AVFrame* frame);
     qint64 timestampToMs(int64_t pts) const;
     int64_t msToTimestamp(qint64 positionMs) const;
+    int64_t frameToTimestamp(qint64 frameNumber) const;
+    qint64 timestampToFrame(int64_t pts, qint64 fallbackPositionMs) const;
     qint64 clampFrameNumber(qint64 frameNumber) const;
     void setPlaybackState(media_player::PlaybackState state);
     void clearPresentedFrame();
@@ -119,6 +128,10 @@ private:
 
     mutable QMutex m_frameMutex;
     QImage m_currentFrameImage;
+    QImage m_currentFrameScaledImage;
+    QSize m_currentFrameScaledTargetSize;
+    QSize m_requestedFrameTargetSize;
+    QImage m_conversionScratchImage;
 
     QChronoTimer* m_playbackTimer{nullptr};
     QElapsedTimer m_playbackClock;
@@ -160,6 +173,7 @@ private:
     std::mutex m_decodeMutex;
     std::condition_variable m_decodeCondition;
     std::deque<BufferedFrame> m_decodedFrames;
+    std::deque<BufferedFrame> m_presentedFrames;
     BufferedFrame m_seekResultFrame;
     std::thread m_decodeThread;
     bool m_decodeStopRequested{false};
@@ -169,6 +183,8 @@ private:
     bool m_seekResultReady{false};
     bool m_decodeAtEnd{false};
     qint64 m_pendingSeekMs{0};
+    int64_t m_pendingSeekTs{0};
+    bool m_pendingSeekPreferPreviousFrame{false};
     quint64 m_decodeGeneration{0};
     QString m_pendingDecodeError;
 };

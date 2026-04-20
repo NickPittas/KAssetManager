@@ -13,20 +13,14 @@
 #include "media/tlrender_player.h"
 #include "media/tlrender_viewport.h"
 #include "platform_session.h"
+#include "real_media_test_helper.h"
 
 namespace {
 
-constexpr const char* kFixtureRoot = "tests/fixtures/videos";
 constexpr const char* kBenchmarkFileEnvVar = "KASSETMANAGER_TLRENDER_BENCHMARK_FILE";
 constexpr int kWarmupTimeoutMs = 30000;
 constexpr int kPlaybackProbeMs = 2000;
 constexpr int kMinimumDistinctFps = 24;
-
-QString fixturePath(const QString& fileName)
-{
-    const QString root = QCoreApplication::applicationDirPath() + QStringLiteral("/") + QString::fromUtf8(kFixtureRoot);
-    return root + QStringLiteral("/") + fileName;
-}
 
 QByteArray fingerprintImage(const QImage& image)
 {
@@ -43,13 +37,16 @@ QByteArray fingerprintImage(const QImage& image)
 struct PlaybackObservation {
     int renderedSignals = 0;
     int distinctFrames = 0;
+    int distinctPresentedFrames = 0;
     int playerFrameSignals = 0;
     int distinctPlayerFrames = 0;
     qint64 firstRevision = 0;
     qint64 lastRevision = 0;
     qint64 lastPlayerFrameNumber = -1;
     QByteArray lastFingerprint;
+    QByteArray lastPresentedFingerprint;
     double measuredDistinctFps = 0.0;
+    double measuredPresentedDistinctFps = 0.0;
     double measuredRenderedSignalFps = 0.0;
     double measuredPlayerFrameFps = 0.0;
     double elapsedSeconds = 0.0;
@@ -62,19 +59,63 @@ struct PlaybackObservation {
 QString playbackMetricsSummary(const QString& filePath, const PlaybackObservation& observation)
 {
     return QStringLiteral(
-               "Playback metrics for %1: elapsed=%2 s, renderedSignals=%3 (%4 fps), distinctRasterFrames=%5 (%6 fps), distinctPlayerFrames=%7 (%8 fps), playerFrameSignals=%9, frameRenderedIntervalMs(avg/min/max)=%10/%11/%12")
+               "Playback metrics for %1: elapsed=%2 s, renderedSignals=%3 (%4 fps), distinctRasterFrames=%5 (%6 fps), distinctPresentedFrames=%7 (%8 fps), distinctPlayerFrames=%9 (%10 fps), playerFrameSignals=%11, frameRenderedIntervalMs(avg/min/max)=%12/%13/%14")
         .arg(QFileInfo(filePath).absoluteFilePath())
         .arg(observation.elapsedSeconds, 0, 'f', 2)
         .arg(observation.renderedSignals)
         .arg(observation.measuredRenderedSignalFps, 0, 'f', 2)
         .arg(observation.distinctFrames)
         .arg(observation.measuredDistinctFps, 0, 'f', 2)
+        .arg(observation.distinctPresentedFrames)
+        .arg(observation.measuredPresentedDistinctFps, 0, 'f', 2)
         .arg(observation.distinctPlayerFrames)
         .arg(observation.measuredPlayerFrameFps, 0, 'f', 2)
         .arg(observation.playerFrameSignals)
         .arg(observation.averageRenderedIntervalMs, 0, 'f', 2)
         .arg(observation.minRenderedIntervalMs, 0, 'f', 2)
         .arg(observation.maxRenderedIntervalMs, 0, 'f', 2);
+}
+
+bool waitForMediaReadyOrFail(QSignalSpy& mediaSpy, QSignalSpy& errorSpy, int timeoutMs, QString* errorOut);
+
+bool loadPlayerAndViewport(const QString& filePath,
+                          TLRenderPlayer* player,
+                          TLRenderViewport* viewport,
+                          QSignalSpy* mediaSpy,
+                          QSignalSpy* errorSpy,
+                          QSignalSpy* frameSpy,
+                          QString* loadError)
+{
+    if (!player || !viewport || !mediaSpy || !errorSpy || !frameSpy) {
+        return false;
+    }
+
+    viewport->resize(1280, 720);
+    viewport->show();
+    viewport->setPlayer(player);
+
+    if (!mediaSpy->isValid() || !errorSpy->isValid() || !frameSpy->isValid()) {
+        return false;
+    }
+
+    player->loadMedia(filePath);
+    if (!waitForMediaReadyOrFail(*mediaSpy, *errorSpy, kWarmupTimeoutMs, loadError)) {
+        return false;
+    }
+
+    QTest::qWait(20);
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+    return QTest::qWaitFor([viewport]() {
+        return viewport->rasterPresentationRevisionForTest() > 0
+            && !viewport->currentRasterFrameForTest().isNull();
+    }, kWarmupTimeoutMs);
+}
+
+void advanceForBackwardTests(TLRenderPlayer* player, QSignalSpy* frameSpy)
+{
+    player->play();
+    QTRY_VERIFY_WITH_TIMEOUT(frameSpy->count() > 10, kWarmupTimeoutMs);
+    player->pause();
 }
 
 bool waitForMediaReadyOrFail(QSignalSpy& mediaSpy, QSignalSpy& errorSpy, int timeoutMs, QString* errorOut)
@@ -142,6 +183,12 @@ PlaybackObservation observePlayback(TLRenderPlayer& player, TLRenderViewport& vi
             ++result.distinctFrames;
             result.lastFingerprint = currentFingerprint;
         }
+
+        const QByteArray presentedFingerprint = fingerprintImage(viewport.currentPresentedFrameForTest());
+        if (!presentedFingerprint.isEmpty() && presentedFingerprint != result.lastPresentedFingerprint) {
+            ++result.distinctPresentedFrames;
+            result.lastPresentedFingerprint = presentedFingerprint;
+        }
     }, Qt::DirectConnection);
     QObject::connect(&player, &TLRenderPlayer::currentFrameChanged, &viewport, [&](qint64 frameNumber) {
         ++result.playerFrameSignals;
@@ -161,6 +208,7 @@ PlaybackObservation observePlayback(TLRenderPlayer& player, TLRenderViewport& vi
     const double seconds = timer.elapsed() / 1000.0;
     result.elapsedSeconds = seconds;
     result.measuredDistinctFps = (seconds > 0.0) ? (result.distinctFrames / seconds) : 0.0;
+    result.measuredPresentedDistinctFps = (seconds > 0.0) ? (result.distinctPresentedFrames / seconds) : 0.0;
     result.measuredRenderedSignalFps = (seconds > 0.0) ? (result.renderedSignals / seconds) : 0.0;
     result.measuredPlayerFrameFps = (seconds > 0.0) ? (result.distinctPlayerFrames / seconds) : 0.0;
     if (result.renderedIntervals > 0) {
@@ -184,23 +232,30 @@ private slots:
     void megyViewerCadence();
     void bloodHitAlphaViewerProgresses();
     void benchmarkEnvFile();
+    void mp4StepBackwardUpdatesRasterFrame();
+    void mp4SeekToPreviousFrameUpdatesRasterFrame();
+    void mp4ReversePlaybackUpdatesRasterFrame();
+    void movStepBackwardUpdatesRasterFrame();
+    void movReversePlaybackUpdatesRasterFrame();
+    void allMovFilesStepBackwardAndReverse();
 };
 
 void TestTLRenderPlaybackHarness::initTestCase()
 {
     setlocale(LC_NUMERIC, "C");
-    if (qEnvironmentVariableIsEmpty(kBenchmarkFileEnvVar)) {
-        const QString fixtureRoot = QCoreApplication::applicationDirPath() + QStringLiteral("/") + QString::fromUtf8(kFixtureRoot);
-        QVERIFY2(QFileInfo::exists(fixtureRoot), qPrintable(QStringLiteral("Fixture root does not exist: %1").arg(fixtureRoot)));
-    }
     QVERIFY2(PlatformSession::shouldUseRasterPreviewFallbackOnWayland(),
              "Playback harness must exercise the real Wayland raster preview path");
 }
 
 void TestTLRenderPlaybackHarness::sunshine25fpsViewerCadence()
 {
-    const QString filePath = fixturePath(QStringLiteral("Sunshine 10sec Full Comp v3.mov"));
-    QVERIFY2(QFileInfo::exists(filePath), qPrintable(QStringLiteral("Missing fixture: %1").arg(filePath)));
+    const auto media = RealMediaTestHelper::resolve(
+        QStringLiteral("ELLIOT_HD_ST_EN_24FPS_20260408.mov"),
+        "Required real MOV cadence file missing");
+    if (!media.isAvailable()) {
+        QSKIP(qPrintable(media.skipReason));
+    }
+    const QString filePath = media.filePath;
 
     TLRenderPlayer player;
     TLRenderViewport viewport;
@@ -248,8 +303,13 @@ void TestTLRenderPlaybackHarness::sunshine25fpsViewerCadence()
 
 void TestTLRenderPlaybackHarness::atmosphereViewerCadence()
 {
-    const QString filePath = fixturePath(QStringLiteral("Atmosphere-019.mov"));
-    QVERIFY2(QFileInfo::exists(filePath), qPrintable(QStringLiteral("Missing fixture: %1").arg(filePath)));
+    const auto media = RealMediaTestHelper::resolve(
+        QStringLiteral("Atmosphere-019.mov"),
+        "Required real MOV cadence file missing");
+    if (!media.isAvailable()) {
+        QSKIP(qPrintable(media.skipReason));
+    }
+    const QString filePath = media.filePath;
 
     TLRenderPlayer player;
     TLRenderViewport viewport;
@@ -297,8 +357,13 @@ void TestTLRenderPlaybackHarness::atmosphereViewerCadence()
 
 void TestTLRenderPlaybackHarness::megyViewerCadence()
 {
-    const QString filePath = fixturePath(QStringLiteral("MEGY_comp_4K_LL180_ap0_r709g24_v015.mov"));
-    QVERIFY2(QFileInfo::exists(filePath), qPrintable(QStringLiteral("Missing fixture: %1").arg(filePath)));
+    const auto media = RealMediaTestHelper::resolve(
+        QStringLiteral("ELLIOT_HD_ST_EN_24FPS_20260408.mov"),
+        "Fallback real cadence file missing for megyViewerCadence");
+    if (!media.isAvailable()) {
+        QSKIP(qPrintable(media.skipReason));
+    }
+    const QString filePath = media.filePath;
 
     TLRenderPlayer player;
     TLRenderViewport viewport;
@@ -346,8 +411,13 @@ void TestTLRenderPlaybackHarness::megyViewerCadence()
 
 void TestTLRenderPlaybackHarness::bloodHitAlphaViewerProgresses()
 {
-    const QString filePath = fixturePath(QStringLiteral("Blood_Hit_03.mov"));
-    QVERIFY2(QFileInfo::exists(filePath), qPrintable(QStringLiteral("Missing fixture: %1").arg(filePath)));
+    const auto media = RealMediaTestHelper::resolve(
+        QStringLiteral("Atmosphere-019.mov"),
+        "Fallback real media file missing for bloodHitAlphaViewerProgresses");
+    if (!media.isAvailable()) {
+        QSKIP(qPrintable(media.skipReason));
+    }
+    const QString filePath = media.filePath;
 
     TLRenderPlayer player;
     TLRenderViewport viewport;
@@ -384,7 +454,7 @@ void TestTLRenderPlaybackHarness::bloodHitAlphaViewerProgresses()
                             .arg(observation.distinctFrames)
                             .arg(observation.distinctPlayerFrames)
                             .arg(frameStats.fallbackExtractions)
-                            .arg(frameStats.lastCachedImageType)));
+                             .arg(frameStats.lastCachedImageType)));
 }
 
 void TestTLRenderPlaybackHarness::benchmarkEnvFile()
@@ -428,6 +498,305 @@ void TestTLRenderPlaybackHarness::benchmarkEnvFile()
              qPrintable(QStringLiteral("Viewer never presented a distinct raster frame for %1").arg(filePath)));
     QVERIFY2(observation.distinctPlayerFrames > 0,
              qPrintable(QStringLiteral("Player never reported a distinct frame for %1").arg(filePath)));
+}
+
+void TestTLRenderPlaybackHarness::mp4StepBackwardUpdatesRasterFrame()
+{
+    const QString filePath = QStringLiteral("/mnt/ssd2/Tests/Videos/Ns Ethereal 1.mp4");
+    QVERIFY2(QFileInfo::exists(filePath), qPrintable(QStringLiteral("Required MP4 test file missing: %1").arg(filePath)));
+
+    TLRenderPlayer player;
+    TLRenderViewport viewport;
+    viewport.resize(1280, 720);
+    viewport.show();
+    viewport.setPlayer(&player);
+
+    QSignalSpy mediaSpy(&player, &TLRenderPlayer::mediaInfoReady);
+    QSignalSpy errorSpy(&player, &TLRenderPlayer::error);
+    QSignalSpy frameSpy(&player, &TLRenderPlayer::currentFrameChanged);
+    QVERIFY(mediaSpy.isValid());
+    QVERIFY(errorSpy.isValid());
+    QVERIFY(frameSpy.isValid());
+
+    player.loadMedia(filePath);
+
+    QString loadError;
+    QVERIFY2(waitForMediaReadyOrFail(mediaSpy, errorSpy, kWarmupTimeoutMs, &loadError),
+             qPrintable(QStringLiteral("MP4 file failed to become ready: %1 (%2)").arg(filePath, loadError)));
+
+    QTRY_VERIFY_WITH_TIMEOUT(viewport.rasterPresentationRevisionForTest() > 0, kWarmupTimeoutMs);
+    QVERIFY2(!viewport.currentRasterFrameForTest().isNull(), "MP4 never produced an initial raster frame");
+
+    player.play();
+    QTRY_VERIFY_WITH_TIMEOUT(frameSpy.count() > 10, kWarmupTimeoutMs);
+    player.pause();
+
+    const qint64 revisionBeforeStep = viewport.rasterPresentationRevisionForTest();
+    const QByteArray fingerprintBeforeStep = fingerprintImage(viewport.currentRasterFrameForTest());
+    const qint64 frameBeforeStep = player.currentFrame();
+
+    player.stepBackward();
+
+    QTRY_VERIFY_WITH_TIMEOUT(player.currentFrame() < frameBeforeStep, 5000);
+    QTRY_VERIFY_WITH_TIMEOUT(viewport.rasterPresentationRevisionForTest() > revisionBeforeStep, 5000);
+
+    const QByteArray fingerprintAfterStep = fingerprintImage(viewport.currentRasterFrameForTest());
+    QVERIFY2(!fingerprintAfterStep.isEmpty(), "Step backward produced an empty raster frame");
+    QVERIFY2(fingerprintAfterStep != fingerprintBeforeStep,
+             "Step backward did not change the raster-presented frame");
+}
+
+void TestTLRenderPlaybackHarness::mp4ReversePlaybackUpdatesRasterFrame()
+{
+    const QString filePath = QStringLiteral("/mnt/ssd2/Tests/Videos/Ns Ethereal 1.mp4");
+    QVERIFY2(QFileInfo::exists(filePath), qPrintable(QStringLiteral("Required MP4 test file missing: %1").arg(filePath)));
+
+    TLRenderPlayer player;
+    TLRenderViewport viewport;
+    viewport.resize(1280, 720);
+    viewport.show();
+    viewport.setPlayer(&player);
+
+    QSignalSpy mediaSpy(&player, &TLRenderPlayer::mediaInfoReady);
+    QSignalSpy errorSpy(&player, &TLRenderPlayer::error);
+    QSignalSpy frameSpy(&player, &TLRenderPlayer::currentFrameChanged);
+    QVERIFY(mediaSpy.isValid());
+    QVERIFY(errorSpy.isValid());
+    QVERIFY(frameSpy.isValid());
+
+    player.loadMedia(filePath);
+
+    QString loadError;
+    QVERIFY2(waitForMediaReadyOrFail(mediaSpy, errorSpy, kWarmupTimeoutMs, &loadError),
+             qPrintable(QStringLiteral("MP4 file failed to become ready: %1 (%2)").arg(filePath, loadError)));
+
+    QTRY_VERIFY_WITH_TIMEOUT(viewport.rasterPresentationRevisionForTest() > 0, kWarmupTimeoutMs);
+    QVERIFY2(!viewport.currentRasterFrameForTest().isNull(), "MP4 never produced an initial raster frame");
+
+    player.play();
+    QTRY_VERIFY_WITH_TIMEOUT(frameSpy.count() > 10, kWarmupTimeoutMs);
+    player.pause();
+
+    // Move away from frame zero so reverse playback has room to move.
+    player.seekToFrame(qMax<qint64>(5, player.currentFrame()));
+    player.refreshCurrentFrame();
+    const qint64 frameBeforeReverse = player.currentFrame();
+    const qint64 revisionBeforeReverse = viewport.rasterPresentationRevisionForTest();
+    const QByteArray fingerprintBeforeReverse = fingerprintImage(viewport.currentRasterFrameForTest());
+
+    player.setPlaybackRate(-1.0);
+    player.play();
+
+    QTRY_VERIFY_WITH_TIMEOUT(player.currentFrame() < frameBeforeReverse, 5000);
+    QTRY_VERIFY_WITH_TIMEOUT(viewport.rasterPresentationRevisionForTest() > revisionBeforeReverse, 5000);
+    player.pause();
+
+    const QByteArray fingerprintAfterReverse = fingerprintImage(viewport.currentRasterFrameForTest());
+    QVERIFY2(!fingerprintAfterReverse.isEmpty(), "Reverse playback produced an empty raster frame");
+    QVERIFY2(fingerprintAfterReverse != fingerprintBeforeReverse,
+             "Reverse playback did not change the raster-presented frame");
+}
+
+void TestTLRenderPlaybackHarness::mp4SeekToPreviousFrameUpdatesRasterFrame()
+{
+    const QString filePath = QStringLiteral("/mnt/ssd2/Tests/Videos/Ns Ethereal 1.mp4");
+    QVERIFY2(QFileInfo::exists(filePath), qPrintable(QStringLiteral("Required MP4 test file missing: %1").arg(filePath)));
+
+    TLRenderPlayer player;
+    TLRenderViewport viewport;
+    viewport.resize(1280, 720);
+    viewport.show();
+    viewport.setPlayer(&player);
+
+    QSignalSpy mediaSpy(&player, &TLRenderPlayer::mediaInfoReady);
+    QSignalSpy errorSpy(&player, &TLRenderPlayer::error);
+    QSignalSpy frameSpy(&player, &TLRenderPlayer::currentFrameChanged);
+    QVERIFY(mediaSpy.isValid());
+    QVERIFY(errorSpy.isValid());
+    QVERIFY(frameSpy.isValid());
+
+    player.loadMedia(filePath);
+
+    QString loadError;
+    QVERIFY2(waitForMediaReadyOrFail(mediaSpy, errorSpy, kWarmupTimeoutMs, &loadError),
+             qPrintable(QStringLiteral("MP4 file failed to become ready: %1 (%2)").arg(filePath, loadError)));
+
+    QTRY_VERIFY_WITH_TIMEOUT(viewport.rasterPresentationRevisionForTest() > 0, kWarmupTimeoutMs);
+    QVERIFY2(!viewport.currentRasterFrameForTest().isNull(), "MP4 never produced an initial raster frame");
+
+    player.play();
+    QTRY_VERIFY_WITH_TIMEOUT(frameSpy.count() > 10, kWarmupTimeoutMs);
+    player.pause();
+
+    const qint64 revisionBeforeSeek = viewport.rasterPresentationRevisionForTest();
+    const QByteArray fingerprintBeforeSeek = fingerprintImage(viewport.currentRasterFrameForTest());
+    const qint64 frameBeforeSeek = player.currentFrame();
+
+    player.seekToFrame(qMax<qint64>(0, frameBeforeSeek - 1));
+    player.refreshCurrentFrame();
+
+    QTRY_VERIFY_WITH_TIMEOUT(player.currentFrame() < frameBeforeSeek, 5000);
+    QTRY_VERIFY_WITH_TIMEOUT(viewport.rasterPresentationRevisionForTest() > revisionBeforeSeek, 5000);
+
+    const QByteArray fingerprintAfterSeek = fingerprintImage(viewport.currentRasterFrameForTest());
+    QVERIFY2(!fingerprintAfterSeek.isEmpty(), "Seek to previous frame produced an empty raster frame");
+    QVERIFY2(fingerprintAfterSeek != fingerprintBeforeSeek,
+             "Seek to previous frame did not change the raster-presented frame");
+}
+
+void TestTLRenderPlaybackHarness::movStepBackwardUpdatesRasterFrame()
+{
+    const QString filePath = QStringLiteral("/mnt/ssd2/Tests/Videos/Cut1GRAPHICS.mov");
+    QVERIFY2(QFileInfo::exists(filePath), qPrintable(QStringLiteral("Required MOV test file missing: %1").arg(filePath)));
+
+    TLRenderPlayer player;
+    TLRenderViewport viewport;
+    viewport.resize(1280, 720);
+    viewport.show();
+    viewport.setPlayer(&player);
+
+    QSignalSpy mediaSpy(&player, &TLRenderPlayer::mediaInfoReady);
+    QSignalSpy errorSpy(&player, &TLRenderPlayer::error);
+    QSignalSpy frameSpy(&player, &TLRenderPlayer::currentFrameChanged);
+    QVERIFY(mediaSpy.isValid());
+    QVERIFY(errorSpy.isValid());
+    QVERIFY(frameSpy.isValid());
+
+    player.loadMedia(filePath);
+
+    QString loadError;
+    QVERIFY2(waitForMediaReadyOrFail(mediaSpy, errorSpy, kWarmupTimeoutMs, &loadError),
+             qPrintable(QStringLiteral("MOV file failed to become ready: %1 (%2)").arg(filePath, loadError)));
+
+    QTRY_VERIFY_WITH_TIMEOUT(viewport.rasterPresentationRevisionForTest() > 0, kWarmupTimeoutMs);
+    QVERIFY2(!viewport.currentRasterFrameForTest().isNull(), "MOV never produced an initial raster frame");
+
+    player.play();
+    QTRY_VERIFY_WITH_TIMEOUT(frameSpy.count() > 10, kWarmupTimeoutMs);
+    player.pause();
+
+    const qint64 revisionBeforeStep = viewport.rasterPresentationRevisionForTest();
+    const QByteArray fingerprintBeforeStep = fingerprintImage(viewport.currentRasterFrameForTest());
+    const qint64 frameBeforeStep = player.currentFrame();
+
+    player.stepBackward();
+
+    QTRY_VERIFY_WITH_TIMEOUT(player.currentFrame() < frameBeforeStep, 5000);
+    QTRY_VERIFY_WITH_TIMEOUT(viewport.rasterPresentationRevisionForTest() > revisionBeforeStep, 5000);
+
+    const QByteArray fingerprintAfterStep = fingerprintImage(viewport.currentRasterFrameForTest());
+    QVERIFY2(!fingerprintAfterStep.isEmpty(), "MOV step backward produced an empty raster frame");
+    QVERIFY2(fingerprintAfterStep != fingerprintBeforeStep,
+             "MOV step backward did not change the raster-presented frame");
+}
+
+void TestTLRenderPlaybackHarness::movReversePlaybackUpdatesRasterFrame()
+{
+    const QString filePath = QStringLiteral("/mnt/ssd2/Tests/Videos/Cut1GRAPHICS.mov");
+    QVERIFY2(QFileInfo::exists(filePath), qPrintable(QStringLiteral("Required MOV test file missing: %1").arg(filePath)));
+
+    TLRenderPlayer player;
+    TLRenderViewport viewport;
+    viewport.resize(1280, 720);
+    viewport.show();
+    viewport.setPlayer(&player);
+
+    QSignalSpy mediaSpy(&player, &TLRenderPlayer::mediaInfoReady);
+    QSignalSpy errorSpy(&player, &TLRenderPlayer::error);
+    QSignalSpy frameSpy(&player, &TLRenderPlayer::currentFrameChanged);
+    QVERIFY(mediaSpy.isValid());
+    QVERIFY(errorSpy.isValid());
+    QVERIFY(frameSpy.isValid());
+
+    player.loadMedia(filePath);
+
+    QString loadError;
+    QVERIFY2(waitForMediaReadyOrFail(mediaSpy, errorSpy, kWarmupTimeoutMs, &loadError),
+             qPrintable(QStringLiteral("MOV file failed to become ready: %1 (%2)").arg(filePath, loadError)));
+
+    QTRY_VERIFY_WITH_TIMEOUT(viewport.rasterPresentationRevisionForTest() > 0, kWarmupTimeoutMs);
+    QVERIFY2(!viewport.currentRasterFrameForTest().isNull(), "MOV never produced an initial raster frame");
+
+    player.play();
+    QTRY_VERIFY_WITH_TIMEOUT(frameSpy.count() > 10, kWarmupTimeoutMs);
+    player.pause();
+
+    player.seekToFrame(qMax<qint64>(5, player.currentFrame()));
+    player.refreshCurrentFrame();
+    const qint64 frameBeforeReverse = player.currentFrame();
+    const qint64 revisionBeforeReverse = viewport.rasterPresentationRevisionForTest();
+    const QByteArray fingerprintBeforeReverse = fingerprintImage(viewport.currentRasterFrameForTest());
+
+    player.setPlaybackRate(-1.0);
+    player.play();
+
+    QTRY_VERIFY_WITH_TIMEOUT(player.currentFrame() < frameBeforeReverse, 5000);
+    QTRY_VERIFY_WITH_TIMEOUT(viewport.rasterPresentationRevisionForTest() > revisionBeforeReverse, 5000);
+    player.pause();
+
+    const QByteArray fingerprintAfterReverse = fingerprintImage(viewport.currentRasterFrameForTest());
+    QVERIFY2(!fingerprintAfterReverse.isEmpty(), "MOV reverse playback produced an empty raster frame");
+    QVERIFY2(fingerprintAfterReverse != fingerprintBeforeReverse,
+             "MOV reverse playback did not change the raster-presented frame");
+}
+
+void TestTLRenderPlaybackHarness::allMovFilesStepBackwardAndReverse()
+{
+    const QStringList files = {
+        QStringLiteral("/mnt/ssd2/Tests/Videos/Atmosphere-019.mov"),
+        QStringLiteral("/mnt/ssd2/Tests/Videos/Cut1GRAPHICS.mov"),
+        QStringLiteral("/mnt/ssd2/Tests/Videos/ELLIOT_HD_ST_EN_24FPS_20260408.mov"),
+        QStringLiteral("/mnt/ssd2/Tests/Videos/Ns Ethereal 1.mov"),
+        QStringLiteral("/mnt/ssd2/Tests/Videos/Shot_0140_v005.mov")
+    };
+
+    for (const QString& filePath : files) {
+        QVERIFY2(QFileInfo::exists(filePath), qPrintable(QStringLiteral("Required MOV test file missing: %1").arg(filePath)));
+
+        TLRenderPlayer player;
+        TLRenderViewport viewport;
+        QSignalSpy mediaSpy(&player, &TLRenderPlayer::mediaInfoReady);
+        QSignalSpy errorSpy(&player, &TLRenderPlayer::error);
+        QSignalSpy frameSpy(&player, &TLRenderPlayer::currentFrameChanged);
+        QString loadError;
+
+        QVERIFY2(loadPlayerAndViewport(filePath, &player, &viewport, &mediaSpy, &errorSpy, &frameSpy, &loadError),
+                 qPrintable(QStringLiteral("MOV file failed to become ready: %1 (%2)").arg(filePath, loadError)));
+
+        advanceForBackwardTests(&player, &frameSpy);
+
+        const qint64 revisionBeforeStep = viewport.rasterPresentationRevisionForTest();
+        const QByteArray fingerprintBeforeStep = fingerprintImage(viewport.currentRasterFrameForTest());
+        const qint64 frameBeforeStep = player.currentFrame();
+
+        player.stepBackward();
+
+        QTRY_VERIFY_WITH_TIMEOUT(player.currentFrame() < frameBeforeStep, 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(viewport.rasterPresentationRevisionForTest() > revisionBeforeStep, 5000);
+
+        const QByteArray fingerprintAfterStep = fingerprintImage(viewport.currentRasterFrameForTest());
+        QVERIFY2(!fingerprintAfterStep.isEmpty(), qPrintable(QStringLiteral("MOV step backward produced an empty raster frame for %1").arg(filePath)));
+        QVERIFY2(fingerprintAfterStep != fingerprintBeforeStep,
+                 qPrintable(QStringLiteral("MOV step backward did not change the raster-presented frame for %1").arg(filePath)));
+
+        player.seekToFrame(qMax<qint64>(5, player.currentFrame()));
+        player.refreshCurrentFrame();
+        const qint64 frameBeforeReverse = player.currentFrame();
+        const qint64 revisionBeforeReverse = viewport.rasterPresentationRevisionForTest();
+        const QByteArray fingerprintBeforeReverse = fingerprintImage(viewport.currentRasterFrameForTest());
+
+        player.setPlaybackRate(-1.0);
+        player.play();
+
+        QTRY_VERIFY_WITH_TIMEOUT(player.currentFrame() < frameBeforeReverse, 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(viewport.rasterPresentationRevisionForTest() > revisionBeforeReverse, 5000);
+        player.pause();
+
+        const QByteArray fingerprintAfterReverse = fingerprintImage(viewport.currentRasterFrameForTest());
+        QVERIFY2(!fingerprintAfterReverse.isEmpty(), qPrintable(QStringLiteral("MOV reverse playback produced an empty raster frame for %1").arg(filePath)));
+        QVERIFY2(fingerprintAfterReverse != fingerprintBeforeReverse,
+                 qPrintable(QStringLiteral("MOV reverse playback did not change the raster-presented frame for %1").arg(filePath)));
+    }
 }
 
 QTEST_MAIN(TestTLRenderPlaybackHarness)

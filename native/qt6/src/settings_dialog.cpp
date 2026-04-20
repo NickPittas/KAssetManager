@@ -12,45 +12,7 @@
 #include <QScrollArea>
 #include <QSettings>
 #include <QHeaderView>
-#include <QFileInfo>
 #include <QCoreApplication>
-#include <QCompleter>
-
-#ifdef HAVE_OCIO
-#include <OpenColorIO/OpenColorIO.h>
-namespace OCIO = OCIO_NAMESPACE;
-#endif
-
-namespace {
-const QString kOcioEnabledSetting = QStringLiteral("OCIO/Enabled");
-const QString kOcioConfigSetting = QStringLiteral("OCIO/ConfigPath");
-const QString kOcioDefault8bitSetting = QStringLiteral("OCIO/DefaultInput8bit");
-const QString kOcioDefault16bitSetting = QStringLiteral("OCIO/DefaultInput16bit");
-const QString kOcioDefault32bitSetting = QStringLiteral("OCIO/DefaultInput32bit");
-const QString kOcioDefaultLogSetting = QStringLiteral("OCIO/DefaultInputLog");
-
-QString findBundledAcesConfig()
-{
-    const QString appDir = QCoreApplication::applicationDirPath();
-    const QString relPath = "OpenColorIO-Config-ACES-1.2/aces_1.2/config.ocio";
-    const QStringList roots = {
-        appDir,
-        QDir(appDir).filePath(".."),
-        QDir(appDir).filePath("../.."),
-        QDir(appDir).filePath("../../.."),
-        QDir::currentPath(),
-        QDir(QDir::currentPath()).filePath(".."),
-        QDir(QDir::currentPath()).filePath("../..")
-    };
-    for (const QString& root : roots) {
-        const QString candidate = QDir(root).filePath(relPath);
-        if (QFileInfo::exists(candidate)) {
-            return QDir::cleanPath(candidate);
-        }
-    }
-    return QString();
-}
-} // namespace
 
 #ifdef Q_OS_WIN
 #include <windows.h>
@@ -69,7 +31,6 @@ SettingsDialog::SettingsDialog(QWidget* parent)
     setupGeneralTab();
     setupCacheTab();
     setupViewTab();
-    setupColorTab();
     setupShortcutsTab();
     setupExternalAppsTab();
     setupAboutTab();
@@ -404,101 +365,6 @@ void SettingsDialog::setupViewTab()
     tabWidget->addTab(viewTab, "View");
 }
 
-void SettingsDialog::setupColorTab()
-{
-    QWidget* colorTab = new QWidget();
-    QVBoxLayout* layout = new QVBoxLayout(colorTab);
-    layout->setContentsMargins(20, 20, 20, 20);
-    layout->setSpacing(15);
-
-    QGroupBox* ocioGroup = new QGroupBox("OCIO Configuration", colorTab);
-    QVBoxLayout* ocioLayout = new QVBoxLayout(ocioGroup);
-
-    QHBoxLayout* configLayout = new QHBoxLayout();
-    QLabel* configLabel = new QLabel("OCIO config:", ocioGroup);
-    configLayout->addWidget(configLabel);
-
-    ocioConfigPathEdit = new QLineEdit(ocioGroup);
-    ocioConfigPathEdit->setPlaceholderText("Path to config.ocio");
-    configLayout->addWidget(ocioConfigPathEdit, 1);
-
-    ocioConfigBrowseBtn = new QPushButton("Browse...", ocioGroup);
-    configLayout->addWidget(ocioConfigBrowseBtn);
-
-    ocioConfigBundledBtn = new QPushButton("Use Bundled ACES 1.2", ocioGroup);
-    configLayout->addWidget(ocioConfigBundledBtn);
-
-    ocioLayout->addLayout(configLayout);
-
-    ocioEnabledCheck = new QCheckBox("Enable OCIO by default", ocioGroup);
-    ocioLayout->addWidget(ocioEnabledCheck);
-
-    layout->addWidget(ocioGroup);
-
-    QGroupBox* defaultsGroup = new QGroupBox("Default Input Transforms", colorTab);
-    QGridLayout* defaultsLayout = new QGridLayout(defaultsGroup);
-    defaultsLayout->setHorizontalSpacing(12);
-    defaultsLayout->setVerticalSpacing(10);
-
-    QLabel* bit8Label = new QLabel("8-bit files", defaultsGroup);
-    ocioDefault8bitCombo = new QComboBox(defaultsGroup);
-    setSearchableCombo(ocioDefault8bitCombo);
-
-    QLabel* bit16Label = new QLabel("16-bit files", defaultsGroup);
-    ocioDefault16bitCombo = new QComboBox(defaultsGroup);
-    setSearchableCombo(ocioDefault16bitCombo);
-
-    QLabel* bit32Label = new QLabel("32-bit files", defaultsGroup);
-    ocioDefault32bitCombo = new QComboBox(defaultsGroup);
-    setSearchableCombo(ocioDefault32bitCombo);
-
-    QLabel* logLabel = new QLabel("Log files", defaultsGroup);
-    ocioDefaultLogCombo = new QComboBox(defaultsGroup);
-    setSearchableCombo(ocioDefaultLogCombo);
-
-    defaultsLayout->addWidget(bit8Label, 0, 0);
-    defaultsLayout->addWidget(ocioDefault8bitCombo, 0, 1);
-    defaultsLayout->addWidget(bit16Label, 1, 0);
-    defaultsLayout->addWidget(ocioDefault16bitCombo, 1, 1);
-    defaultsLayout->addWidget(bit32Label, 2, 0);
-    defaultsLayout->addWidget(ocioDefault32bitCombo, 2, 1);
-    defaultsLayout->addWidget(logLabel, 3, 0);
-    defaultsLayout->addWidget(ocioDefaultLogCombo, 3, 1);
-
-    defaultsLayout->setColumnStretch(1, 1);
-    layout->addWidget(defaultsGroup);
-    layout->addStretch();
-
-    connect(ocioConfigBrowseBtn, &QPushButton::clicked, this, [this]() {
-        const QString filePath = QFileDialog::getOpenFileName(
-            this,
-            tr("Select OCIO config"),
-            ocioConfigPathEdit ? ocioConfigPathEdit->text() : QString(),
-            tr("OCIO Config (config.ocio);;All Files (*.*)")
-        );
-        if (!filePath.isEmpty() && ocioConfigPathEdit) {
-            ocioConfigPathEdit->setText(filePath);
-            refreshOcioDefaults();
-        }
-    });
-
-    connect(ocioConfigBundledBtn, &QPushButton::clicked, this, [this]() {
-        const QString bundled = findBundledAcesConfig();
-        if (bundled.isEmpty()) {
-            QMessageBox::warning(this, "OCIO Config", "Bundled ACES config not found.");
-            return;
-        }
-        if (ocioConfigPathEdit) {
-            ocioConfigPathEdit->setText(bundled);
-            refreshOcioDefaults();
-        }
-    });
-
-    connect(ocioConfigPathEdit, &QLineEdit::editingFinished, this, &SettingsDialog::refreshOcioDefaults);
-
-    tabWidget->addTab(colorTab, "Color");
-}
-
 void SettingsDialog::setupShortcutsTab()
 {
     QWidget* shortcutsTab = new QWidget();
@@ -749,84 +615,6 @@ void SettingsDialog::setupAboutTab()
     tabWidget->addTab(aboutTab, "About");
 }
 
-void SettingsDialog::setSearchableCombo(QComboBox* combo) const
-{
-    if (!combo) return;
-    combo->setEditable(true);
-    combo->setInsertPolicy(QComboBox::NoInsert);
-    if (auto *edit = combo->lineEdit()) {
-        edit->setPlaceholderText("Search...");
-        edit->setClearButtonEnabled(true);
-    }
-    auto *completer = new QCompleter(combo);
-    completer->setModel(combo->model());
-    completer->setCompletionMode(QCompleter::PopupCompletion);
-    completer->setFilterMode(Qt::MatchContains);
-    completer->setCaseSensitivity(Qt::CaseInsensitive);
-    combo->setCompleter(completer);
-}
-
-QStringList SettingsDialog::loadOcioColorspaces(const QString& configPath) const
-{
-#ifdef HAVE_OCIO
-    try {
-        OCIO::ConstConfigRcPtr config = OCIO::Config::CreateFromFile(configPath.toStdString().c_str());
-        if (!config) {
-            return {};
-        }
-        QStringList colorspaces;
-        const int count = config->getNumColorSpaces();
-        colorspaces.reserve(count);
-        for (int i = 0; i < count; ++i) {
-            colorspaces.append(QString::fromStdString(config->getColorSpaceNameByIndex(i)));
-        }
-        return colorspaces;
-    } catch (const OCIO::Exception&) {
-        return {};
-    }
-#else
-    Q_UNUSED(configPath);
-    return {};
-#endif
-}
-
-void SettingsDialog::refreshOcioDefaults()
-{
-    const QString configPath = ocioConfigPathEdit ? ocioConfigPathEdit->text().trimmed() : QString();
-    QStringList colorspaces;
-    if (!configPath.isEmpty() && QFileInfo::exists(configPath)) {
-        colorspaces = loadOcioColorspaces(configPath);
-    }
-
-    auto applyList = [&](QComboBox* combo, const QString& key) {
-        if (!combo) return;
-        combo->blockSignals(true);
-        combo->clear();
-        combo->addItems(colorspaces);
-        combo->setEnabled(!colorspaces.isEmpty());
-
-        if (!colorspaces.isEmpty()) {
-            QSettings s("AugmentCode", "KAssetManager");
-            const QString stored = s.value(key).toString();
-            const int idx = stored.isEmpty() ? -1 : combo->findText(stored);
-            if (idx >= 0) {
-                combo->setCurrentIndex(idx);
-            } else {
-                combo->setCurrentIndex(-1);
-                if (auto *edit = combo->lineEdit()) {
-                    edit->clear();
-                }
-            }
-        }
-        combo->blockSignals(false);
-    };
-
-    applyList(ocioDefault8bitCombo, kOcioDefault8bitSetting);
-    applyList(ocioDefault16bitCombo, kOcioDefault16bitSetting);
-    applyList(ocioDefault32bitCombo, kOcioDefault32bitSetting);
-    applyList(ocioDefaultLogCombo, kOcioDefaultLogSetting);
-}
-
 void SettingsDialog::onClearCache()
 {
     QMessageBox::StandardButton reply = QMessageBox::question(
@@ -917,17 +705,6 @@ void SettingsDialog::loadSettings()
         imageMemoryLimitSpin->setValue(static_cast<int>(ImageMemoryLimits::configuredImageMemoryLimitMb()));
     }
 
-    if (ocioEnabledCheck) {
-        ocioEnabledCheck->setChecked(s.value(kOcioEnabledSetting, true).toBool());
-    }
-    if (ocioConfigPathEdit) {
-        QString configPath = s.value(kOcioConfigSetting).toString();
-        if (configPath.isEmpty()) {
-            configPath = findBundledAcesConfig();
-        }
-        ocioConfigPathEdit->setText(configPath);
-    }
-    refreshOcioDefaults();
 }
 
 void SettingsDialog::saveSettings()
@@ -940,37 +717,6 @@ void SettingsDialog::saveSettings()
         ThemeManager::Theme theme = (themeIndex == 1) ? ThemeManager::Light : ThemeManager::Dark;
         ThemeManager::instance().setTheme(theme);
         ThemeManager::instance().saveTheme();
-    }
-
-    if (ocioEnabledCheck) {
-        s.setValue(kOcioEnabledSetting, ocioEnabledCheck->isChecked());
-    }
-    if (ocioConfigPathEdit) {
-        s.setValue(kOcioConfigSetting, ocioConfigPathEdit->text().trimmed());
-    }
-    if (ocioDefault8bitCombo) {
-        const QString value = ocioDefault8bitCombo->currentText().trimmed();
-        if (!value.isEmpty() && ocioDefault8bitCombo->findText(value) >= 0) {
-            s.setValue(kOcioDefault8bitSetting, value);
-        }
-    }
-    if (ocioDefault16bitCombo) {
-        const QString value = ocioDefault16bitCombo->currentText().trimmed();
-        if (!value.isEmpty() && ocioDefault16bitCombo->findText(value) >= 0) {
-            s.setValue(kOcioDefault16bitSetting, value);
-        }
-    }
-    if (ocioDefault32bitCombo) {
-        const QString value = ocioDefault32bitCombo->currentText().trimmed();
-        if (!value.isEmpty() && ocioDefault32bitCombo->findText(value) >= 0) {
-            s.setValue(kOcioDefault32bitSetting, value);
-        }
-    }
-    if (ocioDefaultLogCombo) {
-        const QString value = ocioDefaultLogCombo->currentText().trimmed();
-        if (!value.isEmpty() && ocioDefaultLogCombo->findText(value) >= 0) {
-            s.setValue(kOcioDefaultLogSetting, value);
-        }
     }
 
     // Save cache size setting
@@ -1093,4 +839,3 @@ void SettingsDialog::updateSequenceCacheMemoryLabel()
 
     sequenceCacheMemoryLabel->setText(text);
 }
-

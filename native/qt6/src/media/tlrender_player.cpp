@@ -62,11 +62,6 @@ extern "C" {
 
 #include <opentimelineio/timeline.h>
 
-#ifdef HAVE_OCIO
-#include <OpenColorIO/OpenColorIO.h>
-namespace OCIO = OCIO_NAMESPACE;
-#endif
-
 #endif // HAVE_TLRENDER
 
 bool TLRenderPlayer::s_initialized = false;
@@ -426,7 +421,11 @@ TLRenderPlayer::TLRenderPlayer(QObject* parent)
     });
     connect(m_ffmpegMovPlayer, &FFmpegMovPlayer::error, this, &TLRenderPlayer::error);
     connect(m_ffmpegMovPlayer, &FFmpegMovPlayer::endOfStream, this, &TLRenderPlayer::endOfStream);
-    connect(m_ffmpegMovPlayer, &FFmpegMovPlayer::frameUpdated, this, &TLRenderPlayer::videoFramesChanged);
+    connect(m_ffmpegMovPlayer, &FFmpegMovPlayer::frameUpdated, this, [this]() {
+        QMutexLocker locker(&m_mutex);
+        locker.unlock();
+        emit videoFramesChanged();
+    });
 
     // Create update timer for position updates
     m_updateTimer = new QTimer(this);
@@ -561,6 +560,16 @@ void TLRenderPlayer::loadMedia(const QString& filePath)
     if (m_mpvPlayer && m_mpvPlayer->hasMedia()) {
         m_mpvPlayer->unloadMedia();
     }
+
+    {
+        QMutexLocker locker(&m_mutex);
+
+        // Clear cached frames from previous media before any early return.
+        m_pendingPlay = false;
+        m_pendingReverse = false;
+        m_cachedVideoFrames.clear();
+        m_frameAcquisitionStats = FrameAcquisitionStats();
+    }
 #ifdef HAVE_TLRENDER
     ensureTlRenderContext();
     if (!m_context) {
@@ -569,15 +578,7 @@ void TLRenderPlayer::loadMedia(const QString& filePath)
     }
 
     QMutexLocker locker(&m_mutex);
-    
-    // Reset any pending deferred playback from previous media
-    m_pendingPlay = false;
-    m_pendingReverse = false;
-    
-    // Clear cached frames from previous media to avoid stale data
-    m_cachedVideoFrames.clear();
-    m_frameAcquisitionStats = FrameAcquisitionStats();
-    
+
     // Stop any current playback
     if (m_player) {
         m_player->stop();
@@ -767,9 +768,6 @@ void TLRenderPlayer::loadMedia(const QString& filePath)
                 }
             });
         
-        // Apply current OCIO settings
-        applyOCIOOptions();
-        
         // Set loop mode
         switch (m_loopMode) {
             case LoopMode::Once:
@@ -951,6 +949,8 @@ void TLRenderPlayer::play()
         return;
     }
 
+    stopManualReversePlayback();
+
     qDebug() << "[TLRenderPlayer::play] CALLED - rate:" << m_playbackRate
              << "currentPlayback:" << static_cast<int>(m_player->getPlayback());
 
@@ -981,10 +981,9 @@ void TLRenderPlayer::play()
 
     // Honor current playback rate sign (JKL expects reverse playback).
     if (m_playbackRate < 0.0) {
-        m_player->setSpeedMult(std::abs(m_playbackRate));
-        qDebug() << "[TLRenderPlayer::play] Calling m_player->reverse()";
-        m_player->reverse();
-        qDebug() << "[TLRenderPlayer::play] After reverse(), playback:" << static_cast<int>(m_player->getPlayback());
+        m_player->stop();
+        m_manualReversePlaybackActive = true;
+        m_manualReverseStepAccumulatorMs = 0.0;
     } else {
         m_player->setSpeedMult(m_playbackRate);
         qDebug() << "[TLRenderPlayer::play] Calling m_player->forward()";
@@ -1012,7 +1011,9 @@ void TLRenderPlayer::pause()
         qDebug() << "[TLRenderPlayer::pause] No player - cannot pause";
         return;
     }
-    
+
+    stopManualReversePlayback();
+
     qDebug() << "[TLRenderPlayer::pause] Pausing playback";
     
     // Cancel any pending deferred playback
@@ -1040,7 +1041,9 @@ void TLRenderPlayer::stop()
     }
 #ifdef HAVE_TLRENDER
     if (!m_player) return;
-    
+
+    stopManualReversePlayback();
+
     // Cancel any pending deferred playback
     {
         QMutexLocker locker(&m_mutex);
@@ -1080,7 +1083,14 @@ void TLRenderPlayer::seek(qint64 positionMs)
     }
 #ifdef HAVE_TLRENDER
     if (!m_player) return;
-    
+
+    stopManualReversePlayback();
+
+    {
+        QMutexLocker locker(&m_mutex);
+        m_cachedVideoFrames.clear();
+    }
+
     const auto& timeRange = m_player->getTimeRange();
     double rate = timeRange.duration().rate();
     if (rate <= 0.0) {
@@ -1110,7 +1120,14 @@ void TLRenderPlayer::seekToFrame(qint64 frameNumber)
     }
 #ifdef HAVE_TLRENDER
     if (!m_player) return;
-    
+
+    stopManualReversePlayback();
+
+    {
+        QMutexLocker locker(&m_mutex);
+        m_cachedVideoFrames.clear();
+    }
+
     const auto& timeRange = m_player->getTimeRange();
     double rate = timeRange.duration().rate();
     if (rate <= 0.0) {
@@ -1140,14 +1157,18 @@ void TLRenderPlayer::setPlaybackRate(double rate)
 #ifdef HAVE_TLRENDER
     if (!m_player) return;
 
-    
     m_player->setSpeedMult(std::abs(rate));
     if (m_playbackState == PlaybackState::Playing) {
         if (rate < 0) {
-            m_player->reverse();
+            m_player->stop();
+            m_manualReversePlaybackActive = true;
+            m_manualReverseStepAccumulatorMs = 0.0;
         } else {
+            stopManualReversePlayback();
             m_player->forward();
         }
+    } else if (rate >= 0.0) {
+        stopManualReversePlayback();
     }
 #endif
 }
@@ -1202,6 +1223,7 @@ void TLRenderPlayer::stepForward()
     }
 #ifdef HAVE_TLRENDER
     if (!m_player) return;
+    stopManualReversePlayback();
     m_player->frameNext();
 #endif
 }
@@ -1218,7 +1240,14 @@ void TLRenderPlayer::stepBackward()
     }
 #ifdef HAVE_TLRENDER
     if (!m_player) return;
+    stopManualReversePlayback();
+    {
+        QMutexLocker locker(&m_mutex);
+        m_cachedVideoFrames.clear();
+    }
     m_player->framePrev();
+    tick();
+    emit videoFramesChanged();
 #endif
 }
 
@@ -1232,6 +1261,7 @@ void TLRenderPlayer::stepForwardBy(int frames)
     }
 #ifdef HAVE_TLRENDER
     if (!m_player) return;
+    stopManualReversePlayback();
     for (int i = 0; i < frames; ++i) {
         m_player->frameNext();
     }
@@ -1248,6 +1278,7 @@ void TLRenderPlayer::stepBackwardBy(int frames)
     }
 #ifdef HAVE_TLRENDER
     if (!m_player) return;
+    stopManualReversePlayback();
     for (int i = 0; i < frames; ++i) {
         m_player->framePrev();
     }
@@ -1262,6 +1293,7 @@ void TLRenderPlayer::gotoStart()
     }
 #ifdef HAVE_TLRENDER
     if (!m_player) return;
+    stopManualReversePlayback();
     m_player->gotoStart();
 #endif
 }
@@ -1274,6 +1306,7 @@ void TLRenderPlayer::gotoEnd()
     }
 #ifdef HAVE_TLRENDER
     if (!m_player) return;
+    stopManualReversePlayback();
     m_player->gotoEnd();
 #endif
 }
@@ -1373,279 +1406,6 @@ FFmpegMovPlayer* TLRenderPlayer::ffmpegMovPlayer() const
 }
 
 // ============================================================================
-// OCIO Color Management
-// ============================================================================
-
-void TLRenderPlayer::setOCIOEnabled(bool enabled)
-{
-    m_ocioEnabled = enabled;
-    applyOCIOOptions();
-    emit ocioOptionsChanged();
-}
-
-bool TLRenderPlayer::isOCIOEnabled() const
-{
-    return m_ocioEnabled;
-}
-
-void TLRenderPlayer::setOCIOConfig(const QString& configPath)
-{
-    m_ocioConfigPath = configPath;
-    updateOCIOLists();
-    applyOCIOOptions();
-    emit ocioConfigChanged(configPath);
-    emit ocioOptionsChanged();
-}
-
-QString TLRenderPlayer::ocioConfigPath() const
-{
-    return m_ocioConfigPath;
-}
-
-void TLRenderPlayer::setInputColorspace(const QString& colorspace)
-{
-    m_inputColorspace = colorspace;
-    applyOCIOOptions();
-    emit ocioOptionsChanged();
-}
-
-QString TLRenderPlayer::inputColorspace() const
-{
-    return m_inputColorspace;
-}
-
-void TLRenderPlayer::setDisplay(const QString& display)
-{
-    m_display = display;
-    applyOCIOOptions();
-    emit ocioOptionsChanged();
-    
-    // Update available views for this display
-    emit viewsChanged(availableViews(display));
-}
-
-QString TLRenderPlayer::display() const
-{
-    return m_display;
-}
-
-void TLRenderPlayer::setView(const QString& view)
-{
-    m_view = view;
-    applyOCIOOptions();
-    emit ocioOptionsChanged();
-}
-
-QString TLRenderPlayer::view() const
-{
-    return m_view;
-}
-
-void TLRenderPlayer::setLook(const QString& look)
-{
-    m_look = look;
-    applyOCIOOptions();
-    emit ocioOptionsChanged();
-}
-
-QString TLRenderPlayer::look() const
-{
-    return m_look;
-}
-
-QStringList TLRenderPlayer::availableColorspaces() const
-{
-    return m_availableColorspaces;
-}
-
-QStringList TLRenderPlayer::availableDisplays() const
-{
-    return m_availableDisplays;
-}
-
-QStringList TLRenderPlayer::availableViews(const QString& display) const
-{
-    if (m_availableViews.contains(display)) {
-        return m_availableViews[display];
-    }
-    
-#ifdef HAVE_OCIO
-    try {
-        OCIO::ConstConfigRcPtr config;
-        if (m_ocioConfigPath.isEmpty()) {
-            config = OCIO::GetCurrentConfig();
-        } else {
-            config = OCIO::Config::CreateFromFile(m_ocioConfigPath.toStdString().c_str());
-        }
-        
-        if (config) {
-            QStringList views;
-            int numViews = config->getNumViews(display.toStdString().c_str());
-            for (int i = 0; i < numViews; ++i) {
-                views.append(QString::fromStdString(
-                    config->getView(display.toStdString().c_str(), i)));
-            }
-            m_availableViews[display] = views;
-            return views;
-        }
-    } catch (const OCIO::Exception& e) {
-        qWarning() << "OCIO: Failed to get views for display" << display << ":" << e.what();
-    }
-#endif
-    
-    return QStringList();
-}
-
-QStringList TLRenderPlayer::availableLooks() const
-{
-    return m_availableLooks;
-}
-
-void TLRenderPlayer::updateOCIOLists()
-{
-#ifdef HAVE_OCIO
-    try {
-        OCIO::ConstConfigRcPtr config;
-        if (m_ocioConfigPath.isEmpty()) {
-            config = OCIO::GetCurrentConfig();
-        } else {
-            config = OCIO::Config::CreateFromFile(m_ocioConfigPath.toStdString().c_str());
-        }
-        
-        if (!config) {
-            qWarning() << "OCIO: No config available";
-            return;
-        }
-        
-        // Get colorspaces
-        m_availableColorspaces.clear();
-        for (int i = 0; i < config->getNumColorSpaces(); ++i) {
-            m_availableColorspaces.append(QString::fromStdString(config->getColorSpaceNameByIndex(i)));
-        }
-        if (m_inputColorspace.isEmpty() || !m_availableColorspaces.contains(m_inputColorspace)) {
-            const char* role = config->getRoleColorSpace(OCIO::ROLE_SCENE_LINEAR);
-            if (role && *role) {
-                m_inputColorspace = QString::fromStdString(role);
-            } else if (!m_availableColorspaces.isEmpty()) {
-                m_inputColorspace = m_availableColorspaces.first();
-            }
-        }
-        emit colorspacesChanged(m_availableColorspaces);
-        
-        // Get displays
-        m_availableDisplays.clear();
-        for (int i = 0; i < config->getNumDisplays(); ++i) {
-            m_availableDisplays.append(QString::fromStdString(config->getDisplay(i)));
-        }
-        emit displaysChanged(m_availableDisplays);
-        
-        // Get looks
-        m_availableLooks.clear();
-        for (int i = 0; i < config->getNumLooks(); ++i) {
-            m_availableLooks.append(QString::fromStdString(config->getLookNameByIndex(i)));
-        }
-        
-        // Clear cached views
-        m_availableViews.clear();
-        
-        // Set defaults if not set
-        if (!m_availableDisplays.isEmpty()) {
-            if (m_display.isEmpty() || !m_availableDisplays.contains(m_display)) {
-                m_display = QString::fromStdString(config->getDefaultDisplay());
-            }
-        }
-        if (!m_display.isEmpty()) {
-            const QStringList views = availableViews(m_display);
-            if (m_view.isEmpty() || !views.contains(m_view)) {
-                m_view = QString::fromStdString(config->getDefaultView(m_display.toStdString().c_str()));
-            }
-        }
-
-        // Make sure view dropdowns can populate immediately after config load.
-        if (!m_display.isEmpty()) {
-            emit viewsChanged(availableViews(m_display));
-        }
-        
-        qDebug() << "OCIO: Loaded config with" << m_availableColorspaces.size() << "colorspaces,"
-                 << m_availableDisplays.size() << "displays";
-                 
-    } catch (const OCIO::Exception& e) {
-        qWarning() << "OCIO: Failed to load config:" << e.what();
-    }
-#endif
-}
-
-void TLRenderPlayer::applyOCIOOptions()
-{
-#ifdef HAVE_TLRENDER
-    // OCIO options will be used during rendering in TLRenderWidget
-    // The player itself doesn't directly apply OCIO - that happens in the GL renderer
-#endif
-}
-
-tl::OCIOOptions TLRenderPlayer::currentOCIOOptions() const
-{
-    tl::OCIOOptions options;
-#ifdef HAVE_TLRENDER
-    options.enabled = m_ocioEnabled;
-    
-    if (!m_ocioConfigPath.isEmpty()) {
-        options.config = tl::OCIOConfig::File;
-        options.fileName = m_ocioConfigPath.toStdString();
-    } else {
-        options.config = tl::OCIOConfig::EnvVar;
-    }
-    
-    options.input = m_inputColorspace.toStdString();
-    options.display = m_display.toStdString();
-    options.view = m_view.toStdString();
-    options.look = m_look.toStdString();
-#endif
-    return options;
-}
-
-tl::DisplayOptions TLRenderPlayer::currentDisplayOptions() const
-{
-    tl::DisplayOptions options;
-#ifdef HAVE_TLRENDER
-    // EXR Display settings (exposure)
-    if (m_exposure != 0.0f) {
-        options.exposure.enabled = true;
-        options.exposure.exposure = m_exposure;
-    }
-    
-    // Levels settings (gamma)
-    if (m_gamma != 1.0f) {
-        options.levels.enabled = true;
-        options.levels.gamma = m_gamma;
-    }
-#endif
-    return options;
-}
-
-void TLRenderPlayer::setExposure(float exposure)
-{
-    m_exposure = qBound(-10.0f, exposure, 10.0f);
-    emit videoFramesChanged(); // Trigger redraw
-}
-
-float TLRenderPlayer::exposure() const
-{
-    return m_exposure;
-}
-
-void TLRenderPlayer::setGamma(float gamma)
-{
-    m_gamma = qBound(0.1f, gamma, 4.0f);
-    emit videoFramesChanged(); // Trigger redraw
-}
-
-float TLRenderPlayer::gamma() const
-{
-    return m_gamma;
-}
-
-// ============================================================================
 // Rendering Interface
 // ============================================================================
 
@@ -1724,6 +1484,14 @@ void TLRenderPlayer::refreshCurrentFrame()
 #endif
 }
 
+void TLRenderPlayer::stopManualReversePlayback()
+{
+#ifdef HAVE_TLRENDER
+    m_manualReversePlaybackActive = false;
+    m_manualReverseStepAccumulatorMs = 0.0;
+#endif
+}
+
 // ============================================================================
 // Update Timer
 // ============================================================================
@@ -1737,6 +1505,27 @@ void TLRenderPlayer::onUpdateTimer()
         return;
     }
 #ifdef HAVE_TLRENDER
+    if (m_manualReversePlaybackActive) {
+        const double fps = m_mediaInfo.fps > 0.0 ? m_mediaInfo.fps : 24.0;
+        const double rate = std::abs(static_cast<double>(m_playbackRate));
+        const double frameDurationMs = 1000.0 / qMax(0.001, fps * qMax(0.001, rate));
+        m_manualReverseStepAccumulatorMs += m_updateTimer->interval();
+
+        while (m_manualReverseStepAccumulatorMs >= frameDurationMs) {
+            m_manualReverseStepAccumulatorMs -= frameDurationMs;
+            const qint64 previousFrame = m_currentFrame.load();
+            stepBackward();
+            if (m_currentFrame.load() >= previousFrame || m_currentFrame.load() <= 0) {
+                if (m_currentFrame.load() <= 0) {
+                    m_playbackState = PlaybackState::Paused;
+                    emit playbackStateChanged(PlaybackState::Paused);
+                }
+                stopManualReversePlayback();
+                break;
+            }
+        }
+        return;
+    }
     tick();
 #endif
 }
@@ -1750,10 +1539,11 @@ QImage TLRenderPlayer::getCurrentFrame(const QSize& targetSize)
     QElapsedTimer timer;
     timer.start();
     if (m_ffmpegMovPlayer && m_ffmpegMovPlayer->hasMedia()) {
-        QImage frame = m_ffmpegMovPlayer->currentFrameImage();
-        if (!frame.isNull() && !targetSize.isEmpty()) {
-            frame = frame.scaled(targetSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
-        }
+        QImage frame = m_ffmpegMovPlayer->currentFrameImage(targetSize);
+#ifdef HAVE_TLRENDER
+        QMutexLocker locker(&m_mutex);
+        m_frameAcquisitionStats.lastGetCurrentFrameNs = timer.nsecsElapsed();
+#endif
         return frame;
     }
     if (m_mpvPlayer && m_mpvPlayer->hasMedia()) {
@@ -1764,53 +1554,63 @@ QImage TLRenderPlayer::getCurrentFrame(const QSize& targetSize)
         return frame;
     }
 #ifdef HAVE_TLRENDER
+    std::vector<tl::VideoFrame> cachedVideoFrames;
+    QString currentPath;
+    PlaybackState playbackState = PlaybackState::Stopped;
+
     {
         QMutexLocker locker(&m_mutex);
-        QImage cachedFrame = currentVideoFramesToQImage(m_cachedVideoFrames, targetSize);
-        if (!cachedFrame.isNull()) {
+        cachedVideoFrames = m_cachedVideoFrames;
+        currentPath = m_currentPath;
+        playbackState = m_playbackState;
+    }
+
+    QImage cachedFrame = currentVideoFramesToQImage(cachedVideoFrames, targetSize);
+    if (!cachedFrame.isNull()) {
+        {
+            QMutexLocker locker(&m_mutex);
             ++m_frameAcquisitionStats.cachedFrameConversions;
-            if (!m_cachedVideoFrames.empty() && !m_cachedVideoFrames.front().layers.empty() && m_cachedVideoFrames.front().layers.front().image) {
-                m_frameAcquisitionStats.lastCachedImageType = static_cast<int>(m_cachedVideoFrames.front().layers.front().image->getInfo().type);
+            if (!cachedVideoFrames.empty() && !cachedVideoFrames.front().layers.empty() && cachedVideoFrames.front().layers.front().image) {
+                m_frameAcquisitionStats.lastCachedImageType = static_cast<int>(cachedVideoFrames.front().layers.front().image->getInfo().type);
             }
             m_frameAcquisitionStats.lastCachedConversionNs = timer.nsecsElapsed();
             m_frameAcquisitionStats.lastGetCurrentFrameNs = m_frameAcquisitionStats.lastCachedConversionNs;
             return cachedFrame;
         }
+    }
 
-        if (!m_cachedVideoFrames.empty()) {
-            for (const auto& frame : m_cachedVideoFrames) {
-                for (const auto& layer : frame.layers) {
-                    if (layer.image) {
-                        ++m_frameAcquisitionStats.unsupportedCachedFrameTypes;
-                        m_frameAcquisitionStats.lastCachedImageType = static_cast<int>(layer.image->getInfo().type);
-                        break;
-                    }
+    if (!cachedVideoFrames.empty()) {
+        for (const auto& frame : cachedVideoFrames) {
+            for (const auto& layer : frame.layers) {
+                if (layer.image) {
+                    QMutexLocker locker(&m_mutex);
+                    ++m_frameAcquisitionStats.unsupportedCachedFrameTypes;
+                    m_frameAcquisitionStats.lastCachedImageType = static_cast<int>(layer.image->getInfo().type);
+                    break;
                 }
             }
         }
     }
-#endif
 
     // For now, reuse the static thumbnail extraction when possible.
     // This remains the fallback when tlRender has no cached frame yet or the
     // cached frame format is not handled above.
-    if (m_currentPath.isEmpty()) {
-#ifdef HAVE_TLRENDER
+    if (playbackState == PlaybackState::Playing || currentPath.isEmpty() || !m_player) {
         QMutexLocker locker(&m_mutex);
         m_frameAcquisitionStats.lastGetCurrentFrameNs = timer.nsecsElapsed();
-#endif
         return QImage();
     }
-    const QImage fallback = extractThumbnail(m_currentPath, targetSize, position());
-#ifdef HAVE_TLRENDER
+    const QImage fallback = extractThumbnail(currentPath, targetSize, position());
     {
         QMutexLocker locker(&m_mutex);
         ++m_frameAcquisitionStats.fallbackExtractions;
         m_frameAcquisitionStats.lastFallbackExtractionNs = timer.nsecsElapsed();
         m_frameAcquisitionStats.lastGetCurrentFrameNs = m_frameAcquisitionStats.lastFallbackExtractionNs;
     }
-#endif
     return fallback;
+#endif
+
+    return QImage();
 }
 
 bool TLRenderPlayer::useMpvBackendForCurrentMedia(const QString& filePath) const

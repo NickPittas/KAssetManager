@@ -241,9 +241,6 @@ void TLRenderWidget::paintGL()
         // Begin render
         m_render->begin(renderSize);
         
-        // Apply OCIO options to renderer
-        m_render->setOCIOOptions(m_player->currentOCIOOptions());
-
         // Calculate video box
         ftk::Box2I videoBox(
             static_cast<int>(m_videoRect.x() * devicePixelRatio()),

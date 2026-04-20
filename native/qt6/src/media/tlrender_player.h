@@ -28,11 +28,7 @@ namespace tl {
     class Player;
     class Timeline;
     class System;
-    struct OCIOOptions;
     struct VideoFrame;
-    struct DisplayOptions;
-    struct Levels;
-    struct EXRDisplay;
     namespace qt {
         class ContextObject;
         class PlayerObject;
@@ -47,10 +43,9 @@ namespace tl {
  * @brief Professional tlRender-based video player for Qt applications
  *
  * This class provides production-ready video playback using tlRender (mrv2's engine),
- * with full OpenColorIO (ACES) color management support.
+ * with tlRender-backed playback support.
  *
  * Key features:
- * - Full ACES/OpenColorIO color management pipeline
  * - OpenGL 4.1 hardware-accelerated rendering
  * - OpenTimelineIO support (.otio, .otioz files)
  * - Image sequence playback (EXR, PNG, JPEG, TIFF, etc.)
@@ -60,13 +55,7 @@ namespace tl {
  * - Playback rate control (including reverse)
  * - Loop modes (Once, Loop, PingPong)
  *
- * OCIO Features:
- * - Load custom OCIO config files
- * - Select input colorspace
- * - Select display and view
- * - Apply looks
- *
- * This replaces GStreamerPlayer with native OCIO support.
+ * This replaces GStreamerPlayer in the current app stack.
  */
 class TLRenderPlayer : public QObject
 {
@@ -210,67 +199,6 @@ public:
     MediaInfo mediaInfo() const;
 
     // ========================================================================
-    // OpenColorIO (OCIO) Color Management
-    // ========================================================================
-
-    /**
-     * @brief Enable/disable OCIO color management
-     */
-    void setOCIOEnabled(bool enabled);
-    bool isOCIOEnabled() const;
-
-    /**
-     * @brief Set OCIO config file path
-     * @param configPath Path to config.ocio file, or empty for environment variable
-     */
-    void setOCIOConfig(const QString& configPath);
-    QString ocioConfigPath() const;
-
-    /**
-     * @brief Set input colorspace (e.g., "ACES - ACEScg", "Utility - Linear - sRGB")
-     */
-    void setInputColorspace(const QString& colorspace);
-    QString inputColorspace() const;
-
-    /**
-     * @brief Set display device (e.g., "sRGB", "Rec.709", "P3-D65")
-     */
-    void setDisplay(const QString& display);
-    QString display() const;
-
-    /**
-     * @brief Set view transform (e.g., "ACES 1.0 - SDR Video", "Raw")
-     */
-    void setView(const QString& view);
-    QString view() const;
-
-    /**
-     * @brief Set OCIO look (optional, e.g., film look)
-     */
-    void setLook(const QString& look);
-    QString look() const;
-
-    /**
-     * @brief Get available colorspaces from current OCIO config
-     */
-    QStringList availableColorspaces() const;
-
-    /**
-     * @brief Get available displays from current OCIO config
-     */
-    QStringList availableDisplays() const;
-
-    /**
-     * @brief Get available views for a display from current OCIO config
-     */
-    QStringList availableViews(const QString& display) const;
-
-    /**
-     * @brief Get available looks from current OCIO config
-     */
-    QStringList availableLooks() const;
-
-    // ========================================================================
     // Rendering (for TLRenderWidget)
     // ========================================================================
 
@@ -305,28 +233,6 @@ public:
      * @brief Get the current video frames for rendering
      */
     std::vector<tl::VideoFrame> currentVideoFrames() const;
-
-    /**
-     * @brief Get the current OCIO options
-     */
-    tl::OCIOOptions currentOCIOOptions() const;
-
-    /**
-     * @brief Get the current display options (exposure, gamma, etc.)
-     */
-    tl::DisplayOptions currentDisplayOptions() const;
-
-    /**
-     * @brief Set exposure adjustment (-10.0 to 10.0, 0.0 = no change)
-     */
-    void setExposure(float exposure);
-    float exposure() const;
-
-    /**
-     * @brief Set gamma adjustment (0.1 to 4.0, 1.0 = no change)
-     */
-    void setGamma(float gamma);
-    float gamma() const;
 
     /**
      * @brief Tick the player (call from render loop)
@@ -384,13 +290,6 @@ signals:
     void error(const QString& errorString);
     void endOfStream();
 
-    // OCIO signals
-    void ocioConfigChanged(const QString& configPath);
-    void ocioOptionsChanged();
-    void colorspacesChanged(const QStringList& colorspaces);
-    void displaysChanged(const QStringList& displays);
-    void viewsChanged(const QStringList& views);
-
 private slots:
     void onUpdateTimer();
 
@@ -398,9 +297,8 @@ private:
     void ensureTlRenderContext();
     void setupContext();
     void updateMediaInfo();
-    void updateOCIOLists();
-    void applyOCIOOptions();
     bool useMpvBackendForCurrentMedia(const QString& filePath) const;
+    void stopManualReversePlayback();
 
     // tlRender objects
     std::shared_ptr<ftk::Context> m_context;
@@ -436,22 +334,8 @@ private:
     // Flag to defer playback until first frame is cached
     bool m_pendingPlay{false};
     bool m_pendingReverse{false};
-
-    // OCIO state
-    bool m_ocioEnabled{false};
-    QString m_ocioConfigPath;
-    QString m_inputColorspace;
-    QString m_display;
-    QString m_view;
-    QString m_look;
-    QStringList m_availableColorspaces;
-    QStringList m_availableDisplays;
-    mutable QMap<QString, QStringList> m_availableViews;
-    QStringList m_availableLooks;
-
-    // Display options (exposure, gamma, etc.)
-    float m_exposure{0.0f};
-    float m_gamma{1.0f};
+    bool m_manualReversePlaybackActive{false};
+    double m_manualReverseStepAccumulatorMs{0.0};
 
     // Update timer
     QTimer* m_updateTimer{nullptr};

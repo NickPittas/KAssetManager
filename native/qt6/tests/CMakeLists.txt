@@ -1,4 +1,4 @@
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Sql Concurrent Test OpenGL OpenGLWidgets)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Sql Concurrent Test OpenGL OpenGLWidgets DBus)
 
 # Test executable: test_simple
 add_executable(test_simple
@@ -18,6 +18,8 @@ add_executable(test_db
     ../src/db.h
     ../src/log_manager.cpp
     ../src/log_manager.h
+    ../src/runtime_paths.cpp
+    ../src/runtime_paths.h
 )
 
 target_link_libraries(test_db PRIVATE Qt6::Test Qt6::Sql Qt6::Core)
@@ -33,6 +35,8 @@ add_executable(test_project_db
     ../src/project_path_utils.h
     ../src/log_manager.cpp
     ../src/log_manager.h
+    ../src/runtime_paths.cpp
+    ../src/runtime_paths.h
 )
 
 target_link_libraries(test_project_db PRIVATE Qt6::Test Qt6::Sql Qt6::Core)
@@ -49,6 +53,8 @@ add_executable(test_models
     ../src/db.h
     ../src/log_manager.cpp
     ../src/log_manager.h
+    ../src/runtime_paths.cpp
+    ../src/runtime_paths.h
 )
 
 target_link_libraries(test_models PRIVATE Qt6::Test Qt6::Sql Qt6::Core Qt6::Widgets)
@@ -84,6 +90,8 @@ add_executable(test_importer
     ../src/db.h
     ../src/log_manager.cpp
     ../src/log_manager.h
+    ../src/runtime_paths.cpp
+    ../src/runtime_paths.h
     ../src/sequence_detector.cpp
     ../src/sequence_detector.h
     ../src/file_utils.h
@@ -126,6 +134,8 @@ add_executable(test_live_preview_manager
     ../src/thumbnail_cache_manager.h
     ../src/oiio_image_loader.cpp
     ../src/oiio_image_loader.h
+    ../src/runtime_paths.cpp
+    ../src/runtime_paths.h
     ../src/utils.cpp
     ../src/utils.h
 )
@@ -196,7 +206,7 @@ add_executable(test_drag_utils
     ../src/drag_utils.h
 )
 
-target_link_libraries(test_drag_utils PRIVATE Qt6::Test Qt6::Core Qt6::Gui Qt6::Widgets)
+target_link_libraries(test_drag_utils PRIVATE Qt6::Test Qt6::Core Qt6::Gui Qt6::Widgets Qt6::DBus)
 
 target_include_directories(test_drag_utils PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
 
@@ -242,6 +252,7 @@ install(TARGETS test_icon_utils DESTINATION bin)
 # Test executable: test_tlrender_playback_harness
 add_executable(test_tlrender_playback_harness
     test_tlrender_playback_harness.cpp
+    real_media_test_helper.cpp
     ../src/file_utils.cpp
     ../src/file_utils.h
     ../src/media/ffmpeg_mov_player.cpp
@@ -250,6 +261,7 @@ add_executable(test_tlrender_playback_harness
     ../src/media/ffmpeg_mov_viewport.h
     ../src/media/tlrender_player.cpp
     ../src/media/tlrender_player.h
+    ../src/platform_session.h
     ../src/media/media_player_types.h
     ../src/media/libmpv_headers.h
     ../src/media/libmpv_runtime.cpp
@@ -299,7 +311,6 @@ target_include_directories(test_tlrender_playback_harness PRIVATE
 target_compile_definitions(test_tlrender_playback_harness PRIVATE
     HAVE_TLRENDER=1
     HAVE_OPENIMAGEIO=1
-    HAVE_OCIO=1
     HAVE_FFMPEG
 )
 

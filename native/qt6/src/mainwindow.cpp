@@ -1395,7 +1395,9 @@ void MainWindow::setupFileManagerUi()
     connect(fmFavoritesList, &QListWidget::customContextMenuRequested, this, [this](const QPoint &pos){
         if (!fmFavoritesList) return;
         QPoint gp = fmFavoritesList->viewport()->mapToGlobal(pos);
-        QMenu m; QAction *rem = m.addAction("Remove Favorite", this, &MainWindow::onFmRemoveFavorite);
+        QMenu m;
+        QAction *rem = m.addAction("Remove Favorite");
+        connect(rem, &QAction::triggered, this, &MainWindow::onFmRemoveFavorite);
         rem->setEnabled(fmFavoritesList->currentItem()!=nullptr);
         m.exec(gp);
     });
@@ -3036,21 +3038,30 @@ void MainWindow::onFmShowContextMenu(const QPoint &pos)
 void MainWindow::showFmContextMenuAt(const QPoint &globalPos)
 {
     QMenu menu;
-    QAction *refreshA = menu.addAction("Refresh", this, &MainWindow::onFmRefresh, QKeySequence(Qt::Key_F5));
-    menu.addSeparator();
-    QAction *copyA = menu.addAction("Copy", this, &MainWindow::onFmCopy, QKeySequence::Copy);
-    QAction *cutA = menu.addAction("Cut", this, &MainWindow::onFmCut, QKeySequence::Cut);
-    QAction *pasteA = menu.addAction("Paste", this, &MainWindow::onFmPaste, QKeySequence::Paste);
-    menu.addSeparator();
-    QAction *renameA = menu.addAction("Rename", this, &MainWindow::onFmRename, QKeySequence(Qt::Key_F2));
-    QAction *bulkRenameA = menu.addAction("Bulk Rename...", this, &MainWindow::onFmBulkRename);
-    QAction *delA = menu.addAction("Delete", this, &MainWindow::onFmDelete, QKeySequence::Delete);
-    QAction *permDelA = menu.addAction("Permanent Delete", this, &MainWindow::onFmDeletePermanent, QKeySequence(Qt::SHIFT | Qt::Key_Delete));
-    QAction *createFolderWithSel = menu.addAction("Create Folder with Selected Files", this, &MainWindow::onFmCreateFolderWithSelected);
-    menu.addSeparator();
-    QAction *addLibA = menu.addAction("Add to Asset Library", this, &MainWindow::onAddSelectionToAssetLibrary);
+    auto addConnectedAction = [this, &menu](const QString &text, auto slot, const QKeySequence &shortcut = QKeySequence()) {
+        QAction *action = menu.addAction(text);
+        connect(action, &QAction::triggered, this, slot);
+        if (!shortcut.isEmpty()) {
+            action->setShortcut(shortcut);
+        }
+        return action;
+    };
 
-    QAction *favA = menu.addAction("Add to Favorites", this, &MainWindow::onFmAddToFavorites);
+    QAction *refreshA = addConnectedAction("Refresh", &MainWindow::onFmRefresh, QKeySequence(Qt::Key_F5));
+    menu.addSeparator();
+    QAction *copyA = addConnectedAction("Copy", &MainWindow::onFmCopy, QKeySequence::Copy);
+    QAction *cutA = addConnectedAction("Cut", &MainWindow::onFmCut, QKeySequence::Cut);
+    QAction *pasteA = addConnectedAction("Paste", &MainWindow::onFmPaste, QKeySequence::Paste);
+    menu.addSeparator();
+    QAction *renameA = addConnectedAction("Rename", &MainWindow::onFmRename, QKeySequence(Qt::Key_F2));
+    QAction *bulkRenameA = addConnectedAction("Bulk Rename...", &MainWindow::onFmBulkRename);
+    QAction *delA = addConnectedAction("Delete", &MainWindow::onFmDelete, QKeySequence::Delete);
+    QAction *permDelA = addConnectedAction("Permanent Delete", &MainWindow::onFmDeletePermanent, QKeySequence(Qt::SHIFT | Qt::Key_Delete));
+    QAction *createFolderWithSel = addConnectedAction("Create Folder with Selected Files", &MainWindow::onFmCreateFolderWithSelected);
+    menu.addSeparator();
+    QAction *addLibA = addConnectedAction("Add to Asset Library", &MainWindow::onAddSelectionToAssetLibrary);
+
+    QAction *favA = addConnectedAction("Add to Favorites", &MainWindow::onFmAddToFavorites);
 
     menu.addSeparator();
     QAction *openInExplorerA = menu.addAction("Open in Explorer");
@@ -5060,8 +5071,10 @@ void MainWindow::onPmProjectContextMenu(const QPoint &pos)
     if (index.isValid()) {
         int projectId = index.data(ProjectsModel::IdRole).toInt();
         
-        menu.addAction("Rename Project", this, &MainWindow::onPmRenameProject);
-        menu.addAction("Change Watch Folder...", this, &MainWindow::onPmAddWatchFolder);
+        QAction *renameProjectAction = menu.addAction("Rename Project");
+        connect(renameProjectAction, &QAction::triggered, this, &MainWindow::onPmRenameProject);
+        QAction *changeWatchFolderAction = menu.addAction("Change Watch Folder...");
+        connect(changeWatchFolderAction, &QAction::triggered, this, &MainWindow::onPmAddWatchFolder);
         menu.addSeparator();
         
         // Generate Thumbnails submenu
@@ -5077,7 +5090,8 @@ void MainWindow::onPmProjectContextMenu(const QPoint &pos)
         });
         
         menu.addSeparator();
-        menu.addAction("Re-sync Asset Folders", this, [this, index]() {
+        QAction *resyncAction = menu.addAction("Re-sync Asset Folders");
+        connect(resyncAction, &QAction::triggered, this, [this, index]() {
             int projectId = index.data(ProjectsModel::IdRole).toInt();
             if (projectId <= 0) return;
             
@@ -5100,9 +5114,11 @@ void MainWindow::onPmProjectContextMenu(const QPoint &pos)
             });
         });
         menu.addSeparator();
-        menu.addAction("Delete Project", this, &MainWindow::onPmDeleteProject);
+        QAction *deleteProjectAction = menu.addAction("Delete Project");
+        connect(deleteProjectAction, &QAction::triggered, this, &MainWindow::onPmDeleteProject);
     } else {
-        menu.addAction("New Project...", this, &MainWindow::onPmCreateProject);
+        QAction *newProjectAction = menu.addAction("New Project...");
+        connect(newProjectAction, &QAction::triggered, this, &MainWindow::onPmCreateProject);
     }
     
     menu.exec(pmProjectsListView->viewport()->mapToGlobal(pos));
@@ -8946,7 +8962,7 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
                     dragEvent->accept();
                     return true;
                 }
-                const bool shift = dragEvent->keyboardModifiers().testFlag(Qt::ShiftModifier);
+                const bool shift = dragEvent->modifiers().testFlag(Qt::ShiftModifier);
                 dragEvent->setDropAction(shift ? Qt::MoveAction : Qt::CopyAction);
                 dragEvent->accept();
                 return true;
@@ -8994,7 +9010,7 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
                     dragEvent->accept();
                     return true;
                 }
-                const bool shift = dragEvent->keyboardModifiers().testFlag(Qt::ShiftModifier);
+                const bool shift = dragEvent->modifiers().testFlag(Qt::ShiftModifier);
                 dragEvent->setDropAction(shift ? Qt::MoveAction : Qt::CopyAction);
                 dragEvent->accept();
                 return true;
@@ -9048,11 +9064,11 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
                     return true;
                 }
 
-                const bool shift = dropEvent->keyboardModifiers().testFlag(Qt::ShiftModifier);
+                const bool shift = dropEvent->modifiers().testFlag(Qt::ShiftModifier);
                 queueFmFileOperation(sources, destDir, shift);
                 statusBar()->showMessage(QString("Queued %1 item(s) for %2").arg(sources.size()).arg(shift ? "move" : "copy"), 3000);
             }
-            dropEvent->setDropAction(dropEvent->keyboardModifiers().testFlag(Qt::ShiftModifier) ? Qt::MoveAction : Qt::CopyAction);
+            dropEvent->setDropAction(dropEvent->modifiers().testFlag(Qt::ShiftModifier) ? Qt::MoveAction : Qt::CopyAction);
             dropEvent->accept();
             return true;
         }
@@ -9062,7 +9078,7 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
         if (event->type() == QEvent::DragEnter) {
             QDragEnterEvent *dragEvent = static_cast<QDragEnterEvent*>(event);
             if (dragEvent->mimeData()->hasUrls() || dragEvent->mimeData()->hasFormat("application/x-kasset-asset-ids") || dragEvent->mimeData()->hasFormat("application/x-kasset-sequence-urls")) {
-                const bool shift = dragEvent->keyboardModifiers().testFlag(Qt::ShiftModifier);
+                const bool shift = dragEvent->modifiers().testFlag(Qt::ShiftModifier);
                 dragEvent->setDropAction(shift ? Qt::MoveAction : Qt::CopyAction);
                 dragEvent->accept();
                 return true;
@@ -9106,7 +9122,7 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
                     dragEvent->accept();
                     return true;
                 }
-                const bool shift = dragEvent->keyboardModifiers().testFlag(Qt::ShiftModifier);
+                const bool shift = dragEvent->modifiers().testFlag(Qt::ShiftModifier);
                 dragEvent->setDropAction(shift ? Qt::MoveAction : Qt::CopyAction);
                 dragEvent->accept();
                 return true;
@@ -9149,11 +9165,11 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
                     return true;
                 }
 
-                const bool shift = dropEvent->keyboardModifiers().testFlag(Qt::ShiftModifier);
+                const bool shift = dropEvent->modifiers().testFlag(Qt::ShiftModifier);
                 queueFmFileOperation(sources, destDir, shift);
                 statusBar()->showMessage(QString("Queued %1 item(s) for %2").arg(sources.size()).arg(shift ? "move" : "copy"), 3000);
             }
-            dropEvent->setDropAction(dropEvent->keyboardModifiers().testFlag(Qt::ShiftModifier) ? Qt::MoveAction : Qt::CopyAction);
+            dropEvent->setDropAction(dropEvent->modifiers().testFlag(Qt::ShiftModifier) ? Qt::MoveAction : Qt::CopyAction);
             dropEvent->accept();
             return true;
         }
@@ -10300,7 +10316,7 @@ void MainWindow::updateFmPreviewForIndex(const QModelIndex &idx)
         // Try OpenImageIO first for advanced formats (PSD/EXR/TIFF/etc.)
         QImage img;
         if (OIIOImageLoader::isOIIOSupported(path)) {
-            img = OIIOImageLoader::loadImage(path, 0, 0, OIIOImageLoader::ColorSpace::sRGB);
+            img = OIIOImageLoader::loadImage(path, 0, 0);
         }
         if (img.isNull()) {
             QImageReader reader(path);
@@ -10426,13 +10442,13 @@ void MainWindow::updateFmPreviewForIndex(const QModelIndex &idx)
                     }
                     // UTF-16 LE BOM
                     if (n >= 2 && b[0] == 0xFF && b[1] == 0xFE) {
-                        return QString::fromUtf16(reinterpret_cast<const ushort*>(b + 2), (n - 2) / 2);
+                        return QString::fromUtf16(reinterpret_cast<const char16_t*>(b + 2), (n - 2) / 2);
                     }
                     // UTF-16 BE BOM
                     if (n >= 2 && b[0] == 0xFE && b[1] == 0xFF) {
                         const int ulen = (n - 2) / 2;
-                        QVector<ushort> buf; buf.resize(ulen);
-                        for (int i = 0; i < ulen; ++i) buf[i] = (ushort(b[2 + 2*i]) << 8) | ushort(b[2 + 2*i + 1]);
+                        QVector<char16_t> buf; buf.resize(ulen);
+                        for (int i = 0; i < ulen; ++i) buf[i] = char16_t((ushort(b[2 + 2*i]) << 8) | ushort(b[2 + 2*i + 1]));
                         return QString::fromUtf16(buf.constData(), ulen);
                     }
                     // Heuristic: UTF-16 without BOM (look for lots of NULs at odd/even positions)
@@ -10445,10 +10461,10 @@ void MainWindow::updateFmPreviewForIndex(const QModelIndex &idx)
                         const bool le = (zeroOdd > zeroEven);
                         const int ulen = n / 2;
                         if (le) {
-                            return QString::fromUtf16(reinterpret_cast<const ushort*>(b), ulen);
+                            return QString::fromUtf16(reinterpret_cast<const char16_t*>(b), ulen);
                         } else {
-                            QVector<ushort> buf; buf.resize(ulen);
-                            for (int i = 0; i < ulen; ++i) buf[i] = (ushort(b[2*i]) << 8) | ushort(b[2*i + 1]);
+                            QVector<char16_t> buf; buf.resize(ulen);
+                            for (int i = 0; i < ulen; ++i) buf[i] = char16_t((ushort(b[2*i]) << 8) | ushort(b[2*i + 1]));
                             return QString::fromUtf16(buf.constData(), ulen);
                         }
                     }
@@ -10669,7 +10685,7 @@ void MainWindow::loadFmSequenceFrame(int index)
     const QString path = fmSequenceFramePaths.at(index);
     QPixmap px;
     if (OIIOImageLoader::isOIIOSupported(path)) {
-        QImage img = OIIOImageLoader::loadImage(path, 0, 0, OIIOImageLoader::ColorSpace::sRGB);
+        QImage img = OIIOImageLoader::loadImage(path, 0, 0);
         if (!img.isNull()) px = QPixmap::fromImage(img);
     }
     if (px.isNull()) {

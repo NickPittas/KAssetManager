@@ -436,7 +436,6 @@ private slots:
 
     void hideControls();
     void onSequenceTimerTick();
-    void onColorSpaceChanged(int index);
 
     // TLRenderPlayer signal handlers
     void onPlayerPositionChanged(qint64 positionMs);
@@ -503,13 +502,8 @@ private:
     void updateVideoAnnotationFrame(); // Update frame and handle per-frame annotations for videos
     int getVideoFrameNumber() const; // Calculate frame number from current position and FPS
 
-#ifdef HAVE_TLRENDER
-    void populateOcioInputColorspaces(const QStringList& colorspaces);
-    void applyOcioInputDefaults(const QString& filePath);
-    QString defaultOcioInputName(const QString& filePath) const;
     void ensurePlayer();
     void ensureRenderWidget();
-#endif
 
     // UI Components
     QGraphicsView *imageView;
@@ -533,33 +527,13 @@ private:
 
     QPushButton *closeBtn;
     QLabel *fileNameLabel;
-    QComboBox *colorSpaceCombo;
-    QLabel *colorSpaceLabel;
 
-#ifdef HAVE_TLRENDER
-    // OCIO (ACES) UI controls for tlRender playback
-    QCheckBox *ocioEnableCheck = nullptr;
-    QLabel *ocioInputLabel = nullptr;
-    QComboBox *ocioInputCombo = nullptr;
-    QLabel *ocioDisplayLabel = nullptr;
-    QComboBox *ocioDisplayCombo = nullptr;
-    QLabel *ocioViewLabel = nullptr;
-    QComboBox *ocioViewCombo = nullptr;
-    QPushButton *ocioConfigBtn = nullptr;
-    
     // Playback controls
     QComboBox *loopModeCombo = nullptr;
     QComboBox *playbackRateCombo = nullptr;
-    
-    // Exposure/Gamma controls
-    QSlider *exposureSlider = nullptr;
-    QLabel *exposureLabel = nullptr;
-    QSlider *gammaSlider = nullptr;
-    QLabel *gammaLabel = nullptr;
-    
+
     // Playback controls container (for show/hide)
     QWidget *playbackControlsGroup = nullptr;
-#endif
     QCheckBox *alphaCheck;
     QPlainTextEdit *textView;
 
@@ -575,7 +549,7 @@ private:
     QTableView *tableView;
     QStandardItemModel *tableModel;
 
-    // tlRender media player (with OCIO support)
+    // tlRender media player
     TLRenderPlayer *m_player;
     TLRenderViewport *m_renderWidget;
 #ifdef HAVE_QT_PDF
@@ -626,11 +600,6 @@ private:
     int sequencePlayDirection; // 1 = forward, -1 = reverse (for JKL scrubbing)
     SequenceFrameCache *frameCache;
     bool useCacheForSequences; // Flag to enable/disable cache (disabled by default)
-
-
-    // Color space for HDR/EXR images
-    OIIOImageLoader::ColorSpace currentColorSpace;
-    bool isHDRImage;
 
     // Alpha channel toggle state
     bool alphaOnlyMode = false;
@@ -693,7 +662,7 @@ public:
     ~SequenceFrameCache();
 
     // Cache operations
-    void setSequence(const QStringList &framePaths, OIIOImageLoader::ColorSpace colorSpace);
+    void setSequence(const QStringList &framePaths);
     void clearCache();
     QPixmap getFrame(int frameIndex);
     bool hasFrame(int frameIndex) const;
@@ -731,7 +700,6 @@ private:
     QPixmap loadFrame(int frameIndex);
 
     QStringList m_framePaths;
-    OIIOImageLoader::ColorSpace m_colorSpace;
     QCache<int, QPixmap> m_cache;
     mutable QRecursiveMutex m_mutex; // Use recursive mutex to allow same thread to lock multiple times
     QThreadPool *m_threadPool;
@@ -755,7 +723,7 @@ class FrameLoaderWorker : public QObject, public QRunnable
 
 public:
     FrameLoaderWorker(SequenceFrameCache *cache, int frameIndex, const QString &framePath,
-                      OIIOImageLoader::ColorSpace colorSpace, quint64 epoch);
+                      quint64 epoch);
     void run() override;
 
 signals:
@@ -765,7 +733,6 @@ private:
     QPointer<SequenceFrameCache> m_cache;
     int m_frameIndex;
     QString m_framePath;
-    OIIOImageLoader::ColorSpace m_colorSpace;
     quint64 m_epoch;
 };
 

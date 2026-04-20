@@ -129,7 +129,7 @@ void ImagePreviewOverlay::showImage(const QString &filePath, const QString &file
     QImage image;
     QPixmap newPixmap;
     if (OIIOImageLoader::isOIIOSupported(filePath)) {
-        image = OIIOImageLoader::loadImage(filePath, 0, 0, currentColorSpace);
+        image = OIIOImageLoader::loadImage(filePath, 0, 0);
         if (!image.isNull()) {
             newPixmap = QPixmap::fromImage(image);
         }

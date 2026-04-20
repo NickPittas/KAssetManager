@@ -1271,7 +1271,7 @@ bool FileManagerPane::eventFilter(QObject *watched, QEvent *event)
                     dragEvent->accept();
                     return true;
                 }
-                const bool moveRequested = dragEvent->keyboardModifiers().testFlag(Qt::ShiftModifier);
+                const bool moveRequested = dragEvent->modifiers().testFlag(Qt::ShiftModifier);
                 dragEvent->setDropAction(moveRequested ? Qt::MoveAction : Qt::CopyAction);
                 dragEvent->accept();
                 return true;
@@ -1286,7 +1286,7 @@ bool FileManagerPane::eventFilter(QObject *watched, QEvent *event)
                     dragEvent->accept();
                     return true;
                 }
-                const bool moveRequested = dragEvent->keyboardModifiers().testFlag(Qt::ShiftModifier);
+                const bool moveRequested = dragEvent->modifiers().testFlag(Qt::ShiftModifier);
                 dragEvent->setDropAction(moveRequested ? Qt::MoveAction : Qt::CopyAction);
                 dragEvent->accept();
                 return true;
@@ -1303,7 +1303,7 @@ bool FileManagerPane::eventFilter(QObject *watched, QEvent *event)
                 dropEvent->accept();
                 return true;
             }
-            const bool moveRequested = dropEvent->keyboardModifiers().testFlag(Qt::ShiftModifier)
+            const bool moveRequested = dropEvent->modifiers().testFlag(Qt::ShiftModifier)
                 || dropEvent->dropAction() == Qt::MoveAction
                 || dropEvent->proposedAction() == Qt::MoveAction;
             emit filesDropped(sources, destDir, moveRequested);

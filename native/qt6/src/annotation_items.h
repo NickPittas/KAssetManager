@@ -39,7 +39,7 @@ public:
     // QGraphicsItem interface
     virtual void paint(QPainter* painter, const QStyleOptionGraphicsItem* option, QWidget* widget = nullptr) override = 0;
     virtual QRectF boundingRect() const override = 0;
-    int type() const override { return UserType + annotationType(); }
+    int type() const override { return UserType + static_cast<int>(annotationType()); }
 
     // Serialization
     virtual QJsonObject toJson() const = 0;

@@ -7,7 +7,6 @@
 #include <QRect>
 
 class FFmpegMovPlayer;
-
 class FFmpegMovViewport : public QWidget
 {
     Q_OBJECT
