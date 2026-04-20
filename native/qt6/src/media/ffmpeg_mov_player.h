@@ -121,6 +121,8 @@ private:
     void resetPlaybackClock();
     bool fallbackToSoftwareDecoding(qint64 restartPositionMs, quint64 generation, bool satisfySeek, QString* errorString = nullptr);
     bool ensureConversionContext(AVFrame* frame);
+    void postReverseSeek();
+    void postReverseSeekIfNeeded();
     qint64 timestampToMs(int64_t pts) const;
     int64_t msToTimestamp(qint64 positionMs) const;
     int64_t frameToTimestamp(qint64 frameNumber) const;

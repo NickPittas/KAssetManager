@@ -460,8 +460,107 @@ void FFmpegMovPlayer::onPlaybackTick()
     }
 
     if (m_playbackRate < 0.0) {
-        stepBackward();
-        updatePlaybackTimer();
+        // Fast path: consume pre-buffered backward frames.
+        BufferedFrame previousFrame;
+        if (popBackwardFrame(&previousFrame)) {
+            presentBufferedFrame(previousFrame, true, false);
+            // If the backward buffer is nearly exhausted, kick off the next
+            // backward seek NOW so it overlaps with the current frame's display
+            // time instead of adding to it.
+            postReverseSeekIfNeeded();
+            updatePlaybackTimer();
+            return;
+        }
+
+        // Slow path: backward buffer empty.  Check for a pending async seek result.
+        BufferedFrame seekResult;
+        bool hasSeekResult = false;
+        bool seekActive = false;
+        bool seekFailed = false;
+        QString seekError;
+        {
+            std::lock_guard<std::mutex> lock(m_decodeMutex);
+            if (m_seekResultReady) {
+                hasSeekResult = true;
+                seekResult = std::move(m_seekResultFrame);
+                m_seekResultFrame = BufferedFrame();
+                m_seekResultReady = false;
+            } else if (m_seekFailed) {
+                seekFailed = true;
+                seekError = m_pendingDecodeError;
+                m_pendingDecodeError.clear();
+            } else {
+                seekActive = m_seekPending || m_seekInProgress;
+            }
+        }
+
+        if (hasSeekResult) {
+            presentBufferedFrame(seekResult, true, false);
+            // Immediately post the next reverse seek so it runs in parallel
+            // with the upcoming frame display period.
+            postReverseSeek();
+            updatePlaybackTimer();
+            return;
+        }
+
+        if (seekFailed) {
+            if (!seekError.isEmpty()) {
+                emit error(seekError);
+            }
+            // A failed seek during reverse means we are at/before the start.
+            switch (m_loopMode) {
+            case media_player::LoopMode::Loop:
+                seekInternal(m_durationMs, true, true);
+                resetPlaybackClock();
+                updatePlaybackTimer();
+                break;
+            case media_player::LoopMode::PingPong:
+                m_playbackRate = -m_playbackRate;
+                resetPlaybackClock();
+                updatePlaybackTimer();
+                break;
+            case media_player::LoopMode::Once:
+            default:
+                pause();
+                emit endOfStream();
+                break;
+            }
+            return;
+        }
+
+        if (seekActive) {
+            // Seek still in progress; check back soon.
+            m_playbackTimer->setInterval(std::chrono::milliseconds(1));
+            m_playbackTimer->start();
+            return;
+        }
+
+        // No seek active.  If we are at the very start, emit end-of-stream.
+        if (m_currentFrame <= 0 || m_lastPresentedPts <= 0) {
+            switch (m_loopMode) {
+            case media_player::LoopMode::Loop:
+                seekInternal(m_durationMs, true, true);
+                resetPlaybackClock();
+                updatePlaybackTimer();
+                break;
+            case media_player::LoopMode::PingPong:
+                m_playbackRate = -m_playbackRate;
+                resetPlaybackClock();
+                updatePlaybackTimer();
+                break;
+            case media_player::LoopMode::Once:
+            default:
+                pause();
+                emit endOfStream();
+                break;
+            }
+            return;
+        }
+
+        // Post an async backward seek; timer will fire again in 1 ms to check it.
+        postReverseSeek();
+        m_playbackTimer->setInterval(std::chrono::milliseconds(1));
+        m_playbackTimer->start();
         return;
     }
 
@@ -1458,6 +1557,67 @@ AVPixelFormat FFmpegMovPlayer::selectHardwarePixelFormat(AVCodecContext* codecCo
     Q_UNUSED(pixelFormats);
 #endif
     return AV_PIX_FMT_NONE;
+}
+
+// ---------------------------------------------------------------------------
+// Async reverse-playback helpers
+// ---------------------------------------------------------------------------
+
+// Post a non-blocking seek to the frame immediately before the current
+// presentation position.  The decode thread will produce the result in
+// m_seekResultFrame / m_seekResultReady; the caller must NOT block waiting
+// for it (use the async path in onPlaybackTick instead).
+void FFmpegMovPlayer::postReverseSeek()
+{
+#if defined(HAVE_FFMPEG) && HAVE_FFMPEG
+    if (!hasMedia()) {
+        return;
+    }
+
+    // Already at the very beginning – nothing to seek to.
+    if (m_currentFrame <= 0 && m_lastPresentedPts <= 0) {
+        return;
+    }
+
+    const int64_t targetTs =
+        (m_lastPresentedPts != AV_NOPTS_VALUE && m_lastPresentedPts > 0)
+            ? (m_lastPresentedPts - 1)
+            : frameToTimestamp(clampFrameNumber(m_currentFrame > 0 ? m_currentFrame - 1 : 0));
+
+    std::lock_guard<std::mutex> lock(m_decodeMutex);
+    if (m_seekPending || m_seekInProgress) {
+        return; // Already seeking – the in-flight seek is good enough.
+    }
+
+    ++m_decodeGeneration;
+    m_pendingSeekMs = timestampToMs(targetTs);
+    m_pendingSeekTs = targetTs;
+    m_pendingSeekPreferPreviousFrame = true;
+    m_seekPending = true;
+    m_seekInProgress = false;
+    m_seekFailed = false;
+    m_seekResultReady = false;
+    m_decodeAtEnd = false;
+    m_pendingDecodeError.clear();
+    m_decodedFrames.clear();
+    m_decodeCondition.notify_all();
+#endif
+}
+
+// Post an async backward seek only when the backward buffer is nearly empty,
+// so the seek overlaps with the current frame's display window.
+void FFmpegMovPlayer::postReverseSeekIfNeeded()
+{
+    {
+        std::lock_guard<std::mutex> lock(m_decodeMutex);
+        if (m_backwardFrames.size() >= 2) {
+            return; // Buffer still has frames – no prefetch needed yet.
+        }
+        if (m_seekPending || m_seekInProgress) {
+            return; // Seek already in flight.
+        }
+    }
+    postReverseSeek();
 }
 
 qint64 FFmpegMovPlayer::timestampToMs(int64_t pts) const
