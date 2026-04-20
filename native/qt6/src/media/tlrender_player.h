@@ -299,6 +299,7 @@ private:
     void updateMediaInfo();
     bool useMpvBackendForCurrentMedia(const QString& filePath) const;
     void stopManualReversePlayback();
+    void stepBackwardInternal();
 
     // tlRender objects
     std::shared_ptr<ftk::Context> m_context;

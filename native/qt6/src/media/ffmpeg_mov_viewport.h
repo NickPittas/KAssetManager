@@ -5,6 +5,7 @@
 #include <QImage>
 #include <QPixmap>
 #include <QRect>
+#include <QByteArray>
 
 class FFmpegMovPlayer;
 class FFmpegMovViewport : public QWidget
@@ -40,6 +41,7 @@ private:
     double m_zoom{1.0};
     QPixmap m_displayPixmap;
     QSize m_sourceFrameSize;
+    QByteArray m_sourceFrameFingerprint;
 };
 
 #endif

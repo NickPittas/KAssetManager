@@ -344,13 +344,21 @@ void TLRenderViewport::updateRasterFrame()
     }
 
     const QSize targetSize = size();
-    const QImage frame = m_player->getCurrentFrame(targetSize);
+    QImage frame;
+    if (m_player->ffmpegMovPlayer() && m_player->ffmpegMovPlayer()->hasMedia()) {
+        frame = m_player->ffmpegMovPlayer()->currentFrameImage(targetSize);
+        QImage rawFrame = m_player->ffmpegMovPlayer()->currentFrameImage();
+        std::cerr << "[updateRasterFrame] MOV frame size=" << frame.size().width() << "x" << frame.size().height() << " isNull=" << frame.isNull() << " rawSize=" << rawFrame.size().width() << "x" << rawFrame.size().height() << "\n";
+    } else {
+        frame = m_player->getCurrentFrame(targetSize);
+    }
     if (frame.isNull()) {
         return;
     }
 
     m_rasterFrame = frame;
     ++m_presentationRevision;
+    std::cerr << "[updateRasterFrame] Updated raster frame, revision=" << m_presentationRevision << "\n";
     update();
     emit frameRendered();
 #endif

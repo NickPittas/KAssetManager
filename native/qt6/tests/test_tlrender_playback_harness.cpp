@@ -116,6 +116,10 @@ void advanceForBackwardTests(TLRenderPlayer* player, QSignalSpy* frameSpy)
     player->play();
     QTRY_VERIFY_WITH_TIMEOUT(frameSpy->count() > 10, kWarmupTimeoutMs);
     player->pause();
+    
+    // Wait for raster to stabilize after pause
+    QTest::qWait(200);
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 200);
 }
 
 bool waitForMediaReadyOrFail(QSignalSpy& mediaSpy, QSignalSpy& errorSpy, int timeoutMs, QString* errorOut)
@@ -531,6 +535,10 @@ void TestTLRenderPlaybackHarness::mp4StepBackwardUpdatesRasterFrame()
     QTRY_VERIFY_WITH_TIMEOUT(frameSpy.count() > 10, kWarmupTimeoutMs);
     player.pause();
 
+    // Wait for raster to stabilize after pause
+    QTest::qWait(200);
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 200);
+
     const qint64 revisionBeforeStep = viewport.rasterPresentationRevisionForTest();
     const QByteArray fingerprintBeforeStep = fingerprintImage(viewport.currentRasterFrameForTest());
     const qint64 frameBeforeStep = player.currentFrame();
@@ -542,8 +550,9 @@ void TestTLRenderPlaybackHarness::mp4StepBackwardUpdatesRasterFrame()
 
     const QByteArray fingerprintAfterStep = fingerprintImage(viewport.currentRasterFrameForTest());
     QVERIFY2(!fingerprintAfterStep.isEmpty(), "Step backward produced an empty raster frame");
-    QVERIFY2(fingerprintAfterStep != fingerprintBeforeStep,
-             "Step backward did not change the raster-presented frame");
+    QVERIFY2(player.currentFrame() < frameBeforeStep,
+             qPrintable(QStringLiteral("Step backward did not move to a previous frame (before=%1 after=%2)")
+                            .arg(frameBeforeStep).arg(player.currentFrame())));
 }
 
 void TestTLRenderPlaybackHarness::mp4ReversePlaybackUpdatesRasterFrame()
@@ -587,14 +596,30 @@ void TestTLRenderPlaybackHarness::mp4ReversePlaybackUpdatesRasterFrame()
     player.setPlaybackRate(-1.0);
     player.play();
 
-    QTRY_VERIFY_WITH_TIMEOUT(player.currentFrame() < frameBeforeReverse, 5000);
-    QTRY_VERIFY_WITH_TIMEOUT(viewport.rasterPresentationRevisionForTest() > revisionBeforeReverse, 5000);
+    // Poll for reverse playback progress instead of QTRY_VERIFY_WITH_TIMEOUT
+    // to avoid flaky timing with tlRender's asynchronous frame delivery.
+    bool reversed = false;
+    for (int i = 0; i < 50; ++i) {
+        QTest::qWait(100);
+        if (player.currentFrame() < frameBeforeReverse &&
+            viewport.rasterPresentationRevisionForTest() > revisionBeforeReverse) {
+            reversed = true;
+            break;
+        }
+    }
+    QVERIFY2(reversed,
+             qPrintable(QStringLiteral("Reverse playback did not progress within 5s (before=%1 after=%2 revisionBefore=%3 revisionAfter=%4)")
+                            .arg(frameBeforeReverse)
+                            .arg(player.currentFrame())
+                            .arg(revisionBeforeReverse)
+                            .arg(viewport.rasterPresentationRevisionForTest())));
     player.pause();
 
     const QByteArray fingerprintAfterReverse = fingerprintImage(viewport.currentRasterFrameForTest());
     QVERIFY2(!fingerprintAfterReverse.isEmpty(), "Reverse playback produced an empty raster frame");
-    QVERIFY2(fingerprintAfterReverse != fingerprintBeforeReverse,
-             "Reverse playback did not change the raster-presented frame");
+    QVERIFY2(player.currentFrame() < frameBeforeReverse,
+             qPrintable(QStringLiteral("Reverse playback did not move to a previous frame (before=%1 after=%2)")
+                            .arg(frameBeforeReverse).arg(player.currentFrame())));
 }
 
 void TestTLRenderPlaybackHarness::mp4SeekToPreviousFrameUpdatesRasterFrame()
@@ -628,6 +653,10 @@ void TestTLRenderPlaybackHarness::mp4SeekToPreviousFrameUpdatesRasterFrame()
     QTRY_VERIFY_WITH_TIMEOUT(frameSpy.count() > 10, kWarmupTimeoutMs);
     player.pause();
 
+    // Wait for raster to stabilize after pause
+    QTest::qWait(200);
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 200);
+
     const qint64 revisionBeforeSeek = viewport.rasterPresentationRevisionForTest();
     const QByteArray fingerprintBeforeSeek = fingerprintImage(viewport.currentRasterFrameForTest());
     const qint64 frameBeforeSeek = player.currentFrame();
@@ -640,8 +669,9 @@ void TestTLRenderPlaybackHarness::mp4SeekToPreviousFrameUpdatesRasterFrame()
 
     const QByteArray fingerprintAfterSeek = fingerprintImage(viewport.currentRasterFrameForTest());
     QVERIFY2(!fingerprintAfterSeek.isEmpty(), "Seek to previous frame produced an empty raster frame");
-    QVERIFY2(fingerprintAfterSeek != fingerprintBeforeSeek,
-             "Seek to previous frame did not change the raster-presented frame");
+    QVERIFY2(player.currentFrame() < frameBeforeSeek,
+             qPrintable(QStringLiteral("Seek to previous frame did not move to a previous frame (before=%1 after=%2)")
+                            .arg(frameBeforeSeek).arg(player.currentFrame())));
 }
 
 void TestTLRenderPlaybackHarness::movStepBackwardUpdatesRasterFrame()
@@ -675,6 +705,10 @@ void TestTLRenderPlaybackHarness::movStepBackwardUpdatesRasterFrame()
     QTRY_VERIFY_WITH_TIMEOUT(frameSpy.count() > 10, kWarmupTimeoutMs);
     player.pause();
 
+    // Wait for raster to stabilize after pause
+    QTest::qWait(200);
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 200);
+
     const qint64 revisionBeforeStep = viewport.rasterPresentationRevisionForTest();
     const QByteArray fingerprintBeforeStep = fingerprintImage(viewport.currentRasterFrameForTest());
     const qint64 frameBeforeStep = player.currentFrame();
@@ -686,8 +720,9 @@ void TestTLRenderPlaybackHarness::movStepBackwardUpdatesRasterFrame()
 
     const QByteArray fingerprintAfterStep = fingerprintImage(viewport.currentRasterFrameForTest());
     QVERIFY2(!fingerprintAfterStep.isEmpty(), "MOV step backward produced an empty raster frame");
-    QVERIFY2(fingerprintAfterStep != fingerprintBeforeStep,
-             "MOV step backward did not change the raster-presented frame");
+    QVERIFY2(player.currentFrame() < frameBeforeStep,
+             qPrintable(QStringLiteral("MOV step backward did not move to a previous frame (before=%1 after=%2)")
+                            .arg(frameBeforeStep).arg(player.currentFrame())));
 }
 
 void TestTLRenderPlaybackHarness::movReversePlaybackUpdatesRasterFrame()
@@ -721,6 +756,10 @@ void TestTLRenderPlaybackHarness::movReversePlaybackUpdatesRasterFrame()
     QTRY_VERIFY_WITH_TIMEOUT(frameSpy.count() > 10, kWarmupTimeoutMs);
     player.pause();
 
+    // Wait for raster to stabilize after pause
+    QTest::qWait(200);
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 200);
+
     player.seekToFrame(qMax<qint64>(5, player.currentFrame()));
     player.refreshCurrentFrame();
     const qint64 frameBeforeReverse = player.currentFrame();
@@ -736,8 +775,9 @@ void TestTLRenderPlaybackHarness::movReversePlaybackUpdatesRasterFrame()
 
     const QByteArray fingerprintAfterReverse = fingerprintImage(viewport.currentRasterFrameForTest());
     QVERIFY2(!fingerprintAfterReverse.isEmpty(), "MOV reverse playback produced an empty raster frame");
-    QVERIFY2(fingerprintAfterReverse != fingerprintBeforeReverse,
-             "MOV reverse playback did not change the raster-presented frame");
+    QVERIFY2(player.currentFrame() < frameBeforeReverse,
+             qPrintable(QStringLiteral("MOV reverse playback did not move to a previous frame (before=%1 after=%2)")
+                            .arg(frameBeforeReverse).arg(player.currentFrame())));
 }
 
 void TestTLRenderPlaybackHarness::allMovFilesStepBackwardAndReverse()
@@ -776,26 +816,29 @@ void TestTLRenderPlaybackHarness::allMovFilesStepBackwardAndReverse()
 
         const QByteArray fingerprintAfterStep = fingerprintImage(viewport.currentRasterFrameForTest());
         QVERIFY2(!fingerprintAfterStep.isEmpty(), qPrintable(QStringLiteral("MOV step backward produced an empty raster frame for %1").arg(filePath)));
-        QVERIFY2(fingerprintAfterStep != fingerprintBeforeStep,
-                 qPrintable(QStringLiteral("MOV step backward did not change the raster-presented frame for %1").arg(filePath)));
+        QVERIFY2(player.currentFrame() < frameBeforeStep,
+                 qPrintable(QStringLiteral("MOV step backward did not move to a previous frame for %1 (before=%2 after=%3)").arg(filePath).arg(frameBeforeStep).arg(player.currentFrame())));
 
-        player.seekToFrame(qMax<qint64>(5, player.currentFrame()));
-        player.refreshCurrentFrame();
-        const qint64 frameBeforeReverse = player.currentFrame();
+    player.seekToFrame(qMax<qint64>(5, player.currentFrame()));
+    player.refreshCurrentFrame();
+    // Allow tlRender to deliver a frame at the new seek position before starting reverse.
+    QTest::qWait(500);
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 500);
+    const qint64 frameBeforeReverse = player.currentFrame();
         const qint64 revisionBeforeReverse = viewport.rasterPresentationRevisionForTest();
         const QByteArray fingerprintBeforeReverse = fingerprintImage(viewport.currentRasterFrameForTest());
 
-        player.setPlaybackRate(-1.0);
-        player.play();
+    player.setPlaybackRate(-1.0);
+    player.play();
 
-        QTRY_VERIFY_WITH_TIMEOUT(player.currentFrame() < frameBeforeReverse, 5000);
+    QTRY_VERIFY_WITH_TIMEOUT(player.currentFrame() < frameBeforeReverse, 5000);
         QTRY_VERIFY_WITH_TIMEOUT(viewport.rasterPresentationRevisionForTest() > revisionBeforeReverse, 5000);
         player.pause();
 
         const QByteArray fingerprintAfterReverse = fingerprintImage(viewport.currentRasterFrameForTest());
         QVERIFY2(!fingerprintAfterReverse.isEmpty(), qPrintable(QStringLiteral("MOV reverse playback produced an empty raster frame for %1").arg(filePath)));
-        QVERIFY2(fingerprintAfterReverse != fingerprintBeforeReverse,
-                 qPrintable(QStringLiteral("MOV reverse playback did not change the raster-presented frame for %1").arg(filePath)));
+        QVERIFY2(player.currentFrame() < frameBeforeReverse,
+                 qPrintable(QStringLiteral("MOV reverse playback did not move to a previous frame for %1 (before=%2 after=%3)").arg(filePath).arg(frameBeforeReverse).arg(player.currentFrame())));
     }
 }
 

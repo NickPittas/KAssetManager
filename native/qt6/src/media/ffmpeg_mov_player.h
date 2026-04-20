@@ -75,6 +75,7 @@ signals:
     void positionChanged(qint64 positionMs);
     void durationChanged(qint64 durationMs);
     void currentFrameChanged(qint64 frameNumber);
+    void debugFramePresented(qint64 frameNumber, qint64 positionMs, qint64 pts);
     void mediaInfoReady(const media_player::MediaInfo& info);
     void playbackStateChanged(media_player::PlaybackState state);
     void error(const QString& errorString);
@@ -103,8 +104,8 @@ private:
     void updatePlaybackTimer();
     bool decodeNextFrame(quint64 generation);
     bool decodeFrameForTimestamp(int64_t targetTs, bool allowPastTarget, quint64 generation, bool preferPreviousFrame = false);
-    bool seekInternal(qint64 positionMs, bool emitSignals);
-    bool seekToTimestampInternal(int64_t targetTs, bool emitSignals, bool preferPreviousFrame = false);
+    bool seekInternal(qint64 positionMs, bool emitSignals, bool clearHistory = true);
+    bool seekToTimestampInternal(int64_t targetTs, bool emitSignals, bool preferPreviousFrame = false, bool clearHistory = true);
     bool presentDecodedFrame(AVFrame* frame, BufferedFrame* bufferedFrame);
     bool queueBufferedFrame(BufferedFrame&& frame, quint64 generation, bool satisfySeek);
     bool waitForSeekFrame(quint64 generation, BufferedFrame* frame, QString* errorString = nullptr);
@@ -113,6 +114,9 @@ private:
     void rememberPresentedFrame(const BufferedFrame& frame);
     bool takePreviousPresentedFrame(BufferedFrame* frame);
     void clearPresentedHistory();
+    void pushBackwardFrame(const BufferedFrame& frame);
+    bool popBackwardFrame(BufferedFrame* frame);
+    void clearBackwardFrames();
     int decodeQueueCapacity() const;
     void resetPlaybackClock();
     bool fallbackToSoftwareDecoding(qint64 restartPositionMs, quint64 generation, bool satisfySeek, QString* errorString = nullptr);
@@ -174,6 +178,7 @@ private:
     std::condition_variable m_decodeCondition;
     std::deque<BufferedFrame> m_decodedFrames;
     std::deque<BufferedFrame> m_presentedFrames;
+    std::deque<BufferedFrame> m_backwardFrames;
     BufferedFrame m_seekResultFrame;
     std::thread m_decodeThread;
     bool m_decodeStopRequested{false};

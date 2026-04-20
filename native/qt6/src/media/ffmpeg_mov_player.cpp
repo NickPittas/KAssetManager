@@ -11,6 +11,7 @@
 #include <QUrl>
 
 #include <cmath>
+#include <iostream>
 
 #if defined(HAVE_FFMPEG) && HAVE_FFMPEG
 extern "C" {
@@ -115,7 +116,7 @@ void FFmpegMovPlayer::loadMedia(const QString& filePath)
     emit durationChanged(m_durationMs);
     emit mediaInfoReady(m_mediaInfo);
 
-    if (!seekInternal(0, true)) {
+    if (!seekInternal(0, true, true)) {
         emit error(tr("Failed to decode first frame from %1").arg(filePath));
         unloadMedia();
     }
@@ -144,6 +145,7 @@ void FFmpegMovPlayer::unloadMedia()
     m_totalFrames = 0;
     m_lastPresentedPts = -1;
     clearPresentedHistory();
+    clearBackwardFrames();
     m_playbackClock.invalidate();
     m_nextPlaybackDeadline = std::chrono::nanoseconds::zero();
     m_playbackStartPositionMs = 0;
@@ -204,7 +206,7 @@ void FFmpegMovPlayer::stop()
         m_audioPlayer->stop();
     }
     setPlaybackState(media_player::PlaybackState::Stopped);
-    seekInternal(0, true);
+    seekInternal(0, true, true);
 }
 
 void FFmpegMovPlayer::seek(qint64 positionMs)
@@ -212,7 +214,7 @@ void FFmpegMovPlayer::seek(qint64 positionMs)
     if (!hasMedia()) {
         return;
     }
-    seekInternal(positionMs, true);
+    seekInternal(positionMs, true, true);
 }
 
 void FFmpegMovPlayer::seekToFrame(qint64 frameNumber)
@@ -221,7 +223,7 @@ void FFmpegMovPlayer::seekToFrame(qint64 frameNumber)
         return;
     }
 
-    seekToTimestampInternal(frameToTimestamp(frameNumber), true);
+    seekToTimestampInternal(frameToTimestamp(frameNumber), true, false, true);
 }
 
 void FFmpegMovPlayer::stepForward()
@@ -236,15 +238,15 @@ void FFmpegMovPlayer::stepBackward()
     }
 
     BufferedFrame previousFrame;
-    if (takePreviousPresentedFrame(&previousFrame)) {
+    if (popBackwardFrame(&previousFrame)) {
         presentBufferedFrame(previousFrame, true);
         return;
     }
 
     const int64_t targetTs = (m_lastPresentedPts != AV_NOPTS_VALUE && m_lastPresentedPts > 0)
-        ? m_lastPresentedPts
-        : frameToTimestamp(clampFrameNumber(m_currentFrame));
-    seekToTimestampInternal(targetTs, true, true);
+        ? (m_lastPresentedPts - 1)
+        : frameToTimestamp(clampFrameNumber(m_currentFrame - 1));
+    seekToTimestampInternal(targetTs, true, true, false);
 }
 
 void FFmpegMovPlayer::setPlaybackRate(double rate)
@@ -459,6 +461,7 @@ void FFmpegMovPlayer::onPlaybackTick()
 
     if (m_playbackRate < 0.0) {
         stepBackward();
+        updatePlaybackTimer();
         return;
     }
 
@@ -499,7 +502,7 @@ void FFmpegMovPlayer::onPlaybackTick()
 
     switch (m_loopMode) {
     case media_player::LoopMode::Loop:
-        if (!seekInternal(0, true)) {
+        if (!seekInternal(0, true, true)) {
             pause();
             emit endOfStream();
         }
@@ -896,7 +899,7 @@ bool FFmpegMovPlayer::decodeFrameForTimestamp(int64_t targetTs, bool allowPastTa
             }
 
             if (preferPreviousFrame && pts != AV_NOPTS_VALUE) {
-                if (pts < targetTs) {
+                if (pts <= targetTs) {
                     previousFrame = frame;
                     hasPreviousFrame = true;
                     continue;
@@ -976,14 +979,14 @@ bool FFmpegMovPlayer::decodeFrameForTimestamp(int64_t targetTs, bool allowPastTa
     return false;
 }
 
-bool FFmpegMovPlayer::seekInternal(qint64 positionMs, bool emitSignals)
+bool FFmpegMovPlayer::seekInternal(qint64 positionMs, bool emitSignals, bool clearHistory)
 {
 #if defined(HAVE_FFMPEG) && HAVE_FFMPEG
     if (!hasMedia()) {
         return false;
     }
 
-    return seekToTimestampInternal(msToTimestamp(positionMs), emitSignals);
+    return seekToTimestampInternal(msToTimestamp(positionMs), emitSignals, false, clearHistory);
 #else
     Q_UNUSED(positionMs);
     Q_UNUSED(emitSignals);
@@ -991,7 +994,7 @@ bool FFmpegMovPlayer::seekInternal(qint64 positionMs, bool emitSignals)
 #endif
 }
 
-bool FFmpegMovPlayer::seekToTimestampInternal(int64_t targetTs, bool emitSignals, bool preferPreviousFrame)
+bool FFmpegMovPlayer::seekToTimestampInternal(int64_t targetTs, bool emitSignals, bool preferPreviousFrame, bool clearHistory)
 {
 #if defined(HAVE_FFMPEG) && HAVE_FFMPEG
     if (!hasMedia()) {
@@ -1002,7 +1005,10 @@ bool FFmpegMovPlayer::seekToTimestampInternal(int64_t targetTs, bool emitSignals
     const int64_t clampedTs = qMax<int64_t>(0, targetTs);
     const bool wasPlaying = m_playbackState == media_player::PlaybackState::Playing;
     m_playbackTimer->stop();
-    clearPresentedHistory();
+    if (clearHistory) {
+        clearPresentedHistory();
+        clearBackwardFrames();
+    }
 
     quint64 generation = 0;
     {
@@ -1236,23 +1242,27 @@ bool FFmpegMovPlayer::takeBufferedFrameForPlayback(qint64 targetPositionMs, Buff
 void FFmpegMovPlayer::presentBufferedFrame(const BufferedFrame& frame, bool emitSignals)
 {
     rememberPresentedFrame(frame);
+    pushBackwardFrame(frame);
 
     {
         QMutexLocker locker(&m_frameMutex);
         m_currentFrameImage = frame.image;
-        m_currentFrameScaledImage = frame.scaledImage;
-        m_currentFrameScaledTargetSize = frame.scaledTargetSize;
+        m_currentFrameScaledImage = QImage();
+        m_currentFrameScaledTargetSize = QSize();
     }
 
     m_lastPresentedPts = frame.pts;
     m_positionMs = frame.positionMs;
     m_currentFrame = frame.frameNumber;
+    std::cerr << "[presentBufferedFrame] pts=" << frame.pts << " frame=" << frame.frameNumber << " imageSize=" << frame.image.size().width() << "x" << frame.image.size().height() << "\n";
 
     const qint64 positionMs = m_positionMs;
     const qint64 frameNumber = m_currentFrame;
+    const qint64 pts = frame.pts;
     QMetaObject::invokeMethod(this,
-                              [this, emitSignals, positionMs, frameNumber]() {
+                              [this, emitSignals, positionMs, frameNumber, pts]() {
                                   emit frameUpdated();
+                                  emit debugFramePresented(frameNumber, positionMs, pts);
                                   if (emitSignals) {
                                       emit positionChanged(positionMs);
                                       emit currentFrameChanged(frameNumber);
@@ -1296,6 +1306,38 @@ void FFmpegMovPlayer::clearPresentedHistory()
 {
     std::lock_guard<std::mutex> lock(m_decodeMutex);
     m_presentedFrames.clear();
+}
+
+void FFmpegMovPlayer::pushBackwardFrame(const BufferedFrame& frame)
+{
+    std::lock_guard<std::mutex> lock(m_decodeMutex);
+    if (!m_backwardFrames.empty() && m_backwardFrames.back().pts == frame.pts) {
+        return;
+    }
+    m_backwardFrames.push_back(frame);
+    while (m_backwardFrames.size() > static_cast<size_t>(kPresentedHistoryFrames)) {
+        m_backwardFrames.pop_front();
+    }
+}
+
+bool FFmpegMovPlayer::popBackwardFrame(BufferedFrame* frame)
+{
+    std::lock_guard<std::mutex> lock(m_decodeMutex);
+    if (m_backwardFrames.size() < 2) {
+        return false;
+    }
+
+    m_backwardFrames.pop_back();
+    if (frame) {
+        *frame = m_backwardFrames.back();
+    }
+    return true;
+}
+
+void FFmpegMovPlayer::clearBackwardFrames()
+{
+    std::lock_guard<std::mutex> lock(m_decodeMutex);
+    m_backwardFrames.clear();
 }
 
 void FFmpegMovPlayer::resetPlaybackClock()

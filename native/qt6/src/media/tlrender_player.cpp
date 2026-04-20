@@ -12,6 +12,7 @@
 #include <QDebug>
 #include <QFileInfo>
 #include <QDir>
+#include <iostream>
 #include <QUrl>
 #include <QMap>
 #include <QMutexLocker>
@@ -490,7 +491,6 @@ void TLRenderPlayer::initialize()
         }
         
         s_initialized = true;
-        qDebug() << "TLRenderPlayer: tlRender initialized successfully";
     } catch (const std::exception& e) {
         qWarning() << "TLRenderPlayer: Failed to initialize tlRender:" << e.what();
     }
@@ -589,12 +589,6 @@ void TLRenderPlayer::loadMedia(const QString& filePath)
         std::string pathStr = filePath.toStdString();
         ftk::Path path(pathStr);
         
-        qDebug() << "[TLRenderPlayer] loadMedia: input path=" << filePath;
-        qDebug() << "[TLRenderPlayer] loadMedia: ftk::Path:"
-                 << "isSeq=" << path.isSeq()
-                 << "getNum=" << QString::fromStdString(path.getNum())
-                 << "getPad=" << path.getPad();
-        
         // Create timeline from path (handles video, sequences, and .otio files)
         tl::Options timelineOptions;
 #ifdef HAVE_FFMPEG
@@ -606,7 +600,6 @@ void TLRenderPlayer::loadMedia(const QString& filePath)
                 // PNG-in-MOV can be unstable with multi-threaded FFmpeg decode.
                 timelineOptions.ioOptions["FFmpeg/ThreadCount"] = "1";
                 timelineOptions.ioOptions["FFmpeg/VideoBufferSize"] = "1";
-                qDebug() << "[TLRenderPlayer] Using single-thread FFmpeg decode for PNG codec";
             }
         }
 #endif
@@ -615,17 +608,6 @@ void TLRenderPlayer::loadMedia(const QString& filePath)
         if (!m_timeline) {
             emit error(tr("Failed to create timeline from: %1").arg(filePath));
             return;
-        }
-        
-        // Log what tlRender actually detected/expanded
-        const auto& tlPath = m_timeline->getPath();
-        qDebug() << "[TLRenderPlayer] loadMedia: tlRender expanded path:"
-                 << "path=" << QString::fromStdString(tlPath.get())
-                 << "isSeq=" << tlPath.isSeq()
-                 << "hasFrames=" << tlPath.getFrames().has_value();
-        if (tlPath.getFrames().has_value()) {
-            const auto& frames = tlPath.getFrames().value();
-            qDebug() << "[TLRenderPlayer] loadMedia: frame range=" << frames.min() << "-" << frames.max();
         }
         
         // Create player
@@ -678,16 +660,11 @@ void TLRenderPlayer::loadMedia(const QString& filePath)
                     }
                 }
 
-                qDebug() << "[TLRenderPlayer] currentVideoChanged: got" << frames.size() 
-                         << "frames, hasValidFrame:" << hasValidFrame
-                         << "pendingPlay:" << m_pendingPlay;
-
                 // Start actual playback now that we have frames
                 if (shouldStartPlayback && m_player) {
-                    qDebug() << "[TLRenderPlayer] First frame ready, starting deferred playback";
                     if (reversePlayback) {
-                        m_player->setSpeedMult(std::abs(m_playbackRate.load()));
-                        m_player->reverse();
+                        m_manualReversePlaybackActive = true;
+                        m_manualReverseStepAccumulatorMs = 0.0;
                     } else {
                         m_player->setSpeedMult(m_playbackRate.load());
                         m_player->forward();
@@ -713,27 +690,15 @@ void TLRenderPlayer::loadMedia(const QString& filePath)
                 }
                 const qint64 newFrame = static_cast<qint64>(localValue);
                 const qint64 newPositionMs = static_cast<qint64>((localValue / rate) * 1000.0);
-                
-                qDebug() << "[TLRenderPlayer] currentTimeChanged DEBUG:"
-                         << "rawValue=" << value.value()
-                         << "startValue=" << startValue
-                         << "durationValue=" << durationValue
-                         << "localValue=" << localValue
-                         << "rate=" << rate
-                         << "newFrame=" << newFrame
-                         << "newPositionMs=" << newPositionMs
-                         << "m_duration=" << m_duration.load();
 
                 // Lazy update media info if we haven't got valid duration yet
                 // (common for sequences where timeline loads asynchronously)
                 if (m_duration.load() <= 0 && timeRange.duration().value() > 0.0) {
-                    qDebug() << "[TLRenderPlayer] Late media info update (sequence async load)";
                     updateMediaInfo();
                 }
 
                 if (newPositionMs != m_position) {
                     m_position = newPositionMs;
-                    qDebug() << "[TLRenderPlayer] currentTimeChanged: frame" << newFrame << "pos" << newPositionMs << "ms";
                     emit positionChanged(newPositionMs);
                 }
                 if (newFrame != m_currentFrame) {
@@ -747,8 +712,6 @@ void TLRenderPlayer::loadMedia(const QString& filePath)
             this,
             [this](tl::Playback playback)
             {
-                qDebug() << "[TLRenderPlayer] playbackChanged SIGNAL received:" << static_cast<int>(playback)
-                         << "(0=Stop, 1=Forward, 2=Reverse)";
                 PlaybackState newState;
                 switch (playback) {
                 case tl::Playback::Stop:
@@ -787,8 +750,6 @@ void TLRenderPlayer::loadMedia(const QString& filePath)
 
         // Keep a precise tick running to avoid render stalls on some systems.
         m_updateTimer->start();
-        
-        qDebug() << "TLRenderPlayer: Loaded media:" << filePath;
         
     } catch (const std::exception& e) {
         emit error(tr("Failed to load media: %1 - %2").arg(filePath, e.what()));
@@ -877,17 +838,11 @@ void TLRenderPlayer::updateMediaInfo()
     }
 #ifdef HAVE_TLRENDER
     if (!m_player || !m_timeline) {
-        qDebug() << "[TLRenderPlayer] updateMediaInfo: no player or timeline!";
         return;
     }
     
     const auto& ioInfo = m_player->getIOInfo();
     const auto& timeRange = m_player->getTimeRange();
-    
-    qDebug() << "[TLRenderPlayer] updateMediaInfo:"
-             << "timeRange.start=" << timeRange.start_time().value()
-             << "timeRange.duration=" << timeRange.duration().value()
-             << "timeRange.rate=" << timeRange.duration().rate();
     
     m_mediaInfo.width = 0;
     m_mediaInfo.height = 0;
@@ -901,11 +856,6 @@ void TLRenderPlayer::updateMediaInfo()
     m_mediaInfo.fps = rate;
     m_mediaInfo.totalFrames = static_cast<qint64>(timeRange.duration().value());
     m_mediaInfo.durationMs = static_cast<qint64>((timeRange.duration().value() / rate) * 1000.0);
-    
-    qDebug() << "[TLRenderPlayer] updateMediaInfo computed:"
-             << "fps=" << m_mediaInfo.fps
-             << "totalFrames=" << m_mediaInfo.totalFrames
-             << "durationMs=" << m_mediaInfo.durationMs;
     
     // Get video info from first video layer
     if (!ioInfo.video.empty()) {
@@ -945,14 +895,20 @@ void TLRenderPlayer::play()
     }
 #ifdef HAVE_TLRENDER
     if (!m_player) {
-        qDebug() << "[TLRenderPlayer::play] No player - cannot play";
         return;
     }
 
     stopManualReversePlayback();
 
-    qDebug() << "[TLRenderPlayer::play] CALLED - rate:" << m_playbackRate
-             << "currentPlayback:" << static_cast<int>(m_player->getPlayback());
+    // Honor current playback rate sign (JKL expects reverse playback).
+    if (m_playbackRate < 0.0) {
+        m_player->stop();
+        m_manualReversePlaybackActive = true;
+        m_manualReverseStepAccumulatorMs = 0.0;
+        m_playbackState = PlaybackState::Playing;
+        emit playbackStateChanged(PlaybackState::Playing);
+        return;
+    }
 
     // Check if we have frames with valid image data cached yet. If not, defer
     // playback until currentVideoChanged delivers the first valid frame. This
@@ -969,9 +925,8 @@ void TLRenderPlayer::play()
         }
         
         if (!hasValidFrame) {
-            qDebug() << "[TLRenderPlayer::play] No valid frames cached yet, deferring playback";
             m_pendingPlay = true;
-            m_pendingReverse = (m_playbackRate < 0.0);
+            m_pendingReverse = false;
             m_playbackState = PlaybackState::Playing;  // UI shows "playing" immediately
             locker.unlock();
             emit playbackStateChanged(PlaybackState::Playing);
@@ -979,20 +934,10 @@ void TLRenderPlayer::play()
         }
     }
 
-    // Honor current playback rate sign (JKL expects reverse playback).
-    if (m_playbackRate < 0.0) {
-        m_player->stop();
-        m_manualReversePlaybackActive = true;
-        m_manualReverseStepAccumulatorMs = 0.0;
-    } else {
-        m_player->setSpeedMult(m_playbackRate);
-        qDebug() << "[TLRenderPlayer::play] Calling m_player->forward()";
-        m_player->forward();
-        qDebug() << "[TLRenderPlayer::play] After forward(), playback:" << static_cast<int>(m_player->getPlayback());
-    }
+    m_player->setSpeedMult(m_playbackRate);
+    m_player->forward();
     m_playbackState = PlaybackState::Playing;
     emit playbackStateChanged(PlaybackState::Playing);
-    qDebug() << "[TLRenderPlayer::play] COMPLETED - emitted PlaybackState::Playing";
 #endif
 }
 
@@ -1008,14 +953,11 @@ void TLRenderPlayer::pause()
     }
 #ifdef HAVE_TLRENDER
     if (!m_player) {
-        qDebug() << "[TLRenderPlayer::pause] No player - cannot pause";
         return;
     }
 
     stopManualReversePlayback();
 
-    qDebug() << "[TLRenderPlayer::pause] Pausing playback";
-    
     // Cancel any pending deferred playback
     {
         QMutexLocker locker(&m_mutex);
@@ -1228,6 +1170,20 @@ void TLRenderPlayer::stepForward()
 #endif
 }
 
+void TLRenderPlayer::stepBackwardInternal()
+{
+#ifdef HAVE_TLRENDER
+    if (!m_player) return;
+    {
+        QMutexLocker locker(&m_mutex);
+        m_cachedVideoFrames.clear();
+    }
+    m_player->framePrev();
+    tick();
+    emit videoFramesChanged();
+#endif
+}
+
 void TLRenderPlayer::stepBackward()
 {
     if (m_ffmpegMovPlayer && m_ffmpegMovPlayer->hasMedia()) {
@@ -1238,17 +1194,8 @@ void TLRenderPlayer::stepBackward()
         m_mpvPlayer->stepBackward();
         return;
     }
-#ifdef HAVE_TLRENDER
-    if (!m_player) return;
     stopManualReversePlayback();
-    {
-        QMutexLocker locker(&m_mutex);
-        m_cachedVideoFrames.clear();
-    }
-    m_player->framePrev();
-    tick();
-    emit videoFramesChanged();
-#endif
+    stepBackwardInternal();
 }
 
 void TLRenderPlayer::stepForwardBy(int frames)
@@ -1513,13 +1460,10 @@ void TLRenderPlayer::onUpdateTimer()
 
         while (m_manualReverseStepAccumulatorMs >= frameDurationMs) {
             m_manualReverseStepAccumulatorMs -= frameDurationMs;
-            const qint64 previousFrame = m_currentFrame.load();
-            stepBackward();
-            if (m_currentFrame.load() >= previousFrame || m_currentFrame.load() <= 0) {
-                if (m_currentFrame.load() <= 0) {
-                    m_playbackState = PlaybackState::Paused;
-                    emit playbackStateChanged(PlaybackState::Paused);
-                }
+            stepBackwardInternal();
+            if (m_currentFrame.load() <= 0) {
+                m_playbackState = PlaybackState::Paused;
+                emit playbackStateChanged(PlaybackState::Paused);
                 stopManualReversePlayback();
                 break;
             }

@@ -3,6 +3,7 @@
 #include <QPaintEvent>
 #include <QPainter>
 #include <QResizeEvent>
+#include <QCryptographicHash>
 
 #include "ffmpeg_mov_player.h"
 
@@ -69,6 +70,7 @@ void FFmpegMovViewport::invalidateDisplayCache()
 {
     m_displayPixmap = QPixmap();
     m_sourceFrameSize = QSize();
+    m_sourceFrameFingerprint.clear();
 }
 
 void FFmpegMovViewport::updateDisplayCache()
@@ -90,13 +92,22 @@ void FFmpegMovViewport::updateDisplayCache()
         return;
     }
 
-    if (!m_displayPixmap.isNull() && m_sourceFrameSize == frame.size() && m_displayPixmap.size() == targetRect.size()) {
+    const QImage normalized = frame.convertToFormat(QImage::Format_RGBA8888);
+    const QByteArray frameFingerprint = QCryptographicHash::hash(
+        QByteArray(reinterpret_cast<const char*>(normalized.constBits()), static_cast<int>(normalized.sizeInBytes())),
+        QCryptographicHash::Sha256);
+
+    if (!m_displayPixmap.isNull()
+        && m_sourceFrameSize == frame.size()
+        && m_displayPixmap.size() == targetRect.size()
+        && m_sourceFrameFingerprint == frameFingerprint) {
         return;
     }
 
     const QImage scaled = frame.scaled(targetRect.size(), Qt::KeepAspectRatio, Qt::SmoothTransformation);
     m_displayPixmap = QPixmap::fromImage(scaled);
     m_sourceFrameSize = frame.size();
+    m_sourceFrameFingerprint = frameFingerprint;
 }
 
 void FFmpegMovViewport::paintEvent(QPaintEvent* event)
