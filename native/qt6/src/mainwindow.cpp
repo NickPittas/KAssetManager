@@ -996,6 +996,30 @@ void MainWindow::setupUi()
     infoDimensions->setWordWrap(true);
     infoLayout->addWidget(infoDimensions);
 
+    infoVideoCodec = new QLabel("", this);
+    infoVideoCodec->setWordWrap(true);
+    infoLayout->addWidget(infoVideoCodec);
+
+    infoAudioCodec = new QLabel("", this);
+    infoAudioCodec->setWordWrap(true);
+    infoLayout->addWidget(infoAudioCodec);
+
+    infoBitrate = new QLabel("", this);
+    infoBitrate->setWordWrap(true);
+    infoLayout->addWidget(infoBitrate);
+
+    infoTimecode = new QLabel("", this);
+    infoTimecode->setWordWrap(true);
+    infoLayout->addWidget(infoTimecode);
+
+    infoCameraInfo = new QLabel("", this);
+    infoCameraInfo->setWordWrap(true);
+    infoLayout->addWidget(infoCameraInfo);
+
+    infoShotInfo = new QLabel("", this);
+    infoShotInfo->setWordWrap(true);
+    infoLayout->addWidget(infoShotInfo);
+
     infoCreated = new QLabel("", this);
     infoCreated->setWordWrap(true);
     infoLayout->addWidget(infoCreated);
@@ -7994,6 +8018,12 @@ void MainWindow::updateInfoPanel()
         infoFileSize->clear();
         infoFileType->clear();
         infoDimensions->clear();
+        infoVideoCodec->clear(); infoVideoCodec->setVisible(false);
+        infoAudioCodec->clear(); infoAudioCodec->setVisible(false);
+        infoBitrate->clear(); infoBitrate->setVisible(false);
+        infoTimecode->clear(); infoTimecode->setVisible(false);
+        infoCameraInfo->clear(); infoCameraInfo->setVisible(false);
+        infoShotInfo->clear(); infoShotInfo->setVisible(false);
         infoCreated->clear();
         infoModified->clear();
         infoPermissions->clear();
@@ -8087,15 +8117,96 @@ void MainWindow::updateInfoPanel()
                 } else {
                     dimensionsStr = "Dimensions: Unable to read";
                 }
+                // Hide video-specific metadata labels for images
+                infoVideoCodec->clear(); infoVideoCodec->setVisible(false);
+                infoAudioCodec->clear(); infoAudioCodec->setVisible(false);
+                infoBitrate->clear(); infoBitrate->setVisible(false);
+                infoTimecode->clear(); infoTimecode->setVisible(false);
+                infoCameraInfo->clear(); infoCameraInfo->setVisible(false);
+                infoShotInfo->clear(); infoShotInfo->setVisible(false);
             }
             // Check if it's a video
             else {
                 QStringList videoExts = {"mp4", "mov", "avi", "mkv", "wmv", "flv", "webm",
                                         "m4v", "mpg", "mpeg", "3gp", "mts", "m2ts", "mxf"};
                 if (videoExts.contains(fileType.toLower())) {
-                    // TODO: Extract video metadata using tlRender/FFmpeg
-                    // For now, just show "Video file"
-                    dimensionsStr = "Video file";
+                    MediaInfo::VideoMetadata meta;
+                    QString metaError;
+                    if (MediaInfo::probeVideoFile(filePath, meta, &metaError)) {
+                        // Dimensions
+                        if (meta.width > 0 && meta.height > 0) {
+                            dimensionsStr = QString("Dimensions: %1 x %2")
+                                .arg(meta.width).arg(meta.height);
+                            if (meta.fps > 0.0) {
+                                dimensionsStr += QString(" @ %1 fps").arg(meta.fps, 0, 'f', 2);
+                            }
+                        }
+
+                        // Video codec
+                        QString vcodec = meta.videoCodec;
+                        if (!meta.videoProfile.isEmpty()) {
+                            vcodec += " (" + meta.videoProfile + ")";
+                        }
+                        infoVideoCodec->setText("Video Codec: " + vcodec);
+                        infoVideoCodec->setVisible(!vcodec.isEmpty());
+
+                        // Audio codec + channels
+                        QString acodec = meta.audioCodec;
+                        if (meta.audioChannels > 0) {
+                            acodec += QString(" — %1 ch").arg(meta.audioChannels);
+                        }
+                        infoAudioCodec->setText("Audio: " + acodec);
+                        infoAudioCodec->setVisible(!acodec.isEmpty());
+
+                        // Bitrate (Mbps)
+                        if (meta.bitrate > 0) {
+                            double mbps = meta.bitrate / 1'000'000.0;
+                            infoBitrate->setText(QString("Bitrate: %1 Mbps").arg(mbps, 0, 'f', 2));
+                            infoBitrate->setVisible(true);
+                        } else {
+                            infoBitrate->clear(); infoBitrate->setVisible(false);
+                        }
+
+                        // Timecode
+                        if (meta.hasTimecode && !meta.timecodeStart.isEmpty()) {
+                            infoTimecode->setText("Timecode: " + meta.timecodeStart);
+                            infoTimecode->setVisible(true);
+                        } else {
+                            infoTimecode->clear(); infoTimecode->setVisible(false);
+                        }
+
+                        // Camera info
+                        QStringList cameraParts;
+                        if (!meta.cameraName.isEmpty()) cameraParts << meta.cameraName;
+                        if (!meta.cameraModel.isEmpty()) cameraParts << meta.cameraModel;
+                        if (!meta.lens.isEmpty()) cameraParts << "Lens: " + meta.lens;
+                        if (!cameraParts.isEmpty()) {
+                            infoCameraInfo->setText("Camera: " + cameraParts.join(" / "));
+                            infoCameraInfo->setVisible(true);
+                        } else {
+                            infoCameraInfo->clear(); infoCameraInfo->setVisible(false);
+                        }
+
+                        // Shot info (reel / scene / take)
+                        QStringList shotParts;
+                        if (!meta.reelName.isEmpty()) shotParts << "Reel: " + meta.reelName;
+                        if (!meta.scene.isEmpty()) shotParts << "Scene: " + meta.scene;
+                        if (!meta.take.isEmpty()) shotParts << "Take: " + meta.take;
+                        if (!shotParts.isEmpty()) {
+                            infoShotInfo->setText(shotParts.join(" | "));
+                            infoShotInfo->setVisible(true);
+                        } else {
+                            infoShotInfo->clear(); infoShotInfo->setVisible(false);
+                        }
+                    } else {
+                        dimensionsStr = "Video file";
+                        infoVideoCodec->clear(); infoVideoCodec->setVisible(false);
+                        infoAudioCodec->clear(); infoAudioCodec->setVisible(false);
+                        infoBitrate->clear(); infoBitrate->setVisible(false);
+                        infoTimecode->clear(); infoTimecode->setVisible(false);
+                        infoCameraInfo->clear(); infoCameraInfo->setVisible(false);
+                        infoShotInfo->clear(); infoShotInfo->setVisible(false);
+                    }
                 }
             }
         }
@@ -8174,6 +8285,12 @@ void MainWindow::updateInfoPanel()
         infoFileSize->clear();
         infoFileType->clear();
         infoDimensions->clear();
+        infoVideoCodec->clear(); infoVideoCodec->setVisible(false);
+        infoAudioCodec->clear(); infoAudioCodec->setVisible(false);
+        infoBitrate->clear(); infoBitrate->setVisible(false);
+        infoTimecode->clear(); infoTimecode->setVisible(false);
+        infoCameraInfo->clear(); infoCameraInfo->setVisible(false);
+        infoShotInfo->clear(); infoShotInfo->setVisible(false);
         infoCreated->clear();
         infoModified->clear();
         infoPermissions->clear();

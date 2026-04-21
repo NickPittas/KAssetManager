@@ -361,6 +361,12 @@ private:
     QLabel *infoFileSize;
     QLabel *infoFileType;
     QLabel *infoDimensions;
+    QLabel *infoVideoCodec;
+    QLabel *infoAudioCodec;
+    QLabel *infoBitrate;
+    QLabel *infoTimecode;
+    QLabel *infoCameraInfo;
+    QLabel *infoShotInfo;
     QLabel *infoCreated;
     QLabel *infoModified;
     QLabel *infoPermissions;
