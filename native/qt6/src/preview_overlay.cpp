@@ -705,11 +705,6 @@ void PreviewOverlay::setupUi()
 
     controlsLayout->addLayout(bottomGrid);
 
-    // playbackControlsGroup kept as a no-op container for existing show/hide calls
-    playbackControlsGroup = new QWidget(this);
-    playbackControlsGroup->setFixedHeight(0);
-    playbackControlsGroup->hide();
-
     mainLayout->addWidget(controlsWidget);
     // Overlay side navigation arrows
     navPrevBtn = new QPushButton("\u25C0", this); // ◀
@@ -1086,11 +1081,6 @@ void PreviewOverlay::showVideo(const QString &filePath)
     // Hide alpha toggle for videos
     if (alphaCheck) alphaCheck->hide();
 
-    if (playbackControlsGroup) {
-        playbackControlsGroup->show();
-        playbackControlsGroup->setVisible(true);
-    }
-
     originalPixmap = QPixmap(); // Clear the pixmap
     fitPending = true;
 
@@ -1148,9 +1138,6 @@ void PreviewOverlay::onPlayPauseClicked()
             qDebug() << "[PreviewOverlay] Starting playback";
             PLAYER_PLAY();
         }
-    }
-    if (playbackControlsGroup) {
-        playbackControlsGroup->show();
     }
     controlsTimer->start();
 }
@@ -1381,7 +1368,6 @@ void PreviewOverlay::setPlaybackControlsVisible(bool visible)
     if (nextFrameBtn) nextFrameBtn->setVisible(visible);
     if (muteBtn) muteBtn->setVisible(visible);
     if (volumeSlider) volumeSlider->setVisible(visible);
-    if (playbackControlsGroup) playbackControlsGroup->setVisible(visible);
 }
 
 void PreviewOverlay::setControlsHeightForImage(bool imageMode)
@@ -1414,16 +1400,10 @@ void PreviewOverlay::setControlsVisible(bool visible)
     if (visible && allow) {
         setControlsHeightForImage(false);
         controlsWidget->show();
-        if (playbackControlsGroup && isVideo) {
-            playbackControlsGroup->show();
-        }
     } else if (!allow) {
         controlsWidget->hide();
     } else {
         controlsWidget->show();
-        if (playbackControlsGroup && isVideo) {
-            playbackControlsGroup->show();
-        }
     }
     controlsWidget->updateGeometry();
 }
@@ -3722,9 +3702,6 @@ void PreviewOverlay::enableAnnotationMode(bool enable)
             controlsPinned = false;
             controlsHovering = false;
             setControlsVisible(true);
-            if (playbackControlsGroup) {
-                playbackControlsGroup->show();
-            }
             controlsTimer->start();
             
             qDebug() << "[PreviewOverlay] Restored video playback from annotation mode";

@@ -532,8 +532,6 @@ private:
     QComboBox *loopModeCombo = nullptr;
     QComboBox *playbackRateCombo = nullptr;
 
-    // Playback controls container (for show/hide)
-    QWidget *playbackControlsGroup = nullptr;
     QCheckBox *alphaCheck;
     QPlainTextEdit *textView;
 
