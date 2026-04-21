@@ -28,6 +28,7 @@ namespace {
 constexpr double kDefaultFps = 24.0;
 constexpr int kDecodeQueueFrames = 32;
 constexpr int kPresentedHistoryFrames = 64;
+constexpr qint64 kBackwardBufferMaxBytes = 256 * 1024 * 1024; // 256 MiB cap for backward buffer
 
 #if defined(HAVE_FFMPEG) && HAVE_FFMPEG && defined(Q_OS_LINUX)
 constexpr AVHWDeviceType kPreferredHwDeviceType = AV_HWDEVICE_TYPE_VAAPI;
@@ -1415,7 +1416,18 @@ void FFmpegMovPlayer::pushBackwardFrame(const BufferedFrame& frame)
         return;
     }
     m_backwardFrames.push_back(frame);
-    while (m_backwardFrames.size() > static_cast<size_t>(kPresentedHistoryFrames)) {
+
+    // Cap by frame count (existing) and by memory (new) to avoid OOM on 4K+ content.
+    qint64 totalBytes = 0;
+    for (const auto& f : m_backwardFrames) {
+        totalBytes += f.image.isNull() ? 0 : f.image.sizeInBytes();
+        totalBytes += f.scaledImage.isNull() ? 0 : f.scaledImage.sizeInBytes();
+    }
+    while (m_backwardFrames.size() > static_cast<size_t>(kPresentedHistoryFrames)
+           || totalBytes > kBackwardBufferMaxBytes) {
+        const BufferedFrame& oldest = m_backwardFrames.front();
+        totalBytes -= oldest.image.isNull() ? 0 : oldest.image.sizeInBytes();
+        totalBytes -= oldest.scaledImage.isNull() ? 0 : oldest.scaledImage.sizeInBytes();
         m_backwardFrames.pop_front();
     }
 }
