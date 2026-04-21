@@ -23,17 +23,6 @@
 
 #include <memory>
 
-#if defined(HAVE_FFMPEG) && HAVE_FFMPEG
-extern "C" {
-#include <libavformat/avformat.h>
-#include <libavcodec/avcodec.h>
-#include <libavutil/error.h>
-#include <libavutil/frame.h>
-#include <libswscale/swscale.h>
-}
-#endif
-
-
 namespace {
 
 constexpr int kMinCacheEntries = 64;
@@ -49,20 +38,6 @@ constexpr int kSequenceMetaTtlMs = 30000;
 // Cache for video durations to avoid repeated tlRender queries during scrubbing
 static QHash<QString, qint64> s_durationCache;
 static QMutex s_durationCacheMutex;
-
-#if defined(HAVE_FFMPEG) && HAVE_FFMPEG
-QString ffmpegErrorString(int err)
-{
-    char buf[AV_ERROR_MAX_STRING_SIZE] = {};
-    av_strerror(err, buf, sizeof(buf));
-    return QString::fromUtf8(buf);
-}
-#else
-static QString ffmpegErrorString(int err)
-{
-    return QString::number(err);
-}
-#endif
 
 bool isImageExtension(const QString& suffix)
 {

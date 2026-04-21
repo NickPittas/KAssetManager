@@ -207,21 +207,7 @@ static constexpr int kImageControlsTopMargin = 4;
 static constexpr int kImageControlsBottomMargin = 6;
 static constexpr int kImageControlsSpacing = 0;
 
-#ifdef HAVE_FFMPEG
-extern "C" {
-#include <libavformat/avformat.h>
-#include <libavcodec/avcodec.h>
-}
-#include <QImage>
-#include <QRegularExpression>
 
-// Unified FFmpeg-based video and image sequence playback backend
-// Replaces manual FallbackPngMovReader implementation with FFmpegPlayer
-// Features: Hardware acceleration, smart caching, seamless integration
-// All video and sequence playback now handled through FFmpegPlayer member variable
-
-// All video playback now handled through unified FFmpegPlayer backend
-#endif // HAVE_FFMPEG
 
 PreviewOverlay::PreviewOverlay(QWidget *parent)
     : QWidget(parent)
