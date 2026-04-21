@@ -1,0 +1,7 @@
+module org.kde.kwindowsystem
+linktarget KWindowSystem
+optional plugin KWindowSystem
+classname org_kde_kwindowsystemPlugin
+typeinfo KWindowSystem.qmltypes
+prefer :/qt/qml/org/kde/kwindowsystem/
+

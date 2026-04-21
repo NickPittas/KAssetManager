@@ -1,0 +1,10 @@
+module org.kde.kirigami.layouts.private
+linktarget KF6KirigamiLayoutsPrivateplugin
+optional plugin KirigamiLayoutsPrivateplugin
+classname org_kde_kirigami_layouts_privatePlugin
+typeinfo KirigamiLayoutsPrivate.qmltypes
+depends QtQuick
+depends org.kde.kirigami.platform
+prefer :/qt/qml/org/kde/kirigami/layouts/private/
+ColumnViewSeparator 2.0 ColumnViewSeparator.qml
+

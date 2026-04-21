@@ -1,0 +1,9 @@
+module org.kde.milou
+linktarget milou
+optional plugin milou
+classname org_kde_milouPlugin
+typeinfo milou.qmltypes
+prefer :/qt/qml/org/kde/milou/
+ResultDelegate 254.0 ResultDelegate.qml
+ResultsView 254.0 ResultsView.qml
+

@@ -1,0 +1,7 @@
+module org.kde.networkmanager
+linktarget networkmanagerqtqml
+optional plugin networkmanagerqtqml
+classname org_kde_networkmanagerPlugin
+typeinfo networkmanagerqtqml.qmltypes
+prefer :/qt/qml/org/kde/networkmanager/
+

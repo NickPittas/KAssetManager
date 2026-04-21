@@ -1,0 +1,10 @@
+module org.kde.plasma.plasmoid
+linktarget plasmoidplugin
+optional plugin plasmoidplugin
+classname org_kde_plasma_plasmoidPlugin
+typeinfo plasmoidplugin.qmltypes
+depends QtQuick
+depends org.kde.plasma.core
+depends org.kde.config
+prefer :/qt/qml/org/kde/plasma/plasmoid/
+

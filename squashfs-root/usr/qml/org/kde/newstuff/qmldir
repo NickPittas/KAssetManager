@@ -1,0 +1,27 @@
+module org.kde.newstuff
+linktarget newstuffqmlplugin
+plugin newstuffqmlplugin
+classname org_kde_newstuffPlugin
+typeinfo newstuffqmlplugin.qmltypes
+prefer :/qt/qml/org/kde/newstuff/
+Button 1.1 Button.qml
+Dialog 1.1 Dialog.qml
+DialogContent 1.1 DialogContent.qml
+DownloadItemsSheet 1.1 DownloadItemsSheet.qml
+EntryDetails 1.1 EntryDetails.qml
+Page 1.1 Page.qml
+QuestionAsker 1.1 QuestionAsker.qml
+Action 1.81 Action.qml
+UploadPage 1.85 UploadPage.qml
+internal ConditionalLoader private/ConditionalLoader.qml
+internal EntryCommentDelegate private/EntryCommentDelegate.qml
+internal EntryCommentsPage private/EntryCommentsPage.qml
+internal EntryScreenshots private/EntryScreenshots.qml
+internal ErrorDisplayer private/ErrorDisplayer.qml
+internal GridTileDelegate private/GridTileDelegate.qml
+internal Rating private/Rating.qml
+internal Shadow private/Shadow.qml
+internal BigPreviewDelegate private/entrygriddelegates/BigPreviewDelegate.qml
+internal FeedbackOverlay private/entrygriddelegates/FeedbackOverlay.qml
+internal TileDelegate private/entrygriddelegates/TileDelegate.qml
+

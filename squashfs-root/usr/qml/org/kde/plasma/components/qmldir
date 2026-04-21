@@ -1,0 +1,67 @@
+module org.kde.plasma.components
+linktarget org_kde_plasmacomponents3
+optional plugin org_kde_plasmacomponents3
+classname org_kde_plasma_componentsPlugin
+typeinfo org_kde_plasmacomponents3.qmltypes
+prefer :/qt/qml/org/kde/plasma/components/
+AbstractButton 3.0 AbstractButton.qml
+BusyIndicator 3.0 BusyIndicator.qml
+Button 3.0 Button.qml
+CheckBox 3.0 CheckBox.qml
+CheckDelegate 3.0 CheckDelegate.qml
+CheckIndicator 3.0 CheckIndicator.qml
+ComboBox 3.0 ComboBox.qml
+Container 3.0 Container.qml
+Control 3.0 Control.qml
+Dial 3.0 Dial.qml
+Dialog 3.0 Dialog.qml
+DialogButtonBox 3.0 DialogButtonBox.qml
+Drawer 3.0 Drawer.qml
+Frame 3.0 Frame.qml
+GroupBox 3.0 GroupBox.qml
+ItemDelegate 3.0 ItemDelegate.qml
+Label 3.0 Label.qml
+Menu 3.0 Menu.qml
+MenuItem 3.0 MenuItem.qml
+MenuSeparator 3.0 MenuSeparator.qml
+Page 3.0 Page.qml
+PageIndicator 3.0 PageIndicator.qml
+Pane 3.0 Pane.qml
+Popup 3.0 Popup.qml
+ProgressBar 3.0 ProgressBar.qml
+RadioButton 3.0 RadioButton.qml
+RadioDelegate 3.0 RadioDelegate.qml
+RadioIndicator 3.0 RadioIndicator.qml
+RangeSlider 3.0 RangeSlider.qml
+RoundButton 3.0 RoundButton.qml
+ScrollBar 3.0 ScrollBar.qml
+ScrollView 3.0 ScrollView.qml
+Slider 3.0 Slider.qml
+SpinBox 3.0 SpinBox.qml
+StackView 3.0 StackView.qml
+SwipeView 3.0 SwipeView.qml
+Switch 3.0 Switch.qml
+SwitchDelegate 3.0 SwitchDelegate.qml
+SwitchIndicator 3.0 SwitchIndicator.qml
+TabBar 3.0 TabBar.qml
+TabButton 3.0 TabButton.qml
+TextArea 3.0 TextArea.qml
+TextField 3.0 TextField.qml
+ToolBar 3.0 ToolBar.qml
+ToolButton 3.0 ToolButton.qml
+ToolTip 3.0 ToolTip.qml
+MobileCursor 3.0 mobiletextselection/MobileCursor.qml
+MobileTextActionsToolBar 3.0 mobiletextselection/MobileTextActionsToolBar.qml
+MobileTextActionsToolBarImpl 3.0 mobiletextselection/MobileTextActionsToolBarImpl.qml
+internal ButtonBackground private/ButtonBackground.qml
+internal ButtonContent private/ButtonContent.qml
+internal ButtonFocus private/ButtonFocus.qml
+internal ButtonHover private/ButtonHover.qml
+internal ButtonShadow private/ButtonShadow.qml
+internal DefaultListItemBackground private/DefaultListItemBackground.qml
+internal FlatButtonBackground private/FlatButtonBackground.qml
+internal IconLabel private/IconLabel.qml
+internal RaisedButtonBackground private/RaisedButtonBackground.qml
+internal RoundShadow private/RoundShadow.qml
+internal TextFieldFocus private/TextFieldFocus.qml
+

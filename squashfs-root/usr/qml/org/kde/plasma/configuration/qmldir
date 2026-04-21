@@ -1,0 +1,8 @@
+module org.kde.plasma.configuration
+linktarget plasmaconfigplugin
+optional plugin plasmaconfigplugin
+classname org_kde_plasma_configurationPlugin
+typeinfo plasmaconfigplugin.qmltypes
+depends QtCore
+prefer :/qt/qml/org/kde/plasma/configuration/
+

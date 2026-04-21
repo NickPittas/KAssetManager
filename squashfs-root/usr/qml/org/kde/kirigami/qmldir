@@ -1,0 +1,19 @@
+module org.kde.kirigami
+linktarget KF6Kirigamiplugin
+plugin Kirigamiplugin
+classname KirigamiPlugin
+typeinfo Kirigami.qmltypes
+import org.kde.kirigami.controls
+import org.kde.kirigami.platform
+import org.kde.kirigami.primitives
+import org.kde.kirigami.delegates
+import org.kde.kirigami.dialogs
+import org.kde.kirigami.layouts
+depends QtQuick.Controls
+depends org.kde.kirigami.private
+depends org.kde.kirigami.private.polyfill
+prefer :/qt/qml/org/kde/kirigami/
+AboutPage 2.6 AboutPage.qml
+AboutItem 2.19 AboutItem.qml
+depends QtQuick
+

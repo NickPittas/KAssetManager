@@ -1,0 +1,8 @@
+module org.kde.newstuff.private
+linktarget newstuffqmlpluginprivate
+optional plugin newstuffqmlpluginprivate
+classname org_kde_newstuff_privatePlugin
+typeinfo newstuffqmlpluginprivate.qmltypes
+prefer :/qt/qml/org/kde/newstuff/private/
+depends QtQuick
+

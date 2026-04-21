@@ -1,0 +1,10 @@
+module org.kde.private.desktopcontainment.folder
+linktarget folderplugin
+optional plugin folderplugin
+classname org_kde_private_desktopcontainment_folderPlugin
+typeinfo folderplugin.qmltypes
+depends QtCore
+depends QtQuick
+depends org.kde.plasma.core
+prefer :/qt/qml/org/kde/private/desktopcontainment/folder/
+

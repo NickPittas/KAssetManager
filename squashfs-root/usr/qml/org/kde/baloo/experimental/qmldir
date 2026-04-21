@@ -1,0 +1,7 @@
+module org.kde.baloo.experimental
+linktarget baloomonitorplugin
+optional plugin baloomonitorplugin
+classname org_kde_baloo_experimentalPlugin
+typeinfo baloomonitorplugin.qmltypes
+prefer :/qt/qml/org/kde/baloo/experimental/
+

@@ -1,0 +1,25 @@
+module org.kde.kirigamiaddons.components
+linktarget componentsplugin
+optional plugin componentsplugin
+classname org_kde_kirigamiaddons_componentsPlugin
+typeinfo componentsplugin.qmltypes
+depends org.kde.kirigami
+prefer :/qt/qml/org/kde/kirigamiaddons/components/
+Avatar 1.0 Avatar.qml
+AvatarButton 1.0 AvatarButton.qml
+DoubleFloatingButton 1.0 DoubleFloatingButton.qml
+Banner 1.0 Banner.qml
+BottomDrawer 1.0 BottomDrawer.qml
+DialogRoundedBackground 1.0 DialogRoundedBackground.qml
+FloatingButton 1.0 FloatingButton.qml
+FloatingToolBar 1.0 FloatingToolBar.qml
+MessageDialog 1.0 MessageDialog.qml
+SearchPopupField 1.0 SearchPopupField.qml
+SegmentedButton 1.0 SegmentedButton.qml
+RadioSelector 1.0 RadioSelector.qml
+ConvergentContextMenu 1.0 ConvergentContextMenu.qml
+internal ContextMenuPage private/ContextMenuPage.qml
+internal ActionsMenu private/ActionsMenu.qml
+internal ActionMenuItem private/ActionMenuItem.qml
+depends QtQuick
+

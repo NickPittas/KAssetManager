@@ -1,0 +1,18 @@
+module org.kde.kirigamiaddons.delegates
+linktarget delegatesplugin
+optional plugin delegatesplugin
+classname org_kde_kirigamiaddons_delegatesPlugin
+typeinfo delegatesplugin.qmltypes
+depends org.kde.kirigami
+depends org.kde.kirigamiaddons.treeview
+depends org.kde.kitemmodels
+prefer :/qt/qml/org/kde/kirigamiaddons/delegates/
+RoundedItemDelegate 1.0 RoundedItemDelegate.qml
+RoundedTreeDelegate 1.0 RoundedTreeDelegate.qml
+CheckDelegate 1.0 CheckDelegate.qml
+RadioDelegate 1.0 RadioDelegate.qml
+IndicatorItemDelegate 1.0 IndicatorItemDelegate.qml
+DefaultContentItem 1.0 DefaultContentItem.qml
+SubtitleContentItem 1.0 SubtitleContentItem.qml
+depends QtQuick
+

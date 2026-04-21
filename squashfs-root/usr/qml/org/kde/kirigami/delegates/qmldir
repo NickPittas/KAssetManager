@@ -1,0 +1,17 @@
+module org.kde.kirigami.delegates
+linktarget KF6KirigamiDelegates
+optional plugin KirigamiDelegatesplugin
+classname org_kde_kirigami_delegatesPlugin
+typeinfo KirigamiDelegates.qmltypes
+depends QtQuick
+depends org.kde.kirigami.platform
+depends org.kde.kirigami.primitives
+prefer :/qt/qml/org/kde/kirigami/delegates/
+IconTitleSubtitle 254.0 IconTitleSubtitle.qml
+TitleSubtitle 254.0 TitleSubtitle.qml
+TitleSubtitleWithActions 254.0 TitleSubtitleWithActions.qml
+SubtitleDelegate 254.0 SubtitleDelegate.qml
+CheckSubtitleDelegate 254.0 CheckSubtitleDelegate.qml
+RadioSubtitleDelegate 254.0 RadioSubtitleDelegate.qml
+SwitchSubtitleDelegate 254.0 SwitchSubtitleDelegate.qml
+

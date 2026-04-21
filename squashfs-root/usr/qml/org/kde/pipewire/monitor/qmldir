@@ -1,0 +1,9 @@
+module org.kde.pipewire.monitor
+linktarget KPipeWireMonitorDeclarative
+optional plugin KPipeWireMonitorDeclarative
+classname org_kde_pipewire_monitorPlugin
+typeinfo KPipeWireMonitorDeclarative.qmltypes
+depends QtCore
+prefer :/qt/qml/org/kde/pipewire/monitor/
+depends QtQuick
+

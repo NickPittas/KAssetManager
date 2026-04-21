@@ -1,0 +1,10 @@
+module org.kde.kirigamiaddons.treeview
+linktarget treeviewplugin
+plugin treeviewplugin
+classname TreeViewPlugin
+typeinfo treeviewplugin.qmltypes
+prefer :/qt/qml/org/kde/kirigamiaddons/treeview/
+TreeViewDecoration 1.0 TreeViewDecoration.qml
+internal TreeViewDecoration styles/org.kde.desktop/TreeViewDecoration.qml
+depends QtQuick
+

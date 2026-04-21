@@ -1,0 +1,7 @@
+module org.kde.notification
+linktarget knotificationqmlplugin
+optional plugin knotificationqmlplugin
+classname org_kde_notificationPlugin
+typeinfo knotificationqmlplugin.qmltypes
+prefer :/qt/qml/org/kde/notification/
+

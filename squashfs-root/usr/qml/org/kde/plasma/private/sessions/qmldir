@@ -1,0 +1,9 @@
+module org.kde.plasma.private.sessions
+linktarget sessionsprivateplugin
+optional plugin sessionsprivateplugin
+classname org_kde_plasma_private_sessionsPlugin
+typeinfo sessionsprivateplugin.qmltypes
+depends QtCore
+prefer :/qt/qml/org/kde/plasma/private/sessions/
+depends QtQuick
+

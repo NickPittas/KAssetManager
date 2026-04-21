@@ -1,0 +1,8 @@
+module org.kde.kirigami.platform
+linktarget KF6::KirigamiPlatformplugin
+optional plugin KirigamiPlatformplugin
+classname org_kde_kirigami_platformPlugin
+typeinfo KirigamiPlatform.qmltypes
+depends QtQuick
+prefer :/qt/qml/org/kde/kirigami/platform/
+

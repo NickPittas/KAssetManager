@@ -1,0 +1,9 @@
+module org.kde.bluedevil.components
+linktarget bluedevilcomponents
+optional plugin bluedevilcomponents
+classname org_kde_bluedevil_componentsPlugin
+typeinfo bluedevilcomponents.qmltypes
+prefer :/qt/qml/org/kde/bluedevil/components/
+ForgetDeviceDialog 254.0 ForgetDeviceDialog.qml
+depends QtQuick
+

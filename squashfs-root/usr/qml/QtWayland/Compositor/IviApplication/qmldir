@@ -1,0 +1,7 @@
+module QtWayland.Compositor.IviApplication
+linktarget Qt6::WaylandCompositorIviapplicationplugin
+optional plugin waylandcompositoriviapplicationplugin
+classname QtWayland_Compositor_IviApplicationPlugin
+typeinfo plugins.qmltypes
+prefer :/qt-project.org/imports/QtWayland/Compositor/IviApplication/
+

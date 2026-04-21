@@ -1,0 +1,20 @@
+module org.kde.kirigamiaddons.labs.components
+linktarget componentslabsplugin
+optional plugin componentslabsplugin
+classname org_kde_kirigamiaddons_labs_componentsPlugin
+typeinfo componentslabsplugin.qmltypes
+depends org.kde.kirigamiaddons.components
+depends QtMultimedia
+prefer :/qt/qml/org/kde/kirigamiaddons/labs/components/
+Avatar 1.0 Avatar.qml
+AbstractMaximizeComponent 1.0 AbstractMaximizeComponent.qml
+AlbumMaximizeComponent 1.0 AlbumMaximizeComponent.qml
+ImageMaximizeDelegate 1.0 ImageMaximizeDelegate.qml
+VideoMaximizeDelegate 1.0 VideoMaximizeDelegate.qml
+AlbumModelItem 1.0 AlbumModelItem.qml
+Banner 1.0 Banner.qml
+DownloadAction 1.0 DownloadAction.qml
+SearchPopupField 1.0 SearchPopupField.qml
+DialogRoundedBackground 1.0 DialogRoundedBackground.qml
+depends QtQuick
+

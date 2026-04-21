@@ -1,0 +1,7 @@
+module org.kde.kdeconnect.private.findthisdevice
+linktarget kdeconnect_findthisdevice_qmlhelper
+optional plugin kdeconnect_findthisdevice_qmlhelper
+classname org_kde_kdeconnect_private_findthisdevicePlugin
+typeinfo kdeconnect_findthisdevice_qmlhelper.qmltypes
+prefer :/qt/qml/org/kde/kdeconnect/private/findthisdevice/
+

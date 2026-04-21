@@ -1,0 +1,8 @@
+module QtQuick.VirtualKeyboard.Styles.Breeze
+linktarget breezestyle
+optional plugin breezestyle
+classname QtQuick_VirtualKeyboard_Styles_BreezePlugin
+typeinfo breezestyle.qmltypes
+depends QtQuick
+prefer :/qt/qml/QtQuick/VirtualKeyboard/Styles/Breeze/
+

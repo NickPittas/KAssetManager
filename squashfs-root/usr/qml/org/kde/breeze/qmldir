@@ -1,0 +1,69 @@
+module org.kde.breeze
+linktarget BreezeStyle
+optional plugin BreezeStyle
+classname org_kde_breezePlugin
+designersupported
+typeinfo BreezeStyle.qmltypes
+depends QtQuick.Controls
+depends QtQuick.Window
+depends org.kde.kirigami
+depends org.kde.breeze.impl
+depends org.kde.guiaddons
+prefer :/qt/qml/org/kde/breeze/
+AbstractButton 254.0 AbstractButton.qml
+ApplicationWindow 254.0 ApplicationWindow.qml
+BusyIndicator 254.0 BusyIndicator.qml
+Button 254.0 Button.qml
+ButtonGroup 254.0 ButtonGroup.qml
+CheckBox 254.0 CheckBox.qml
+CheckDelegate 254.0 CheckDelegate.qml
+ComboBox 254.0 ComboBox.qml
+Container 254.0 Container.qml
+Control 254.0 Control.qml
+DelayButton 254.0 DelayButton.qml
+Dial 254.0 Dial.qml
+Dialog 254.0 Dialog.qml
+DialogButtonBox 254.0 DialogButtonBox.qml
+Drawer 254.0 Drawer.qml
+Frame 254.0 Frame.qml
+GroupBox 254.0 GroupBox.qml
+HorizontalHeaderView 254.0 HorizontalHeaderView.qml
+ItemDelegate 254.0 ItemDelegate.qml
+Label 254.0 Label.qml
+Menu 254.0 Menu.qml
+MenuBar 254.0 MenuBar.qml
+MenuBarItem 254.0 MenuBarItem.qml
+MenuItem 254.0 MenuItem.qml
+MenuSeparator 254.0 MenuSeparator.qml
+MobileTextActionsToolBar 254.0 MobileTextActionsToolBar.qml
+Page 254.0 Page.qml
+PageIndicator 254.0 PageIndicator.qml
+Pane 254.0 Pane.qml
+Popup 254.0 Popup.qml
+ProgressBar 254.0 ProgressBar.qml
+RadioButton 254.0 RadioButton.qml
+RadioDelegate 254.0 RadioDelegate.qml
+RangeSlider 254.0 RangeSlider.qml
+RoundButton 254.0 RoundButton.qml
+ScrollBar 254.0 ScrollBar.qml
+ScrollIndicator 254.0 ScrollIndicator.qml
+ScrollView 254.0 ScrollView.qml
+Slider 254.0 Slider.qml
+SpinBox 254.0 SpinBox.qml
+SplitView 254.0 SplitView.qml
+StackView 254.0 StackView.qml
+SwipeDelegate 254.0 SwipeDelegate.qml
+SwipeView 254.0 SwipeView.qml
+Switch 254.0 Switch.qml
+SwitchDelegate 254.0 SwitchDelegate.qml
+TabBar 254.0 TabBar.qml
+TabButton 254.0 TabButton.qml
+TextArea 254.0 TextArea.qml
+TextField 254.0 TextField.qml
+ToolBar 254.0 ToolBar.qml
+ToolButton 254.0 ToolButton.qml
+ToolSeparator 254.0 ToolSeparator.qml
+ToolTip 254.0 ToolTip.qml
+Tumbler 254.0 Tumbler.qml
+VerticalHeaderView 254.0 VerticalHeaderView.qml
+

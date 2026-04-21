@@ -1,0 +1,8 @@
+module org.kde.kinfocenter.private
+linktarget KInfoCenterInternalplugin
+optional plugin KInfoCenterInternalplugin
+classname org_kde_kinfocenter_privatePlugin
+typeinfo KInfoCenterInternal.qmltypes
+prefer :/qt/qml/org/kde/kinfocenter/private/
+CommandOutputKCM 1.0 qml/CommandOutputKCM.qml
+

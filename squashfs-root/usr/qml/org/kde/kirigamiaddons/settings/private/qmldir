@@ -1,0 +1,14 @@
+module org.kde.kirigamiaddons.settings.private
+linktarget settingsprivateplugin
+optional plugin settingsprivateplugin
+classname org_kde_kirigamiaddons_settings_privatePlugin
+typeinfo settingsprivateplugin.qmltypes
+depends org.kde.kirigami
+depends org.kde.kirigamiaddons.delegates
+prefer :/qt/qml/org/kde/kirigamiaddons/settings/private/
+ConfigWindow 254.0 ConfigWindow.qml
+ConfigMobilePage 254.0 ConfigMobilePage.qml
+ActionIconGroup 254.0 ActionIconGroup.qml
+SonnetConfigPage 254.0 SonnetConfigPage.qml
+depends QtQuick
+

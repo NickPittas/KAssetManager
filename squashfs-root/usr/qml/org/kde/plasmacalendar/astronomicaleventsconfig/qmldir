@@ -1,0 +1,7 @@
+module org.kde.plasmacalendar.astronomicaleventsconfig
+linktarget plasmacalendarastronomicaleventsconfig
+plugin plasmacalendarastronomicaleventsconfig
+classname org_kde_plasmacalendar_astronomicaleventsconfigPlugin
+typeinfo plasmacalendarastronomicaleventsconfig.qmltypes
+prefer :/qt/qml/org/kde/plasmacalendar/astronomicaleventsconfig/
+

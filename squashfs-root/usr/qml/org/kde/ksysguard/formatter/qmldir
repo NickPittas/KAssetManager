@@ -1,0 +1,7 @@
+module org.kde.ksysguard.formatter
+linktarget Formatterplugin
+optional plugin Formatterplugin
+classname org_kde_ksysguard_formatterPlugin
+typeinfo Formatter.qmltypes
+prefer :/qt/qml/org/kde/ksysguard/formatter/
+

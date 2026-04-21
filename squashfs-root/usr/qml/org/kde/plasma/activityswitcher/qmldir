@@ -1,0 +1,8 @@
+module org.kde.plasma.activityswitcher
+linktarget activityswitcherextensionplugin
+optional plugin activityswitcherextensionplugin
+classname org_kde_plasma_activityswitcherPlugin
+typeinfo activityswitcherextensionplugin.qmltypes
+prefer :/qt/qml/org/kde/plasma/activityswitcher/
+depends QtQuick
+

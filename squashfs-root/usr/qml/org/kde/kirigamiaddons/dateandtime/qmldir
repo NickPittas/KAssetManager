@@ -1,0 +1,17 @@
+module org.kde.kirigamiaddons.dateandtime
+linktarget dateandtimeplugin
+optional plugin dateandtimeplugin
+classname org_kde_kirigamiaddons_dateandtimePlugin
+typeinfo dateandtimeplugin.qmltypes
+depends org.kde.kirigami
+depends org.kde.kirigamiaddons.components
+depends org.kde.kirigamiaddons.delegates
+prefer :/qt/qml/org/kde/kirigamiaddons/dateandtime/
+DatePopup 1.0 DatePopup.qml
+TimePopup 1.0 TimePopup.qml
+TimePicker 1.0 TimePicker.qml
+DatePathView 1.0 private/DatePathView.qml
+DatePicker 1.0 private/DatePicker.qml
+DatePickerDelegate 1.0 private/DatePickerDelegate.qml
+depends QtQuick
+

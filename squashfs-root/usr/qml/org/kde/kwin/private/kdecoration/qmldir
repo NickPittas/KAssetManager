@@ -1,0 +1,9 @@
+module org.kde.kwin.private.kdecoration
+linktarget kdecorationprivatedeclarative
+optional plugin kdecorationprivatedeclarative
+classname org_kde_kwin_private_kdecorationPlugin
+typeinfo kdecorationprivatedeclarative.qmltypes
+depends QtCore
+depends QtQuick
+prefer :/qt/qml/org/kde/kwin/private/kdecoration/
+

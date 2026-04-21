@@ -1,0 +1,9 @@
+module org.kde.kquickcontrols
+linktarget kquickcontrols
+optional plugin kquickcontrols
+classname org_kde_kquickcontrolsPlugin
+typeinfo kquickcontrols.qmltypes
+prefer :/qt/qml/org/kde/kquickcontrols/
+ColorButton 2.0 ColorButton.qml
+KeySequenceItem 2.0 KeySequenceItem.qml
+

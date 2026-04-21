@@ -1,0 +1,109 @@
+/*
+    SPDX-FileCopyrightText: 2017 Marco Martin <mart@kde.org>
+    SPDX-FileCopyrightText: 2017 The Qt Company Ltd.
+
+    SPDX-License-Identifier: LGPL-3.0-only OR GPL-2.0-or-later
+*/
+
+
+import QtQuick
+import QtQuick.Controls as QQC2
+import QtQuick.Templates as T
+import org.kde.kirigami as Kirigami
+import org.kde.kirigami.dialogs as KDialogs
+
+T.Dialog {
+    id: control
+
+    parent: QQC2.Overlay.overlay
+    anchors.centerIn: QQC2.Overlay.overlay
+    z: Kirigami.OverlayZStacking.z
+
+    implicitWidth: Math.max(implicitBackgroundWidth + leftInset + rightInset,
+                            contentWidth + leftPadding + rightPadding,
+                            implicitHeaderWidth,
+                            implicitFooterWidth)
+    implicitHeight: Math.max(implicitBackgroundHeight + topInset + bottomInset,
+                             contentHeight + topPadding + bottomPadding
+                             + (implicitHeaderHeight > 0 ? implicitHeaderHeight + spacing : 0)
+                             + (implicitFooterHeight > 0 ? implicitFooterHeight + spacing : 0))
+
+    padding: contentItem instanceof QQC2.ScrollView ? 0 : Kirigami.Units.gridUnit
+    margins: Kirigami.Units.gridUnit
+
+    // black background, fades in and out
+    QQC2.Overlay.modal: Rectangle {
+        color: Qt.rgba(0, 0, 0, 0.3)
+
+        // the opacity of the item is changed internally by QQuickPopup on open/close
+        Behavior on opacity {
+            enabled: Kirigami.Units.longDuration > 0
+            OpacityAnimator {
+                duration: Kirigami.Units.longDuration
+                easing.type: Easing.InOutQuad
+            }
+        }
+    }
+
+    enter: Transition {
+        NumberAnimation {
+            property: "opacity"
+            from: 0
+            to: 1
+            easing.type: Easing.InOutQuad
+            duration: Kirigami.Units.longDuration
+        }
+    }
+
+    exit: Transition {
+        NumberAnimation {
+            property: "opacity"
+            from: 1
+            to: 0
+            easing.type: Easing.InOutQuad
+            duration: Kirigami.Units.longDuration
+        }
+    }
+
+    contentItem: Item {}
+
+    background: Kirigami.ShadowedRectangle {
+        Kirigami.Theme.colorSet: Kirigami.Theme.View
+        Kirigami.Theme.inherit: false
+
+        color: Kirigami.Theme.backgroundColor
+        radius: !control.hasOwnProperty("popupType") || control.popupType === T.Popup.Item ? Kirigami.Units.cornerRadius : 0
+
+        shadow {
+            size: radius * 2
+            color: Qt.rgba(0, 0, 0, 0.3)
+            yOffset: 1
+        }
+
+        border {
+            width: !control.hasOwnProperty("popupType") || control.popupType === T.Popup.Item ? 1 : 0
+            color: Kirigami.ColorUtils.linearInterpolation(Kirigami.Theme.backgroundColor, Kirigami.Theme.textColor, Kirigami.Theme.frameContrast);
+        }
+    }
+
+    header: KDialogs.DialogHeader {
+        visible: (!control.hasOwnProperty("popupType") || control.popupType === T.Popup.Item) && control.title.length > 0
+        dialog: control
+    }
+
+    footer: QQC2.DialogButtonBox {
+        visible: count > 0
+
+        background: Item {
+            Kirigami.Separator {
+                visible: if (control.contentItem instanceof T.Pane || control.contentItem instanceof Flickable) {
+                    return control.contentItem.height < control.contentItem.contentHeight;
+                } else {
+                    return false;
+                }
+                width: parent.width
+                anchors.top: parent.top
+            }
+        }
+    }
+}

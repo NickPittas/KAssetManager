@@ -1,0 +1,7 @@
+module org.kde.plasma.private.systemtray
+linktarget systemtrayplugin
+optional plugin systemtrayplugin
+classname org_kde_plasma_private_systemtrayPlugin
+typeinfo systemtrayplugin.qmltypes
+prefer :/qt/qml/org/kde/plasma/private/systemtray/
+

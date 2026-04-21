@@ -1,0 +1,30 @@
+module org.kde.plasma.extras
+linktarget plasmaextracomponentsplugin
+optional plugin plasmaextracomponentsplugin
+classname org_kde_plasma_extrasPlugin
+typeinfo plasmaextracomponentsplugin.qmltypes
+depends org.kde.plasma.core
+prefer :/qt/qml/org/kde/plasma/extras/
+ActionTextField 2.0 ActionTextField.qml
+BasicPlasmoidHeading 2.0 BasicPlasmoidHeading.qml
+DescriptiveLabel 2.0 DescriptiveLabel.qml
+ExpandableListItem 2.0 ExpandableListItem.qml
+Heading 2.0 Heading.qml
+Highlight 2.0 Highlight.qml
+ListItem 2.0 ListItem.qml
+ListSectionHeader 2.0 ListSectionHeader.qml
+ModelContextMenu 2.0 ModelContextMenu.qml
+PasswordField 2.0 PasswordField.qml
+PlaceholderMessage 2.0 PlaceholderMessage.qml
+PlasmoidHeading 2.0 PlasmoidHeading.qml
+Representation 2.0 Representation.qml
+SearchField 2.0 SearchField.qml
+ShadowedLabel 2.0 ShadowedLabel.qml
+ActivateAnimation 2.0 animations/ActivateAnimation.qml
+AppearAnimation 2.0 animations/AppearAnimation.qml
+DisappearAnimation 2.0 animations/DisappearAnimation.qml
+PressedAnimation 2.0 animations/PressedAnimation.qml
+ReleasedAnimation 2.0 animations/ReleasedAnimation.qml
+internal BackgroundMetrics private/BackgroundMetrics.qml
+depends QtQuick
+

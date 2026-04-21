@@ -1,0 +1,29 @@
+module org.kde.kquickimageeditor
+linktarget KQuickImageEditorPlugin
+optional plugin KQuickImageEditorplugin
+classname KQuickImageEditorPlugin
+typeinfo KQuickImageEditor.qmltypes
+depends QtQuick
+depends QtQuick.Controls
+depends QtQuick.Effects
+depends QtQuick.Shapes
+depends QtQuick.Templates
+depends org.kde.kirigami
+prefer :/qt/qml/org/kde/kquickimageeditor/
+AnnotationSelectionTool 1.0 AnnotationSelectionTool.qml
+CropTool 1.0 CropTool.qml
+HoverOutline 1.0 HoverOutline.qml
+TextTool 1.0 TextTool.qml
+BasicResizeHandle 1.0 BasicResizeHandle.qml
+CropBackground 1.0 CropBackground.qml
+RectangleCutout 1.0 RectangleCutout.qml
+SelectionBackground 1.0 SelectionBackground.qml
+SelectionHandle 1.0 SelectionHandle.qml
+SelectionTool 1.0 SelectionTool.qml
+internal AnimatedLoader private/AnimatedLoader.qml
+internal DashedOutline private/DashedOutline.qml
+internal Handle private/Handle.qml
+internal Outline private/Outline.qml
+internal TextContextMenu private/TextContextMenu.qml
+depends QtQuick
+

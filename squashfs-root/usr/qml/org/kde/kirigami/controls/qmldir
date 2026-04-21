@@ -1,0 +1,73 @@
+module org.kde.kirigami.controls
+linktarget KF6KirigamiControlsplugin
+plugin KirigamiControlsplugin
+classname KirigamiControlsPlugin
+typeinfo KirigamiControls.qmltypes
+depends QtQuick
+depends org.kde.kirigami.layouts
+depends org.kde.kirigami.platform
+depends org.kde.kirigami.primitives
+depends org.kde.kirigami.templates
+prefer :/qt/qml/org/kde/kirigami/controls/
+AboutItem 2.0 AboutItem.qml
+AboutPage 2.0 AboutPage.qml
+AbstractApplicationHeader 2.0 AbstractApplicationHeader.qml
+AbstractApplicationItem 2.0 AbstractApplicationItem.qml
+AbstractApplicationWindow 2.0 AbstractApplicationWindow.qml
+AbstractCard 2.0 AbstractCard.qml
+Action 2.0 Action.qml
+ActionTextField 2.0 ActionTextField.qml
+ActionToolBar 2.0 ActionToolBar.qml
+ApplicationItem 2.0 ApplicationItem.qml
+ApplicationWindow 2.0 ApplicationWindow.qml
+Card 2.0 Card.qml
+CardsLayout 2.0 CardsLayout.qml
+CardsListView 2.0 CardsListView.qml
+Chip 2.0 Chip.qml
+ContextDrawer 2.0 ContextDrawer.qml
+ContextualHelpButton 2.0 ContextualHelpButton.qml
+FlexColumn 2.0 FlexColumn.qml
+GlobalDrawer 2.0 GlobalDrawer.qml
+Heading 2.0 Heading.qml
+InlineMessage 2.0 InlineMessage.qml
+InlineViewHeader 2.0 InlineViewHeader.qml
+LinkButton 2.0 LinkButton.qml
+ListItemDragHandle 2.0 ListItemDragHandle.qml
+ListSectionHeader 2.0 ListSectionHeader.qml
+LoadingPlaceholder 2.0 LoadingPlaceholder.qml
+NavigationTabBar 2.0 NavigationTabBar.qml
+NavigationTabButton 2.0 NavigationTabButton.qml
+OverlayDrawer 2.0 OverlayDrawer.qml
+OverlaySheet 2.0 OverlaySheet.qml
+Page 2.0 Page.qml
+PagePoolAction 2.0 PagePoolAction.qml
+PageRow 2.0 PageRow.qml
+PasswordField 2.0 PasswordField.qml
+PlaceholderMessage 2.0 PlaceholderMessage.qml
+ScrollablePage 2.0 ScrollablePage.qml
+SearchField 2.0 SearchField.qml
+SelectableLabel 2.0 SelectableLabel.qml
+SwipeListItem 2.0 SwipeListItem.qml
+UrlButton 2.0 UrlButton.qml
+internal ActionMenuItem private/ActionMenuItem.qml
+internal ActionsMenu private/ActionsMenu.qml
+internal BannerImage private/BannerImage.qml
+internal ContextDrawerActionItem private/ContextDrawerActionItem.qml
+internal DefaultCardBackground private/DefaultCardBackground.qml
+internal DefaultChipBackground private/DefaultChipBackground.qml
+internal DefaultPageTitleDelegate private/DefaultPageTitleDelegate.qml
+internal EdgeShadow private/EdgeShadow.qml
+internal GlobalDrawerActionItem private/GlobalDrawerActionItem.qml
+internal MobileDialogLayer private/MobileDialogLayer.qml
+internal PassiveNotificationsManager private/PassiveNotificationsManager.qml
+internal PrivateActionToolButton private/PrivateActionToolButton.qml
+internal PullDownIndicator private/PullDownIndicator.qml
+internal SwipeItemEventFilter private/SwipeItemEventFilter.qml
+internal BreadcrumbControl private/globaltoolbar/BreadcrumbControl.qml
+internal HandleButton private/globaltoolbar/HandleButton.qml
+internal NavigationButtons private/globaltoolbar/NavigationButtons.qml
+internal PageRowGlobalToolBarStyleGroup private/globaltoolbar/PageRowGlobalToolBarStyleGroup.qml
+internal PageRowGlobalToolBarUI private/globaltoolbar/PageRowGlobalToolBarUI.qml
+internal ToolBarPageFooter private/globaltoolbar/ToolBarPageFooter.qml
+internal ToolBarPageHeader private/globaltoolbar/ToolBarPageHeader.qml
+

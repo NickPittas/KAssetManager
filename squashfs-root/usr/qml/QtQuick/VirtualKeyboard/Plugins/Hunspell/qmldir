@@ -1,0 +1,8 @@
+module QtQuick.VirtualKeyboard.Plugins.Hunspell
+linktarget Qt6::qtvkbhunspellplugin
+plugin qtvkbhunspellplugin
+classname QtQuick_VirtualKeyboard_Plugins_HunspellPlugin
+typeinfo plugins.qmltypes
+depends QtQuick.VirtualKeyboard.Core auto
+prefer :/qt-project.org/imports/QtQuick/VirtualKeyboard/Plugins/Hunspell/
+

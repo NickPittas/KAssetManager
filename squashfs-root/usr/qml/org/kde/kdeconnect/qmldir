@@ -1,0 +1,11 @@
+module org.kde.kdeconnect
+linktarget kdeconnectdeclarativeplugin
+plugin kdeconnectdeclarativeplugin
+classname org_kde_kdeconnectPlugin
+typeinfo kdeconnectdeclarativeplugin.qmltypes
+prefer :/qt/qml/org/kde/kdeconnect/
+DBusProperty 1.0 DBusProperty.qml
+PluginChecker 1.0 PluginChecker.qml
+RemoteKeyboard 1.0 RemoteKeyboard.qml
+depends QtQuick
+

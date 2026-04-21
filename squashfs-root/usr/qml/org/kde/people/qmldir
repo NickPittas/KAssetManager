@@ -1,0 +1,9 @@
+module org.kde.people
+linktarget KF6PeopleDeclarative
+plugin KF6PeopleDeclarative
+classname org_kde_peoplePlugin
+typeinfo KF6PeopleDeclarative.qmltypes
+depends QtCore
+prefer :/qt/qml/org/kde/people/
+depends QtQuick
+

@@ -1,0 +1,8 @@
+module org.kde.qqc2desktopstyle.private
+linktarget qqc2desktopstyleplugin
+optional plugin qqc2desktopstyleplugin
+classname org_kde_qqc2desktopstyle_privatePlugin
+typeinfo qqc2desktopstyleplugin.qmltypes
+depends QtQuick
+prefer :/qt/qml/org/kde/qqc2desktopstyle/private/
+

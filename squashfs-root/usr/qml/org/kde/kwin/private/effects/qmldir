@@ -1,0 +1,10 @@
+module org.kde.kwin.private.effects
+linktarget effectsplugin
+plugin effectsplugin
+classname org_kde_kwin_private_effectsPlugin
+typeinfo effectsplugin.qmltypes
+prefer :/qt/qml/org/kde/kwin/private/effects/
+WindowHeap 254.0 WindowHeap.qml
+WindowHeapDelegate 254.0 WindowHeapDelegate.qml
+depends QtQuick
+

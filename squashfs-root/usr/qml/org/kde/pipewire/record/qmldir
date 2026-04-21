@@ -1,0 +1,7 @@
+module org.kde.pipewire.record
+linktarget KPipeWireRecordplugin
+optional plugin KPipeWireRecordplugin
+classname org_kde_pipewire_recordPlugin
+typeinfo KPipeWireRecord.qmltypes
+prefer :/qt/qml/org/kde/pipewire/record/
+

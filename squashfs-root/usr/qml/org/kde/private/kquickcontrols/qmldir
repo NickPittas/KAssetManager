@@ -1,0 +1,8 @@
+module org.kde.private.kquickcontrols
+linktarget kquickcontrolsprivateplugin
+optional plugin kquickcontrolsprivateplugin
+classname org_kde_private_kquickcontrolsPlugin
+typeinfo kquickcontrolsprivate.qmltypes
+prefer :/qt/qml/org/kde/private/kquickcontrols/
+depends QtQuick
+

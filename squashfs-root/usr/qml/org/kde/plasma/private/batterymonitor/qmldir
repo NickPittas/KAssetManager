@@ -1,0 +1,7 @@
+module org.kde.plasma.private.batterymonitor
+linktarget batterymonitorplugin
+optional plugin batterymonitorplugin
+classname org_kde_plasma_private_batterymonitorPlugin
+typeinfo batterymonitorplugin.qmltypes
+prefer :/qt/qml/org/kde/plasma/private/batterymonitor/
+

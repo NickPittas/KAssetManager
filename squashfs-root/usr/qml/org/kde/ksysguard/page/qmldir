@@ -1,0 +1,29 @@
+module org.kde.ksysguard.page
+linktarget PlasmaSystemMonitorPageplugin
+optional plugin PlasmaSystemMonitorPageplugin
+classname org_kde_ksysguard_pagePlugin
+typeinfo PlasmaSystemMonitorPage.qmltypes
+depends QtCore
+depends org.kde.ksysguard.faces
+prefer :/qt/qml/org/kde/ksysguard/page/
+ColumnControl 254.0 ColumnControl.qml
+Container 254.0 Container.qml
+EditablePage 254.0 EditablePage.qml
+PageContents 254.0 PageContents.qml
+PageEditor 254.0 PageEditor.qml
+PlaceholderRectangle 254.0 PlaceholderRectangle.qml
+RowControl 254.0 RowControl.qml
+SectionControl 254.0 SectionControl.qml
+PageDialog 254.0 PageDialog.qml
+EditablePageAction 254.0 EditablePageAction.qml
+FaceControl 254.0 FaceControl.qml
+FaceConfigurationPage 254.0 FaceConfigurationPage.qml
+LoadPresetDialog 254.0 LoadPresetDialog.qml
+EditorToolBar 254.0 EditorToolBar.qml
+MoveButton 254.0 MoveButton.qml
+PageSortDialog 254.0 PageSortDialog.qml
+DialogLoader 254.0 DialogLoader.qml
+MissingSensorsDialog 254.0 MissingSensorsDialog.qml
+ConditionalLoader 254.0 ConditionalLoader.qml
+depends QtQuick
+

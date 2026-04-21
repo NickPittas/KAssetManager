@@ -1,0 +1,9 @@
+module org.kde.bluezqt
+linktarget bluezqtextensionplugin
+plugin bluezqtextensionplugin
+classname BluezQtExtensionPlugin
+typeinfo bluezqtextensionplugin.qmltypes
+depends QtCore
+prefer :/qt/qml/org/kde/bluezqt/
+DevicesModel 1.0 DevicesModel.qml
+

@@ -1,0 +1,7 @@
+module org.kde.ksysguard.process
+linktarget processcoreplugin
+optional plugin processcoreplugin
+classname org_kde_ksysguard_processPlugin
+typeinfo processcore.qmltypes
+prefer :/qt/qml/org/kde/ksysguard/process/
+

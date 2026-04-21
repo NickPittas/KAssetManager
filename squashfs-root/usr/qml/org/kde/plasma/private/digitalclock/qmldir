@@ -1,0 +1,8 @@
+module org.kde.plasma.private.digitalclock
+linktarget digitalclockplugin
+optional plugin digitalclockplugin
+classname org_kde_plasma_private_digitalclockPlugin
+typeinfo digitalclockplugin.qmltypes
+depends QtCore
+prefer :/qt/qml/org/kde/plasma/private/digitalclock/
+

@@ -1,0 +1,21 @@
+module org.kde.kirigami.templates
+linktarget KF6KirigamiTemplates
+optional plugin KirigamiTemplatesplugin
+classname org_kde_kirigami_templatesPlugin
+typeinfo KirigamiTemplates.qmltypes
+prefer :/qt/qml/org/kde/kirigami/templates/
+AbstractApplicationHeader 2.0 AbstractApplicationHeader.qml
+AbstractCard 2.0 AbstractCard.qml
+singleton AppHeaderSizeGroup 2.0 AppHeaderSizeGroup.qml
+Chip 2.0 Chip.qml
+Heading 2.0 Heading.qml
+InlineMessage 2.0 InlineMessage.qml
+LinkButton 2.0 LinkButton.qml
+NavigationTabBar 2.0 NavigationTabBar.qml
+NavigationTabButton 2.0 NavigationTabButton.qml
+OverlayDrawer 2.0 OverlayDrawer.qml
+OverlaySheet 2.0 OverlaySheet.qml
+InlineViewHeader 2.0 InlineViewHeader.qml
+internal BorderPropertiesGroup private/BorderPropertiesGroup.qml
+internal DrawerHandle private/DrawerHandle.qml
+

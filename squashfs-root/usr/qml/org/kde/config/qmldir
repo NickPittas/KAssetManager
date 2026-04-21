@@ -1,0 +1,8 @@
+module org.kde.config
+linktarget KF6ConfigQmlplugin
+optional plugin KF6ConfigQmlplugin
+classname org_kde_configPlugin
+typeinfo KF6ConfigQml.qmltypes
+depends QtQuick
+prefer :/qt/qml/org/kde/config/
+

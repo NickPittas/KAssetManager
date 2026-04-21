@@ -1,0 +1,7 @@
+module org.kde.akonadi.mime
+linktarget akonadi_mime_quick_plugin
+optional plugin akonadi_mime_quick_plugin
+classname org_kde_akonadi_mimePlugin
+typeinfo akonadi_mime_quick_plugin.qmltypes
+prefer :/qt/qml/org/kde/akonadi/mime/
+

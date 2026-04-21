@@ -1,0 +1,22 @@
+/*
+    SPDX-FileCopyrightText: 2016 Marco Martin <mart@kde.org>
+
+    SPDX-License-Identifier: LGPL-2.0-or-later
+*/
+
+import QtQuick
+import QtQuick.Templates as T
+
+/*!
+     \qmltype Container
+     \inqmlmodule org.kde.plasma.components
+     \brief A simple container whose visual styling is determined by the active Plasma theme.
+ */
+T.Container {
+    id: control
+
+    implicitWidth: Math.max(background ? background.implicitWidth : 0,
+                            (contentItem ? contentItem.implicitWidth : 0) + leftPadding + rightPadding)
+    implicitHeight: Math.max(background ? background.implicitHeight : 0,
+                             (contentItem ? contentItem.implicitHeight : 0) + topPadding + bottomPadding)
+}

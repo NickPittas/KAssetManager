@@ -1,0 +1,47 @@
+module org.kde.kirigamiaddons.formcard
+linktarget formcardplugin
+optional plugin formcardplugin
+classname org_kde_kirigamiaddons_formcardPlugin
+typeinfo formcardplugin.qmltypes
+depends org.kde.coreaddons
+depends org.kde.kirigami
+depends org.kde.kirigamiaddons.components
+depends org.kde.kirigamiaddons.dateandtime
+depends org.kde.kirigamiaddons.delegates
+prefer :/qt/qml/org/kde/kirigamiaddons/formcard/
+AboutKDE 1.0 AboutKDE.qml
+AboutKDEPage 1.0 AboutKDEPage.qml
+AboutPage 1.0 AboutPage.qml
+AbstractFormDelegate 1.0 AbstractFormDelegate.qml
+FormArrow 1.0 FormArrow.qml
+FormButtonDelegate 1.0 FormButtonDelegate.qml
+FormCard 1.0 FormCard.qml
+FormCardDialog 1.0 FormCardDialog.qml
+FormCardPage 1.0 FormCardPage.qml
+FormCheckDelegate 1.0 FormCheckDelegate.qml
+FormComboBoxDelegate 1.0 FormComboBoxDelegate.qml
+FormDateTimeDelegate 1.0 FormDateTimeDelegate.qml
+FormDelegateBackground 1.0 FormDelegateBackground.qml
+FormDelegateSeparator 1.0 FormDelegateSeparator.qml
+FormFileDelegate 1.0 FormFileDelegate.qml
+FormFolderDelegate 1.0 FormFolderDelegate.qml
+FormGridContainer 1.0 FormGridContainer.qml
+FormHeader 1.0 FormHeader.qml
+FormLinkDelegate 1.0 FormLinkDelegate.qml
+FormPasswordFieldDelegate 1.0 FormPasswordFieldDelegate.qml
+FormPlaceholderMessageDelegate 1.0 FormPlaceholderMessageDelegate.qml
+FormRadioDelegate 1.0 FormRadioDelegate.qml
+FormRadioSelectorDelegate 1.0 FormRadioSelectorDelegate.qml
+FormSectionText 1.0 FormSectionText.qml
+FormSpinBoxDelegate 1.0 FormSpinBoxDelegate.qml
+FormSwitchDelegate 1.0 FormSwitchDelegate.qml
+FormTextAreaDelegate 1.0 FormTextAreaDelegate.qml
+FormTextDelegate 1.0 FormTextDelegate.qml
+FormTextFieldDelegate 1.0 FormTextFieldDelegate.qml
+FormColorDelegate 1.0 FormColorDelegate.qml
+FormIconDelegate 1.0 FormIconDelegate.qml
+ContentItemLoader 1.0 private/ContentItemLoader.qml
+SpinButton 1.0 private/SpinButton.qml
+singleton FormCardUnits 1.0 private/FormCardUnits.qml
+depends QtQuick
+

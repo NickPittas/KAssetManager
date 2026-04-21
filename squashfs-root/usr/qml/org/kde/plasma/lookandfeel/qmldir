@@ -1,0 +1,7 @@
+module org.kde.plasma.lookandfeel
+linktarget lookandfeelqmlplugin
+optional plugin lookandfeelqmlplugin
+classname org_kde_plasma_lookandfeelPlugin
+typeinfo lookandfeelqmlplugin.qmltypes
+prefer :/qt/qml/org/kde/plasma/lookandfeel/
+

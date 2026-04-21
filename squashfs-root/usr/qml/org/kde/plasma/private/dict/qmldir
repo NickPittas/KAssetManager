@@ -1,0 +1,8 @@
+module org.kde.plasma.private.dict
+linktarget dictplugin
+plugin dictplugin
+classname org_kde_plasma_private_dictPlugin
+typeinfo dictplugin.qmltypes
+prefer :/qt/qml/org/kde/plasma/private/dict/
+depends QtQuick
+

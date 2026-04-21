@@ -1,0 +1,19 @@
+module org.kde.akonadi
+linktarget akonadi_quick_plugin
+optional plugin akonadi_quick_plugin
+classname org_kde_akonadiPlugin
+typeinfo akonadi_quick_plugin.qmltypes
+depends QtQuick
+depends QtCore
+depends org.kde.kirigami
+depends org.kde.kirigamiaddons.delegates
+depends org.kde.kirigamiaddons.formcard
+depends org.kde.kirigamiaddons.components
+depends org.kde.kitemmodels
+prefer :/qt/qml/org/kde/akonadi/
+AgentConfigurationForm 254.0 AgentConfigurationForm.qml
+CollectionComboBox 254.0 CollectionComboBox.qml
+CollectionChooserPage 254.0 CollectionChooserPage.qml
+FormCollectionComboBox 254.0 FormCollectionComboBox.qml
+TagManagerPage 254.0 TagManagerPage.qml
+

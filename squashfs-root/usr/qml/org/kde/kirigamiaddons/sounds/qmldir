@@ -1,0 +1,11 @@
+module org.kde.kirigamiaddons.sounds
+linktarget soundsplugin
+optional plugin soundsplugin
+classname org_kde_kirigamiaddons_soundsPlugin
+typeinfo soundsplugin.qmltypes
+depends org.kde.kirigami
+depends org.kde.kirigamiaddons.delegates
+prefer :/qt/qml/org/kde/kirigamiaddons/sounds/
+SoundsPicker 0.0 SoundsPicker.qml
+depends QtQuick
+

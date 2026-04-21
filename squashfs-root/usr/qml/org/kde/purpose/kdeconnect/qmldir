@@ -1,0 +1,8 @@
+module org.kde.purpose.kdeconnect
+linktarget kdeconnectQml
+optional plugin kdeconnectQml
+classname org_kde_purpose_kdeconnectPlugin
+typeinfo kdeconnectQml.qmltypes
+depends QtCore
+prefer :/qt/qml/org/kde/purpose/kdeconnect/
+

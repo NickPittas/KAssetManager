@@ -1,0 +1,8 @@
+module org.kde.plasma.private.fifteenpuzzle
+linktarget fifteenpuzzleplugin
+plugin fifteenpuzzleplugin
+classname org_kde_plasma_private_fifteenpuzzlePlugin
+typeinfo fifteenpuzzleplugin.qmltypes
+prefer :/qt/qml/org/kde/plasma/private/fifteenpuzzle/
+depends QtQuick
+

@@ -1,0 +1,8 @@
+module org.kde.plasma.workspace.trianglemousefilter
+linktarget trianglemousefilterplugin
+optional plugin trianglemousefilterplugin
+classname org_kde_plasma_workspace_trianglemousefilterPlugin
+typeinfo trianglemousefilterplugin.qmltypes
+depends QtQuick
+prefer :/qt/qml/org/kde/plasma/workspace/trianglemousefilter/
+

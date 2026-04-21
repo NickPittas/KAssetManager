@@ -1,0 +1,7 @@
+module org.kde.ki18n
+linktarget KF6I18nQmlplugin
+optional plugin KF6I18nQmlplugin
+classname org_kde_ki18nPlugin
+typeinfo KF6I18nQml.qmltypes
+prefer :/qt/qml/org/kde/ki18n/
+

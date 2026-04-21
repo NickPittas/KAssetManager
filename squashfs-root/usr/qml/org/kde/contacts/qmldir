@@ -1,0 +1,8 @@
+module org.kde.contacts
+linktarget kcontactsqml
+plugin kcontactsqml
+classname KContactsQmlPlugin
+typeinfo kcontactsqml.qmltypes
+depends QtQuick
+prefer :/qt/qml/org/kde/contacts/
+

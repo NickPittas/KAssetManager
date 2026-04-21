@@ -1,0 +1,7 @@
+module org.kde.plasma.private.alternatecalendarconfig
+linktarget plasmacalendaralternatecalendarconfig
+optional plugin plasmacalendaralternatecalendarconfig
+classname org_kde_plasma_private_alternatecalendarconfigPlugin
+typeinfo plasmacalendaralternatecalendarconfig.qmltypes
+prefer :/qt/qml/org/kde/plasma/private/alternatecalendarconfig/
+

@@ -1,0 +1,7 @@
+module org.kde.kholidays
+linktarget kholidaysdeclarativeplugin
+plugin kholidaysdeclarativeplugin
+classname org_kde_kholidaysPlugin
+typeinfo kholidaysdeclarativeplugin.qmltypes
+prefer :/qt/qml/org/kde/kholidays/
+

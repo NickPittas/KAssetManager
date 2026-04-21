@@ -1,0 +1,9 @@
+module org.kde.activities
+linktarget plasmaactivitiesextensionplugin
+optional plugin plasmaactivitiesextensionplugin
+classname org_kde_activitiesPlugin
+typeinfo plasmaactivitiesextensionplugin.qmltypes
+depends QtCore
+prefer :/qt/qml/org/kde/activities/
+depends QtQuick
+

@@ -1,0 +1,7 @@
+module org.kde.userfeedback
+linktarget KF6UserFeedbackQml
+plugin KF6UserFeedbackQml
+classname org_kde_userfeedbackPlugin
+typeinfo KF6UserFeedbackQml.qmltypes
+prefer :/qt/qml/org/kde/userfeedback/
+

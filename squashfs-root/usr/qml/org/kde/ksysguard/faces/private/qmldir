@@ -1,0 +1,7 @@
+module org.kde.ksysguard.faces.private
+linktarget SensorFacesPrivate
+optional plugin SensorFacesPrivate
+classname org_kde_ksysguard_faces_privatePlugin
+typeinfo SensorFacesPrivate.qmltypes
+prefer :/qt/qml/org/kde/ksysguard/faces/private/
+

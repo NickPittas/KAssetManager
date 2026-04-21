@@ -1,0 +1,7 @@
+module org.kde.plasma.private.profiles
+linktarget profiles_qml_plugin
+plugin profiles_qml_plugin
+classname org_kde_plasma_private_profilesPlugin
+typeinfo profiles_qml_plugin.qmltypes
+prefer :/qt/qml/org/kde/plasma/private/profiles/
+

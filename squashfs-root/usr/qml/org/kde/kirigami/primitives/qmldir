@@ -1,0 +1,12 @@
+module org.kde.kirigami.primitives
+linktarget KF6KirigamiPrimitives
+optional plugin KirigamiPrimitivesplugin
+classname org_kde_kirigami_primitivesPlugin
+typeinfo KirigamiPrimitives.qmltypes
+depends QtQuick
+depends org.kde.kirigami.platform
+prefer :/qt/qml/org/kde/kirigami/primitives/
+IconPropertiesGroup 2.0 IconPropertiesGroup.qml
+Separator 2.0 Separator.qml
+ShadowedImage 2.0 ShadowedImage.qml
+

@@ -1,0 +1,8 @@
+module org.kde.ksvg
+linktarget corebindingsplugin
+optional plugin corebindingsplugin
+classname org_kde_ksvgPlugin
+typeinfo corebindingsplugin.qmltypes
+depends QtQuick
+prefer :/qt/qml/org/kde/ksvg/
+

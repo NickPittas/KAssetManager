@@ -1,0 +1,16 @@
+module org.kde.ksysguard.faces
+linktarget SensorFacesplugin
+optional plugin SensorFacesplugin
+classname org_kde_ksysguard_facesPlugin
+typeinfo SensorFaces.qmltypes
+depends QtCore
+depends QtQuick
+depends org.kde.config
+prefer :/qt/qml/org/kde/ksysguard/faces/
+ExtendedLegend 1.0 ExtendedLegend.qml
+SensorFace 1.0 SensorFace.qml
+SensorRangeSpinBox 1.0 SensorRangeSpinBox.qml
+Choices 1.0 Choices.qml
+CompactSensorFace 1.0 CompactSensorFace.qml
+SuffixSpinBox 1.0 SuffixSpinBox.qml
+

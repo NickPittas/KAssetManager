@@ -1,0 +1,7 @@
+module org.kde.plasma.private.mpris
+linktarget kmprisplugin
+optional plugin kmprisplugin
+classname org_kde_plasma_private_mprisPlugin
+typeinfo kmpris.qmltypes
+prefer :/qt/qml/org/kde/plasma/private/mpris/
+

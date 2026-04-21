@@ -1,0 +1,7 @@
+module QtWayland.Compositor.XdgShell
+linktarget Qt6::WaylandCompositorXdgShellplugin
+optional plugin waylandcompositorxdgshellplugin
+classname QtWayland_Compositor_XdgShellPlugin
+typeinfo plugins.qmltypes
+prefer :/qt-project.org/imports/QtWayland/Compositor/XdgShell/
+

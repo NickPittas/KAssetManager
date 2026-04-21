@@ -1,0 +1,19 @@
+module org.kde.desktop.private
+linktarget org_kde_desktop_private
+optional plugin org_kde_desktop_private
+classname org_kde_desktop_privatePlugin
+typeinfo org_kde_desktop_private.qmltypes
+depends org.kde.qqc2desktopstyle.private
+prefer :/qt/qml/org/kde/desktop/private/
+CheckIndicator 1.0 CheckIndicator.qml
+DefaultListItemBackground 1.0 DefaultListItemBackground.qml
+DefaultSliderHandle 1.0 DefaultSliderHandle.qml
+DefaultToolBarBackground 1.0 DefaultToolBarBackground.qml
+FocusRect 1.0 FocusRect.qml
+singleton GlobalSonnetSettings 1.0 GlobalSonnetSettings.qml
+MobileCursor 1.0 MobileCursor.qml
+singleton MobileTextActionsToolBar 1.0 MobileTextActionsToolBar.qml
+MobileTextActionsToolBarImpl 1.0 MobileTextActionsToolBarImpl.qml
+SwitchIndicator 1.0 SwitchIndicator.qml
+singleton TextFieldContextMenu 1.0 TextFieldContextMenu.qml
+

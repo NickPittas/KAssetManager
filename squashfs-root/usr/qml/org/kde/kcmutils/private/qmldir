@@ -1,0 +1,9 @@
+module org.kde.kcmutils.private
+linktarget kcmutilsprivateqmlplugin
+optional plugin kcmutilsprivateqmlplugin
+classname org_kde_kcmutils_privatePlugin
+typeinfo kcmutilsprivateqmlplugin.qmltypes
+depends QtCore
+depends QtQuick
+prefer :/qt/qml/org/kde/kcmutils/private/
+

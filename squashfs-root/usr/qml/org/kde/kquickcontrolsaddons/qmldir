@@ -1,0 +1,8 @@
+module org.kde.kquickcontrolsaddons
+linktarget kquickcontrolsaddonsplugin
+optional plugin kquickcontrolsaddonsplugin
+classname org_kde_kquickcontrolsaddonsPlugin
+typeinfo kquickcontrolsaddonsplugin.qmltypes
+depends QtQuick
+prefer :/qt/qml/org/kde/kquickcontrolsaddons/
+

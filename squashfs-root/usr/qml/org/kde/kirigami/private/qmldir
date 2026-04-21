@@ -1,0 +1,7 @@
+module org.kde.kirigami.private
+linktarget KF6KirigamiPrivateplugin
+optional plugin KirigamiPrivateplugin
+classname org_kde_kirigami_privatePlugin
+typeinfo KirigamiPrivate.qmltypes
+prefer :/qt/qml/org/kde/kirigami/private/
+

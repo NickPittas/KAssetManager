@@ -1,0 +1,9 @@
+module org.kde.plasma.workspace.osd
+linktarget plasmashell_osd
+optional plugin plasmashell_osd
+classname org_kde_plasma_workspace_osdPlugin
+typeinfo plasmashell_osd.qmltypes
+prefer :/qt/qml/org/kde/plasma/workspace/osd/
+Osd 254.0 Osd.qml
+OsdItem 254.0 OsdItem.qml
+

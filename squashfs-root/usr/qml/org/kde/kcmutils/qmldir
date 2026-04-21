@@ -1,0 +1,25 @@
+module org.kde.kcmutils
+linktarget kcmutilsqmlplugin
+optional plugin kcmutilsqmlplugin
+classname org_kde_kcmutilsPlugin
+typeinfo kcmutilsqmlplugin.qmltypes
+depends QtQuick
+depends org.kde.kcmutils.private
+depends org.kde.config
+prefer :/qt/qml/org/kde/kcmutils/
+PluginDelegate 1.0 PluginDelegate.qml
+PluginSelector 1.0 PluginSelector.qml
+AbstractKCM 1.0 AbstractKCM.qml
+ContextualHelpButton 1.0 ContextualHelpButton.qml
+GridDelegate 1.0 GridDelegate.qml
+GridView 1.0 GridView.qml
+GridViewKCM 1.0 GridViewKCM.qml
+ScrollView 1.0 ScrollView.qml
+ScrollViewKCM 1.0 ScrollViewKCM.qml
+SettingHighlighter 1.0 SettingHighlighter.qml
+SettingStateBinding 1.0 SettingStateBinding.qml
+SimpleKCM 1.0 SimpleKCM.qml
+AboutPlugin 1.0 private/AboutPlugin.qml
+GridDelegateMenu 1.0 private/GridDelegateMenu.qml
+GridViewInternal 1.0 private/GridViewInternal.qml
+

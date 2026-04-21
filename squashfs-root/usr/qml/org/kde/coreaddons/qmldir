@@ -1,0 +1,7 @@
+module org.kde.coreaddons
+linktarget KF6::kcoreaddonsplugin
+plugin kcoreaddonsplugin
+classname KCoreAddonsPlugin
+typeinfo kcoreaddonsplugin.qmltypes
+prefer :/qt/qml/org/kde/coreaddons/
+

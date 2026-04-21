@@ -1,0 +1,9 @@
+module org.kde.graphicaleffects
+linktarget graphicaleffects
+optional plugin graphicaleffects
+classname org_kde_graphicaleffectsPlugin
+typeinfo graphicaleffects.qmltypes
+prefer :/qt/qml/org/kde/graphicaleffects/
+Lanczos 1.0 Lanczos.qml
+BadgeEffect 1.0 BadgeEffect.qml
+

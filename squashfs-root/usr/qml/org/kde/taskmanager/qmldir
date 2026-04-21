@@ -1,0 +1,9 @@
+module org.kde.taskmanager
+linktarget taskmanagerplugin
+optional plugin taskmanagerplugin
+classname org_kde_taskmanagerPlugin
+typeinfo taskmanager.qmltypes
+depends QtCore
+prefer :/qt/qml/org/kde/taskmanager/
+depends QtQuick
+

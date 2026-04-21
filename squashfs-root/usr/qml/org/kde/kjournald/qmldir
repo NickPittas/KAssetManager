@@ -1,0 +1,9 @@
+module org.kde.kjournald
+linktarget kjournaldplugin
+optional plugin kjournaldplugin
+classname org_kde_kjournaldPlugin
+typeinfo kjournald.qmltypes
+depends QtQuick
+prefer :/qt/qml/org/kde/kjournald/
+depends QtQuick
+

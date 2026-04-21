@@ -1,0 +1,9 @@
+module org.kde.prison.scanner
+linktarget prisonscannerquickplugin
+optional plugin prisonscannerquickplugin
+classname org_kde_prison_scannerPlugin
+typeinfo prisonscannerquickplugin.qmltypes
+depends QtMultimedia
+prefer :/qt/qml/org/kde/prison/scanner/
+depends QtQuick
+

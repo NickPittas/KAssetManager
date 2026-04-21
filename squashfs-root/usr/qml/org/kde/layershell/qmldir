@@ -1,0 +1,7 @@
+module org.kde.layershell
+linktarget LayerShellQtQml
+optional plugin LayerShellQtQml
+classname org_kde_layershellPlugin
+typeinfo LayerShellQtQml.qmltypes
+prefer :/qt/qml/org/kde/layershell/
+

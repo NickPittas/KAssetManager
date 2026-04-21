@@ -1,0 +1,7 @@
+module org.kde.i18n.localeData
+linktarget ki18nlocaledataqmlplugin
+plugin ki18nlocaledataqmlplugin
+classname org_kde_i18n_localeDataPlugin
+typeinfo ki18nlocaledataqmlplugin.qmltypes
+prefer :/qt/qml/org/kde/i18n/localeData/
+

@@ -1,0 +1,18 @@
+module org.kde.kirigamiaddons.tableview
+linktarget tableviewplugin
+optional plugin tableviewplugin
+classname org_kde_kirigamiaddons_tableviewPlugin
+typeinfo tableviewplugin.qmltypes
+depends org.kde.kirigami
+prefer :/qt/qml/org/kde/kirigamiaddons/tableview/
+ListTableView 1.0 ListTableView.qml
+KTableView 1.0 KTableView.qml
+HeaderComponent 1.0 HeaderComponent.qml
+AbstractHeaderComponent 1.0 private/AbstractHeaderComponent.qml
+HeaderDelegate 1.0 private/HeaderDelegate.qml
+AbstractTable 1.0 private/AbstractTable.qml
+ListCellDelegate 1.0 private/ListCellDelegate.qml
+ListRowDelegate 1.0 private/ListRowDelegate.qml
+TableCellDelegate 1.0 private/TableCellDelegate.qml
+depends QtQuick
+
