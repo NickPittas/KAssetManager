@@ -63,6 +63,15 @@ resources/ffmpeg/
 /*.AppImage
 tools/appimage/
 
+# Compiler dependency files (generated during build)
+*.d
+
+# AppImage staging / unpacked squashfs
+squashfs-root/
+
+# Session / runtime logs
+*.log
+
 B165C015_241223_R0G5.mxf.txt
 .kilocode/mcp.json
 OpenColorIO-Config-ACES-1.2/

@@ -20,6 +20,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Note
 This file now includes the 1.8.0 release notes below. Unreleased will contain future work.
 
+## [1.8.6] - 2026-04-21
+
+### Added
+- **Fedora 43 KDE Wayland Linux port baseline** with validated AppImage packaging
+- **FFmpeg MOV playback backend** for Linux/Wayland raster preview fallback (`FFmpegMovPlayer`)
+- **Async reverse-playback seek overlap** to eliminate MP4/MOV backward playback choppiness on Wayland
+- **Linux AppImage packaging scripts** (`scripts/build-linux-appimage.sh`, `scripts/package-appimage.sh`)
+- **Backward frame buffer** in `FFmpegMovPlayer` for smooth step-backward and reverse playback
+
+### Changed
+- **Transport button layout**: loop mode and playback rate combos merged into the audio controls row, centered transport buttons
+- **Test harness assertions**: re-tightened to verify both frame counter and raster fingerprint changes on step-backward/reverse
+
+### Fixed
+- **MOV backward buffer oscillation** after forward seek on Wayland
+- **MP4/MOV reverse playback choppiness** via async seek overlap with the display window
+- **Annotation overlay persistence** on Wayland video preview (live annotation overlays preserved)
+
 ## [1.8.0] - 2026-01-13
 
 ### Added

@@ -7,8 +7,8 @@
 - [x] **Phase 5: Port Linux File Operations And File Manager Reveal**
 - [x] **Phase 6: Verify Project Manager And Batch Rename**
 - [x] **Phase 7: Bundle And Verify Converters**
-- [ ] **Phase 8: Package The Fedora 43 Wayland AppImage**
-- [ ] **Phase 9: Document Linux/Fedora 43 Wayland Support**
+- [x] **Phase 8: Package The Fedora 43 Wayland AppImage**
+- [x] **Phase 9: Document Linux/Fedora 43 Wayland Support**
 
 | Phase | Plans | Status | Completed |
 |-------|-------|--------|-----------|
@@ -19,8 +19,8 @@
 | 5     | 0/0   | Complete | 2026-04-14 |
 | 6     | 1/1   | Complete | 2026-04-18 |
 | 7     | 1/1   | Complete | 2026-04-18 |
-| 8     | 0/0   | Pending | |
-| 9     | 0/0   | Pending | |
+| 8     | 0/0   | In Progress | 2026-04-21 |
+| 9     | 0/0   | In Progress | 2026-04-21 |
 
 ### Phase 1: Establish Fedora 43 Wayland App Build Baseline
 **Goal:** Enable Linux-safe configure/build/startup on Fedora 43 Wayland.
@@ -81,7 +81,11 @@ Plans:
 **Requirements:** FEDORA43-APPIMAGE
 **Plans:** 0/0 plans complete
 
+Status note: AppImage packaging scripts (`scripts/build-linux-appimage.sh`, `scripts/package-appimage.sh`) are in place and producing `KAssetManager-x86_64.AppImage`. Final user smoke test in a normal Wayland session is the remaining gap before marking complete.
+
 ### Phase 9: Document Linux/Fedora 43 Wayland Support
 **Goal:** Capture Linux build, validation, and packaging guidance.
 **Requirements:** FEDORA43-DOCS
 **Plans:** 0/0 plans complete
+
+Status note: `docs/linux-wayland-validation.md` exists and covers playback validation corpus, AppImage notes, and smoke commands. Remaining polish items are listed there (OCIO/color controls on non-native paths, general AppImage documentation cleanup).

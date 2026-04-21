@@ -75,7 +75,8 @@ signals:
     void positionChanged(qint64 positionMs);
     void durationChanged(qint64 durationMs);
     void currentFrameChanged(qint64 frameNumber);
-    void debugFramePresented(qint64 frameNumber, qint64 positionMs, qint64 pts);
+    // DEBUG: uncomment if you need per-frame diagnostics
+    // void debugFramePresented(qint64 frameNumber, qint64 positionMs, qint64 pts);
     void mediaInfoReady(const media_player::MediaInfo& info);
     void playbackStateChanged(media_player::PlaybackState state);
     void error(const QString& errorString);

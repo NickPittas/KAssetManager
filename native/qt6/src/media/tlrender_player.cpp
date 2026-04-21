@@ -12,7 +12,6 @@
 #include <QDebug>
 #include <QFileInfo>
 #include <QDir>
-#include <iostream>
 #include <QUrl>
 #include <QMap>
 #include <QMutexLocker>

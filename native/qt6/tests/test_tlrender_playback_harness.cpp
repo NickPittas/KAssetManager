@@ -550,6 +550,8 @@ void TestTLRenderPlaybackHarness::mp4StepBackwardUpdatesRasterFrame()
 
     const QByteArray fingerprintAfterStep = fingerprintImage(viewport.currentRasterFrameForTest());
     QVERIFY2(!fingerprintAfterStep.isEmpty(), "Step backward produced an empty raster frame");
+    QVERIFY2(fingerprintAfterStep != fingerprintBeforeStep,
+             "Step backward did not change the raster-presented frame");
     QVERIFY2(player.currentFrame() < frameBeforeStep,
              qPrintable(QStringLiteral("Step backward did not move to a previous frame (before=%1 after=%2)")
                             .arg(frameBeforeStep).arg(player.currentFrame())));
@@ -617,6 +619,8 @@ void TestTLRenderPlaybackHarness::mp4ReversePlaybackUpdatesRasterFrame()
 
     const QByteArray fingerprintAfterReverse = fingerprintImage(viewport.currentRasterFrameForTest());
     QVERIFY2(!fingerprintAfterReverse.isEmpty(), "Reverse playback produced an empty raster frame");
+    QVERIFY2(fingerprintAfterReverse != fingerprintBeforeReverse,
+             "Reverse playback did not change the raster-presented frame");
     QVERIFY2(player.currentFrame() < frameBeforeReverse,
              qPrintable(QStringLiteral("Reverse playback did not move to a previous frame (before=%1 after=%2)")
                             .arg(frameBeforeReverse).arg(player.currentFrame())));
@@ -669,6 +673,8 @@ void TestTLRenderPlaybackHarness::mp4SeekToPreviousFrameUpdatesRasterFrame()
 
     const QByteArray fingerprintAfterSeek = fingerprintImage(viewport.currentRasterFrameForTest());
     QVERIFY2(!fingerprintAfterSeek.isEmpty(), "Seek to previous frame produced an empty raster frame");
+    QVERIFY2(fingerprintAfterSeek != fingerprintBeforeSeek,
+             "Seek to previous frame did not change the raster-presented frame");
     QVERIFY2(player.currentFrame() < frameBeforeSeek,
              qPrintable(QStringLiteral("Seek to previous frame did not move to a previous frame (before=%1 after=%2)")
                             .arg(frameBeforeSeek).arg(player.currentFrame())));
@@ -720,6 +726,8 @@ void TestTLRenderPlaybackHarness::movStepBackwardUpdatesRasterFrame()
 
     const QByteArray fingerprintAfterStep = fingerprintImage(viewport.currentRasterFrameForTest());
     QVERIFY2(!fingerprintAfterStep.isEmpty(), "MOV step backward produced an empty raster frame");
+    QVERIFY2(fingerprintAfterStep != fingerprintBeforeStep,
+             "MOV step backward did not change the raster-presented frame");
     QVERIFY2(player.currentFrame() < frameBeforeStep,
              qPrintable(QStringLiteral("MOV step backward did not move to a previous frame (before=%1 after=%2)")
                             .arg(frameBeforeStep).arg(player.currentFrame())));
@@ -775,6 +783,8 @@ void TestTLRenderPlaybackHarness::movReversePlaybackUpdatesRasterFrame()
 
     const QByteArray fingerprintAfterReverse = fingerprintImage(viewport.currentRasterFrameForTest());
     QVERIFY2(!fingerprintAfterReverse.isEmpty(), "MOV reverse playback produced an empty raster frame");
+    QVERIFY2(fingerprintAfterReverse != fingerprintBeforeReverse,
+             "MOV reverse playback did not change the raster-presented frame");
     QVERIFY2(player.currentFrame() < frameBeforeReverse,
              qPrintable(QStringLiteral("MOV reverse playback did not move to a previous frame (before=%1 after=%2)")
                             .arg(frameBeforeReverse).arg(player.currentFrame())));
@@ -816,27 +826,31 @@ void TestTLRenderPlaybackHarness::allMovFilesStepBackwardAndReverse()
 
         const QByteArray fingerprintAfterStep = fingerprintImage(viewport.currentRasterFrameForTest());
         QVERIFY2(!fingerprintAfterStep.isEmpty(), qPrintable(QStringLiteral("MOV step backward produced an empty raster frame for %1").arg(filePath)));
+        QVERIFY2(fingerprintAfterStep != fingerprintBeforeStep,
+                 qPrintable(QStringLiteral("MOV step backward did not change the raster-presented frame for %1").arg(filePath)));
         QVERIFY2(player.currentFrame() < frameBeforeStep,
                  qPrintable(QStringLiteral("MOV step backward did not move to a previous frame for %1 (before=%2 after=%3)").arg(filePath).arg(frameBeforeStep).arg(player.currentFrame())));
 
-    player.seekToFrame(qMax<qint64>(5, player.currentFrame()));
-    player.refreshCurrentFrame();
-    // Allow tlRender to deliver a frame at the new seek position before starting reverse.
-    QTest::qWait(500);
-    QCoreApplication::processEvents(QEventLoop::AllEvents, 500);
-    const qint64 frameBeforeReverse = player.currentFrame();
+        player.seekToFrame(qMax<qint64>(5, player.currentFrame()));
+        player.refreshCurrentFrame();
+        // Allow tlRender to deliver a frame at the new seek position before starting reverse.
+        QTest::qWait(500);
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 500);
+        const qint64 frameBeforeReverse = player.currentFrame();
         const qint64 revisionBeforeReverse = viewport.rasterPresentationRevisionForTest();
         const QByteArray fingerprintBeforeReverse = fingerprintImage(viewport.currentRasterFrameForTest());
 
-    player.setPlaybackRate(-1.0);
-    player.play();
+        player.setPlaybackRate(-1.0);
+        player.play();
 
-    QTRY_VERIFY_WITH_TIMEOUT(player.currentFrame() < frameBeforeReverse, 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(player.currentFrame() < frameBeforeReverse, 5000);
         QTRY_VERIFY_WITH_TIMEOUT(viewport.rasterPresentationRevisionForTest() > revisionBeforeReverse, 5000);
         player.pause();
 
         const QByteArray fingerprintAfterReverse = fingerprintImage(viewport.currentRasterFrameForTest());
         QVERIFY2(!fingerprintAfterReverse.isEmpty(), qPrintable(QStringLiteral("MOV reverse playback produced an empty raster frame for %1").arg(filePath)));
+        QVERIFY2(fingerprintAfterReverse != fingerprintBeforeReverse,
+                 qPrintable(QStringLiteral("MOV reverse playback did not change the raster-presented frame for %1").arg(filePath)));
         QVERIFY2(player.currentFrame() < frameBeforeReverse,
                  qPrintable(QStringLiteral("MOV reverse playback did not move to a previous frame for %1 (before=%2 after=%3)").arg(filePath).arg(frameBeforeReverse).arg(player.currentFrame())));
     }

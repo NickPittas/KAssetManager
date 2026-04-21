@@ -11,7 +11,6 @@
 #include <QUrl>
 
 #include <cmath>
-#include <iostream>
 
 #if defined(HAVE_FFMPEG) && HAVE_FFMPEG
 extern "C" {
@@ -1360,9 +1359,10 @@ void FFmpegMovPlayer::presentBufferedFrame(const BufferedFrame& frame, bool emit
     const qint64 frameNumber = m_currentFrame;
     const qint64 pts = frame.pts;
     QMetaObject::invokeMethod(this,
-                              [this, emitSignals, positionMs, frameNumber, pts]() {
+                              [this, emitSignals, positionMs, frameNumber]() {
                                   emit frameUpdated();
-                                  emit debugFramePresented(frameNumber, positionMs, pts);
+                                  // DEBUG: uncomment if you need per-frame diagnostics
+                                  // emit debugFramePresented(frameNumber, positionMs, pts);
                                   if (emitSignals) {
                                       emit positionChanged(positionMs);
                                       emit currentFrameChanged(frameNumber);

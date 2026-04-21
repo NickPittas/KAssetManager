@@ -1086,15 +1086,9 @@ void PreviewOverlay::showVideo(const QString &filePath)
     // Hide alpha toggle for videos
     if (alphaCheck) alphaCheck->hide();
 
-    qDebug() << "[showVideo] Playback controls check:"
-             << "playbackControlsGroup:" << (playbackControlsGroup != nullptr)
-             << "loopModeCombo:" << (loopModeCombo != nullptr);
-    if (playbackControlsGroup) { 
+    if (playbackControlsGroup) {
         playbackControlsGroup->show();
         playbackControlsGroup->setVisible(true);
-        qDebug() << "[showVideo] playbackControlsGroup isVisible:" << playbackControlsGroup->isVisible()
-                 << "size:" << playbackControlsGroup->size()
-                 << "parent:" << playbackControlsGroup->parentWidget();
     }
 
     originalPixmap = QPixmap(); // Clear the pixmap

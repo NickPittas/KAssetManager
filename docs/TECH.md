@@ -43,11 +43,11 @@ KAsset Manager is built with **Qt 6 Widgets** (C++20) for native Windows desktop
 
 ### Media Support
 
-- **tlRender (mrv2)** - Primary backend for all video and image-sequence playback
+- **tlRender (mrv2)** - Primary backend for video and image-sequence playback
   - tlRender integration (see `tlrender_player.*`, `tlrender_widget.*`) feeds LivePreviewManager and PreviewOverlay.
   - Supports professional codecs and containers such as MP4, MOV (including ProRes 4444 and Animation), AVI, etc., via bundled FFmpeg.
 - **Qt Multimedia / Audio** - Used only for lightweight audio-only playback where appropriate.
-- **FFmpeg (external)** - Used only by the Convert dialog/tools for format conversion (not for live playback).
+- **FFmpeg (external)** - Used by the Convert dialog/tools for format conversion. On Linux/Wayland, FFmpeg is also used as the live MOV playback backend via `FFmpegMovPlayer` when the raster preview fallback is active.
 
 ### Image Support
 
@@ -368,15 +368,26 @@ CREATE INDEX idx_asset_versions_asset_id ON asset_versions(asset_id);
 ### Current
 
 - Windows 10/11 (64-bit)
+- Fedora 43 KDE Wayland (validated Linux baseline)
 
 ### Future
 
 - macOS (Qt Widgets is cross-platform)
-- Linux (Qt Widgets is cross-platform)
+- Other Linux distributions (Qt Widgets is cross-platform)
 
 ## Version History
 
-### v1.2.0 (Current)
+### v1.8.6 (Current)
+
+- Fedora 43 KDE Wayland Linux port validation and packaging:
+  - AppImage packaging support (`scripts/build-linux-appimage.sh`, `scripts/package-appimage.sh`).
+  - FFmpeg MOV playback backend for Linux/Wayland raster preview fallback.
+  - Reverse playback async seek overlap fixes for smooth MP4/MOV backward playback.
+  - Annotation overlay preservation on Wayland video preview.
+  - Transport button UI refinements: loop and speed controls merged into the audio row.
+- Bug fixes and optimizations around MOV backward buffer oscillation and choppiness.
+
+### v1.2.0
 
 - File Manager network-drive performance improvements:
   - Lightweight folder-tree icons and folder-only expansion (no file or thumbnail work until a folder is selected).
@@ -384,7 +395,7 @@ CREATE INDEX idx_asset_versions_asset_id ON asset_versions(asset_id);
 - Context-aware status bar progress:
   - Status bar progress label distinguishes "File Manager previews (visible)" from "Asset previews (visible)" while thumbnails are being generated.
 - Playback backend updates:
-  - tlRender is now the primary backend for video and image-sequence playback; FFmpeg is retained only for the Convert dialog/tools.
+  - tlRender is now the primary backend for video and image-sequence playback; FFmpeg is retained for the Convert dialog/tools and Linux MOV live playback.
 
 ### v1.1.0
 
