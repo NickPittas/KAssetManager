@@ -2154,6 +2154,30 @@ void MainWindow::setupFileManagerUi()
     fmInfoDimensions->setWordWrap(true);
     infoLayout->addWidget(fmInfoDimensions);
 
+    fmInfoVideoCodec = new QLabel("", fmInfoPanel);
+    fmInfoVideoCodec->setWordWrap(true);
+    infoLayout->addWidget(fmInfoVideoCodec);
+
+    fmInfoAudioCodec = new QLabel("", fmInfoPanel);
+    fmInfoAudioCodec->setWordWrap(true);
+    infoLayout->addWidget(fmInfoAudioCodec);
+
+    fmInfoBitrate = new QLabel("", fmInfoPanel);
+    fmInfoBitrate->setWordWrap(true);
+    infoLayout->addWidget(fmInfoBitrate);
+
+    fmInfoTimecode = new QLabel("", fmInfoPanel);
+    fmInfoTimecode->setWordWrap(true);
+    infoLayout->addWidget(fmInfoTimecode);
+
+    fmInfoCameraInfo = new QLabel("", fmInfoPanel);
+    fmInfoCameraInfo->setWordWrap(true);
+    infoLayout->addWidget(fmInfoCameraInfo);
+
+    fmInfoShotInfo = new QLabel("", fmInfoPanel);
+    fmInfoShotInfo->setWordWrap(true);
+    infoLayout->addWidget(fmInfoShotInfo);
+
     fmInfoCreated = new QLabel("", fmInfoPanel);
     fmInfoCreated->setWordWrap(true);
     infoLayout->addWidget(fmInfoCreated);
@@ -10931,6 +10955,12 @@ void MainWindow::updateFmInfoPanel()
         if (fmInfoFileSize) fmInfoFileSize->clear();
         if (fmInfoFileType) fmInfoFileType->clear();
         if (fmInfoDimensions) fmInfoDimensions->clear();
+        if (fmInfoVideoCodec) { fmInfoVideoCodec->clear(); fmInfoVideoCodec->setVisible(false); }
+        if (fmInfoAudioCodec) { fmInfoAudioCodec->clear(); fmInfoAudioCodec->setVisible(false); }
+        if (fmInfoBitrate) { fmInfoBitrate->clear(); fmInfoBitrate->setVisible(false); }
+        if (fmInfoTimecode) { fmInfoTimecode->clear(); fmInfoTimecode->setVisible(false); }
+        if (fmInfoCameraInfo) { fmInfoCameraInfo->clear(); fmInfoCameraInfo->setVisible(false); }
+        if (fmInfoShotInfo) { fmInfoShotInfo->clear(); fmInfoShotInfo->setVisible(false); }
         if (fmInfoCreated) fmInfoCreated->clear();
         if (fmInfoModified) fmInfoModified->clear();
         if (fmInfoPermissions) fmInfoPermissions->clear();
@@ -11001,17 +11031,110 @@ void MainWindow::updateFmInfoPanel()
             } else {
                 dimensionsStr = "Dimensions: Unable to read";
             }
+            // Hide video-specific metadata labels for images
+            if (fmInfoVideoCodec) { fmInfoVideoCodec->clear(); fmInfoVideoCodec->setVisible(false); }
+            if (fmInfoAudioCodec) { fmInfoAudioCodec->clear(); fmInfoAudioCodec->setVisible(false); }
+            if (fmInfoBitrate) { fmInfoBitrate->clear(); fmInfoBitrate->setVisible(false); }
+            if (fmInfoTimecode) { fmInfoTimecode->clear(); fmInfoTimecode->setVisible(false); }
+            if (fmInfoCameraInfo) { fmInfoCameraInfo->clear(); fmInfoCameraInfo->setVisible(false); }
+            if (fmInfoShotInfo) { fmInfoShotInfo->clear(); fmInfoShotInfo->setVisible(false); }
         } else {
             QStringList videoExts = {"mp4", "mov", "avi", "mkv", "wmv", "flv", "webm",
                                     "m4v", "mpg", "mpeg", "3gp", "mts", "m2ts", "mxf"};
             if (videoExts.contains(ext)) {
-                // TODO: Extract video metadata using tlRender/FFmpeg
-                // For now, just show "Video file"
-                dimensionsStr = "Video file";
+                MediaInfo::VideoMetadata meta;
+                QString metaError;
+                if (MediaInfo::probeVideoFile(filePath, meta, &metaError)) {
+                    // Dimensions
+                    if (meta.width > 0 && meta.height > 0) {
+                        dimensionsStr = QString("Dimensions: %1 x %2")
+                            .arg(meta.width).arg(meta.height);
+                        if (meta.fps > 0.0) {
+                            dimensionsStr += QString(" @ %1 fps").arg(meta.fps, 0, 'f', 2);
+                        }
+                    }
+
+                    // Video codec
+                    QString vcodec = meta.videoCodec;
+                    if (!meta.videoProfile.isEmpty()) {
+                        vcodec += " (" + meta.videoProfile + ")";
+                    }
+                    if (fmInfoVideoCodec) {
+                        fmInfoVideoCodec->setText("Video Codec: " + vcodec);
+                        fmInfoVideoCodec->setVisible(!vcodec.isEmpty());
+                    }
+
+                    // Audio codec + channels
+                    QString acodec = meta.audioCodec;
+                    if (meta.audioChannels > 0) {
+                        acodec += QString(" — %1 ch").arg(meta.audioChannels);
+                    }
+                    if (fmInfoAudioCodec) {
+                        fmInfoAudioCodec->setText("Audio: " + acodec);
+                        fmInfoAudioCodec->setVisible(!acodec.isEmpty());
+                    }
+
+                    // Bitrate (Mbps)
+                    if (meta.bitrate > 0) {
+                        double mbps = meta.bitrate / 1'000'000.0;
+                        if (fmInfoBitrate) {
+                            fmInfoBitrate->setText(QString("Bitrate: %1 Mbps").arg(mbps, 0, 'f', 2));
+                            fmInfoBitrate->setVisible(true);
+                        }
+                    } else {
+                        if (fmInfoBitrate) { fmInfoBitrate->clear(); fmInfoBitrate->setVisible(false); }
+                    }
+
+                    // Timecode
+                    if (meta.hasTimecode && !meta.timecodeStart.isEmpty()) {
+                        if (fmInfoTimecode) {
+                            fmInfoTimecode->setText("Timecode: " + meta.timecodeStart);
+                            fmInfoTimecode->setVisible(true);
+                        }
+                    } else {
+                        if (fmInfoTimecode) { fmInfoTimecode->clear(); fmInfoTimecode->setVisible(false); }
+                    }
+
+                    // Camera info
+                    QStringList cameraParts;
+                    if (!meta.cameraName.isEmpty()) cameraParts << meta.cameraName;
+                    if (!meta.cameraModel.isEmpty()) cameraParts << meta.cameraModel;
+                    if (!meta.lens.isEmpty()) cameraParts << "Lens: " + meta.lens;
+                    if (!cameraParts.isEmpty()) {
+                        if (fmInfoCameraInfo) {
+                            fmInfoCameraInfo->setText("Camera: " + cameraParts.join(" / "));
+                            fmInfoCameraInfo->setVisible(true);
+                        }
+                    } else {
+                        if (fmInfoCameraInfo) { fmInfoCameraInfo->clear(); fmInfoCameraInfo->setVisible(false); }
+                    }
+
+                    // Shot info (reel / scene / take)
+                    QStringList shotParts;
+                    if (!meta.reelName.isEmpty()) shotParts << "Reel: " + meta.reelName;
+                    if (!meta.scene.isEmpty()) shotParts << "Scene: " + meta.scene;
+                    if (!meta.take.isEmpty()) shotParts << "Take: " + meta.take;
+                    if (!shotParts.isEmpty()) {
+                        if (fmInfoShotInfo) {
+                            fmInfoShotInfo->setText(shotParts.join(" | "));
+                            fmInfoShotInfo->setVisible(true);
+                        }
+                    } else {
+                        if (fmInfoShotInfo) { fmInfoShotInfo->clear(); fmInfoShotInfo->setVisible(false); }
+                    }
+                } else {
+                    dimensionsStr = "Video file";
+                    if (fmInfoVideoCodec) { fmInfoVideoCodec->clear(); fmInfoVideoCodec->setVisible(false); }
+                    if (fmInfoAudioCodec) { fmInfoAudioCodec->clear(); fmInfoAudioCodec->setVisible(false); }
+                    if (fmInfoBitrate) { fmInfoBitrate->clear(); fmInfoBitrate->setVisible(false); }
+                    if (fmInfoTimecode) { fmInfoTimecode->clear(); fmInfoTimecode->setVisible(false); }
+                    if (fmInfoCameraInfo) { fmInfoCameraInfo->clear(); fmInfoCameraInfo->setVisible(false); }
+                    if (fmInfoShotInfo) { fmInfoShotInfo->clear(); fmInfoShotInfo->setVisible(false); }
+                }
             }
         }
 
-        fmInfoDimensions->setText(dimensionsStr);
+        if (fmInfoDimensions) fmInfoDimensions->setText(dimensionsStr);
     }
 
     // Update created date

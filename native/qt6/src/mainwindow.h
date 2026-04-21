@@ -544,6 +544,12 @@ private:
     QLabel *fmInfoFileSize = nullptr;
     QLabel *fmInfoFileType = nullptr;
     QLabel *fmInfoDimensions = nullptr;
+    QLabel *fmInfoVideoCodec = nullptr;
+    QLabel *fmInfoAudioCodec = nullptr;
+    QLabel *fmInfoBitrate = nullptr;
+    QLabel *fmInfoTimecode = nullptr;
+    QLabel *fmInfoCameraInfo = nullptr;
+    QLabel *fmInfoShotInfo = nullptr;
     QLabel *fmInfoCreated = nullptr;
     QLabel *fmInfoModified = nullptr;
     QLabel *fmInfoPermissions = nullptr;
