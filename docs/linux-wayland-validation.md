@@ -48,7 +48,9 @@ Accepted playback result policy for this port:
 
 ## AppImage Notes
 
-The current packaging path produces:
+For complete step-by-step instructions, required CMake flags, troubleshooting, and common failure modes, see: [docs/APPIMAGE_CREATION.md](../docs/APPIMAGE_CREATION.md)
+
+The packaging produces:
 
 ```text
 KAssetManager-x86_64.AppImage
@@ -60,6 +62,8 @@ Key packaging/runtime notes:
 - AppImage packaging is driven by `scripts/package-appimage.sh`
 - official `appimagetool` and `linuxdeploy` AppImages can be used locally when host packages are unavailable
 - packaged/AppImage runtime data must use a writable per-user Qt data location rather than the mounted AppImage path
+- Set `CMAKE_INSTALL_LIBDIR=lib` (Fedora defaults to `lib64` but tlRender uses `lib`)
+- Clean build directory before each AppImage build to avoid stale caches
 
 ## Smoke Commands
 
@@ -81,6 +85,8 @@ Run AppImage:
 chmod +x ./KAssetManager-x86_64.AppImage
 ./KAssetManager-x86_64.AppImage
 ```
+
+For detailed troubleshooting, see `docs/APPIMAGE_CREATION.md`.
 
 ## Known Remaining Linux Gap
 

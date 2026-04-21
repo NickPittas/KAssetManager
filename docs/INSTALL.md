@@ -79,16 +79,17 @@ Notes:
 
 ### Linux AppImage packaging
 
-Build AppDir staging:
+For detailed step-by-step instructions, troubleshooting, and common failure modes, see: [docs/APPIMAGE_CREATION.md](../docs/APPIMAGE_CREATION.md)
+
+Quick start:
 
 ```bash
+# Full build (recommended for first build)
+rm -rf /home/npittas/KAssetManager/build-linux-appimage
 ./scripts/build-linux-appimage.sh
-```
-
-Package AppImage:
-
-```bash
 ./scripts/package-appimage.sh
+
+# Result: KAssetManager-x86_64.AppImage
 ```
 
 Run AppImage:
@@ -98,11 +99,17 @@ chmod +x ./KAssetManager-x86_64.AppImage
 ./KAssetManager-x86_64.AppImage
 ```
 
+Key requirements:
+- **CMAKE_INSTALL_LIBDIR=lib**: Fedora defaults to `lib64`, but must use `lib` to match tlRender's library layout
+- **Clean build directory**: Stale caches from git worktrees can cause path issues
+- **Recreate qt.conf**: CMake's post-build deletes it; must recreate before `cmake --install`
+
 Packaging notes:
 
 - The repo now contains Linux AppImage helper scripts and packaging metadata
 - If host packages for `appimagetool` or `linuxdeploy` are unavailable, official upstream AppImage builds of those tools can be used locally
 - The packaged Linux runtime uses a writable per-user Qt data location when the executable/AppImage mount is not writable
+- Set `LINUXDEPLOY=""` if linuxdeploy-plugin-qt fails (uses qtpaths fallback)
 
 ### Linux writable data location
 
