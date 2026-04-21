@@ -1,8 +1,0 @@
-module org.kde.draganddrop
-linktarget draganddropplugin
-optional plugin draganddropplugin
-classname org_kde_draganddropPlugin
-typeinfo draganddropplugin.qmltypes
-depends QtQuick
-prefer :/qt/qml/org/kde/draganddrop/
-

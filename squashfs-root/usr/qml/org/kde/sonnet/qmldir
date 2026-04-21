@@ -1,8 +1,0 @@
-module org.kde.sonnet
-linktarget sonnetquickplugin
-optional plugin sonnetquickplugin
-classname org_kde_sonnetPlugin
-typeinfo sonnetquickplugin.qmltypes
-depends QtQuick
-prefer :/qt/qml/org/kde/sonnet/
-

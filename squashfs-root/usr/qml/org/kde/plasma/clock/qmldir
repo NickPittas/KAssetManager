@@ -1,7 +1,0 @@
-module org.kde.plasma.clock
-linktarget clockplugin
-optional plugin clockplugin
-classname org_kde_plasma_clockPlugin
-typeinfo clockplugin.qmltypes
-prefer :/qt/qml/org/kde/plasma/clock/
-

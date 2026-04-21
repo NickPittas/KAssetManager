@@ -1,9 +1,0 @@
-module org.kde.plasma.private.volume
-linktarget plasma-volume-declarative
-plugin plasma-volume-declarative
-classname org_kde_plasma_private_volumePlugin
-typeinfo plasma-volume-declarative.qmltypes
-prefer :/qt/qml/org/kde/plasma/private/volume/
-PulseObjectFilterModel 0.1 PulseObjectFilterModel.qml
-depends QtQuick
-

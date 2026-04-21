@@ -1,9 +1,0 @@
-module org.kde.plasma.wallpapers.image
-linktarget plasma_wallpaper_image
-plugin plasma_wallpaper_image
-classname ImagePlugin
-typeinfo plasma_wallpaper_image.qmltypes
-depends org.kde.taskmanager
-depends org.kde.plasma.core
-prefer :/qt/qml/org/kde/plasma/wallpapers/image/
-

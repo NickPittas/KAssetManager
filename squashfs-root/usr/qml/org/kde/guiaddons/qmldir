@@ -1,8 +1,0 @@
-module org.kde.guiaddons
-linktarget KF6::kguiaddonsqml
-plugin kguiaddonsqml
-classname KGuiAddonsPlugin
-typeinfo kguiaddonsqml.qmltypes
-depends QtQuick
-prefer :/qt/qml/org/kde/guiaddons/
-

@@ -1,7 +1,0 @@
-module org.kde.plasma.printmanager
-linktarget kcupsplugin
-optional plugin kcupsplugin
-classname org_kde_plasma_printmanagerPlugin
-typeinfo kcups.qmltypes
-prefer :/qt/qml/org/kde/plasma/printmanager/
-

@@ -1,8 +1,0 @@
-module org.kde.notificationmanager
-linktarget notificationmanagerplugin
-optional plugin notificationmanagerplugin
-classname org_kde_notificationmanagerPlugin
-typeinfo notificationmanager.qmltypes
-prefer :/qt/qml/org/kde/notificationmanager/
-depends QtQuick
-

@@ -1,7 +1,0 @@
-module org.kde.kaccounts
-linktarget kaccountsdeclarativeplugin
-plugin kaccountsdeclarativeplugin
-classname org_kde_kaccountsPlugin
-typeinfo kaccountsdeclarativeplugin.qmltypes
-prefer :/qt/qml/org/kde/kaccounts/
-

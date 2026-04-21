@@ -1,8 +1,0 @@
-module org.kde.plasma.workspace.dbus
-linktarget dbusplugin
-plugin dbusplugin
-classname DBusPlugin
-typeinfo dbusplugin.qmltypes
-depends QtQuick
-prefer :/qt/qml/org/kde/plasma/workspace/dbus/
-

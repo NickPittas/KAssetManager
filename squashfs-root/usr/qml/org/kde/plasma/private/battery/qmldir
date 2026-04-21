@@ -1,7 +1,0 @@
-module org.kde.plasma.private.battery
-linktarget batterycontrolplugin
-optional plugin batterycontrolplugin
-classname org_kde_plasma_private_batteryPlugin
-typeinfo batterycontrol.qmltypes
-prefer :/qt/qml/org/kde/plasma/private/battery/
-

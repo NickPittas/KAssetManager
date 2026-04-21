@@ -1,7 +1,0 @@
-module org.kde.plasma.emoji
-linktarget EmojierDeclarativePlugin
-optional plugin EmojierDeclarativePlugin
-classname org_kde_plasma_emojiPlugin
-typeinfo EmojierDeclarativePlugin.qmltypes
-prefer :/qt/qml/org/kde/plasma/emoji/
-

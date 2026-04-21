@@ -1,9 +1,0 @@
-module org.kde.purpose
-linktarget purposequickplugin
-optional plugin purposequickplugin
-classname org_kde_purposePlugin
-typeinfo purposequickplugin.qmltypes
-prefer :/qt/qml/org/kde/purpose/
-AlternativesView 1.0 AlternativesView.qml
-JobView 1.0 JobView.qml
-

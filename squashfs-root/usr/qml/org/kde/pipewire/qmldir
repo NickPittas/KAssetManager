@@ -1,8 +1,0 @@
-module org.kde.pipewire
-linktarget KPipeWireplugin
-optional plugin KPipeWireplugin
-classname org_kde_pipewirePlugin
-typeinfo KPipeWire.qmltypes
-depends QtQuick
-prefer :/qt/qml/org/kde/pipewire/
-

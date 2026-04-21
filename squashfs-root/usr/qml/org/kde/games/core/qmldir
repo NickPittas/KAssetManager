@@ -1,8 +1,0 @@
-module org.kde.games.core
-linktarget corebindingsplugin
-plugin corebindingsplugin
-classname org_kde_games_corePlugin
-typeinfo corebindingsplugin.qmltypes
-prefer :/qt/qml/org/kde/games/core/
-KGameItem 0.1 KGameItem.qml
-

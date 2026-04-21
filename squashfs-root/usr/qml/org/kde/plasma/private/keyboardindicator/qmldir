@@ -1,7 +1,0 @@
-module org.kde.plasma.private.keyboardindicator
-linktarget keyboardindicatorplugin
-optional plugin keyboardindicatorplugin
-classname org_kde_plasma_private_keyboardindicatorPlugin
-typeinfo keyboardindicatorplugin.qmltypes
-prefer :/qt/qml/org/kde/plasma/private/keyboardindicator/
-

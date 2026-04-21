@@ -1,8 +1,0 @@
-module org.kde.calendarcore
-linktarget kcalendarcoreqml
-plugin kcalendarcoreqml
-classname KCalendarCoreQmlPlugin
-typeinfo kcalendarcoreqml.qmltypes
-depends QtCore
-prefer :/qt/qml/org/kde/calendarcore/
-

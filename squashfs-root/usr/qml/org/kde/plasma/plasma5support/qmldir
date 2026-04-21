@@ -1,9 +1,0 @@
-module org.kde.plasma.plasma5support
-linktarget plasma5supportplugin
-optional plugin plasma5supportplugin
-classname org_kde_plasma_plasma5supportPlugin
-typeinfo plasma5supportplugin.qmltypes
-depends QtCore
-depends QtQuick
-prefer :/qt/qml/org/kde/plasma/plasma5support/
-

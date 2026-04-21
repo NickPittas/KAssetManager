@@ -1,9 +1,0 @@
-module org.kde.pkpass
-linktarget kpkpassqmlplugin
-optional plugin kpkpassqmlplugin
-classname org_kde_pkpassPlugin
-typeinfo kpkpassqmlplugin.qmltypes
-depends QtCore
-depends QtQml
-prefer :/qt/qml/org/kde/pkpass/
-

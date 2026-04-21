@@ -1,8 +1,0 @@
-module org.kde.prison
-linktarget prisonquickplugin
-optional plugin prisonquickplugin
-classname org_kde_prisonPlugin
-typeinfo prisonquickplugin.qmltypes
-depends QtQuick
-prefer :/qt/qml/org/kde/prison/
-

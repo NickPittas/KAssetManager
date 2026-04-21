@@ -1,3 +1,0 @@
-module SSO.OnlineAccounts
-plugin Accounts
-typeinfo plugin.qmltypes

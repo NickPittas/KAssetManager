@@ -1,7 +1,0 @@
-module org.kde.plasma.private.holidayevents
-linktarget holidayevents
-optional plugin holidayevents
-classname org_kde_plasma_private_holidayeventsPlugin
-typeinfo holidayevents.qmltypes
-prefer :/qt/qml/org/kde/plasma/private/holidayevents/
-

@@ -1,8 +1,0 @@
-module org.kde.plasma.private.kcm_keyboard
-linktarget kcm_keyboard_declarative
-optional plugin kcm_keyboard_declarative
-classname org_kde_plasma_private_kcm_keyboardPlugin
-typeinfo kcm_keyboard_declarative.qmltypes
-depends QtCore
-prefer :/qt/qml/org/kde/plasma/private/kcm_keyboard/
-
