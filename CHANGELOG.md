@@ -20,6 +20,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Note
 This file now includes the 1.8.0 release notes below. Unreleased will contain future work.
 
+## [2.0] - 2026-05-26
+
+### Added
+- **Final Linux AppImage release artifact**: `KAssetManager-2.0-x86_64.AppImage` for the Fedora 43 KDE Wayland validated baseline.
+
+### Changed
+- **Linux video preview status**: playback, timeline scrubbing, hover scrubbing, and thumbnails are working in the current AppImage workflow.
+- **AppImage thumbnail extraction**: video thumbnails use external `/usr/bin/ffmpeg` extraction for robust process isolation in packaged Linux runs.
+
+### Fixed
+- **Wayland/tlRender raster video color** now matches VLC/ffmpeg thumbnails by correcting YUV chroma scaling.
+
 ## [1.8.6] - 2026-04-21
 
 ### Added

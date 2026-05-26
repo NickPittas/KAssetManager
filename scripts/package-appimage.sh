@@ -8,7 +8,16 @@ usr_dir="$appdir_root/usr"
 linux_packaging_dir="$repo_root/native/qt6/packaging/linux"
 desktop_file="$linux_packaging_dir/kassetmanager.desktop"
 icon_file="$repo_root/icon.png"
-appimage_name="${APPIMAGE_NAME:-KAssetManager-$(uname -m).AppImage}"
+cmake_file="$repo_root/native/qt6/CMakeLists.txt"
+arch="$(uname -m)"
+app_version="$(sed -nE 's/^[[:space:]]*project\([[:space:]]*KAssetManagerQt[[:space:]]+VERSION[[:space:]]+([^[:space:])]+).*$/\1/p' "$cmake_file" 2>/dev/null | head -n 1 || true)"
+if [[ -n "${APPIMAGE_NAME:-}" ]]; then
+  appimage_name="$APPIMAGE_NAME"
+elif [[ -n "$app_version" ]]; then
+  appimage_name="KAssetManager-$app_version-$arch.AppImage"
+else
+  appimage_name="KAssetManager-$arch.AppImage"
+fi
 
 prepend_path() {
   var_name="$1"

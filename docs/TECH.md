@@ -47,7 +47,7 @@ KAsset Manager is built with **Qt 6 Widgets** (C++20) for native Windows desktop
   - tlRender integration (see `tlrender_player.*`, `tlrender_widget.*`) feeds LivePreviewManager and PreviewOverlay.
   - Supports professional codecs and containers such as MP4, MOV (including ProRes 4444 and Animation), AVI, etc., via bundled FFmpeg.
 - **Qt Multimedia / Audio** - Used only for lightweight audio-only playback where appropriate.
-- **FFmpeg (external)** - Used by the Convert dialog/tools for format conversion. On Linux/Wayland, FFmpeg is also used as the live MOV playback backend via `FFmpegMovPlayer` when the raster preview fallback is active.
+- **FFmpeg (external)** - Used by the Convert dialog/tools for format conversion. On Linux/AppImage, external `/usr/bin/ffmpeg` is used for robust video thumbnail extraction; Linux/Wayland MOV playback can also use `FFmpegMovPlayer` when the raster preview fallback is active.
 
 ### Image Support
 
@@ -285,11 +285,9 @@ CREATE INDEX idx_asset_versions_asset_id ON asset_versions(asset_id);
    - Layer support for PSD files
    - HDR image display
 
-2. **Video Playback**
-   - Full-screen video player
-   - Frame-by-frame navigation
-   - Timeline scrubbing
-   - Multiple codec support
+2. **Video Playback Enhancements**
+   - Current playback, frame-by-frame navigation, timeline scrubbing, hover scrubbing, and thumbnails are working
+   - Future work can expand codec/platform coverage beyond the validated baseline
 
 3. **Metadata Editing**
    - EXIF/XMP/IPTC editing
@@ -377,7 +375,15 @@ CREATE INDEX idx_asset_versions_asset_id ON asset_versions(asset_id);
 
 ## Version History
 
-### v1.8.6 (Current)
+### v2.0 (Current)
+
+- Fedora 43 KDE Wayland Linux/AppImage release baseline:
+  - Final AppImage filename: `KAssetManager-2.0-x86_64.AppImage`.
+  - Video playback, timeline scrubbing, hover scrubbing, and thumbnails are working.
+  - AppImage video thumbnails use external `/usr/bin/ffmpeg` extraction for robust process isolation.
+  - Live Wayland/tlRender raster video color matches VLC/ffmpeg thumbnails after corrected YUV chroma scaling.
+
+### v1.8.6
 
 - Fedora 43 KDE Wayland Linux port validation and packaging:
   - AppImage packaging support (`scripts/build-linux-appimage.sh`, `scripts/package-appimage.sh`).

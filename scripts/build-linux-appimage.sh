@@ -14,6 +14,7 @@ cmake_args=(
   -G "$generator"
   -DBUILD_APP=ON
   -DBUILD_TESTS=OFF
+  -DCMAKE_INSTALL_LIBDIR=lib
 )
 
 if [[ "$generator" == "Ninja" ]]; then

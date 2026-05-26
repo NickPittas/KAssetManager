@@ -32,6 +32,15 @@ constexpr int kSeqUpperSearchMaxDoublings = 32;
 constexpr qint64 kSeqUpperSearchHardCap = 100000000; // 100M
 constexpr int kDecodeSafetyIterMax = 256;
 
+// FFmpeg/tlRender thumbnail extraction has shown heap corruption when many video
+// thumbnails are decoded concurrently from grid view. Keep video thumbnail decode
+// serialized; image/sequence thumbnail work remains parallel.
+QMutex& videoThumbnailDecodeMutex()
+{
+    static QMutex mutex;
+    return mutex;
+}
+
 constexpr qreal kDefaultPosterPosition = 0.05; // pick early frame for motion clips
 constexpr int kSequenceMetaTtlMs = 30000;
 
@@ -786,6 +795,8 @@ QImage LivePreviewManager::loadVideoFrame(const Request& request, QString& error
             durationMs = s_durationCache[request.filePath];
         }
     }
+
+    QMutexLocker videoDecodeLocker(&videoThumbnailDecodeMutex());
 
     if (durationMs == 0) {
         durationMs = TLRenderPlayer::queryDuration(request.filePath);

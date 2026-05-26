@@ -4,7 +4,7 @@ This guide documents the complete process for creating a working AppImage of KAs
 
 ## Overview
 
-AppImage packaging bundles the application with its dependencies into a single executable file that runs on most Linux distributions. The process involves:
+AppImage packaging bundles the application with its dependencies into a single executable file that runs on most Linux distributions. The current Fedora 43 KDE Wayland baseline has working video playback, timeline scrubbing, hover scrubbing, thumbnails, and live Wayland/tlRender raster video color matching VLC/ffmpeg thumbnails after corrected YUV chroma scaling. AppImage video thumbnails use external `/usr/bin/ffmpeg` extraction for robust process isolation. The process involves:
 
 1. Building the application with proper CMake configuration
 2. Installing to a staging directory (AppDir)
@@ -77,16 +77,9 @@ ninja -j$(nproc) -C /home/npittas/KAssetManager/build-linux-appimage
 
 This creates the executable at `build-linux-appimage/kassetmanagerqt`
 
-### Step 4: Prepare for Installation
+### Step 4: Install to AppDir
 
-CMake's post-build step deletes `qt.conf` from the build tree (to prevent breaking local runs). You must recreate it before installation, or the install step fails with "file INSTALL cannot find qt.conf".
-
-```bash
-# Recreate qt.conf in the build tree
-printf '[Paths]\nPlugins=../plugins\n' > /home/npittas/KAssetManager/build-linux-appimage/qt.conf
-```
-
-### Step 5: Install to AppDir
+The build helper installs directly into the AppDir staging tree. The installed executable receives the package-layout `qt.conf` automatically; do not place that file beside the build-tree executable used for local development runs.
 
 ```bash
 cmake --install /home/npittas/KAssetManager/build-linux-appimage \
@@ -99,7 +92,7 @@ This creates the AppDir structure:
 - `AppDir/usr/plugins/` (Qt plugins)
 - `AppDir/usr/qml/` (Qt QML files, if needed)
 
-### Step 6: Create the AppImage
+### Step 5: Create the AppImage
 
 There are two approaches:
 
@@ -131,18 +124,17 @@ export APPIMAGETOOL="$PWD/tools/appimage/appimagetool-x86_64.AppImage"
 export LINUXDEPLOY=""  # Disable linuxdeploy
 export LINUXDEPLOY_PLUGIN_QT=""  # Disable plugin
 export NO_STRIP=1  # Avoid ELF format issues
-export APPIMAGE_NAME="KAssetManager-1.8.6-x86_64.AppImage"
 
 bash scripts/package-appimage.sh
 ```
 
-### Step 7: Verify the AppImage
+### Step 6: Verify the AppImage
 
 ```bash
 # Extract and test (doesn't require display)
 cd /tmp
 rm -rf appimage-test &>/dev/null
-/home/npittas/KAssetManager/KAssetManager-1.8.6-x86_64.AppImage --appimage-extract
+/home/npittas/KAssetManager/KAssetManager-2.0-x86_64.AppImage --appimage-extract
 
 # Test with offscreen platform (no display needed)
 cd squashfs-root/usr/bin
@@ -158,7 +150,7 @@ QT_QPA_PLATFORM=offscreen timeout 5 ./kassetmanagerqt 2>&1
 | Symptom | Cause | Fix |
 |--------|-------|-----|
 | **Segfault (Exit 139)** | RUNPATH points to `lib64` but libraries in `lib/` | Add `-DCMAKE_INSTALL_LIBDIR=lib` to cmake |
-| **"file INSTALL cannot find qt.conf"** | Post-build deleted qt.conf | Recreate qt.conf before `cmake --install` |
+| **"file INSTALL cannot find qt.conf"** | Outdated build files from older CMake packaging logic | Reconfigure with the current branch and rerun `scripts/build-linux-appimage.sh` |
 | **linuxdeploy-plugin-qt: "Failed to run plugin"** | linuxdeploy can't query qmake | Set `LINUXDEPLOY=""` to use fallback |
 | **Incompatible library versions bundled** | Multiple FFmpeg versions (.61, .62, .59) | Remove duplicates before packaging |
 | **Stales CMake cache** | FFmpeg_CFLAGS points to `.worktrees/` | Wipe build directory and reconfigure |
@@ -204,7 +196,7 @@ Handles AppImage creation with:
 ## Final AppImage Location
 
 After successful build:
-- **Main AppImage**: `/home/npittas/KAssetManager/KAssetManager-1.8.6-x86_64.AppImage`
+- **Main AppImage**: `/home/npittas/KAssetManager/KAssetManager-2.0-x86_64.AppImage`
 
 This file is ready to distribute and run on most Linux distributions.
 
@@ -214,13 +206,13 @@ To test the AppImage on different systems:
 
 ```bash
 # Make executable
-chmod +x KAssetManager-1.8.6-x86_64.AppImage
+chmod +x KAssetManager-2.0-x86_64.AppImage
 
 # Run normally
-./KAssetManager-1.8.6-x86_64.AppImage
+./KAssetManager-2.0-x86_64.AppImage
 
 # Debug mode
-./KAssetManager-1.8.6-x86_64.AppImage --appimage-extract-and-run
+./KAssetManager-2.0-x86_64.AppImage --appimage-extract-and-run
 ```
 
 ## Environment Variables
@@ -229,7 +221,7 @@ chmod +x KAssetManager-1.8.6-x86_64.AppImage
 - `LINUXDEPLOY`: Path to linuxdeploy binary (set to empty to use fallback)
 - `LINUXDEPLOY_PLUGIN_QT`: Path to Qt plugin (set to empty to use fallback)
 - `NO_STRIP`: Set to `1` to skip library stripping
-- `APPIMAGE_NAME`: Output filename (default: `KAssetManager-$(uname -m).AppImage`)
+- `APPIMAGE_NAME`: Optional output filename override (default derives the project version, e.g. `KAssetManager-2.0-$(uname -m).AppImage`)
 
 ## See Also
 

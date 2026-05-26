@@ -1142,11 +1142,9 @@ void PreviewOverlay::onSliderMoved(int position)
         return;
     }
 
+    m_player->seek(position);
     const double fps = detectedFps > 0.0 ? detectedFps : 24.0;
-    const qint64 targetFrame = qMax<qint64>(0, qRound64((position / 1000.0) * fps));
-    m_player->seekToFrame(targetFrame);
-    m_player->refreshCurrentFrame();
-    lastKnownVideoFrame = static_cast<int>(targetFrame);
+    lastKnownVideoFrame = static_cast<int>(qMax<qint64>(0, qRound64((position / 1000.0) * fps)));
 
     // Update timecode immediately during scrubbing
     lastKnownPosition = position;
@@ -1220,13 +1218,11 @@ void PreviewOverlay::onSliderReleased()
         userSeeking = false;
         return;
     }
-    const double fps = detectedFps > 0.0 ? detectedFps : 24.0;
-    const qint64 targetFrame = qMax<qint64>(0, qRound64((pos / 1000.0) * fps));
-    m_player->seekToFrame(targetFrame);
-    m_player->refreshCurrentFrame();
+    m_player->seek(pos);
     
     // Calculate and explicitly track the frame number we seeked to
-    lastKnownVideoFrame = static_cast<int>(targetFrame);
+    const double fps = detectedFps > 0.0 ? detectedFps : 24.0;
+    lastKnownVideoFrame = static_cast<int>(qMax<qint64>(0, qRound64((pos / 1000.0) * fps)));
     qDebug() << "[PreviewOverlay] Seek to position" << pos << "ms - explicitly set frame to:" << lastKnownVideoFrame;
     
     // Update lastKnownPosition immediately for timecode display

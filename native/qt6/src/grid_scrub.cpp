@@ -489,10 +489,6 @@ void GridScrubController::beginScrub()
         return;
     }
     m_scrubActive = true;
-    if (m_view && m_view->viewport() && !m_mouseGrabbed && !PlatformSession::isWayland()) {
-        m_view->viewport()->grabMouse();
-        m_mouseGrabbed = true;
-    }
 }
 
 void GridScrubController::endScrub()
@@ -501,8 +497,5 @@ void GridScrubController::endScrub()
         return;
     }
     m_scrubActive = false;
-    if (m_view && m_view->viewport() && m_mouseGrabbed) {
-        m_view->viewport()->releaseMouse();
-        m_mouseGrabbed = false;
-    }
+    m_mouseGrabbed = false;
 }

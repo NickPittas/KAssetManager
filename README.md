@@ -8,9 +8,9 @@ KAsset Manager is a native Qt 6 desktop application that provides a professional
 
 Current platform status:
 
-- Windows remains the primary packaged platform
+- Windows remains a supported packaged platform
 - Fedora 43 KDE Wayland is the current validated Linux baseline
-- Linux packaging currently targets AppImage first
+- Linux packaging targets AppImage; current release artifact is `KAssetManager-2.0-x86_64.AppImage`
 
 ### Key Features
 
@@ -51,10 +51,11 @@ Current platform status:
 
 - **Full-Screen Preview** - View images, videos, and sequences
 - **Image Zoom & Pan** - Inspect images in detail
-- **Video Playback** - Play videos with timeline and volume controls
+- **Video Playback** - Play videos with timeline, volume controls, frame stepping, and scrubbing
 - **Image Sequences** - Automatic detection and playback at 24fps
 - **HDR/EXR Support** - Color space selection (Linear, sRGB, Rec.709)
-- **Hover Scrubbing** - Hold Ctrl over grid cards to scrub videos and image sequences
+- **Hover Scrubbing and Thumbnails** - Hold Ctrl over grid cards to scrub videos and image sequences; AppImage video thumbnails use external `/usr/bin/ffmpeg` extraction for robust process isolation
+- **Wayland Color Match** - Live Wayland/tlRender raster video now matches VLC/ffmpeg thumbnails after corrected YUV chroma scaling
 - **Synchronized Navigation** - Arrow keys navigate between assets in full-screen preview while automatically highlighting the current asset in the background grid/list
 - **Focus Restoration** - When closing full-size preview, selection and keyboard focus return to the last previewed item so you can continue navigating with arrow keys instantly
 
@@ -71,7 +72,7 @@ Current platform status:
 
 #### 🚀 **Performance**
 
-- **Live Preview Streaming** - tlRender (mrv2) for video/sequences, OpenImageIO for all still images with in-memory caching
+- **Live Preview Streaming** - tlRender (mrv2) for video/sequences, OpenImageIO for all still images with in-memory caching; playback, scrubbing, and thumbnails are working on the Fedora AppImage baseline
 - **Smart Caching** - LRU pixmap cache (~512MB) keeps recent frames warm
 - **Database Indexes** - Optimized queries for large libraries
 - **Lazy Loading** - Decode only when cards enter the viewport

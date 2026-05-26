@@ -19,6 +19,8 @@
 #include <QElapsedTimer>
 #include <QImage>
 #include <QSize>
+#include <QProcess>
+#include <QProcessEnvironment>
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -144,7 +146,7 @@ QSize fittedTargetSize(const QSize& sourceSize, const QSize& targetSize)
 }
 
 template<typename Sample>
-QImage planarYuv422ToQImage(const std::shared_ptr<ftk::Image>& image, const QSize& targetSize = QSize())
+QImage planarYuv422ToQImage(const std::shared_ptr<ftk::Image>& image, const QSize& = QSize())
 {
     if (!image || !image->isValid()) {
         return {};
@@ -187,32 +189,28 @@ QImage planarYuv422ToQImage(const std::shared_ptr<ftk::Image>& image, const QSiz
     const float yOffset = legalRange ? (16.0f / 255.0f) : 0.0f;
     const float yScale = legalRange ? (255.0f / 219.0f) : 1.0f;
     const float uvOffset = 0.5f;
-    const float uvScale = legalRange ? (255.0f / 224.0f) * 2.0f : 2.0f;
+    // RGB coefficients below already include the 2x centered-chroma expansion.
+    const float uvScale = legalRange ? (255.0f / 224.0f) : 1.0f;
     const float rFactor = 2.0f * (1.0f - coefficients.kr);
     const float bFactor = 2.0f * (1.0f - coefficients.kb);
     const float gUFactor = 2.0f * coefficients.kb * (1.0f - coefficients.kb) / kg;
     const float gVFactor = 2.0f * coefficients.kr * (1.0f - coefficients.kr) / kg;
 
-    const QSize outputSize = fittedTargetSize(QSize(width, height), targetSize);
-    const int outputWidth = outputSize.width();
-    const int outputHeight = outputSize.height();
-    QImage out(outputWidth, outputHeight, QImage::Format_RGB32);
+    QImage out(width, height, QImage::Format_RGB32);
     if (out.isNull()) {
         return {};
     }
 
-    for (int y = 0; y < outputHeight; ++y) {
-        const int srcY = std::min(height - 1, (y * height) / outputHeight);
-        const auto* yRow = reinterpret_cast<const Sample*>(base + yStride * static_cast<size_t>(srcY));
-        const auto* uRow = reinterpret_cast<const Sample*>(uBase + uvStride * static_cast<size_t>(srcY));
-        const auto* vRow = reinterpret_cast<const Sample*>(vBase + uvStride * static_cast<size_t>(srcY));
+    for (int y = 0; y < height; ++y) {
+        const auto* yRow = reinterpret_cast<const Sample*>(base + yStride * static_cast<size_t>(y));
+        const auto* uRow = reinterpret_cast<const Sample*>(uBase + uvStride * static_cast<size_t>(y));
+        const auto* vRow = reinterpret_cast<const Sample*>(vBase + uvStride * static_cast<size_t>(y));
         QRgb* dst = reinterpret_cast<QRgb*>(out.scanLine(y));
 
-        for (int x = 0; x < outputWidth; ++x) {
-            const int srcX = std::min(width - 1, (x * width) / outputWidth);
-            const float ySample = clampUnit((static_cast<float>(yRow[srcX]) * invMaxValue - yOffset) * yScale);
-            const float uSample = (static_cast<float>(uRow[srcX / 2]) * invMaxValue - uvOffset) * uvScale;
-            const float vSample = (static_cast<float>(vRow[srcX / 2]) * invMaxValue - uvOffset) * uvScale;
+        for (int x = 0; x < width; ++x) {
+            const float ySample = clampUnit((static_cast<float>(yRow[x]) * invMaxValue - yOffset) * yScale);
+            const float uSample = (static_cast<float>(uRow[x / 2]) * invMaxValue - uvOffset) * uvScale;
+            const float vSample = (static_cast<float>(vRow[x / 2]) * invMaxValue - uvOffset) * uvScale;
 
             const float r = clampUnit(ySample + rFactor * vSample);
             const float g = clampUnit(ySample - gUFactor * uSample - gVFactor * vSample);
@@ -229,7 +227,7 @@ QImage planarYuv422ToQImage(const std::shared_ptr<ftk::Image>& image, const QSiz
 }
 
 template<typename Sample>
-QImage planarYuv420ToQImage(const std::shared_ptr<ftk::Image>& image, const QSize& targetSize = QSize())
+QImage planarYuv420ToQImage(const std::shared_ptr<ftk::Image>& image, const QSize& = QSize())
 {
     if (!image || !image->isValid()) {
         return {};
@@ -273,32 +271,28 @@ QImage planarYuv420ToQImage(const std::shared_ptr<ftk::Image>& image, const QSiz
     const float yOffset = legalRange ? (16.0f / 255.0f) : 0.0f;
     const float yScale = legalRange ? (255.0f / 219.0f) : 1.0f;
     const float uvOffset = 0.5f;
-    const float uvScale = legalRange ? (255.0f / 224.0f) * 2.0f : 2.0f;
+    // RGB coefficients below already include the 2x centered-chroma expansion.
+    const float uvScale = legalRange ? (255.0f / 224.0f) : 1.0f;
     const float rFactor = 2.0f * (1.0f - coefficients.kr);
     const float bFactor = 2.0f * (1.0f - coefficients.kb);
     const float gUFactor = 2.0f * coefficients.kb * (1.0f - coefficients.kb) / kg;
     const float gVFactor = 2.0f * coefficients.kr * (1.0f - coefficients.kr) / kg;
 
-    const QSize outputSize = fittedTargetSize(QSize(width, height), targetSize);
-    const int outputWidth = outputSize.width();
-    const int outputHeight = outputSize.height();
-    QImage out(outputWidth, outputHeight, QImage::Format_RGB32);
+    QImage out(width, height, QImage::Format_RGB32);
     if (out.isNull()) {
         return {};
     }
 
-    for (int y = 0; y < outputHeight; ++y) {
-        const int srcY = std::min(height - 1, (y * height) / outputHeight);
-        const auto* yRow = reinterpret_cast<const Sample*>(base + yStride * static_cast<size_t>(srcY));
-        const auto* uRow = reinterpret_cast<const Sample*>(uBase + uvStride * static_cast<size_t>(srcY / 2));
-        const auto* vRow = reinterpret_cast<const Sample*>(vBase + uvStride * static_cast<size_t>(srcY / 2));
+    for (int y = 0; y < height; ++y) {
+        const auto* yRow = reinterpret_cast<const Sample*>(base + yStride * static_cast<size_t>(y));
+        const auto* uRow = reinterpret_cast<const Sample*>(uBase + uvStride * static_cast<size_t>(y / 2));
+        const auto* vRow = reinterpret_cast<const Sample*>(vBase + uvStride * static_cast<size_t>(y / 2));
         QRgb* dst = reinterpret_cast<QRgb*>(out.scanLine(y));
 
-        for (int x = 0; x < outputWidth; ++x) {
-            const int srcX = std::min(width - 1, (x * width) / outputWidth);
-            const float ySample = clampUnit((static_cast<float>(yRow[srcX]) * invMaxValue - yOffset) * yScale);
-            const float uSample = (static_cast<float>(uRow[srcX / 2]) * invMaxValue - uvOffset) * uvScale;
-            const float vSample = (static_cast<float>(vRow[srcX / 2]) * invMaxValue - uvOffset) * uvScale;
+        for (int x = 0; x < width; ++x) {
+            const float ySample = clampUnit((static_cast<float>(yRow[x]) * invMaxValue - yOffset) * yScale);
+            const float uSample = (static_cast<float>(uRow[x / 2]) * invMaxValue - uvOffset) * uvScale;
+            const float vSample = (static_cast<float>(vRow[x / 2]) * invMaxValue - uvOffset) * uvScale;
 
             const float r = clampUnit(ySample + rFactor * vSample);
             const float g = clampUnit(ySample - gUFactor * uSample - gVFactor * vSample);
@@ -1001,6 +995,14 @@ void TLRenderPlayer::stop()
 
 void TLRenderPlayer::togglePlayback()
 {
+    if (m_ffmpegMovPlayer && m_ffmpegMovPlayer->hasMedia()) {
+        if (m_playbackState == PlaybackState::Playing) {
+            pause();
+        } else {
+            play();
+        }
+        return;
+    }
 #ifdef HAVE_TLRENDER
     if (!m_player) return;
     
@@ -1026,11 +1028,6 @@ void TLRenderPlayer::seek(qint64 positionMs)
     if (!m_player) return;
 
     stopManualReversePlayback();
-
-    {
-        QMutexLocker locker(&m_mutex);
-        m_cachedVideoFrames.clear();
-    }
 
     const auto& timeRange = m_player->getTimeRange();
     double rate = timeRange.duration().rate();
@@ -1063,11 +1060,6 @@ void TLRenderPlayer::seekToFrame(qint64 frameNumber)
     if (!m_player) return;
 
     stopManualReversePlayback();
-
-    {
-        QMutexLocker locker(&m_mutex);
-        m_cachedVideoFrames.clear();
-    }
 
     const auto& timeRange = m_player->getTimeRange();
     double rate = timeRange.duration().rate();
@@ -1582,182 +1574,58 @@ void TLRenderPlayer::resetFrameAcquisitionStatsForTest()
 
 QImage TLRenderPlayer::extractThumbnail(const QString& filePath, const QSize& targetSize, qint64 positionMs)
 {
-#if defined(HAVE_FFMPEG) && HAVE_FFMPEG
-    // Reduce FFmpeg logging noise
-    static bool logLevelSet = false;
-    if (!logLevelSet) {
-        av_log_set_level(AV_LOG_ERROR);
-        logLevelSet = true;
-    }
-
     if (filePath.isEmpty()) {
         return {};
     }
 
-    AVFormatContext* fmtCtx = nullptr;
-    QByteArray localPath = QFile::encodeName(filePath);
-    int ret = avformat_open_input(&fmtCtx, localPath.constData(), nullptr, nullptr);
-    if (ret < 0 || !fmtCtx) {
+    // Keep thumbnail generation out of the app process. The in-process FFmpeg
+    // decode + swscale + QImage conversion path reproducibly corrupts heap
+    // memory for the Robotics MP4s during File Manager grid/side previews.
+    // ffmpeg CLI isolates decoder crashes/corruption from the UI process while
+    // preserving video thumbnails, side preview posters, and scrubbing requests.
+    QProcess ffmpeg;
+    QStringList args;
+    args << QStringLiteral("-v") << QStringLiteral("error");
+    if (positionMs > 0) {
+        args << QStringLiteral("-ss") << QString::number(positionMs / 1000.0, 'f', 3);
+    }
+    args << QStringLiteral("-i") << filePath
+         << QStringLiteral("-frames:v") << QStringLiteral("1")
+         << QStringLiteral("-f") << QStringLiteral("image2pipe")
+         << QStringLiteral("-vcodec") << QStringLiteral("png")
+         << QStringLiteral("pipe:1");
+
+    QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+    env.remove(QStringLiteral("LD_LIBRARY_PATH"));
+    ffmpeg.setProcessEnvironment(env);
+    ffmpeg.start(QStringLiteral("/usr/bin/ffmpeg"), args, QIODevice::ReadOnly);
+    if (!ffmpeg.waitForStarted(3000)) {
+        qWarning() << "[TLRenderPlayer] ffmpeg thumbnail process failed to start" << filePath;
+        return {};
+    }
+    if (!ffmpeg.waitForFinished(15000)) {
+        ffmpeg.kill();
+        ffmpeg.waitForFinished(1000);
+        qWarning() << "[TLRenderPlayer] ffmpeg thumbnail process timed out" << filePath;
+        return {};
+    }
+    if (ffmpeg.exitStatus() != QProcess::NormalExit || ffmpeg.exitCode() != 0) {
+        qWarning() << "[TLRenderPlayer] ffmpeg thumbnail process failed"
+                   << filePath << ffmpeg.readAllStandardError();
         return {};
     }
 
-    ret = avformat_find_stream_info(fmtCtx, nullptr);
-    if (ret < 0) {
-        avformat_close_input(&fmtCtx);
+    QImage image;
+    if (!image.loadFromData(ffmpeg.readAllStandardOutput(), "PNG")) {
+        qWarning() << "[TLRenderPlayer] Failed to decode ffmpeg thumbnail PNG" << filePath;
         return {};
     }
 
-    const int vIdx = av_find_best_stream(fmtCtx, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
-    if (vIdx < 0) {
-        avformat_close_input(&fmtCtx);
-        return {};
+    if (!targetSize.isEmpty()) {
+        image = image.scaled(targetSize, Qt::KeepAspectRatio, Qt::FastTransformation);
     }
-
-    AVStream* vs = fmtCtx->streams[vIdx];
-    if (!vs || !vs->codecpar) {
-        avformat_close_input(&fmtCtx);
-        return {};
-    }
-
-    const AVCodec* codec = avcodec_find_decoder(vs->codecpar->codec_id);
-    if (!codec) {
-        avformat_close_input(&fmtCtx);
-        return {};
-    }
-
-    AVCodecContext* decCtx = avcodec_alloc_context3(codec);
-    if (!decCtx) {
-        avformat_close_input(&fmtCtx);
-        return {};
-    }
-
-    ret = avcodec_parameters_to_context(decCtx, vs->codecpar);
-    if (ret < 0) {
-        avcodec_free_context(&decCtx);
-        avformat_close_input(&fmtCtx);
-        return {};
-    }
-
-    ret = avcodec_open2(decCtx, codec, nullptr);
-    if (ret < 0) {
-        avcodec_free_context(&decCtx);
-        avformat_close_input(&fmtCtx);
-        return {};
-    }
-
-    // Seek to requested position.
-    // Convert ms -> stream time_base.
-    const double targetSeconds = qMax<qint64>(0, positionMs) / 1000.0;
-    const double tb = av_q2d(vs->time_base);
-    if (tb > 0.0) {
-        const int64_t targetTs = static_cast<int64_t>(targetSeconds / tb);
-        av_seek_frame(fmtCtx, vIdx, targetTs, AVSEEK_FLAG_BACKWARD);
-        avcodec_flush_buffers(decCtx);
-    }
-
-    AVPacket* pkt = av_packet_alloc();
-    AVFrame* frame = av_frame_alloc();
-    AVFrame* rgb = av_frame_alloc();
-    if (!pkt || !frame || !rgb) {
-        if (pkt) av_packet_free(&pkt);
-        if (frame) av_frame_free(&frame);
-        if (rgb) av_frame_free(&rgb);
-        avcodec_free_context(&decCtx);
-        avformat_close_input(&fmtCtx);
-        return {};
-    }
-
-    const int srcW = decCtx->width;
-    const int srcH = decCtx->height;
-    if (srcW <= 0 || srcH <= 0) {
-        av_packet_free(&pkt);
-        av_frame_free(&frame);
-        av_frame_free(&rgb);
-        avcodec_free_context(&decCtx);
-        avformat_close_input(&fmtCtx);
-        return {};
-    }
-
-    SwsContext* sws = sws_getContext(
-        srcW, srcH, decCtx->pix_fmt,
-        srcW, srcH, AV_PIX_FMT_BGRA,
-        SWS_BILINEAR, nullptr, nullptr, nullptr);
-    if (!sws) {
-        av_packet_free(&pkt);
-        av_frame_free(&frame);
-        av_frame_free(&rgb);
-        avcodec_free_context(&decCtx);
-        avformat_close_input(&fmtCtx);
-        return {};
-    }
-
-    const int rgbBufSize = av_image_get_buffer_size(AV_PIX_FMT_BGRA, srcW, srcH, 1);
-    uint8_t* rgbBuf = static_cast<uint8_t*>(av_malloc(rgbBufSize));
-    if (!rgbBuf) {
-        sws_freeContext(sws);
-        av_packet_free(&pkt);
-        av_frame_free(&frame);
-        av_frame_free(&rgb);
-        avcodec_free_context(&decCtx);
-        avformat_close_input(&fmtCtx);
-        return {};
-    }
-    av_image_fill_arrays(rgb->data, rgb->linesize, rgbBuf, AV_PIX_FMT_BGRA, srcW, srcH, 1);
-
-    QImage out;
-    bool gotFrame = false;
-    int safetyPackets = 0;
-
-    while (av_read_frame(fmtCtx, pkt) >= 0 && safetyPackets < 5000) {
-        ++safetyPackets;
-        if (pkt->stream_index != vIdx) {
-            av_packet_unref(pkt);
-            continue;
-        }
-
-        ret = avcodec_send_packet(decCtx, pkt);
-        av_packet_unref(pkt);
-        if (ret < 0) {
-            continue;
-        }
-
-        while ((ret = avcodec_receive_frame(decCtx, frame)) >= 0) {
-            // Optional: try to reach/skip to target time, but keep it simple.
-            // Many codecs will output the closest prior frame after AVSEEK_FLAG_BACKWARD.
-            sws_scale(sws, frame->data, frame->linesize, 0, srcH, rgb->data, rgb->linesize);
-
-            QImage img(rgb->data[0], srcW, srcH, rgb->linesize[0], QImage::Format_ARGB32);
-            out = img.copy();
-            gotFrame = true;
-            break;
-        }
-
-        if (gotFrame) {
-            break;
-        }
-    }
-
-    if (gotFrame && !targetSize.isEmpty()) {
-        out = out.scaled(targetSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
-    }
-
-    av_free(rgbBuf);
-    sws_freeContext(sws);
-    av_packet_free(&pkt);
-    av_frame_free(&frame);
-    av_frame_free(&rgb);
-    avcodec_free_context(&decCtx);
-    avformat_close_input(&fmtCtx);
-
-    return out;
-#else
-    Q_UNUSED(filePath);
-    Q_UNUSED(targetSize);
-    Q_UNUSED(positionMs);
-    return {};
-#endif
+    return image;
 }
-
 qint64 TLRenderPlayer::queryDuration(const QString& filePath)
 {
 #if defined(HAVE_FFMPEG) && HAVE_FFMPEG

@@ -1,5 +1,8 @@
 cmake_minimum_required(VERSION 3.21)
-cmake_minimum_required(VERSION 3.21)
+
+if(POLICY CMP0144)
+    cmake_policy(SET CMP0144 NEW)
+endif()
 
 # Set vcpkg toolchain file from environment if not already set
 if(NOT DEFINED CMAKE_TOOLCHAIN_FILE)
@@ -18,7 +21,7 @@ if(NOT DEFINED CMAKE_TOOLCHAIN_FILE)
     endif()
 endif()
 
-project(KAssetManagerQt VERSION 1.8.6 LANGUAGES CXX)
+project(KAssetManagerQt VERSION 2.0 LANGUAGES CXX)
 # Optional static analysis / sanitizers
 option(ENABLE_ASAN "Enable AddressSanitizer (Clang/GCC only)" OFF)
 if(ENABLE_ASAN)
@@ -504,18 +507,12 @@ if(UNIX AND NOT APPLE)
   set(_APP_ICON_PNG "${CMAKE_SOURCE_DIR}/../../icon.png")
 
   # Keep Linux assets in the install tree even before AppImage assembly.
-  set(_QT_CONF "${CMAKE_CURRENT_BINARY_DIR}/qt.conf")
+  # The packaged layout needs qt.conf next to the installed executable, but a
+  # qt.conf beside the build-tree executable overrides Fedora's system Qt plugin
+  # paths and breaks direct local runs from the build directory.
+  set(_QT_CONF "${CMAKE_CURRENT_BINARY_DIR}/install-qt.conf")
   file(WRITE "${_QT_CONF}" "[Paths]\nPlugins=../plugins\n")
-  install(FILES "${_QT_CONF}" DESTINATION bin)
-
-  # The packaged layout needs qt.conf in the install tree, but keeping the same
-  # file beside the build-tree executable breaks normal local runs because the
-  # referenced ../plugins path does not exist there.
-  add_custom_command(
-    TARGET kassetmanagerqt POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E rm -f "${_QT_CONF}"
-    COMMENT "Removing build-tree qt.conf to preserve normal local Qt plugin discovery"
-  )
+  install(FILES "${_QT_CONF}" DESTINATION bin RENAME qt.conf)
 
   if(EXISTS "${_LINUX_PACKAGING_DIR}/kassetmanager.desktop")
     install(FILES "${_LINUX_PACKAGING_DIR}/kassetmanager.desktop" DESTINATION share/applications)

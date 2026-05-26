@@ -72,8 +72,9 @@ squashfs-root/
 # Session / runtime logs
 *.log
 
-# Octto session artifacts
+# Agent/session artifacts
 .octto/
+.pi/
 
 B165C015_241223_R0G5.mxf.txt
 .kilocode/mcp.json

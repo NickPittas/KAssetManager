@@ -393,6 +393,20 @@ MainWindow::MainWindow(QWidget *parent)
                 }
             }
         }
+        // Update FM image preview only when the embedded video player is not active.
+        // Video selections own the FM preview area; scrub/thumbnail frames must not
+        // create a second image preview above the video widget.
+        if (!fmCurrentPreviewPath.isEmpty() && filePath == fmCurrentPreviewPath &&
+            !(fmVideoWidget && fmVideoWidget->isVisible())) {
+            if (fmImageItem && fmImageScene && fmImageView) {
+                fmImageItem->setPixmap(pixmap);
+                fmImageScene->setSceneRect(fmImageItem->boundingRect());
+                fmImageView->resetTransform();
+                fmImageView->fitInView(fmImageItem, Qt::KeepAspectRatio);
+                fmImageFitToView = true;
+                fmImageView->show();
+            }
+        }
         // Update PM preview panel if this is the currently selected item
         if (!pmCurrentPreviewPath.isEmpty() && filePath == pmCurrentPreviewPath) {
             if (pmImageScene && pmImageView) {
@@ -10720,13 +10734,13 @@ if (isExcelFile(ext)) {
     }
 
     if (isAudioFile(ext) || isVideoFile(ext)) {
-        // Media branch: audio/video
+        fmCurrentPreviewPath = path;
+
         if (isVideoFile(ext)) {
             fmCurrentPreviewPath = path;
+            ensureFmVideoPreview();
             if (fmVideoWidget) {
-                ensureFmVideoPreview();
-                if (fmVideoWidget) fmVideoWidget->show();
-                // CRITICAL: Set video widget AFTER show() to ensure valid window handle
+                fmVideoWidget->show();
                 if (fmTlRenderPlayer) fmVideoWidget->setPlayer(fmTlRenderPlayer);
             }
             if (fmImageView) fmImageView->hide();
@@ -10742,7 +10756,6 @@ if (isExcelFile(ext)) {
         if (fmMuteBtn) fmMuteBtn->show();
 
         if (fmTlRenderPlayer) {
-            ensureFmVideoPreview();
             fmTlRenderPlayer->loadMedia(path);
             fmTlRenderPlayer->pause();
             if (fmPlayPauseBtn) fmPlayPauseBtn->setIcon(icoMediaPlay(ThemeManager::instance().iconColor()));
