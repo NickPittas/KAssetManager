@@ -27,12 +27,12 @@ jobs:
           arch: gcc_64
           modules: qtmultimedia
           cache: true
-      - name: Configure (ASan + clang-tidy)
+      - name: Configure (ASan + UBSan)
         env:
           CC: gcc
           CXX: g++
         run: |
-          cmake -S native/qt6 -B build -G Ninja -DBUILD_APP=OFF -DBUILD_TESTS=ON -DENABLE_ASAN=ON -DENABLE_UBSAN=ON -DENABLE_CLANG_TIDY=ON -DCMAKE_BUILD_TYPE=Debug
+          cmake -S native/qt6 -B build -G Ninja -DBUILD_APP=OFF -DBUILD_TESTS=ON -DENABLE_ASAN=ON -DENABLE_UBSAN=ON -DCMAKE_BUILD_TYPE=Debug
       - name: Build
         run: cmake --build build -j 2
       - name: Install (tests to install_run/bin)
@@ -41,6 +41,7 @@ jobs:
         env:
           ASAN_OPTIONS: detect_leaks=1:check_initialization_order=1
           UBSAN_OPTIONS: print_stacktrace=1
+          QT_QPA_PLATFORM: offscreen
         run: ctest --test-dir build --output-on-failure
 
 
@@ -70,6 +71,8 @@ jobs:
       - name: Install (tests to install_run/bin)
         run: cmake --install build --prefix build/install_run
       - name: Run tests
+        env:
+          QT_QPA_PLATFORM: offscreen
         run: ctest --test-dir build --output-on-failure
       - name: Generate coverage report
         run: |

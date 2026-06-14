@@ -37,7 +37,9 @@ void TestPlatformSession::doesNotForceRasterWidgetsOnWayland()
 
 void TestPlatformSession::usesRasterPreviewFallbackOnWayland()
 {
+    qputenv("XDG_SESSION_TYPE", "wayland");
     QVERIFY(PlatformSession::shouldUseRasterPreviewFallbackOnWayland());
+    qunsetenv("XDG_SESSION_TYPE");
 }
 
 QTEST_APPLESS_MAIN(TestPlatformSession)
