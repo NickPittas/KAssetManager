@@ -8,6 +8,7 @@
 #include <QScrollBar>
 #include <QCursor>
 #include <QFileInfo>
+#include <QByteArray>
 #include <QRegularExpression>
 #include <algorithm>
 #include <limits>
@@ -274,7 +275,6 @@ bool GridScrubController::eventFilter(QObject *watched, QEvent *event)
 void GridScrubController::handleHoverMove(const QPoint &pos)
 {
     if (m_scrubActive && m_currentIndex.isValid()) {
-        handleCtrlScrub(pos);
         updateOverlayGeometry();
         return;
     }
@@ -344,7 +344,9 @@ void GridScrubController::setPosition(qreal value)
     if (!m_currentPath.isEmpty()) {
         m_positions[m_currentPath] = m_position;
     }
-    m_overlay->setProgress(m_position);
+    if (m_overlay) {
+        m_overlay->setProgress(m_position);
+    }
 }
 
 void GridScrubController::requestPreview()
@@ -365,7 +367,19 @@ void GridScrubController::requestPreview()
     // Track the requested position so we can ignore stale frame responses
     m_requestedPosition = m_position;
     
-    LivePreviewManager::instance().requestFrame(m_currentPath, targetSize, m_position);
+    LivePreviewManager& previewManager = LivePreviewManager::instance();
+    const QString suffix = info.suffix().toLower();
+    const bool isVideo = suffix == QStringLiteral("mp4")
+        || suffix == QStringLiteral("mov")
+        || suffix == QStringLiteral("avi")
+        || suffix == QStringLiteral("mkv")
+        || suffix == QStringLiteral("webm")
+        || suffix == QStringLiteral("m4v")
+        || suffix == QStringLiteral("mxf");
+    if (isVideo) {
+        previewManager.cancelPending();
+    }
+    previewManager.requestFrame(m_currentPath, targetSize, m_position, true);
 }
 
 void GridScrubController::showOverlay()
@@ -412,6 +426,7 @@ bool GridScrubController::handleCtrlScrub(const QPoint &pos)
 {
     if (m_warpingCursor) {
         m_warpingCursor = false;
+        return true;
     }
     if (m_currentPath.isEmpty() || !m_currentIndex.isValid()) {
         return false;
@@ -422,7 +437,9 @@ bool GridScrubController::handleCtrlScrub(const QPoint &pos)
     }
     const int clampedX = std::clamp(pos.x(), thumbRect.left(), thumbRect.right());
     const int clampedY = std::clamp(pos.y(), thumbRect.top(), thumbRect.bottom());
-    if (m_view && m_view->viewport() && (clampedX != pos.x() || clampedY != pos.y())) {
+    if (m_view && m_view->viewport() &&
+        !PlatformSession::isWayland() &&
+        (clampedX != pos.x() || clampedY != pos.y())) {
         m_warpingCursor = true;
         const QPoint clampedPoint(clampedX, clampedY);
         QCursor::setPos(m_view->viewport()->mapToGlobal(clampedPoint));
@@ -487,7 +504,8 @@ void GridScrubController::beginScrub()
         return;
     }
     m_scrubActive = true;
-    if (m_view && m_view->viewport() && !m_mouseGrabbed) {
+    if (!m_mouseGrabbed && m_view && m_view->viewport() &&
+        shouldGrabMouseForSessionType(qEnvironmentVariable("XDG_SESSION_TYPE"))) {
         m_view->viewport()->grabMouse();
         m_mouseGrabbed = true;
     }
@@ -499,8 +517,8 @@ void GridScrubController::endScrub()
         return;
     }
     m_scrubActive = false;
-    if (m_view && m_view->viewport() && m_mouseGrabbed) {
+    if (m_mouseGrabbed && m_view && m_view->viewport()) {
         m_view->viewport()->releaseMouse();
-        m_mouseGrabbed = false;
     }
+    m_mouseGrabbed = false;
 }

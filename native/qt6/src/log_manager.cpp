@@ -1,4 +1,5 @@
 #include "log_manager.h"
+#include "runtime_paths.h"
 #include <QDebug>
 #include <QMutexLocker>
 #include <QCoreApplication>
@@ -40,8 +41,7 @@ bool shouldLogQtMessage(QtMsgType type, QString* levelOut) {
 } // namespace
 
 LogManager::LogManager(QObject* parent) : QObject(parent) {
-    // Open persistent app log next to the executable
-    QString path = QCoreApplication::applicationDirPath() + "/app.log";
+    const QString path = RuntimePaths::dataPath("app.log");
     m_file.setFileName(path);
     if (m_file.open(QIODevice::Append | QIODevice::Text)) {
         m_ts.setDevice(&m_file);
@@ -83,6 +83,9 @@ void LogManager::clear() {
 
 void customMessageHandler(QtMsgType type, const QMessageLogContext& context, const QString& msg) {
     Q_UNUSED(context);
+    if (msg.startsWith(QStringLiteral("spaVisitChoice: parse error"))) {
+        return;
+    }
     QString level;
     if (!shouldLogQtMessage(type, &level)) {
         return;

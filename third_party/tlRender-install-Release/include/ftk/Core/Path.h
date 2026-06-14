@@ -1,0 +1,307 @@
+// SPDX-License-Identifier: BSD-3-Clause
+// Copyright Contributors to the feather-tk project.
+
+#pragma once
+
+#include <ftk/Core/Range.h>
+#include <ftk/Core/Util.h>
+
+#include <filesystem>
+#include <iostream>
+#include <optional>
+#include <string>
+#include <vector>
+
+namespace ftk
+{
+    //! \name File Paths
+    ///@{
+
+    //! Does the file name start with a dot?
+    FTK_API bool isDotFile(const std::string&);
+
+    //! Split a path.
+    FTK_API std::vector<std::string> split(std::filesystem::path);
+
+    //! Append a path separator.
+    FTK_API std::string appendSeparator(const std::string&);
+
+    //! Get the list of file system drives.
+    FTK_API std::vector<std::filesystem::path> getDrives();
+
+    //! User paths.
+    enum class FTK_API_TYPE UserPath
+    {
+        Home,
+        Desktop,
+        Documents,
+        Downloads,
+
+        Count,
+        First = Home
+    };
+    FTK_ENUM(UserPath);
+
+    //! Get a user path.
+    FTK_API std::filesystem::path getUserPath(UserPath);
+    
+    //! Create a unique temporary directory.
+    FTK_API std::filesystem::path createTmpDir();
+
+    //! Create a temporary directory that will automatically be removed when
+    //! finished.
+    class FTK_API_TYPE TmpDir
+    {
+        FTK_NON_COPYABLE(TmpDir);
+
+    public:
+        FTK_API TmpDir();
+
+        FTK_API ~TmpDir();
+        
+        //! Get the path to the temporary directory.
+        FTK_API const std::filesystem::path& getPath() const;
+
+        //! Remove the temporary directory (this will also be called
+        //! automatically in the destructor).
+        FTK_API void remove();
+
+    private:
+        std::filesystem::path _path;
+    };
+
+    //! Convert a frame number to a string.
+    FTK_API std::string toString(int64_t frame, int pad = 0);
+
+    //! File path options.
+    struct FTK_API_TYPE PathOptions
+    {
+        bool   seqNegative  = true;
+        size_t seqMaxDigits = 9;
+
+        bool operator == (const PathOptions&) const;
+        bool operator != (const PathOptions&) const;
+    };
+
+    //! Frame sequence.
+    struct FTK_API_TYPE FrameSeq
+    {
+        FrameSeq() = default;
+        explicit FrameSeq(const RangeI64&, int inc = 1);
+        FrameSeq(int64_t, int64_t, int inc = 1);
+        explicit FrameSeq(int64_t);
+
+        RangeI64 range;
+        int      inc = 1;
+
+        bool operator == (const FrameSeq&) const;
+        bool operator != (const FrameSeq&) const;
+    };
+
+    //! Convert frames to frame sequences.
+    FTK_API std::vector<FrameSeq> toFrameSeq(const std::vector<int64_t>&);
+
+    //! Convert a frame sequence to frames.
+    FTK_API std::vector<int64_t> toFrames(const FrameSeq&);
+
+    //! Convert frame sequences to frames.
+    FTK_API std::vector<int64_t> toFrames(const std::vector<FrameSeq>&);
+
+    //! Convert a frame sequence to a label.
+    FTK_API std::string getLabel(const FrameSeq&);
+
+    //! Convert frame sequences to a label.
+    FTK_API std::string getLabel(const std::vector<FrameSeq>&);
+
+    //! File path.
+    //! 
+    //! Example: file:///tmp/render.0001.exr?user=foo;password=bar
+    //! * protocol: file://
+    //! * dir: /tmp/
+    //! * base: render.
+    //! * number: 0001
+    //! * padding: 4
+    //! * extension: .exr
+    //! * request: ?user=foo;password=bar
+    //! * file name: render.0001.exr
+    class FTK_API_TYPE Path
+    {
+    public:
+        Path() = default;
+        FTK_API explicit Path(
+            const std::string&,
+            const PathOptions& = PathOptions());
+        FTK_API Path(
+            const std::string& dir,
+            const std::string& fileName,
+            const PathOptions& = PathOptions());
+
+        //! \name Path Options
+        ///@{
+
+        const PathOptions& getOptions();
+        FTK_API void setOptions(const PathOptions&);
+
+        ///@}
+
+        //! \name Path Components
+        ///@{
+
+        const std::string& get() const;
+        bool isEmpty() const;
+
+        bool hasProtocol() const;
+        bool hasDir() const;
+        bool hasBase() const;
+        bool hasNum() const;
+        bool hasExt() const;
+        bool hasRequest() const;
+
+        std::string getProtocol() const;
+        std::string getDir() const;
+        std::string getBase() const;
+        std::string getNum() const;
+        int getPad() const;
+        std::string getExt() const;
+        std::string getRequest() const;
+        std::string getFileName(bool dir = false) const;
+
+        FTK_API void setProtocol(const std::string&);
+        FTK_API void setDir(const std::string&);
+        FTK_API void setBase(const std::string&);
+        FTK_API void setNum(const std::string&);
+        FTK_API void setPad(int);
+        FTK_API void setExt(const std::string&);
+        FTK_API void setRequest(const std::string&);
+        FTK_API void setFileName(const std::string&);
+
+        ///@}
+
+        //! \name File Sequences
+        ///@{
+
+        const std::optional<RangeI64>& getFrames() const;
+        FTK_API void setFrames(const RangeI64&);
+
+        //! Get whether this is a sequence.
+        bool isSeq() const;
+
+        //! Get whether this has a sequence wildcard ('#').
+        bool hasSeqWildcard() const;
+
+        //! Get a file name with the given frame number.
+        std::string getFrame(int64_t frame, bool dir = false) const;
+
+        //! Get the frame range string.
+        std::string getFrameRange() const;
+
+        //! Get whether a path is part of this sequence.
+        bool seq(const Path&) const;
+
+        //! Add a path to this sequence.
+        FTK_API bool addSeq(const Path&);
+
+        ///@}
+
+        //! \name Utility
+        ///@{
+
+        //! Get whether the path is absolute.
+        bool isAbs() const;
+
+        //! Test whether this extension matches one in the given list.
+        FTK_API bool testExt(const std::vector<std::string>&) const;
+
+        ///@}
+
+        //! \name Constants
+        ///@{
+
+        static std::string getNumbers();
+        static std::string getPathSeparators();
+
+        ///@}
+
+        bool operator == (const Path&) const;
+        bool operator != (const Path&) const;
+
+    private:
+        void _parse(const PathOptions&);
+
+        std::string _path;
+        PathOptions _options;
+        static const std::pair<size_t, size_t> _invalid;
+        std::pair<size_t, size_t> _protocol = _invalid;
+        std::pair<size_t, size_t> _dir = _invalid;
+        std::pair<size_t, size_t> _base = _invalid;
+        std::pair<size_t, size_t> _num = _invalid;
+        int _pad = 0;
+        std::pair<size_t, size_t> _ext = _invalid;
+        std::pair<size_t, size_t> _request = _invalid;
+        std::optional<RangeI64> _frames;
+    };
+
+    //! Directory list sorting.
+    enum class FTK_API_TYPE DirListSort
+    {
+        Name,
+        Extension,
+        Size,
+        Time,
+
+        Count,
+        First = Name
+    };
+    FTK_ENUM(DirListSort);
+
+    //! Directory list options.
+    struct FTK_API_TYPE DirListOptions
+    {
+        DirListSort              sort         = DirListSort::Name;
+        bool                     sortReverse  = false;
+        std::string              filter;
+        bool                     filterFiles  = false;
+        std::vector<std::string> filterExt;
+        bool                     seq          = true;
+        std::vector<std::string> seqExts;
+        bool                     seqNegative  = true;
+        size_t                   seqMaxDigits = 9;
+        bool                     hidden       = false;
+
+        bool operator == (const DirListOptions&) const;
+        bool operator != (const DirListOptions&) const;
+    };
+
+    //! Directory list entry.
+    struct FTK_API_TYPE DirEntry
+    {
+        Path                            path;
+        bool                            isDir = false;
+        size_t                          size = 0;
+        std::filesystem::file_time_type time;
+
+        bool operator == (const DirEntry&) const;
+        bool operator != (const DirEntry&) const;
+    };
+
+    //! List directory contents.
+    FTK_API std::vector<DirEntry> dirList(
+        const std::filesystem::path&,
+        const DirListOptions& = DirListOptions());
+
+    //! Expand a file sequence. This function will search the directory for
+    //! other frames that match the given file name.
+    FTK_API Path expandSeq(
+        const Path&,
+        const PathOptions& = PathOptions());
+
+    FTK_API void to_json(nlohmann::json&, const PathOptions&);
+    FTK_API void to_json(nlohmann::json&, const DirListOptions&);
+
+    FTK_API void from_json(const nlohmann::json&, PathOptions&);
+    FTK_API void from_json(const nlohmann::json&, DirListOptions&);
+
+    ///@}
+}
+
+#include <ftk/Core/PathInline.h>

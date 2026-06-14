@@ -3,7 +3,7 @@
 #include "assets_model.h"
 #include "assets_table_model.h"
 #include "tags_model.h"
-#include "importer.h"
+#include "import_controller.h"
 #include "db.h"
 #include "preview_overlay.h"
 #include "image_preview_overlay.h"
@@ -19,6 +19,7 @@
 #include "file_ops.h"
 #include "file_ops_dialog.h"
 #include "log_manager.h"
+#include "runtime_paths.h"
 #include "sequence_detector.h"
 #include "context_preserver.h"
 #include "database_health_agent.h"
@@ -34,13 +35,14 @@
 #include "project_sequence_grouping_proxy_model.h"
 #include "project_item_delegate.h"
 #include "project_db.h"
+#include "project_path_utils.h"
 #include "project_version_detector.h"
 #include "project_manager_watcher.h"
 
 #include "office_preview.h"
 #include "file_manager_pane.h"
-#include "media/tlrender_player.h"
-#include "media/tlrender_viewport.h"
+#include "media/player_lab_player.h"
+#include "media/player_lab_viewport.h"
 
 #include "media_convert_dialog.h"
 #include "thumbnail_cache_manager.h"
@@ -103,6 +105,7 @@ static size_t currentWorkingSetMB() {
 #include <QtConcurrent/QtConcurrentRun>
 #include <functional>
 #include <algorithm>
+#include <memory>
 #include <QMenu>
 #include <QAction>
 #include <QActionGroup>
@@ -177,6 +180,7 @@ QRect insetPreviewRect(const QRect &source)
 // Forward declare helper
 // Lightweight icon painters (no external resources) for toolbar buttons
 #include <functional>
+#include <stdexcept>
 #include "icon_utils.h"
 #include "sequence_grouping_proxy_model.h"
 #include "asset_sequence_grouping_proxy_model.h"
@@ -195,6 +199,7 @@ QRect insetPreviewRect(const QRect &source)
 
 
 #include "video_metadata.h"
+#include "media_async_request.h"
 #include "drag_utils.h"
 #include <QSet>
 
@@ -272,11 +277,52 @@ MainWindow::MainWindow(QWidget *parent)
     setAcceptDrops(true);
 
     // Create importer
-    importer = new Importer(this);
-    connect(importer, &Importer::progressChanged, this, &MainWindow::onImportProgress);
-    connect(importer, &Importer::currentFileChanged, this, &MainWindow::onImportFileChanged);
-    connect(importer, &Importer::currentFolderChanged, this, &MainWindow::onImportFolderChanged);
-    connect(importer, &Importer::importFinished, this, &MainWindow::onImportComplete);
+    infoMediaRequests = new MediaAsyncRequest(this);
+    connect(infoMediaRequests, &MediaAsyncRequest::requestFinished, this,
+            [this](quint64, const QString& channel, const QVariant& result) {
+        const QVariantMap metadata = result.toMap();
+        if (channel == QLatin1String("asset-info-video")) {
+            if (metadata.value(QStringLiteral("path")).toString() == assetInfoVideoMetadataPath)
+                applyAssetInfoVideoMetadata(metadata);
+        } else if (channel == QLatin1String("fm-info-video")) {
+            if (metadata.value(QStringLiteral("path")).toString() == fmInfoVideoMetadataPath)
+                applyFmInfoVideoMetadata(metadata);
+        }
+    });
+    connect(infoMediaRequests, &MediaAsyncRequest::requestFailed, this,
+            [this](quint64, const QString& channel, const QString&) {
+        if (channel == QLatin1String("asset-info-video") && !assetInfoVideoMetadataPath.isEmpty()) {
+            infoDimensions->setText("Video file");
+            infoDimensions->setVisible(true);
+            clearAssetInfoVideoMetadata();
+        } else if (channel == QLatin1String("fm-info-video") && !fmInfoVideoMetadataPath.isEmpty()) {
+            if (fmInfoDimensions) {
+                fmInfoDimensions->setText("Video file");
+                fmInfoDimensions->setVisible(true);
+            }
+            clearFmInfoVideoMetadata();
+        }
+    });
+    importer = new ImportController(this);
+    importer->start(ImportController::DatabaseKind::AssetLibrary, DB::instance().database().databaseName());
+    connect(importer, &ImportController::progressChanged, this, &MainWindow::onImportProgress);
+    connect(importer, &ImportController::currentFileChanged, this, &MainWindow::onImportFileChanged);
+    connect(importer, &ImportController::currentFolderChanged, this, &MainWindow::onImportFolderChanged);
+    connect(importer, &ImportController::importFinished, this, [this](int filesImported, const QList<int>& changedFolderIds) {
+        DB::instance().notifyFoldersChanged();
+        for (int folderId : changedFolderIds)
+            DB::instance().notifyAssetsChanged(folderId);
+        onImportComplete();
+        statusBar()->showMessage(QString("Imported %1 item(s)").arg(filesImported), 3000);
+    });
+    connect(importer, &ImportController::importFailed, this, [this](const QString& error) {
+        if (importProgressDialog) {
+            importProgressDialog->reject();
+            importProgressDialog->deleteLater();
+            importProgressDialog = nullptr;
+        }
+        statusBar()->showMessage(QString("Import failed: %1").arg(error), 5000);
+    });
 
     // Create project folder watcher
     projectFolderWatcher = new ProjectFolderWatcher(this);
@@ -322,13 +368,19 @@ MainWindow::MainWindow(QWidget *parent)
     m_resizeSettleTimer.setInterval(50); // Short delay to batch rapid events
     connect(&m_resizeSettleTimer, &QTimer::timeout, this, [this]() {
         m_windowResizing = false;
-        // Resume thumbnail requests now that resize is done
-        LivePreviewManager::instance().resumeRequests();
+        const bool anyPlayerStillPlaying =
+            (fmPlayerLabPlayer && fmPlayerLabPlayer->playbackState() == PlayerLabPlayer::PlaybackState::Playing) ||
+            (pmPlayerLabPlayer && pmPlayerLabPlayer->playbackState() == PlayerLabPlayer::PlaybackState::Playing);
+        if (!anyPlayerStillPlaying) {
+            // Resume thumbnail requests now that resize is done
+            LivePreviewManager::instance().resumeRequests();
+        }
         // Trigger a single viewport update
         if (assetGridView && assetGridView->viewport()) assetGridView->viewport()->update();
         if (fmGridView && fmGridView->viewport()) fmGridView->viewport()->update();
-        // Schedule progress update (debounced)
-        scheduleVisibleThumbProgressUpdate();
+        if (pmAssetsGridView && pmAssetsGridView->viewport()) pmAssetsGridView->viewport()->update();
+        // Schedule progress update (debounced) only when playback is not active.
+        if (!anyPlayerStillPlaying) scheduleVisibleThumbProgressUpdate();
     });
 
     // Debounce timer for splitter state persistence (avoids disk I/O during resize)
@@ -362,6 +414,9 @@ MainWindow::MainWindow(QWidget *parent)
             QVariantList sizes; for (int v : fmDualPaneSplitter->sizes()) sizes << v;
             s.setValue("FileManager/DualPaneSplitterSizes", sizes);
         }
+        if (fmSecondaryPane && fmSecondaryPane->isVisible()) {
+            fmSecondaryPane->saveState(s, "FileManager/SecondaryPane");
+        }
         if (pmSplitter) s.setValue("ProjectManager/MainSplitter", pmSplitter->saveState());
         if (pmLeftSplitter) s.setValue("ProjectManager/LeftSplitter", pmLeftSplitter->saveState());
         if (pmRightSplitter) s.setValue("ProjectManager/RightSplitter", pmRightSplitter->saveState());
@@ -390,6 +445,20 @@ MainWindow::MainWindow(QWidget *parent)
                 }
             }
         }
+        // Update FM image preview only when the embedded video player is not active.
+        // Video selections own the FM preview area; scrub/thumbnail frames must not
+        // create a second image preview above the video widget.
+        if (!fmCurrentPreviewPath.isEmpty() && filePath == fmCurrentPreviewPath &&
+            !(fmVideoWidget && fmVideoWidget->isVisible())) {
+            if (fmImageItem && fmImageScene && fmImageView) {
+                fmImageItem->setPixmap(pixmap);
+                fmImageScene->setSceneRect(fmImageItem->boundingRect());
+                fmImageView->resetTransform();
+                fmImageView->fitInView(fmImageItem, Qt::KeepAspectRatio);
+                fmImageFitToView = true;
+                fmImageView->show();
+            }
+        }
         // Update PM preview panel if this is the currently selected item
         if (!pmCurrentPreviewPath.isEmpty() && filePath == pmCurrentPreviewPath) {
             if (pmImageScene && pmImageView) {
@@ -415,13 +484,42 @@ MainWindow::MainWindow(QWidget *parent)
             return;
         }
         g_lastPreviewError.insert(path, error);
-        qWarning() << "[LivePreview] failed for" << path << ':' << error;
+        qDebug() << "[LivePreview] failed for" << path << ':' << error;
     });
 
 }
 
 MainWindow::~MainWindow()
 {
+    // PlayerLabPlayer::unloadMedia()/~PlayerLabPlayer emits playbackStateChanged
+    // while stopping. During QObject child teardown the toolbar buttons connected
+    // to those signals may already be deleted, so detach the players from the UI
+    // before Qt starts deleting children.
+    if (fmPlayerLabPlayer) {
+        disconnect(fmPlayerLabPlayer, nullptr, this, nullptr);
+        fmPlayerLabPlayer->blockSignals(true);
+        if (fmVideoWidget) {
+            fmVideoWidget->setPlayer(nullptr);
+        }
+        fmPlayerLabPlayer->stop();
+        fmPlayerLabPlayer->unloadMedia();
+    }
+    if (pmPlayerLabPlayer) {
+        disconnect(pmPlayerLabPlayer, nullptr, this, nullptr);
+        pmPlayerLabPlayer->blockSignals(true);
+        if (pmVideoWidget) {
+            pmVideoWidget->setPlayer(nullptr);
+        }
+        pmPlayerLabPlayer->stop();
+        pmPlayerLabPlayer->unloadMedia();
+    }
+
+    // Destroy the optional secondary pane before Qt's base-class child teardown.
+    // It owns media/GL widgets and an active scrub controller; deterministic
+    // teardown avoids late events or context cleanup hitting half-destroyed
+    // viewport children during application exit.
+    delete fmSecondaryPane;
+    fmSecondaryPane = nullptr;
 }
 
 void MainWindow::onShowUserGuide()
@@ -993,6 +1091,30 @@ void MainWindow::setupUi()
     infoDimensions->setWordWrap(true);
     infoLayout->addWidget(infoDimensions);
 
+    infoVideoCodec = new QLabel("", this);
+    infoVideoCodec->setWordWrap(true);
+    infoLayout->addWidget(infoVideoCodec);
+
+    infoAudioCodec = new QLabel("", this);
+    infoAudioCodec->setWordWrap(true);
+    infoLayout->addWidget(infoAudioCodec);
+
+    infoBitrate = new QLabel("", this);
+    infoBitrate->setWordWrap(true);
+    infoLayout->addWidget(infoBitrate);
+
+    infoTimecode = new QLabel("", this);
+    infoTimecode->setWordWrap(true);
+    infoLayout->addWidget(infoTimecode);
+
+    infoCameraInfo = new QLabel("", this);
+    infoCameraInfo->setWordWrap(true);
+    infoLayout->addWidget(infoCameraInfo);
+
+    infoShotInfo = new QLabel("", this);
+    infoShotInfo->setWordWrap(true);
+    infoLayout->addWidget(infoShotInfo);
+
     infoCreated = new QLabel("", this);
     infoCreated->setWordWrap(true);
     infoLayout->addWidget(infoCreated);
@@ -1113,6 +1235,7 @@ void MainWindow::setupUi()
 
     // Log viewer as dock widget at bottom (hidden by default)
     QDockWidget* logDock = new QDockWidget("Application Log", this);
+    logDock->setObjectName(QStringLiteral("applicationLogDock"));
     LogManager::instance().addLog("[TRACE] logDock created", "DEBUG");
     logDock->setAllowedAreas(Qt::BottomDockWidgetArea);
     logDock->setFeatures(QDockWidget::DockWidgetClosable);
@@ -1391,7 +1514,9 @@ void MainWindow::setupFileManagerUi()
     connect(fmFavoritesList, &QListWidget::customContextMenuRequested, this, [this](const QPoint &pos){
         if (!fmFavoritesList) return;
         QPoint gp = fmFavoritesList->viewport()->mapToGlobal(pos);
-        QMenu m; QAction *rem = m.addAction("Remove Favorite", this, &MainWindow::onFmRemoveFavorite);
+        QMenu m;
+        QAction *rem = m.addAction("Remove Favorite");
+        connect(rem, &QAction::triggered, this, &MainWindow::onFmRemoveFavorite);
         rem->setEnabled(fmFavoritesList->currentItem()!=nullptr);
         m.exec(gp);
     });
@@ -1589,28 +1714,20 @@ void MainWindow::setupFileManagerUi()
     connect(fmPathBar, &QLineEdit::returnPressed, this, [this]() {
         QString path = fmPathBar->text().trimmed();
         if (path.isEmpty()) return;
-        
-        // Expand environment variables like %USERPROFILE%
+
         path = QDir::fromNativeSeparators(path);
-        
-        // Check if path exists
-        QFileInfo fi(path);
-        if (!fi.exists()) {
-            QMessageBox::warning(this, "Invalid Path", 
-                QString("The path '%1' does not exist.").arg(path));
-            // Restore the current path
+
+        FileUtils::PathAvailabilityResult result = FileUtils::checkPathAvailability(
+            path, FileUtils::PathAvailabilityMode::FileOrContainingDirectory);
+        if (!result.available) {
             if (fmDirModel) {
                 fmPathBar->setText(QDir::toNativeSeparators(fmDirModel->rootPath()));
             }
+            statusBar()->showMessage(result.message, 5000);
             return;
         }
-        
-        // If it's a file, navigate to its parent directory
-        if (fi.isFile()) {
-            path = fi.absolutePath();
-        }
-        
-        fmNavigateToPath(path, true);
+
+        navigateActiveFmPaneToPath(result.normalizedPath, true);
     });
     rightLayout->addWidget(fmPathBar);
 
@@ -1941,14 +2058,8 @@ void MainWindow::setupFileManagerUi()
     pv->addLayout(alphaRow);
 
     // Video widget for tlRender rendering
-    fmVideoWidget = new TLRenderViewport(fmPreviewPanel);
-    fmVideoWidget->setMinimumHeight(160);
-    fmVideoWidget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    fmVideoWidget->hide();
-
     // Create tlRender player for video playback
-    fmTlRenderPlayer = new TLRenderPlayer(fmPreviewPanel);
-    fmVideoWidget->setPlayer(fmTlRenderPlayer);
+    fmPlayerLabPlayer = new PlayerLabPlayer(fmPreviewPanel);
 
     // Media controls (Explorer-like): Prev - Play/Pause - Next - Slider - Time - Audio
     QHBoxLayout *mc = new QHBoxLayout();
@@ -2011,24 +2122,44 @@ void MainWindow::setupFileManagerUi()
             if (fmSequencePlaying) pauseFmSequence(); else playFmSequence();
             return;
         }
-        if (!fmTlRenderPlayer) return;
-        if (fmTlRenderPlayer->playbackState() == TLRenderPlayer::PlaybackState::Playing) {
-            fmTlRenderPlayer->pause();
+        if (!fmPlayerLabPlayer) return;
+        if (fmPlayerLabPlayer->playbackState() == PlayerLabPlayer::PlaybackState::Playing) {
+            fmPlayerLabPlayer->pause();
             fmPlayPauseBtn->setIcon(icoMediaPlay(ThemeManager::instance().iconColor()));
         } else {
-            fmTlRenderPlayer->play();
+            fmPlayerLabPlayer->play();
             fmPlayPauseBtn->setIcon(icoMediaPause(ThemeManager::instance().iconColor()));
         }
     });
 
-    connect(fmTlRenderPlayer, &TLRenderPlayer::positionChanged, this, [this](qint64 pos){
+    connect(fmPlayerLabPlayer, &PlayerLabPlayer::positionChanged, this, [this](qint64 pos){
         if (fmIsSequence) return; // sequence updates handled separately
-        qint64 duration = fmTlRenderPlayer->duration();
-        if (fmTlRenderPlayer && duration > 0){
+        qint64 duration = fmPlayerLabPlayer->duration();
+        if (fmPlayerLabPlayer && duration > 0){
             fmPositionSlider->blockSignals(true);
             fmPositionSlider->setValue(int(pos*1000/duration));
             fmPositionSlider->blockSignals(false);
             fmTimeLabel->setText(QString("%1 / %2").arg(QTime::fromMSecsSinceStartOfDay(int(pos)).toString("mm:ss")).arg(QTime::fromMSecsSinceStartOfDay(int(duration)).toString("mm:ss")));
+        }
+    });
+    connect(fmPlayerLabPlayer, &PlayerLabPlayer::playbackStateChanged, this, [this](PlayerLabPlayer::PlaybackState state){
+        if (fmPlayPauseBtn) {
+            fmPlayPauseBtn->setIcon(state == PlayerLabPlayer::PlaybackState::Playing
+                ? icoMediaPause(ThemeManager::instance().iconColor())
+                : icoMediaPlay(ThemeManager::instance().iconColor()));
+        }
+        if (state == PlayerLabPlayer::PlaybackState::Playing) {
+            visibleThumbTimer.stop();
+            LivePreviewManager::instance().cancelPending();
+            LivePreviewManager::instance().suspendRequests();
+        } else {
+            const bool anyPlayerStillPlaying =
+                (fmPlayerLabPlayer && fmPlayerLabPlayer->playbackState() == PlayerLabPlayer::PlaybackState::Playing) ||
+                (pmPlayerLabPlayer && pmPlayerLabPlayer->playbackState() == PlayerLabPlayer::PlaybackState::Playing);
+            if (!anyPlayerStillPlaying) {
+                LivePreviewManager::instance().resumeRequests();
+                scheduleVisibleThumbProgressUpdate();
+            }
         }
     });
 
@@ -2037,27 +2168,26 @@ void MainWindow::setupFileManagerUi()
             loadFmSequenceFrame(v);
             return;
         }
-        qint64 duration = fmTlRenderPlayer->duration();
-        if (fmTlRenderPlayer && duration > 0) fmTlRenderPlayer->seek(qint64(v) * duration / 1000);
+        qint64 duration = fmPlayerLabPlayer->duration();
+        if (fmPlayerLabPlayer && duration > 0) fmPlayerLabPlayer->seekAsync(qint64(v) * duration / 1000);
     });
 
-    connect(fmVolumeSlider, &QSlider::valueChanged, this, [this](int v){ if (fmTlRenderPlayer) fmTlRenderPlayer->setVolume(v/100.0f); });
+    connect(fmVolumeSlider, &QSlider::valueChanged, this, [this](int v){ if (fmPlayerLabPlayer) fmPlayerLabPlayer->setVolume(v/100.0f); });
     connect(fmMuteBtn, &QPushButton::clicked, this, [this]{
-        if (!fmTlRenderPlayer) return;
-        bool newMuted = !fmTlRenderPlayer->isMuted();
-        fmTlRenderPlayer->setMuted(newMuted);
+        if (!fmPlayerLabPlayer) return;
+        bool newMuted = !fmPlayerLabPlayer->isMuted();
+        fmPlayerLabPlayer->setMuted(newMuted);
         fmMuteBtn->setIcon(newMuted ? icoMediaMute() : icoMediaAudio());
     });
 
 
     // Center the preview content between title and controls
-    QWidget *previewContent = new QWidget(fmPreviewPanel);
-    QVBoxLayout *pc = new QVBoxLayout(previewContent);
+    fmPreviewContent = new QWidget(fmPreviewPanel);
+    QVBoxLayout *pc = new QVBoxLayout(fmPreviewContent);
     pc->setContentsMargins(0,0,0,0);
     pc->setSpacing(6);
     pc->addWidget(fmImageView, 1);
-    pc->addWidget(fmVideoWidget, 1);
-    pv->addWidget(previewContent);
+    pv->addWidget(fmPreviewContent);
     pv->addLayout(mc);
     // Hide media controls by default (only show for video/audio)
     if (fmPrevFrameBtn) fmPrevFrameBtn->hide();
@@ -2130,6 +2260,30 @@ void MainWindow::setupFileManagerUi()
     fmInfoDimensions = new QLabel("", fmInfoPanel);
     fmInfoDimensions->setWordWrap(true);
     infoLayout->addWidget(fmInfoDimensions);
+
+    fmInfoVideoCodec = new QLabel("", fmInfoPanel);
+    fmInfoVideoCodec->setWordWrap(true);
+    infoLayout->addWidget(fmInfoVideoCodec);
+
+    fmInfoAudioCodec = new QLabel("", fmInfoPanel);
+    fmInfoAudioCodec->setWordWrap(true);
+    infoLayout->addWidget(fmInfoAudioCodec);
+
+    fmInfoBitrate = new QLabel("", fmInfoPanel);
+    fmInfoBitrate->setWordWrap(true);
+    infoLayout->addWidget(fmInfoBitrate);
+
+    fmInfoTimecode = new QLabel("", fmInfoPanel);
+    fmInfoTimecode->setWordWrap(true);
+    infoLayout->addWidget(fmInfoTimecode);
+
+    fmInfoCameraInfo = new QLabel("", fmInfoPanel);
+    fmInfoCameraInfo->setWordWrap(true);
+    infoLayout->addWidget(fmInfoCameraInfo);
+
+    fmInfoShotInfo = new QLabel("", fmInfoPanel);
+    fmInfoShotInfo->setWordWrap(true);
+    infoLayout->addWidget(fmInfoShotInfo);
 
     fmInfoCreated = new QLabel("", fmInfoPanel);
     fmInfoCreated->setWordWrap(true);
@@ -2256,23 +2410,13 @@ void MainWindow::setupFileManagerUi()
     fmSplitter->setStretchFactor(0, 0);  // Tree pane: fixed size (doesn't grow with window)
     fmSplitter->setStretchFactor(1, 1);  // Right pane: expands with window
 
-    // Root: select first drive if exists
-    QFileInfoList drives = QDir::drives();
-    if (!drives.isEmpty()) {
-        QString path = QDir::toNativeSeparators(drives.first().absoluteFilePath());
-        QModelIndex idx = fmIndexForPath(path);
-        if (idx.isValid() && fmTree) {
-            fmTree->setCurrentIndex(idx);
-                    fmDirModel->setRootPath(path);
-            QModelIndex srcRoot = fmDirModel->index(path);
-            if (fmProxyModel) {
-                fmProxyModel->rebuildForRoot(path);
-                QModelIndex proxyRoot = fmProxyModel->mapFromSource(srcRoot);
-                fmGridView->setRootIndex(proxyRoot);
-                fmListView->setRootIndex(proxyRoot);
-            } else {
-                fmGridView->setRootIndex(srcRoot);
-                fmListView->setRootIndex(srcRoot);
+    // Root: choose a safe default directory only when there is no saved path to restore.
+    {
+        QSettings s("AugmentCode", "KAssetManager");
+        if (!s.contains("FileManager/CurrentPath")) {
+            const QString defaultRoot = FileUtils::firstAvailableDirectory();
+            if (!defaultRoot.isEmpty()) {
+                fmNavigateToPath(defaultRoot, false);
             }
         }
     }
@@ -2409,34 +2553,28 @@ void MainWindow::setupFileManagerUi()
         // Restore current navigation path (use unified navigator to keep buttons/history consistent)
         if (s.contains("FileManager/CurrentPath")) {
             QString savedPath = s.value("FileManager/CurrentPath").toString();
-            if (QFileInfo::exists(savedPath)) {
-                fmNavigateToPath(savedPath, false);
+            const QString expectedFingerprint = s.value("FileManager/CurrentPathStorageFingerprint").toString();
+            FileUtils::PathAvailabilityResult result = FileUtils::checkPathAvailability(
+                savedPath, FileUtils::PathAvailabilityMode::DirectoryOnly, expectedFingerprint);
+            if (result.available) {
+                fmNavigateToPath(result.normalizedPath, false);
+            } else {
+                s.remove("FileManager/CurrentPath");
+                s.remove("FileManager/CurrentPathStorageFingerprint");
+                const QString msg = QString("File Manager saved path unavailable: %1").arg(result.message);
+                statusBar()->showMessage(msg, 5000);
+                qWarning() << "[FileManager]" << msg;
+
+                const QString fallback = FileUtils::firstAvailableDirectory();
+                if (!fallback.isEmpty()) {
+                    fmNavigateToPath(fallback, false);
+                }
             }
         }
         
         // Restore dual-pane state if it was enabled
-        if (s.value("FileManager/DualPane", false).toBool()) {
-            if (fmDualPaneToggle) {
-                fmDualPaneToggle->setChecked(true);  // This triggers onFmToggleSecondPane
-                
-                // Restore dual-pane splitter sizes after a short delay to ensure layout is ready
-                QTimer::singleShot(100, this, [this]() {
-                    QSettings s("AugmentCode", "KAssetManager");
-                    if (fmDualPaneSplitter && s.contains("FileManager/DualPaneSplitterSizes")) {
-                        QList<int> sizes;
-                        const auto list = s.value("FileManager/DualPaneSplitterSizes").toList();
-                        bool hasZero = false;
-                        for (const QVariant &x : list) {
-                            int sz = x.toInt();
-                            sizes << sz;
-                            if (sz < 10) hasZero = true;
-                        }
-                        if (!sizes.isEmpty() && !hasZero) {
-                            fmDualPaneSplitter->setSizes(sizes);
-                        }
-                    }
-                });
-            }
+        if (s.value("FileManager/DualPane", false).toBool() && fmDualPaneToggle) {
+            fmDualPaneToggle->setChecked(true);  // This triggers onFmToggleSecondPane
         }
 
         syncFmToolbarFromActivePane();
@@ -2474,12 +2612,7 @@ void MainWindow::onFmTreeCurrentChanged(const QModelIndex &current, const QModel
                 fmPendingNavigationPath.clear();
                 
                 fmSuppressTreeSync = true;
-                // Navigate the active pane (primary or secondary)
-                if (fmSecondaryPane && fmSecondaryPane->isVisible() && !fmPrimaryPaneActive) {
-                    fmSecondaryPane->navigateToPath(path, true);
-                } else {
-                    fmNavigateToPath(path, true);
-                }
+                navigateActiveFmPaneToPath(path, true);
                 fmSuppressTreeSync = false;
             }
         });
@@ -2500,13 +2633,22 @@ void MainWindow::onFmTreeActivated(const QModelIndex &index)
     }
 
     fmSuppressTreeSync = true;
-    fmNavigateToPath(path, true);
+    navigateActiveFmPaneToPath(path, true);
     fmSuppressTreeSync = false;
 }
 
 // Forward declarations for file-type helpers used by File Manager handlers
 static inline bool isImageFile(const QString &ext);
 static inline bool isVideoFile(const QString &ext);
+
+QRect MainWindow::initialOverlayGeometry() const
+{
+    const QRect base = frameGeometry().isValid() ? frameGeometry() : geometry();
+    const int width = qMax(960, static_cast<int>(base.width() * 0.8));
+    const int height = qMax(640, static_cast<int>(base.height() * 0.8));
+    const QPoint center = base.center();
+    return QRect(center.x() - width / 2, center.y() - height / 2, width, height);
+}
 static bool isPreviewOverlayViewable(const QString &ext);
 
 void MainWindow::onFmItemDoubleClicked(const QModelIndex &index)
@@ -2531,7 +2673,7 @@ void MainWindow::onFmItemDoubleClicked(const QModelIndex &index)
             if (!previewOverlay) {
                 previewOverlay = new PreviewOverlay(this);
                 // Center overlay to the app window instead of screen top-left
-                previewOverlay->setGeometry(geometry());
+                previewOverlay->setGeometry(initialOverlayGeometry());
                 connect(previewOverlay, &PreviewOverlay::closed, this, &MainWindow::closePreview);
                 connect(previewOverlay, &PreviewOverlay::navigateRequested, this, &MainWindow::changeFmPreview);
             } else {
@@ -2555,7 +2697,7 @@ void MainWindow::onFmItemDoubleClicked(const QModelIndex &index)
 
     QFileInfo fi(path);
     if (fi.isDir()) {
-        fmNavigateToPath(path, true);
+        navigateActiveFmPaneToPath(path, true);
         return;
     }
 
@@ -2575,7 +2717,7 @@ void MainWindow::onFmItemDoubleClicked(const QModelIndex &index)
             }
             if (!imagePreviewOverlay) {
                 imagePreviewOverlay = new ImagePreviewOverlay(this);
-                imagePreviewOverlay->setGeometry(geometry());
+                imagePreviewOverlay->setGeometry(initialOverlayGeometry());
                 connect(imagePreviewOverlay, &ImagePreviewOverlay::closed, this, &MainWindow::closePreview);
                 connect(imagePreviewOverlay, &ImagePreviewOverlay::navigateRequested, this, &MainWindow::changeFmPreview);
             } else {
@@ -2590,7 +2732,7 @@ void MainWindow::onFmItemDoubleClicked(const QModelIndex &index)
             if (!previewOverlay) {
                 previewOverlay = new PreviewOverlay(this);
                 // Center overlay to the app window instead of screen top-left
-                previewOverlay->setGeometry(geometry());
+                previewOverlay->setGeometry(initialOverlayGeometry());
                 connect(previewOverlay, &PreviewOverlay::closed, this, &MainWindow::closePreview);
                 connect(previewOverlay, &PreviewOverlay::navigateRequested, this, &MainWindow::changeFmPreview);
             } else {
@@ -2703,7 +2845,7 @@ void MainWindow::onFmPaste()
     }
 
     // Ensure any preview locks are released before file ops
-    if (fmTlRenderPlayer) { fmTlRenderPlayer->stop(); }
+    if (fmPlayerLabPlayer) { fmPlayerLabPlayer->stop(); }
     // Release any locks held by previews
     releaseAnyPreviewLocksForPaths(fmClipboard);
     // Enqueue async operation
@@ -2726,14 +2868,7 @@ void MainWindow::onFmDelete()
     }
     QStringList paths = selectedPathsForActiveFmPane();
     if (paths.isEmpty()) return;
-
-
-    // Ensure any preview locks are released before file ops
-    releaseAnyPreviewLocksForPaths(paths);
-    // Enqueue async delete
-    auto &q = FileOpsQueue::instance();
-    q.enqueueDelete(paths);
-
+    confirmAndQueueFmDelete(paths, false);
 }
 
 
@@ -2745,13 +2880,7 @@ void MainWindow::onFmDeletePermanent()
     }
     QStringList paths = selectedPathsForActiveFmPane();
     if (paths.isEmpty()) return;
-
-
-    // Ensure any preview locks are released before file ops
-    releaseAnyPreviewLocksForPaths(paths);
-    auto &q = FileOpsQueue::instance();
-    q.enqueueDeletePermanent(paths);
-
+    confirmAndQueueFmDelete(paths, true);
 }
 
 void MainWindow::onFmBackToParent()
@@ -2795,7 +2924,7 @@ void MainWindow::onFmRefresh()
     // Clearing it causes all visible thumbnails to flicker and re-decode.
 
     // Re-read directory by flipping root path (only for manual F5 refresh)
-    QString tempPath = QDir::tempPath();
+    QString tempPath = QCoreApplication::applicationDirPath();
     fmDirModel->setRootPath(tempPath);
     fmDirModel->setRootPath(currentPath);
 
@@ -2823,7 +2952,7 @@ void MainWindow::onFmLightRefresh()
     if (fmDirModel) {
         QString currentPath = fmDirModel->rootPath();
         if (!currentPath.isEmpty()) {
-            QString tempPath = QDir::tempPath();
+            QString tempPath = QCoreApplication::applicationDirPath();
             fmDirModel->setRootPath(tempPath);
             fmDirModel->setRootPath(currentPath);
             
@@ -2857,14 +2986,34 @@ void MainWindow::onFmRename()
     QFileInfo fi(p);
     bool ok = false;
     QString newName = QInputDialog::getText(this, "Rename", "New name:", QLineEdit::Normal, fi.fileName(), &ok);
-    if (!ok || newName.trimmed().isEmpty()) return;
-    QString dest = fi.absolutePath() + QDir::separator() + newName.trimmed();
+    const QString trimmedName = newName.trimmed();
+    if (!ok || trimmedName.isEmpty()) return;
+    if (trimmedName == fi.fileName()) {
+        statusBar()->showMessage("Name unchanged", 2000);
+        return;
+    }
+
+    const QString dest = fi.absolutePath() + QDir::separator() + trimmedName;
+    if (QFileInfo::exists(dest)) {
+        QMessageBox::warning(this, "Rename", QString("A file or folder named '%1' already exists.").arg(trimmedName));
+        return;
+    }
+
+    bool renamed = false;
     if (fi.isDir()) {
         QDir parent(fi.absolutePath());
-        parent.rename(fi.fileName(), newName.trimmed());
+        renamed = parent.rename(fi.fileName(), trimmedName);
     } else {
-        QFile::rename(p, dest);
+        renamed = QFile::rename(p, dest);
     }
+
+    if (!renamed) {
+        QMessageBox::warning(this, "Rename", QString("Failed to rename '%1' to '%2'.").arg(fi.fileName(), trimmedName));
+        return;
+    }
+
+    onFmLightRefresh();
+    statusBar()->showMessage("Renamed successfully", 2000);
 }
 
 void MainWindow::onFmBulkRename()
@@ -2901,7 +3050,7 @@ void MainWindow::onFmNewFolder()
     if (QDir().mkpath(path)) {
         // Refresh the file list and tree to show the new folder
         if (fmDirModel) {
-            QString tempPath = QDir::tempPath();
+            QString tempPath = QCoreApplication::applicationDirPath();
             fmDirModel->setRootPath(tempPath);
             fmDirModel->setRootPath(destDir);
             
@@ -2966,7 +3115,7 @@ void MainWindow::onFmFavoriteActivated(QListWidgetItem* item)
     if (!item) return;
     QString path = item->data(Qt::UserRole).toString();
     if (path.isEmpty()) return;
-    fmNavigateToPath(path, true);
+    navigateActiveFmPaneToPath(path, true);
 }
 
 void MainWindow::loadFmFavorites()
@@ -3023,20 +3172,30 @@ void MainWindow::onFmShowContextMenu(const QPoint &pos)
 void MainWindow::showFmContextMenuAt(const QPoint &globalPos)
 {
     QMenu menu;
-    QAction *refreshA = menu.addAction("Refresh", this, &MainWindow::onFmRefresh, QKeySequence(Qt::Key_F5));
-    menu.addSeparator();
-    QAction *copyA = menu.addAction("Copy", this, &MainWindow::onFmCopy, QKeySequence::Copy);
-    QAction *cutA = menu.addAction("Cut", this, &MainWindow::onFmCut, QKeySequence::Cut);
-    QAction *pasteA = menu.addAction("Paste", this, &MainWindow::onFmPaste, QKeySequence::Paste);
-    menu.addSeparator();
-    QAction *renameA = menu.addAction("Rename", this, &MainWindow::onFmRename, QKeySequence(Qt::Key_F2));
-    QAction *bulkRenameA = menu.addAction("Bulk Rename...", this, &MainWindow::onFmBulkRename);
-    QAction *delA = menu.addAction("Delete", this, &MainWindow::onFmDelete, QKeySequence::Delete);
-    QAction *createFolderWithSel = menu.addAction("Create Folder with Selected Files", this, &MainWindow::onFmCreateFolderWithSelected);
-    menu.addSeparator();
-    QAction *addLibA = menu.addAction("Add to Asset Library", this, &MainWindow::onAddSelectionToAssetLibrary);
+    auto addConnectedAction = [this, &menu](const QString &text, auto slot, const QKeySequence &shortcut = QKeySequence()) {
+        QAction *action = menu.addAction(text);
+        connect(action, &QAction::triggered, this, slot);
+        if (!shortcut.isEmpty()) {
+            action->setShortcut(shortcut);
+        }
+        return action;
+    };
 
-    QAction *favA = menu.addAction("Add to Favorites", this, &MainWindow::onFmAddToFavorites);
+    QAction *refreshA = addConnectedAction("Refresh", &MainWindow::onFmRefresh, QKeySequence(Qt::Key_F5));
+    menu.addSeparator();
+    QAction *copyA = addConnectedAction("Copy", &MainWindow::onFmCopy, QKeySequence::Copy);
+    QAction *cutA = addConnectedAction("Cut", &MainWindow::onFmCut, QKeySequence::Cut);
+    QAction *pasteA = addConnectedAction("Paste", &MainWindow::onFmPaste, QKeySequence::Paste);
+    menu.addSeparator();
+    QAction *renameA = addConnectedAction("Rename", &MainWindow::onFmRename, QKeySequence(Qt::Key_F2));
+    QAction *bulkRenameA = addConnectedAction("Bulk Rename...", &MainWindow::onFmBulkRename);
+    QAction *delA = addConnectedAction("Delete", &MainWindow::onFmDelete, QKeySequence::Delete);
+    QAction *permDelA = addConnectedAction("Permanent Delete", &MainWindow::onFmDeletePermanent, QKeySequence(Qt::SHIFT | Qt::Key_Delete));
+    QAction *createFolderWithSel = addConnectedAction("Create Folder with Selected Files", &MainWindow::onFmCreateFolderWithSelected);
+    menu.addSeparator();
+    QAction *addLibA = addConnectedAction("Add to Asset Library", &MainWindow::onAddSelectionToAssetLibrary);
+
+    QAction *favA = addConnectedAction("Add to Favorites", &MainWindow::onFmAddToFavorites);
 
     menu.addSeparator();
     QAction *openInExplorerA = menu.addAction("Open in Explorer");
@@ -3053,6 +3212,7 @@ void MainWindow::showFmContextMenuAt(const QPoint &globalPos)
     renameA->setEnabled(selCount == 1);
     bulkRenameA->setEnabled(selCount >= 2);
     delA->setEnabled(hasSel);
+    permDelA->setEnabled(hasSel);
     pasteA->setEnabled(!fmClipboard.isEmpty());
     addLibA->setEnabled(hasSel);
     favA->setEnabled(hasSel);
@@ -3097,8 +3257,7 @@ void MainWindow::showFmContextMenuAt(const QPoint &globalPos)
     // Handle new context menu actions
     if (chosen == openInExplorerA && selCount == 1) {
         QString path = selectedPaths.first();
-        // Use explorer.exe /select to open Explorer and select the file
-        QProcess::startDetached("explorer.exe", QStringList() << "/select," << QDir::toNativeSeparators(path));
+        DragUtils::instance().showInExplorer(path);
     } else if (chosen == propertiesA && selCount == 1) {
         QString path = selectedPaths.first();
         // Use Windows Shell API to show Properties dialog
@@ -3189,12 +3348,10 @@ void MainWindow::onFmTreeContextMenu(const QPoint &pos)
         QStringList paths = getSelectedFmTreePaths();
         if (paths.isEmpty()) return;
 
-        releaseAnyPreviewLocksForPaths(paths);
-        FileOpsQueue::instance().enqueueDelete(paths);
+        confirmAndQueueFmDelete(paths, false);
 
     } else if (chosen == permDelA) {
         QStringList paths = getSelectedFmTreePaths();
-        releaseAnyPreviewLocksForPaths(paths);
         doPermanentDelete(paths);
     } else if (chosen == renameA) {
         QStringList paths = getSelectedFmTreePaths();
@@ -3202,9 +3359,24 @@ void MainWindow::onFmTreeContextMenu(const QPoint &pos)
         QFileInfo fi(paths.first());
         bool ok=false;
         QString newName = QInputDialog::getText(this, "Rename", "New name:", QLineEdit::Normal, fi.fileName(), &ok);
-        if (!ok || newName.trimmed().isEmpty()) return;
+        const QString trimmedName = newName.trimmed();
+        if (!ok || trimmedName.isEmpty()) return;
+        if (trimmedName == fi.fileName()) {
+            statusBar()->showMessage("Name unchanged", 2000);
+            return;
+        }
+        const QString dest = fi.absolutePath() + QDir::separator() + trimmedName;
+        if (QFileInfo::exists(dest)) {
+            QMessageBox::warning(this, "Rename", QString("A file or folder named '%1' already exists.").arg(trimmedName));
+            return;
+        }
         QDir parent(fi.absolutePath());
-        parent.rename(fi.fileName(), newName.trimmed());
+        if (!parent.rename(fi.fileName(), trimmedName)) {
+            QMessageBox::warning(this, "Rename", QString("Failed to rename '%1' to '%2'.").arg(fi.fileName(), trimmedName));
+            return;
+        }
+        onFmLightRefresh();
+        statusBar()->showMessage("Renamed successfully", 2000);
     } else if (chosen == newFolderA) {
         QDir dir(path);
         QString newPath = uniqueNameInDir(path, "New Folder");
@@ -3230,8 +3402,7 @@ void MainWindow::onFmTreeContextMenu(const QPoint &pos)
         }
         releaseAnyPreviewLocksForPaths(files);
         FileOpsQueue::instance().enqueueMove(files, folderPath);
-        if (!fileOpsDialog) fileOpsDialog = new FileOpsProgressDialog(this);
-        fileOpsDialog->show(); fileOpsDialog->raise(); fileOpsDialog->activateWindow();
+        showFileOpsDialog();
     } else if (chosen == addLibA) {
         onAddTreeSelectionToAssetLibrary();
     } else if (chosen == importPmA && isSingleFolder) {
@@ -3244,7 +3415,7 @@ void MainWindow::onFmTreeContextMenu(const QPoint &pos)
         onFmAddToFavorites();
     } else if (chosen == openInExplorerA && hasSelection && selectedPaths.size() == 1) {
         const QString p = selectedPaths.first();
-        QProcess::startDetached("explorer.exe", QStringList() << "/select," << QDir::toNativeSeparators(p));
+        DragUtils::instance().showInExplorer(p);
     } else if (chosen == propertiesA && hasSelection && selectedPaths.size() == 1) {
         const QString p = selectedPaths.first();
 #ifdef Q_OS_WIN
@@ -3281,19 +3452,60 @@ void MainWindow::onFmPasteInto(const QString& destDir)
     auto &q = FileOpsQueue::instance();
     if (fmClipboardCutMode) q.enqueueMove(fmClipboard, destDir);
     else q.enqueueCopy(fmClipboard, destDir);
-    if (!fileOpsDialog) fileOpsDialog = new FileOpsProgressDialog(this);
-    fileOpsDialog->show(); fileOpsDialog->raise(); fileOpsDialog->activateWindow();
+    showFileOpsDialog();
     fmClipboard.clear();
     fmClipboardCutMode = false;
+}
+
+bool MainWindow::confirmAndQueueFmDelete(const QStringList& paths, bool permanentDelete)
+{
+    if (paths.isEmpty()) return false;
+
+    const QString actionVerb = permanentDelete ? QStringLiteral("permanently delete")
+                                               : QStringLiteral("move to the Trash");
+    QString message;
+    if (paths.size() == 1) {
+        const QFileInfo info(paths.first());
+        const QString noun = info.isDir() ? QStringLiteral("folder") : QStringLiteral("file");
+        message = permanentDelete
+            ? QString("Are you sure you want to permanently delete the %1 '%2'?\n\nThis action cannot be undone.")
+                  .arg(noun, info.fileName())
+            : QString("Are you sure you want to move the %1 '%2' to the Trash?")
+                  .arg(noun, info.fileName());
+    } else {
+        message = permanentDelete
+            ? QString("Are you sure you want to permanently delete %1 selected items?\n\nThis action cannot be undone.").arg(paths.size())
+            : QString("Are you sure you want to move %1 selected items to the Trash?").arg(paths.size());
+    }
+
+    const auto reply = QMessageBox::question(
+        this,
+        permanentDelete ? tr("Permanent Delete") : tr("Delete"),
+        message,
+        QMessageBox::Yes | QMessageBox::No,
+        QMessageBox::No);
+    if (reply != QMessageBox::Yes) return false;
+
+    releaseAnyPreviewLocksForPaths(paths);
+    if (permanentDelete) FileOpsQueue::instance().enqueueDeletePermanent(paths);
+    else FileOpsQueue::instance().enqueueDelete(paths);
+    showFileOpsDialog();
+    statusBar()->showMessage(QString("Starting %1 of %2 item(s)...").arg(actionVerb).arg(paths.size()), 3000);
+    return true;
+}
+
+void MainWindow::showFileOpsDialog()
+{
+    if (!fileOpsDialog) fileOpsDialog = new FileOpsProgressDialog(this);
+    fileOpsDialog->show();
+    fileOpsDialog->raise();
+    fileOpsDialog->activateWindow();
 }
 
 void MainWindow::doPermanentDelete(const QStringList& paths)
 {
     if (paths.isEmpty()) return;
-    // Ensure any preview locks are released before file ops
-    releaseAnyPreviewLocksForPaths(paths);
-    FileOpsQueue::instance().enqueueDeletePermanent(paths);
-
+    confirmAndQueueFmDelete(paths, true);
 }
 
 
@@ -3301,7 +3513,7 @@ void MainWindow::releaseAnyPreviewLocksForPaths(const QStringList& paths)
 {
     QSet<QString> s; for (const QString &p : paths) s.insert(QFileInfo(p).absoluteFilePath());
     // Embedded FM preview: stop media and clear if current preview is among paths
-    if (fmTlRenderPlayer) { fmTlRenderPlayer->stop(); }
+    if (fmPlayerLabPlayer) { fmPlayerLabPlayer->stop(); }
     if (!fmCurrentPreviewPath.isEmpty()) {
         QString abs = QFileInfo(fmCurrentPreviewPath).absoluteFilePath();
         if (s.contains(abs)) {
@@ -3317,6 +3529,52 @@ void MainWindow::releaseAnyPreviewLocksForPaths(const QStringList& paths)
             // still release any handles
             previewOverlay->stopPlayback();
         }
+    }
+}
+
+void MainWindow::queueFmFileOperation(const QStringList& sources, const QString& destDir, bool moveRequested)
+{
+    if (sources.isEmpty() || destDir.isEmpty()) return;
+
+    releaseAnyPreviewLocksForPaths(sources);
+    if (moveRequested) FileOpsQueue::instance().enqueueMove(sources, destDir);
+    else FileOpsQueue::instance().enqueueCopy(sources, destDir);
+
+    showFileOpsDialog();
+}
+
+void MainWindow::refreshFileManagerViewsForPaths(const QStringList& paths, const QString& destination)
+{
+    QSet<QString> dirs;
+    for (const QString &path : paths) {
+        QFileInfo info(path);
+        const QString dir = info.isDir() ? info.absolutePath() : info.absolutePath();
+        if (!dir.isEmpty()) dirs.insert(QDir::cleanPath(dir));
+    }
+    if (!destination.isEmpty()) {
+        dirs.insert(QDir::cleanPath(destination));
+    }
+
+    const QString primaryRoot = fmDirModel ? QDir::cleanPath(fmDirModel->rootPath()) : QString();
+    const QString secondaryRoot = fmSecondaryPane ? QDir::cleanPath(fmSecondaryPane->currentPath()) : QString();
+
+    bool refreshPrimary = false;
+    bool refreshSecondary = false;
+    for (const QString &dir : dirs) {
+        if (!primaryRoot.isEmpty() && dir == primaryRoot) refreshPrimary = true;
+        if (!secondaryRoot.isEmpty() && dir == secondaryRoot) refreshSecondary = true;
+        if (fmEverythingTreeModel) fmEverythingTreeModel->refreshPath(dir);
+    }
+
+    if (refreshPrimary) {
+        onFmLightRefresh();
+    }
+    if (refreshSecondary && fmSecondaryPane && (!refreshPrimary || secondaryRoot != primaryRoot)) {
+        fmSecondaryPane->refresh();
+    }
+
+    if (!dirs.isEmpty()) {
+        scheduleVisibleThumbProgressUpdate();
     }
 }
 
@@ -3350,8 +3608,7 @@ void MainWindow::onFmCreateFolderWithSelected()
     // Enqueue async move of selected into the new folder
     auto &q = FileOpsQueue::instance();
     q.enqueueMove(paths, folderPath);
-    if (!fileOpsDialog) fileOpsDialog = new FileOpsProgressDialog(this);
-    fileOpsDialog->show(); fileOpsDialog->raise(); fileOpsDialog->activateWindow();
+    showFileOpsDialog();
 }
 
 void MainWindow::onFmViewModeToggled()
@@ -3437,35 +3694,31 @@ void MainWindow::onFmToggleSecondPane(bool checked)
             });
 
             // Connect filesDropped for copy/move operations
-            connect(fmSecondaryPane, &FileManagerPane::filesDropped, this, [this](const QStringList &paths, const QString &destDir) {
-                // Determine if this is a cut (move) or copy operation
-                bool isCut = fmSecondaryPane->isClipboardCutMode();
-                
-                // Use FileOpsQueue for the operation
-                FileOpsQueue &queue = FileOpsQueue::instance();
-                if (isCut) {
-                    queue.enqueueMove(paths, destDir);
-                } else {
-                    queue.enqueueCopy(paths, destDir);
-                }
+            connect(fmSecondaryPane, &FileManagerPane::filesDropped, this, [this](const QStringList &paths, const QString &destDir, bool moveRequested) {
+                queueFmFileOperation(paths, destDir, moveRequested);
             });
             
             // Connect fileDoubleClicked to open preview overlay
             connect(fmSecondaryPane, &FileManagerPane::fileDoubleClicked, this, &MainWindow::onSecondaryPaneFileDoubleClicked);
             
-            // Navigate to same path as primary pane initially
-            QString currentPath = fmDirModel ? fmDirModel->rootPath() : QString();
-            if (!currentPath.isEmpty()) {
-                fmSecondaryPane->navigateToPath(currentPath, false);
+            QSettings s("AugmentCode", "KAssetManager");
+            const bool hasSavedSecondaryState = s.contains("FileManager/SecondaryPane/CurrentPath")
+                || s.contains("FileManager/SecondaryPane/ViewMode");
+            if (hasSavedSecondaryState) {
+                fmSecondaryPane->restoreState(s, "FileManager/SecondaryPane");
+            } else {
+                // Navigate to the same path as the primary pane only for a brand-new secondary pane.
+                QString currentPath = fmDirModel ? fmDirModel->rootPath() : QString();
+                if (!currentPath.isEmpty()) {
+                    fmSecondaryPane->navigateToPath(currentPath, false);
+                }
+                fmSecondaryPane->setPreviewVisible(false);
             }
             
-            // Mark secondary pane as inactive initially
+            // Mark the secondary pane as inactive initially.
             fmSecondaryPane->setActive(false);
-            
-            // Hide the preview panel by default for the secondary pane
-            fmSecondaryPane->setPreviewVisible(false);
 
-            // Hide the per-pane toolbar; use the shared File Manager toolbar instead
+            // Hide the per-pane toolbar; use the shared File Manager toolbar instead.
             fmSecondaryPane->setToolbarVisible(false);
         }
         
@@ -3474,6 +3727,8 @@ void MainWindow::onFmToggleSecondPane(bool checked)
             // Find the right widget in fmSplitter
             if (fmSplitter && fmSplitter->count() >= 2) {
                 QWidget *right = fmSplitter->widget(1);
+                const QList<int> fmSplitterSizes = fmSplitter->sizes();
+                const int rightWidth = right->width();
                 
                 // Create a new horizontal splitter for dual-pane
                 fmDualPaneSplitter = new QSplitter(Qt::Horizontal, this);
@@ -3485,9 +3740,23 @@ void MainWindow::onFmToggleSecondPane(bool checked)
                 fmDualPaneSplitter->addWidget(fmSecondaryPane);
                 fmDualPaneSplitter->setStretchFactor(0, 1);
                 fmDualPaneSplitter->setStretchFactor(1, 1);
-                
-                // Replace the right widget in fmSplitter with the dual-pane splitter
+
+                // Replace the right widget with the dual-pane splitter without letting
+                // QSplitter redistribute the outer File Manager pane sizes.
                 fmSplitter->insertWidget(1, fmDualPaneSplitter);
+                fmSplitter->setSizes(fmSplitterSizes);
+                const QVariant savedDualPaneSizes = QSettings("AugmentCode", "KAssetManager")
+                    .value("FileManager/DualPaneSplitterSizes");
+                const auto savedSizeList = savedDualPaneSizes.toList();
+                if (savedSizeList.size() != 2) {
+                    const int dualWidth = rightWidth > 0 ? rightWidth : fmDualPaneSplitter->width();
+                    if (dualWidth > 0) {
+                        fmDualPaneSplitter->setSizes({dualWidth / 2, dualWidth - (dualWidth / 2)});
+                    }
+                }
+                connect(fmDualPaneSplitter, &QSplitter::splitterMoved, this, [this](int, int){
+                    m_splitterSaveTimer.start();
+                });
             }
         }
         
@@ -3500,7 +3769,40 @@ void MainWindow::onFmToggleSecondPane(bool checked)
         if (fmSyncNavButton) {
             fmSyncNavButton->show();
         }
+
+        // Apply saved dual-pane sizes after the splitter is visible. This runs
+        // for both first creation and re-showing an existing splitter.
+        QTimer::singleShot(0, this, [this]() {
+            if (!fmDualPaneSplitter || !fmDualPaneSplitter->isVisible()) {
+                return;
+            }
+            QSettings s("AugmentCode", "KAssetManager");
+            const auto savedSizeList = s.value("FileManager/DualPaneSplitterSizes").toList();
+            if (savedSizeList.size() != 2) {
+                return;
+            }
+            QList<int> sizes;
+            int total = 0;
+            for (const QVariant &savedSize : savedSizeList) {
+                const int size = savedSize.toInt();
+                sizes << size;
+                total += size;
+            }
+            if (total > 0) {
+                fmDualPaneSplitter->setSizes(sizes);
+            }
+        });
     } else {
+        QSettings s("AugmentCode", "KAssetManager");
+        if (fmSecondaryPane && fmSecondaryPane->isVisible()) {
+            fmSecondaryPane->saveState(s, "FileManager/SecondaryPane");
+        }
+        if (fmDualPaneSplitter && fmDualPaneSplitter->isVisible()) {
+            s.setValue("FileManager/DualPaneSplitter", fmDualPaneSplitter->saveState());
+            QVariantList sizes; for (int v : fmDualPaneSplitter->sizes()) sizes << v;
+            s.setValue("FileManager/DualPaneSplitterSizes", sizes);
+        }
+
         // Hide the secondary pane
         if (fmSecondaryPane) {
             fmSecondaryPane->hide();
@@ -3518,6 +3820,9 @@ void MainWindow::onFmToggleSecondPane(bool checked)
     // Persist state
     QSettings s("AugmentCode", "KAssetManager");
     s.setValue("FileManager/DualPane", checked);
+    if (checked && fmSecondaryPane) {
+        fmSecondaryPane->saveState(s, "FileManager/SecondaryPane");
+    }
 }
 
 void MainWindow::onSecondaryPanePathChanged(const QString &path)
@@ -3578,7 +3883,7 @@ void MainWindow::onSecondaryPaneFileDoubleClicked(const QString &path)
         }
         if (!imagePreviewOverlay) {
             imagePreviewOverlay = new ImagePreviewOverlay(this);
-            imagePreviewOverlay->setGeometry(geometry());
+            imagePreviewOverlay->setGeometry(initialOverlayGeometry());
             connect(imagePreviewOverlay, &ImagePreviewOverlay::closed, this, &MainWindow::closePreview);
             connect(imagePreviewOverlay, &ImagePreviewOverlay::navigateRequested, this, &MainWindow::changeFmPreview);
         } else {
@@ -3592,7 +3897,7 @@ void MainWindow::onSecondaryPaneFileDoubleClicked(const QString &path)
         }
         if (!previewOverlay) {
             previewOverlay = new PreviewOverlay(this);
-            previewOverlay->setGeometry(geometry());
+            previewOverlay->setGeometry(initialOverlayGeometry());
             connect(previewOverlay, &PreviewOverlay::closed, this, &MainWindow::closePreview);
             connect(previewOverlay, &PreviewOverlay::navigateRequested, this, &MainWindow::changeFmPreview);
         } else {
@@ -3643,6 +3948,17 @@ void MainWindow::setActiveFmPane(bool primary)
 bool MainWindow::isSecondaryFmPaneActive() const
 {
     return fmSecondaryPane && fmSecondaryPane->isVisible() && !fmPrimaryPaneActive;
+}
+
+void MainWindow::navigateActiveFmPaneToPath(const QString& path, bool addToHistory)
+{
+    if (isSecondaryFmPaneActive()) {
+        fmSecondaryPane->navigateToPath(path, addToHistory);
+        syncFmToolbarFromActivePane();
+        return;
+    }
+
+    fmNavigateToPath(path, addToHistory);
 }
 
 QStringList MainWindow::selectedPathsForActiveFmPane() const
@@ -3766,41 +4082,22 @@ void MainWindow::importToAssetLibrary(const QStringList& filePathsIn, const QStr
 
     if (filePaths.isEmpty() && folderPaths.isEmpty()) return;
 
-    // Ensure a destination asset folder is selected
     if (!folderTreeView || !folderTreeView->currentIndex().isValid()) {
         QMessageBox::warning(this, "No Folder Selected", "Please select a folder in the Asset Library before importing.");
         return;
     }
     const int targetFolderId = folderTreeView->currentIndex().data(VirtualFolderTreeModel::IdRole).toInt();
 
-    // Show progress dialog
     if (!importProgressDialog) importProgressDialog = new ImportProgressDialog(this);
     importProgressDialog->show();
     importProgressDialog->raise();
     importProgressDialog->activateWindow();
 
-    // Prevent the dialog from closing between multiple import calls
-    disconnect(importer, &Importer::importFinished, this, &MainWindow::onImportComplete);
-
-    int totalImported = 0;
-
-    // Import folders preserving subfolder structure
-    for (const QString &dir : folderPaths) {
-        if (importer->importFolder(dir, targetFolderId)) totalImported++;
-    }
-
-    // Import individual files
-    if (!filePaths.isEmpty()) {
-        importer->importFiles(filePaths, targetFolderId); // emits importFinished
-        totalImported += filePaths.size();
-    }
-
-    // Reconnect and close dialog
-    connect(importer, &Importer::importFinished, this, &MainWindow::onImportComplete);
-    onImportComplete();
-
-    if (totalImported > 0) {
-        statusBar()->showMessage(QString("Imported %1 item(s)").arg(totalImported), 3000);
+    if (!importer->importToAssetLibrary(filePaths, folderPaths, targetFolderId, true)) {
+        importProgressDialog->reject();
+        importProgressDialog->deleteLater();
+        importProgressDialog = nullptr;
+        statusBar()->showMessage("Import is already running or could not start", 3000);
     }
 }
 
@@ -3811,8 +4108,7 @@ void MainWindow::setupProjectManagerUi()
     LogManager::instance().addLog("[ProjectManager] Setting up Project Manager UI...", "INFO");
     
     // Initialize ProjectDB with separate database file
-    const QString dataDir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-    const QString projectsDbPath = dataDir + "/projects.db";
+    const QString projectsDbPath = RuntimePaths::dataPath("projects.db");
     if (!ProjectDB::instance().init(projectsDbPath)) {
         LogManager::instance().addLog("[ProjectManager] Failed to initialize ProjectDB at: " + projectsDbPath, "ERROR");
         return;
@@ -4149,19 +4445,13 @@ void MainWindow::setupProjectManagerUi()
     pmImageView->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     
     // Video widget (hidden by default)
-    pmVideoWidget = new TLRenderViewport(pmPreviewPanel);
-    pmVideoWidget->setMinimumHeight(160);
-    pmVideoWidget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    pmVideoWidget->hide();
-    
     // Preview content container
-    QWidget *previewContent = new QWidget(pmPreviewPanel);
-    QVBoxLayout *pc = new QVBoxLayout(previewContent);
+    pmPreviewContent = new QWidget(pmPreviewPanel);
+    QVBoxLayout *pc = new QVBoxLayout(pmPreviewContent);
     pc->setContentsMargins(0, 0, 0, 0);
     pc->setSpacing(6);
     pc->addWidget(pmImageView, 1);
-    pc->addWidget(pmVideoWidget, 1);
-    pv->addWidget(previewContent);
+    pv->addWidget(pmPreviewContent);
     
     // Media controls
     QHBoxLayout *mc = new QHBoxLayout();
@@ -4219,8 +4509,7 @@ void MainWindow::setupProjectManagerUi()
     pv->addLayout(mc);
     
     // Create tlRender player for video playback
-    pmTlRenderPlayer = new TLRenderPlayer(pmPreviewPanel);
-    pmVideoWidget->setPlayer(pmTlRenderPlayer);
+    pmPlayerLabPlayer = new PlayerLabPlayer(pmPreviewPanel);
     
     // Sequence timer for image sequence playback
     pmSequenceTimer = new QTimer(pmPreviewPanel);
@@ -4234,11 +4523,11 @@ void MainWindow::setupProjectManagerUi()
     // Wire up media controls
     connect(pmPrevFrameBtn, &QPushButton::clicked, this, [this]{ 
         if (pmIsSequence) stepPmSequence(-1); 
-        else if (pmTlRenderPlayer) pmTlRenderPlayer->stepBackward();
+        else if (pmPlayerLabPlayer) pmPlayerLabPlayer->stepBackward();
     });
     connect(pmNextFrameBtn, &QPushButton::clicked, this, [this]{ 
         if (pmIsSequence) stepPmSequence(1); 
-        else if (pmTlRenderPlayer) pmTlRenderPlayer->stepForward();
+        else if (pmPlayerLabPlayer) pmPlayerLabPlayer->stepForward();
     });
     
     connect(pmPlayPauseBtn, &QPushButton::clicked, this, [this]{
@@ -4246,22 +4535,22 @@ void MainWindow::setupProjectManagerUi()
             if (pmSequencePlaying) pausePmSequence(); else playPmSequence();
             return;
         }
-        if (!pmTlRenderPlayer) return;
-        if (pmTlRenderPlayer->playbackState() == TLRenderPlayer::PlaybackState::Playing) {
-            pmTlRenderPlayer->pause();
+        if (!pmPlayerLabPlayer) return;
+        if (pmPlayerLabPlayer->playbackState() == PlayerLabPlayer::PlaybackState::Playing) {
+            pmPlayerLabPlayer->pause();
             pmPlayPauseBtn->setIcon(icoMediaPlay(ThemeManager::instance().iconColor()));
         } else {
-            pmTlRenderPlayer->play();
+            pmPlayerLabPlayer->play();
             pmPlayPauseBtn->setIcon(icoMediaPause(ThemeManager::instance().iconColor()));
         }
     });
 
     syncFmToolbarFromActivePane();
     
-    connect(pmTlRenderPlayer, &TLRenderPlayer::positionChanged, this, [this](qint64 pos){
+    connect(pmPlayerLabPlayer, &PlayerLabPlayer::positionChanged, this, [this](qint64 pos){
         if (pmIsSequence) return;
-        qint64 duration = pmTlRenderPlayer->duration();
-        if (pmTlRenderPlayer && duration > 0){
+        qint64 duration = pmPlayerLabPlayer->duration();
+        if (pmPlayerLabPlayer && duration > 0){
             pmPositionSlider->blockSignals(true);
             pmPositionSlider->setValue(int(pos*1000/duration));
             pmPositionSlider->blockSignals(false);
@@ -4271,11 +4560,24 @@ void MainWindow::setupProjectManagerUi()
         }
     });
     
-    connect(pmTlRenderPlayer, &TLRenderPlayer::playbackStateChanged, this, [this](TLRenderPlayer::PlaybackState state){
+    connect(pmPlayerLabPlayer, &PlayerLabPlayer::playbackStateChanged, this, [this](PlayerLabPlayer::PlaybackState state){
         if (pmPlayPauseBtn) {
-            pmPlayPauseBtn->setIcon(state == TLRenderPlayer::PlaybackState::Playing 
-                ? icoMediaPause(ThemeManager::instance().iconColor()) 
+            pmPlayPauseBtn->setIcon(state == PlayerLabPlayer::PlaybackState::Playing
+                ? icoMediaPause(ThemeManager::instance().iconColor())
                 : icoMediaPlay(ThemeManager::instance().iconColor()));
+        }
+        if (state == PlayerLabPlayer::PlaybackState::Playing) {
+            visibleThumbTimer.stop();
+            LivePreviewManager::instance().cancelPending();
+            LivePreviewManager::instance().suspendRequests();
+        } else {
+            const bool anyPlayerStillPlaying =
+                (fmPlayerLabPlayer && fmPlayerLabPlayer->playbackState() == PlayerLabPlayer::PlaybackState::Playing) ||
+                (pmPlayerLabPlayer && pmPlayerLabPlayer->playbackState() == PlayerLabPlayer::PlaybackState::Playing);
+            if (!anyPlayerStillPlaying) {
+                LivePreviewManager::instance().resumeRequests();
+                scheduleVisibleThumbProgressUpdate();
+            }
         }
     });
     
@@ -4284,22 +4586,22 @@ void MainWindow::setupProjectManagerUi()
             loadPmSequenceFrame(v);
             return;
         }
-        if (pmTlRenderPlayer) {
-            qint64 duration = pmTlRenderPlayer->duration();
+        if (pmPlayerLabPlayer) {
+            qint64 duration = pmPlayerLabPlayer->duration();
             if (duration > 0) {
-                pmTlRenderPlayer->seek(v * duration / 1000);
+                pmPlayerLabPlayer->seekAsync(qint64(v) * duration / 1000);
             }
         }
     });
     
     connect(pmVolumeSlider, &QSlider::valueChanged, this, [this](int v){
-        if (pmTlRenderPlayer) pmTlRenderPlayer->setVolume(v / 100.0f);
+        if (pmPlayerLabPlayer) pmPlayerLabPlayer->setVolume(v / 100.0f);
     });
     
     connect(pmMuteBtn, &QPushButton::clicked, this, [this]{
-        if (!pmTlRenderPlayer) return;
-        bool newMuted = !pmTlRenderPlayer->isMuted();
-        pmTlRenderPlayer->setMuted(newMuted);
+        if (!pmPlayerLabPlayer) return;
+        bool newMuted = !pmPlayerLabPlayer->isMuted();
+        pmPlayerLabPlayer->setMuted(newMuted);
         pmMuteBtn->setIcon(newMuted ? icoMediaMute(ThemeManager::instance().iconColor()) 
                                     : icoMediaAudio(ThemeManager::instance().iconColor()));
     });
@@ -4708,7 +5010,7 @@ void MainWindow::onPmOpenOverlay()
         }
         if (!previewOverlay) {
             previewOverlay = new PreviewOverlay(this);
-            previewOverlay->setGeometry(geometry());
+            previewOverlay->setGeometry(initialOverlayGeometry());
             connect(previewOverlay, &PreviewOverlay::closed, this, &MainWindow::closePreview);
             connect(previewOverlay, &PreviewOverlay::navigateRequested, this, &MainWindow::changePmPreview);
         } else {
@@ -4741,7 +5043,7 @@ void MainWindow::onPmOpenOverlay()
             }
             if (!imagePreviewOverlay) {
                 imagePreviewOverlay = new ImagePreviewOverlay(this);
-                imagePreviewOverlay->setGeometry(geometry());
+                imagePreviewOverlay->setGeometry(initialOverlayGeometry());
                 connect(imagePreviewOverlay, &ImagePreviewOverlay::closed, this, &MainWindow::closePreview);
                 connect(imagePreviewOverlay, &ImagePreviewOverlay::navigateRequested, this, &MainWindow::changePmPreview);
             } else {
@@ -4755,7 +5057,7 @@ void MainWindow::onPmOpenOverlay()
             }
             if (!previewOverlay) {
                 previewOverlay = new PreviewOverlay(this);
-                previewOverlay->setGeometry(geometry());
+                previewOverlay->setGeometry(initialOverlayGeometry());
                 connect(previewOverlay, &PreviewOverlay::closed, this, &MainWindow::closePreview);
                 connect(previewOverlay, &PreviewOverlay::navigateRequested, this, &MainWindow::changePmPreview);
             } else {
@@ -4779,14 +5081,19 @@ void MainWindow::onPmAssetContextMenu(const QPoint &pos)
     // Get all selected items
     QModelIndexList selectedIndexes = view->selectionModel()->selectedIndexes();
     QStringList selectedPaths;
+    QStringList selectedRenamablePaths;
     QList<int> selectedAssetIds;
     
     for (const QModelIndex &idx : selectedIndexes) {
+        const bool isFolder = idx.data(ProjectAssetsModel::IsFolderRole).toBool();
         QString path = idx.data(ProjectAssetsModel::FilePathRole).toString();
         int assetId = idx.data(ProjectAssetsModel::IdRole).toInt();
         if (!path.isEmpty() && !selectedPaths.contains(path)) {
             selectedPaths.append(path);
             selectedAssetIds.append(assetId);
+            if (!isFolder) {
+                selectedRenamablePaths.append(path);
+            }
         }
     }
     
@@ -4827,6 +5134,9 @@ void MainWindow::onPmAssetContextMenu(const QPoint &pos)
     QAction *renameA = menu.addAction("Rename");
     renameA->setShortcut(QKeySequence(Qt::Key_F2));
     renameA->setEnabled(selCount == 1);
+
+    QAction *bulkRenameA = menu.addAction(QString("Bulk Rename (%1 item(s))...").arg(selectedRenamablePaths.size()));
+    bulkRenameA->setEnabled(selectedRenamablePaths.size() >= 2);
     
     QAction *deleteA = menu.addAction("Delete");
     deleteA->setShortcut(QKeySequence::Delete);
@@ -4862,10 +5172,17 @@ void MainWindow::onPmAssetContextMenu(const QPoint &pos)
         onPmPaste();
     } else if (chosen == renameA && selCount == 1) {
         onPmRename();
+    } else if (chosen == bulkRenameA && selectedRenamablePaths.size() >= 2) {
+        releaseAnyPreviewLocksForPaths(selectedRenamablePaths);
+        BulkRenameDialog dialog(selectedRenamablePaths, this);
+        if (dialog.exec() == QDialog::Accepted) {
+            onPmRefresh();
+            statusBar()->showMessage("Bulk rename completed", 3000);
+        }
     } else if (chosen == deleteA) {
         onPmDelete();
     } else if (chosen == showInExplorerA && selCount == 1) {
-        QProcess::startDetached("explorer.exe", {"/select,", QDir::toNativeSeparators(selectedPaths.first())});
+        DragUtils::instance().showInExplorer(selectedPaths.first());
     } else if (chosen == propertiesA && selCount == 1) {
         #ifdef Q_OS_WIN
         std::wstring wpath = selectedPaths.first().toStdWString();
@@ -4950,8 +5267,10 @@ void MainWindow::onPmProjectContextMenu(const QPoint &pos)
     if (index.isValid()) {
         int projectId = index.data(ProjectsModel::IdRole).toInt();
         
-        menu.addAction("Rename Project", this, &MainWindow::onPmRenameProject);
-        menu.addAction("Change Watch Folder...", this, &MainWindow::onPmAddWatchFolder);
+        QAction *renameProjectAction = menu.addAction("Rename Project");
+        connect(renameProjectAction, &QAction::triggered, this, &MainWindow::onPmRenameProject);
+        QAction *changeWatchFolderAction = menu.addAction("Change Watch Folder...");
+        connect(changeWatchFolderAction, &QAction::triggered, this, &MainWindow::onPmAddWatchFolder);
         menu.addSeparator();
         
         // Generate Thumbnails submenu
@@ -4967,7 +5286,8 @@ void MainWindow::onPmProjectContextMenu(const QPoint &pos)
         });
         
         menu.addSeparator();
-        menu.addAction("Re-sync Asset Folders", this, [this, index]() {
+        QAction *resyncAction = menu.addAction("Re-sync Asset Folders");
+        connect(resyncAction, &QAction::triggered, this, [this, index]() {
             int projectId = index.data(ProjectsModel::IdRole).toInt();
             if (projectId <= 0) return;
             
@@ -4990,9 +5310,11 @@ void MainWindow::onPmProjectContextMenu(const QPoint &pos)
             });
         });
         menu.addSeparator();
-        menu.addAction("Delete Project", this, &MainWindow::onPmDeleteProject);
+        QAction *deleteProjectAction = menu.addAction("Delete Project");
+        connect(deleteProjectAction, &QAction::triggered, this, &MainWindow::onPmDeleteProject);
     } else {
-        menu.addAction("New Project...", this, &MainWindow::onPmCreateProject);
+        QAction *newProjectAction = menu.addAction("New Project...");
+        connect(newProjectAction, &QAction::triggered, this, &MainWindow::onPmCreateProject);
     }
     
     menu.exec(pmProjectsListView->viewport()->mapToGlobal(pos));
@@ -5040,17 +5362,26 @@ void MainWindow::pmImportToProject(const QString& name, const QString& watchPath
         return;
     }
     
-    // Create importer if needed - uses same proven Importer as Asset Manager
     if (!pmImporter) {
-        pmImporter = new Importer(this, &ProjectDB::instance());
-        pmImporter->setSequenceDetectionEnabled(true);  // Enable sequence detection like Asset Manager
-        connect(pmImporter, &Importer::progressChanged, this, &MainWindow::onPmImportProgress);
-        connect(pmImporter, &Importer::currentFileChanged, this, &MainWindow::onPmImportFileChanged);
-        connect(pmImporter, &Importer::currentFolderChanged, this, &MainWindow::onPmImportFolderChanged);
-        connect(pmImporter, &Importer::importFinished, this, &MainWindow::onPmImportFinished);
+        pmImporter = new ImportController(this);
+        pmImporter->start(ImportController::DatabaseKind::ProjectManager, ProjectDB::instance().database().databaseName());
+        connect(pmImporter, &ImportController::progressChanged, this, &MainWindow::onPmImportProgress);
+        connect(pmImporter, &ImportController::currentFileChanged, this, &MainWindow::onPmImportFileChanged);
+        connect(pmImporter, &ImportController::currentFolderChanged, this, &MainWindow::onPmImportFolderChanged);
+        connect(pmImporter, &ImportController::importFinished, this, [this](int, const QList<int>&) {
+            onPmImportFinished();
+        });
+        connect(pmImporter, &ImportController::importFailed, this, [this](const QString& error) {
+            if (pmImportProgressDialog) {
+                pmImportProgressDialog->reject();
+                pmImportProgressDialog->deleteLater();
+                pmImportProgressDialog = nullptr;
+            }
+            pmPendingImportProjectId = -1;
+            statusBar()->showMessage(QString("Project import failed: %1").arg(error), 5000);
+        });
     }
-    
-    // Show progress dialog
+
     if (!pmImportProgressDialog) {
         pmImportProgressDialog = new ImportProgressDialog(this);
     }
@@ -5058,18 +5389,18 @@ void MainWindow::pmImportToProject(const QString& name, const QString& watchPath
     pmImportProgressDialog->show();
     pmImportProgressDialog->raise();
     pmImportProgressDialog->activateWindow();
-    
-    // Store project ID for refresh after import
+
     pmPendingImportProjectId = projectId;
-    
+
     LogManager::instance().addLog(QString("[ProjectManager] Starting import from %1 into folder id %2").arg(watchPath).arg(folderId), "INFO");
-    
-    // Use Importer::importFolderContents - same approach as Asset Manager
-    // Progress updates are throttled (every 50ms) to keep UI responsive
-    pmImporter->importFolderContents(watchPath, folderId);
-    
-    // Import is synchronous but with throttled UI updates - call finished handler
-    onPmImportFinished();
+
+    if (!pmImporter->importFolderContentsToProject(watchPath, folderId, true)) {
+        pmImportProgressDialog->reject();
+        pmImportProgressDialog->deleteLater();
+        pmImportProgressDialog = nullptr;
+        pmPendingImportProjectId = -1;
+        statusBar()->showMessage("Project import is already running or could not start", 3000);
+    }
 }
 
 void MainWindow::onPmImportProgress(int current, int total)
@@ -5296,6 +5627,9 @@ void MainWindow::onPmVersionDropdownRequested(const QModelIndex &index, const QP
 
 void MainWindow::onPmRefresh()
 {
+    if (pmWatcher && pmCurrentProjectId > 0) {
+        pmWatcher->rescan(pmCurrentProjectId);
+    }
     if (pmProjectsModel) {
         pmProjectsModel->refresh();
     }
@@ -5662,6 +5996,9 @@ void MainWindow::updatePmInfoPanel()
 
 void MainWindow::updatePmPreviewForIndex(const QModelIndex &idx)
 {
+    if (!pmPreviewPanel || !pmPreviewPanel->isVisible()) {
+        return;
+    }
     if (!idx.isValid()) {
         clearPmPreview();
         return;
@@ -5721,8 +6058,8 @@ void MainWindow::clearPmPreview()
     pmCurrentPreviewPath.clear();
     
     // Stop video playback
-    if (pmTlRenderPlayer) {
-        pmTlRenderPlayer->stop();
+    if (pmPlayerLabPlayer) {
+        pmPlayerLabPlayer->stop();
     }
     
     // Stop sequence playback
@@ -5812,10 +6149,12 @@ void MainWindow::loadPmSequenceFrame(int index)
 
 void MainWindow::showPmVideo(const QString &filePath)
 {
-    if (!pmTlRenderPlayer || !pmVideoWidget) return;
+    if (!pmPlayerLabPlayer) return;
+    ensurePmVideoPreview();
+    if (!pmVideoWidget) return;
     
     // Stop any previous playback
-    pmTlRenderPlayer->stop();
+    pmPlayerLabPlayer->stop();
     pausePmSequence();
     pmIsSequence = false;
     
@@ -5824,7 +6163,7 @@ void MainWindow::showPmVideo(const QString &filePath)
     pmVideoWidget->show();
     
     // Ensure tlRender viewport is wired to the active player
-    pmVideoWidget->setPlayer(pmTlRenderPlayer);
+    pmVideoWidget->setPlayer(pmPlayerLabPlayer);
     
     // Show media controls
     if (pmPrevFrameBtn) pmPrevFrameBtn->show();
@@ -5836,14 +6175,52 @@ void MainWindow::showPmVideo(const QString &filePath)
     if (pmMuteBtn) pmMuteBtn->show();
     
     // Load and play
-    pmTlRenderPlayer->loadMedia(filePath);
-    pmTlRenderPlayer->play();
+    pmPlayerLabPlayer->loadMedia(filePath);
+    pmPlayerLabPlayer->play();
+}
+
+void MainWindow::ensureFmVideoPreview()
+{
+    if (fmVideoWidget || !fmPreviewContent) {
+        return;
+    }
+
+    auto *layout = qobject_cast<QVBoxLayout*>(fmPreviewContent->layout());
+    if (!layout) {
+        return;
+    }
+
+    fmVideoWidget = new PlayerLabViewport(fmPreviewPanel);
+    fmVideoWidget->setMinimumHeight(160);
+    fmVideoWidget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    fmVideoWidget->hide();
+    fmVideoWidget->setPlayer(fmPlayerLabPlayer);
+    layout->insertWidget(1, fmVideoWidget, 1);
+}
+
+void MainWindow::ensurePmVideoPreview()
+{
+    if (pmVideoWidget || !pmPreviewContent) {
+        return;
+    }
+
+    auto *layout = qobject_cast<QVBoxLayout*>(pmPreviewContent->layout());
+    if (!layout) {
+        return;
+    }
+
+    pmVideoWidget = new PlayerLabViewport(pmPreviewPanel);
+    pmVideoWidget->setMinimumHeight(160);
+    pmVideoWidget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    pmVideoWidget->hide();
+    pmVideoWidget->setPlayer(pmPlayerLabPlayer);
+    layout->insertWidget(1, pmVideoWidget, 1);
 }
 
 void MainWindow::showPmImage(const QString &filePath)
 {
     // Stop any previous playback
-    if (pmTlRenderPlayer) pmTlRenderPlayer->stop();
+    if (pmPlayerLabPlayer) pmPlayerLabPlayer->stop();
     pausePmSequence();
     pmIsSequence = false;
     
@@ -5888,7 +6265,7 @@ void MainWindow::showPmSequence(const QStringList &framePaths)
     if (framePaths.isEmpty()) return;
     
     // Stop any previous playback
-    if (pmTlRenderPlayer) pmTlRenderPlayer->stop();
+    if (pmPlayerLabPlayer) pmPlayerLabPlayer->stop();
     
     pmIsSequence = true;
     pmSequenceFramePaths = framePaths;
@@ -5958,7 +6335,7 @@ void MainWindow::changePmPreview(int delta)
             }
             if (!previewOverlay) {
                 previewOverlay = new PreviewOverlay(this);
-                previewOverlay->setGeometry(geometry());
+                previewOverlay->setGeometry(initialOverlayGeometry());
                 connect(previewOverlay, &PreviewOverlay::closed, this, &MainWindow::closePreview);
                 connect(previewOverlay, &PreviewOverlay::navigateRequested, this, &MainWindow::changePmPreview);
             }
@@ -6005,7 +6382,7 @@ void MainWindow::changePmPreview(int delta)
                 }
                 if (!imagePreviewOverlay) {
                     imagePreviewOverlay = new ImagePreviewOverlay(this);
-                    imagePreviewOverlay->setGeometry(geometry());
+                    imagePreviewOverlay->setGeometry(initialOverlayGeometry());
                     connect(imagePreviewOverlay, &ImagePreviewOverlay::closed, this, &MainWindow::closePreview);
                     connect(imagePreviewOverlay, &ImagePreviewOverlay::navigateRequested, this, &MainWindow::changePmPreview);
                 }
@@ -6016,7 +6393,7 @@ void MainWindow::changePmPreview(int delta)
                 }
                 if (!previewOverlay) {
                     previewOverlay = new PreviewOverlay(this);
-                    previewOverlay->setGeometry(geometry());
+                    previewOverlay->setGeometry(initialOverlayGeometry());
                     connect(previewOverlay, &PreviewOverlay::closed, this, &MainWindow::closePreview);
                     connect(previewOverlay, &PreviewOverlay::navigateRequested, this, &MainWindow::changePmPreview);
                 }
@@ -6121,6 +6498,50 @@ QStringList MainWindow::getSelectedPmAssetPaths() const
     }
     
     return paths;
+}
+
+QString MainWindow::pmCurrentDestinationDir() const
+{
+    if (pmCurrentProjectId <= 0) {
+        return QString();
+    }
+
+    const Project project = ProjectDB::instance().getProject(pmCurrentProjectId);
+    const QString watchPath = QDir::cleanPath(project.watchPath);
+    if (watchPath.isEmpty()) {
+        return QString();
+    }
+
+    if (pmCurrentFolderId <= 0) {
+        return watchPath;
+    }
+
+    QStringList pathSegments;
+    int folderId = pmCurrentFolderId;
+    const int rootFolderId = ProjectDB::instance().getProjectRootFolderId(pmCurrentProjectId);
+
+    while (folderId > 0 && folderId != rootFolderId) {
+        QSqlQuery query(ProjectDB::instance().database());
+        query.prepare("SELECT name, parent_id FROM virtual_folders WHERE id = ?");
+        query.addBindValue(folderId);
+        if (!query.exec() || !query.next()) {
+            return watchPath;
+        }
+
+        pathSegments.prepend(query.value(0).toString());
+        folderId = query.value(1).toInt();
+    }
+
+    if (folderId != rootFolderId) {
+        return watchPath;
+    }
+
+    QString destination = watchPath;
+    for (const QString &segment : pathSegments) {
+        destination = QDir(destination).filePath(segment);
+    }
+
+    return QDir::cleanPath(destination);
 }
 
 void MainWindow::restoreProjectManagerState()
@@ -6251,7 +6672,7 @@ void MainWindow::navigateToProjectAsset(int projectId, int assetId, const QStrin
             match = (srcIdx.data(ProjectAssetsModel::IdRole).toInt() == assetId);
         }
         if (!match && !filePath.isEmpty()) {
-            match = srcIdx.data(ProjectAssetsModel::FilePathRole).toString().compare(filePath, Qt::CaseInsensitive) == 0;
+            match = ProjectPathUtils::pathsEqual(srcIdx.data(ProjectAssetsModel::FilePathRole).toString(), filePath);
         }
         if (match) {
             targetRow = row;
@@ -6297,17 +6718,7 @@ void MainWindow::onPmPaste()
 {
     if (pmClipboard.isEmpty()) return;
     
-    // Get current folder path from the first item's directory or project watch path
-    QString destDir;
-    if (pmCurrentProjectId > 0) {
-        QVector<Project> projects = ProjectDB::instance().listProjects();
-        for (const Project& p : projects) {
-            if (p.id == pmCurrentProjectId) {
-                destDir = p.watchPath;
-                break;
-            }
-        }
-    }
+    const QString destDir = pmCurrentDestinationDir();
     
     if (destDir.isEmpty()) {
         QMessageBox::warning(this, "Paste", "No destination folder available");
@@ -6328,9 +6739,7 @@ void MainWindow::onPmPaste()
         pmAssetsModel->setProjectId(pmCurrentProjectId);
     }
     
-    if (!fileOpsDialog) fileOpsDialog = new FileOpsProgressDialog(this);
-    fileOpsDialog->show();
-    fileOpsDialog->raise();
+    showFileOpsDialog();
     
     pmClipboard.clear();
     pmClipboardCutMode = false;
@@ -6356,8 +6765,7 @@ void MainWindow::onPmDelete()
     }
     
     FileOpsQueue::instance().enqueueDelete(paths);
-    if (!fileOpsDialog) fileOpsDialog = new FileOpsProgressDialog(this);
-    fileOpsDialog->show();
+    showFileOpsDialog();
 }
 
 void MainWindow::onPmRename()
@@ -6389,17 +6797,7 @@ void MainWindow::onPmRename()
 
 void MainWindow::onPmNewFolder()
 {
-    // Create folder in current project's watch path
-    QString destDir;
-    if (pmCurrentProjectId > 0) {
-        QVector<Project> projects = ProjectDB::instance().listProjects();
-        for (const Project& p : projects) {
-            if (p.id == pmCurrentProjectId) {
-                destDir = p.watchPath;
-                break;
-            }
-        }
-    }
+    const QString destDir = pmCurrentDestinationDir();
     
     if (destDir.isEmpty()) {
         QMessageBox::warning(this, "New Folder", "No project selected");
@@ -6594,10 +6992,18 @@ void MainWindow::setupConnections()
     connect(&DB::instance(), &DB::assetVersionsChanged,
             this, &MainWindow::onAssetVersionsChanged);
 
-    // Note: We intentionally do NOT refresh File Manager after file operations.
-    // QFileSystemModel has its own internal file watcher that auto-updates.
-    // Triggering onFmRefresh() would cause unnecessary 1sec+ delays after every operation.
-    // Use F5 or View > Refresh for manual refresh if needed.
+    auto &fileOpsQueue = FileOpsQueue::instance();
+    auto pendingFileOps = std::make_shared<QHash<int, FileOpsQueue::Item>>();
+    connect(&fileOpsQueue, &FileOpsQueue::currentItemChanged, this, [pendingFileOps](const FileOpsQueue::Item &item) {
+        pendingFileOps->insert(item.id, item);
+    });
+    connect(&fileOpsQueue, &FileOpsQueue::itemFinished, this, [this, pendingFileOps](int id, bool success, const QString &) {
+        const FileOpsQueue::Item item = pendingFileOps->take(id);
+        if (!success) {
+            return;
+        }
+        refreshFileManagerViewsForPaths(item.sources, item.destination);
+    });
 }
 
 
@@ -7456,7 +7862,7 @@ void MainWindow::showPreview(int index)
         }
         if (!imagePreviewOverlay) {
             imagePreviewOverlay = new ImagePreviewOverlay(this);
-            imagePreviewOverlay->setGeometry(geometry());
+            imagePreviewOverlay->setGeometry(initialOverlayGeometry());
             connect(imagePreviewOverlay, &ImagePreviewOverlay::closed, this, &MainWindow::closePreview);
             connect(imagePreviewOverlay, &ImagePreviewOverlay::navigateRequested, this, &MainWindow::changePreview);
         } else {
@@ -7474,7 +7880,7 @@ void MainWindow::showPreview(int index)
     if (!previewOverlay) {
         previewOverlay = new PreviewOverlay(this);
         // Center overlay to the app window instead of screen top-left
-        previewOverlay->setGeometry(geometry());
+        previewOverlay->setGeometry(initialOverlayGeometry());
 
         connect(previewOverlay, &PreviewOverlay::closed, this, &MainWindow::closePreview);
         connect(previewOverlay, &PreviewOverlay::navigateRequested, this, &MainWindow::changePreview);
@@ -7514,17 +7920,26 @@ void MainWindow::closePreview()
     previewIndex = -1;
 
     if (previewOverlay) {
-        // Stop any playback (video, fallback, sequence) before hiding/deleting
-        previewOverlay->stopPlayback();
-        previewOverlay->hide();
-        previewOverlay->deleteLater();
+        PreviewOverlay* overlay = previewOverlay;
         previewOverlay = nullptr;
+        overlay->stopPlayback();
+        overlay->hide();
+        if (m_appClosing) {
+            delete overlay;
+        } else {
+            overlay->deleteLater();
+        }
     }
     if (imagePreviewOverlay) {
-        imagePreviewOverlay->stopPlayback();
-        imagePreviewOverlay->hide();
-        imagePreviewOverlay->deleteLater();
+        ImagePreviewOverlay* overlay = imagePreviewOverlay;
         imagePreviewOverlay = nullptr;
+        overlay->stopPlayback();
+        overlay->hide();
+        if (m_appClosing) {
+            delete overlay;
+        } else {
+            overlay->deleteLater();
+        }
     }
 
     // 1) If preview was opened from File Manager, restore focus/selection there
@@ -7625,7 +8040,7 @@ void MainWindow::changeFmPreview(int delta)
             }
             if (!imagePreviewOverlay) {
                 imagePreviewOverlay = new ImagePreviewOverlay(this);
-                imagePreviewOverlay->setGeometry(geometry());
+                imagePreviewOverlay->setGeometry(initialOverlayGeometry());
                 connect(imagePreviewOverlay, &ImagePreviewOverlay::closed, this, &MainWindow::closePreview);
                 connect(imagePreviewOverlay, &ImagePreviewOverlay::navigateRequested, this, &MainWindow::changeFmPreview);
             }
@@ -7637,7 +8052,7 @@ void MainWindow::changeFmPreview(int delta)
             }
             if (!previewOverlay) {
                 previewOverlay = new PreviewOverlay(this);
-                previewOverlay->setGeometry(geometry());
+                previewOverlay->setGeometry(initialOverlayGeometry());
                 connect(previewOverlay, &PreviewOverlay::closed, this, &MainWindow::closePreview);
                 connect(previewOverlay, &PreviewOverlay::navigateRequested, this, &MainWindow::changeFmPreview);
             }
@@ -7737,7 +8152,7 @@ void MainWindow::changeFmPreview(int delta)
                 }
                 if (!previewOverlay) {
                     previewOverlay = new PreviewOverlay(this);
-                    previewOverlay->setGeometry(geometry());
+                    previewOverlay->setGeometry(initialOverlayGeometry());
                     connect(previewOverlay, &PreviewOverlay::closed, this, &MainWindow::closePreview);
                     connect(previewOverlay, &PreviewOverlay::navigateRequested, this, &MainWindow::changeFmPreview);
                 }
@@ -7753,6 +8168,7 @@ void MainWindow::changeFmPreview(int delta)
         QString path = fmDirModel ? fmDirModel->filePath(srcIdx) : QString();
         if (!path.isEmpty()) {
             QFileInfo fi(path);
+
             if (fi.exists() && fi.isFile() && isPreviewOverlayViewable(fi.suffix())) {
                 // Found a viewable file - update context and show it
                 fmOverlayCurrentIndex = QPersistentModelIndex(next);
@@ -7773,6 +8189,185 @@ void MainWindow::changeFmPreview(int delta)
 
     // No viewable file found in the direction - do nothing
 }
+namespace {
+QVariantMap probeVideoMetadataMap(const QString& filePath)
+{
+    MediaInfo::VideoMetadata meta;
+    QString error;
+    if (!MediaInfo::probeVideoFile(filePath, meta, &error)) {
+        throw std::runtime_error(error.isEmpty() ? "Video metadata probe failed" : error.toStdString());
+    }
+
+    QVariantMap result;
+    result.insert(QStringLiteral("path"), filePath);
+
+    QString dimensions;
+    if (meta.width > 0 && meta.height > 0) {
+        dimensions = QString("Dimensions: %1 x %2").arg(meta.width).arg(meta.height);
+        if (meta.fps > 0.0) {
+            dimensions += QString(" @ %1 fps").arg(meta.fps, 0, 'f', 2);
+        }
+    }
+    result.insert(QStringLiteral("dimensions"), dimensions);
+
+    QString vcodec = meta.videoCodec;
+    if (!meta.videoProfile.isEmpty()) {
+        vcodec += " (" + meta.videoProfile + ")";
+    }
+    result.insert(QStringLiteral("videoCodec"), vcodec);
+
+    QString acodec = meta.audioCodec;
+    if (meta.audioChannels > 0) {
+        acodec += QString(" — %1 ch").arg(meta.audioChannels);
+    }
+    result.insert(QStringLiteral("audioCodec"), acodec);
+
+    result.insert(QStringLiteral("bitrateMbps"), meta.bitrate > 0 ? meta.bitrate / 1'000'000.0 : 0.0);
+    result.insert(QStringLiteral("timecode"), meta.hasTimecode ? meta.timecodeStart : QString());
+
+    QStringList cameraParts;
+    if (!meta.cameraName.isEmpty()) cameraParts << meta.cameraName;
+    if (!meta.cameraModel.isEmpty()) cameraParts << meta.cameraModel;
+    if (!meta.lens.isEmpty()) cameraParts << "Lens: " + meta.lens;
+    result.insert(QStringLiteral("camera"), cameraParts.join(" / "));
+
+    QStringList shotParts;
+    if (!meta.reelName.isEmpty()) shotParts << "Reel: " + meta.reelName;
+    if (!meta.scene.isEmpty()) shotParts << "Scene: " + meta.scene;
+    if (!meta.take.isEmpty()) shotParts << "Take: " + meta.take;
+    result.insert(QStringLiteral("shot"), shotParts.join(" | "));
+    return result;
+}
+}
+
+void MainWindow::clearAssetInfoVideoMetadata()
+{
+    infoVideoCodec->clear(); infoVideoCodec->setVisible(false);
+    infoAudioCodec->clear(); infoAudioCodec->setVisible(false);
+    infoBitrate->clear(); infoBitrate->setVisible(false);
+    infoTimecode->clear(); infoTimecode->setVisible(false);
+    infoCameraInfo->clear(); infoCameraInfo->setVisible(false);
+    infoShotInfo->clear(); infoShotInfo->setVisible(false);
+}
+
+void MainWindow::clearFmInfoVideoMetadata()
+{
+    if (fmInfoVideoCodec) { fmInfoVideoCodec->clear(); fmInfoVideoCodec->setVisible(false); }
+    if (fmInfoAudioCodec) { fmInfoAudioCodec->clear(); fmInfoAudioCodec->setVisible(false); }
+    if (fmInfoBitrate) { fmInfoBitrate->clear(); fmInfoBitrate->setVisible(false); }
+    if (fmInfoTimecode) { fmInfoTimecode->clear(); fmInfoTimecode->setVisible(false); }
+    if (fmInfoCameraInfo) { fmInfoCameraInfo->clear(); fmInfoCameraInfo->setVisible(false); }
+    if (fmInfoShotInfo) { fmInfoShotInfo->clear(); fmInfoShotInfo->setVisible(false); }
+}
+
+void MainWindow::requestAssetInfoVideoMetadata(const QString& filePath)
+{
+    assetInfoVideoMetadataPath = filePath;
+    clearAssetInfoVideoMetadata();
+    infoDimensions->setText("Video file");
+    infoDimensions->setVisible(true);
+    infoMediaRequests->submitLatest(QStringLiteral("asset-info-video"), [filePath] {
+        return QVariant(probeVideoMetadataMap(filePath));
+    });
+}
+
+void MainWindow::requestFmInfoVideoMetadata(const QString& filePath)
+{
+    fmInfoVideoMetadataPath = filePath;
+    clearFmInfoVideoMetadata();
+    if (fmInfoDimensions) {
+        fmInfoDimensions->setText("Video file");
+        fmInfoDimensions->setVisible(true);
+    }
+    infoMediaRequests->submitLatest(QStringLiteral("fm-info-video"), [filePath] {
+        return QVariant(probeVideoMetadataMap(filePath));
+    });
+}
+
+void MainWindow::applyAssetInfoVideoMetadata(const QVariantMap& metadata)
+{
+    const QString dimensions = metadata.value(QStringLiteral("dimensions")).toString();
+    infoDimensions->setText(dimensions.isEmpty() ? QStringLiteral("Video file") : dimensions);
+    infoDimensions->setVisible(true);
+
+    const QString vcodec = metadata.value(QStringLiteral("videoCodec")).toString();
+    infoVideoCodec->setText("Video Codec: " + vcodec);
+    infoVideoCodec->setVisible(!vcodec.isEmpty());
+
+    const QString acodec = metadata.value(QStringLiteral("audioCodec")).toString();
+    infoAudioCodec->setText("Audio: " + acodec);
+    infoAudioCodec->setVisible(!acodec.isEmpty());
+
+    const double mbps = metadata.value(QStringLiteral("bitrateMbps")).toDouble();
+    if (mbps > 0.0) {
+        infoBitrate->setText(QString("Bitrate: %1 Mbps").arg(mbps, 0, 'f', 2));
+        infoBitrate->setVisible(true);
+    } else {
+        infoBitrate->clear(); infoBitrate->setVisible(false);
+    }
+
+    const QString timecode = metadata.value(QStringLiteral("timecode")).toString();
+    infoTimecode->setText("Timecode: " + timecode);
+    infoTimecode->setVisible(!timecode.isEmpty());
+
+    const QString camera = metadata.value(QStringLiteral("camera")).toString();
+    infoCameraInfo->setText("Camera: " + camera);
+    infoCameraInfo->setVisible(!camera.isEmpty());
+
+    const QString shot = metadata.value(QStringLiteral("shot")).toString();
+    infoShotInfo->setText(shot);
+    infoShotInfo->setVisible(!shot.isEmpty());
+}
+
+void MainWindow::applyFmInfoVideoMetadata(const QVariantMap& metadata)
+{
+    const QString dimensions = metadata.value(QStringLiteral("dimensions")).toString();
+    if (fmInfoDimensions) {
+        fmInfoDimensions->setText(dimensions.isEmpty() ? QStringLiteral("Video file") : dimensions);
+        fmInfoDimensions->setVisible(true);
+    }
+
+    const QString vcodec = metadata.value(QStringLiteral("videoCodec")).toString();
+    if (fmInfoVideoCodec) {
+        fmInfoVideoCodec->setText("Video Codec: " + vcodec);
+        fmInfoVideoCodec->setVisible(!vcodec.isEmpty());
+    }
+
+    const QString acodec = metadata.value(QStringLiteral("audioCodec")).toString();
+    if (fmInfoAudioCodec) {
+        fmInfoAudioCodec->setText("Audio: " + acodec);
+        fmInfoAudioCodec->setVisible(!acodec.isEmpty());
+    }
+
+    const double mbps = metadata.value(QStringLiteral("bitrateMbps")).toDouble();
+    if (fmInfoBitrate) {
+        if (mbps > 0.0) {
+            fmInfoBitrate->setText(QString("Bitrate: %1 Mbps").arg(mbps, 0, 'f', 2));
+            fmInfoBitrate->setVisible(true);
+        } else {
+            fmInfoBitrate->clear(); fmInfoBitrate->setVisible(false);
+        }
+    }
+
+    const QString timecode = metadata.value(QStringLiteral("timecode")).toString();
+    if (fmInfoTimecode) {
+        fmInfoTimecode->setText("Timecode: " + timecode);
+        fmInfoTimecode->setVisible(!timecode.isEmpty());
+    }
+
+    const QString camera = metadata.value(QStringLiteral("camera")).toString();
+    if (fmInfoCameraInfo) {
+        fmInfoCameraInfo->setText("Camera: " + camera);
+        fmInfoCameraInfo->setVisible(!camera.isEmpty());
+    }
+
+    const QString shot = metadata.value(QStringLiteral("shot")).toString();
+    if (fmInfoShotInfo) {
+        fmInfoShotInfo->setText(shot);
+        fmInfoShotInfo->setVisible(!shot.isEmpty());
+    }
+}
+
 
 
 QItemSelectionModel* MainWindow::getCurrentSelectionModel()
@@ -7788,11 +8383,15 @@ void MainWindow::updateInfoPanel()
         : getCurrentSelectionModel()->selectedRows();
 
     if (selected.isEmpty()) {
+        assetInfoVideoMetadataPath.clear();
+        if (infoMediaRequests)
+            infoMediaRequests->cancelChannel(QStringLiteral("asset-info-video"));
         infoFileName->setText("No selection");
         infoFilePath->clear();
         infoFileSize->clear();
         infoFileType->clear();
         infoDimensions->clear();
+        clearAssetInfoVideoMetadata();
         infoCreated->clear();
         infoModified->clear();
         infoPermissions->clear();
@@ -7802,7 +8401,6 @@ void MainWindow::updateInfoPanel()
         if (versionTable) { versionTable->setRowCount(0); }
         if (versionsTitleLabel) { versionsTitleLabel->setText("Version History"); }
         if (revertVersionButton) { revertVersionButton->setEnabled(false); }
-
         return;
     }
 
@@ -7870,6 +8468,10 @@ void MainWindow::updateInfoPanel()
             if (!version.isEmpty()) {
                 dimensionsStr += QString("\nVersion: %1").arg(version);
             }
+
+            assetInfoVideoMetadataPath.clear();
+            infoMediaRequests->cancelChannel(QStringLiteral("asset-info-video"));
+            clearAssetInfoVideoMetadata();
         } else {
             // Check if it's an image
             QStringList imageExts = {"jpg", "jpeg", "png", "gif", "bmp", "tiff", "tif", "webp",
@@ -7886,15 +8488,21 @@ void MainWindow::updateInfoPanel()
                 } else {
                     dimensionsStr = "Dimensions: Unable to read";
                 }
+                assetInfoVideoMetadataPath.clear();
+                infoMediaRequests->cancelChannel(QStringLiteral("asset-info-video"));
+                clearAssetInfoVideoMetadata();
             }
             // Check if it's a video
             else {
                 QStringList videoExts = {"mp4", "mov", "avi", "mkv", "wmv", "flv", "webm",
                                         "m4v", "mpg", "mpeg", "3gp", "mts", "m2ts", "mxf"};
                 if (videoExts.contains(fileType.toLower())) {
-                    // TODO: Extract video metadata using tlRender/FFmpeg
-                    // For now, just show "Video file"
                     dimensionsStr = "Video file";
+                    requestAssetInfoVideoMetadata(filePath);
+                } else {
+                    assetInfoVideoMetadataPath.clear();
+                    infoMediaRequests->cancelChannel(QStringLiteral("asset-info-video"));
+                    clearAssetInfoVideoMetadata();
                 }
             }
         }
@@ -7973,12 +8581,17 @@ void MainWindow::updateInfoPanel()
         infoFileSize->clear();
         infoFileType->clear();
         infoDimensions->clear();
+        assetInfoVideoMetadataPath.clear();
+        if (infoMediaRequests)
+            infoMediaRequests->cancelChannel(QStringLiteral("asset-info-video"));
+        clearAssetInfoVideoMetadata();
         infoCreated->clear();
         infoModified->clear();
         infoPermissions->clear();
         infoRatingLabel->setVisible(false);
         infoRatingWidget->setVisible(false);
         infoTags->clear();
+
     }
 }
 
@@ -8361,120 +8974,43 @@ void MainWindow::dropEvent(QDropEvent *event)
     statusBar()->clearMessage();
 
     const QMimeData *mimeData = event->mimeData();
-
-    if (mimeData->hasUrls()) {
-        QStringList filePaths;
-        QStringList folderPaths;
-        QList<QUrl> urls = mimeData->urls();
-        
-        for (const QUrl &url : urls) {
-            if (url.isLocalFile()) {
-                QString path = url.toLocalFile();
-                QFileInfo info(path);
-
-                if (info.isFile()) {
-                    filePaths.append(path);
-                } else if (info.isDir()) {
-                    // Keep directories separate to preserve structure
-                    folderPaths.append(path);
-                }
-            }
-        }
-
-        // Check if we're on the Project Manager tab
-        if (mainTabs && mainTabs->currentWidget() == projectManagerPage) {
-            // Handle Project Manager drops - only folders make sense here
-            if (folderPaths.size() == 1) {
-                QString folderPath = folderPaths.first();
-                QString folderName = QDir(folderPath).dirName();
-                pmImportToProject(folderName, folderPath);
-                event->acceptProposedAction();
-                return;
-            } else if (folderPaths.size() > 1) {
-                statusBar()->showMessage("Please drop only one folder at a time for Project Manager", 3000);
-                event->ignore();
-                return;
-            } else {
-                statusBar()->showMessage("Drop a folder to create a project", 3000);
-                event->ignore();
-                return;
-            }
-        }
-
-        // Asset Manager drop handling
-        // Get currently selected folder ID
-        QModelIndex currentFolderIndex = folderTreeView->currentIndex();
-        int parentFolderId = 0;
-        if (currentFolderIndex.isValid()) {
-            parentFolderId = folderModel->data(currentFolderIndex, VirtualFolderTreeModel::IdRole).toInt();
-        }
-        if (parentFolderId <= 0) {
-            parentFolderId = folderModel->rootId();
-        }
-
-        int totalImported = 0;
-
-        // Create and show import progress dialog
-        if (!importProgressDialog) {
-            importProgressDialog = new ImportProgressDialog(this);
-        }
-        importProgressDialog->show();
-        importProgressDialog->raise();
-        importProgressDialog->activateWindow();
-
-        // Disconnect importFinished temporarily to prevent premature dialog closure
-        disconnect(importer, &Importer::importFinished, this, &MainWindow::onImportComplete);
-
-        // Import folders with structure preservation
-        for (const QString &folderPath : folderPaths) {
-            if (importer->importFolder(folderPath, parentFolderId)) {
-                totalImported++;
-            }
-        }
-
-        // Import individual files
-        if (!filePaths.isEmpty()) {
-            importFiles(filePaths);
-            totalImported += filePaths.size();
-        }
-
-        // Reconnect importFinished signal
-        connect(importer, &Importer::importFinished, this, &MainWindow::onImportComplete);
-
-        // Manually trigger import complete
-        onImportComplete();
-
-        if (totalImported > 0) {
-            statusBar()->showMessage(QString("Import complete: %1 item(s)").arg(totalImported), 3000);
-        } else {
-            statusBar()->showMessage("No valid files to import", 3000);
-        }
-
-        event->acceptProposedAction();
-    } else {
+    if (!mimeData->hasUrls()) {
         event->ignore();
+        return;
     }
+
+    QStringList filePaths;
+    QStringList folderPaths;
+    const QList<QUrl> urls = mimeData->urls();
+    for (const QUrl &url : urls) {
+        if (!url.isLocalFile()) continue;
+        const QString path = url.toLocalFile();
+        const QFileInfo info(path);
+        if (info.isFile()) filePaths.append(path);
+        else if (info.isDir()) folderPaths.append(path);
+    }
+
+    if (mainTabs && mainTabs->currentWidget() == projectManagerPage) {
+        if (folderPaths.size() == 1) {
+            const QString folderPath = folderPaths.first();
+            pmImportToProject(QDir(folderPath).dirName(), folderPath);
+            event->acceptProposedAction();
+            return;
+        }
+        statusBar()->showMessage(folderPaths.size() > 1
+            ? QStringLiteral("Please drop only one folder at a time for Project Manager")
+            : QStringLiteral("Drop a folder to create a project"), 3000);
+        event->ignore();
+        return;
+    }
+
+    importToAssetLibrary(filePaths, folderPaths);
+    event->acceptProposedAction();
 }
 
 void MainWindow::importFiles(const QStringList &filePaths)
 {
-    if (!folderTreeView->currentIndex().isValid()) {
-        QMessageBox::warning(this, "No Folder Selected", "Please select a folder before importing files.");
-        return;
-    }
-
-    int folderId = folderTreeView->currentIndex().data(VirtualFolderTreeModel::IdRole).toInt();
-
-    // Create and show import progress dialog
-    if (!importProgressDialog) {
-        importProgressDialog = new ImportProgressDialog(this);
-    }
-    importProgressDialog->show();
-    importProgressDialog->raise();
-    importProgressDialog->activateWindow();
-
-    // Start import
-    importer->importFiles(filePaths, folderId);
+    importToAssetLibrary(filePaths, QStringList());
 }
 
 void MainWindow::onImportProgress(int current, int total)
@@ -8552,6 +9088,17 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
     // During UI construction, ignore heavy logic in event filter
     if (m_initializing) {
         return false; // do not intercept; let normal processing continue
+    }
+
+    if (fmSecondaryPane && fmSecondaryPane->isVisible() && event->type() == QEvent::MouseButtonPress) {
+        if (watched == fmGridView || watched == fmListView ||
+            (fmGridView && watched == fmGridView->viewport()) ||
+            (fmListView && watched == fmListView->viewport()) ||
+            watched == fmPathBar || watched == fmPreviewPanel ||
+            watched == fmImageView || (fmImageView && watched == fmImageView->viewport()) ||
+            watched == fmPreviewContent || watched == fmTree || (fmTree && watched == fmTree->viewport())) {
+            setActiveFmPane(true);
+        }
     }
     
     // Handle version badge clicks on Project Manager grid view
@@ -8750,7 +9297,7 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
                     dragEvent->accept();
                     return true;
                 }
-                const bool shift = dragEvent->keyboardModifiers().testFlag(Qt::ShiftModifier);
+                const bool shift = dragEvent->modifiers().testFlag(Qt::ShiftModifier);
                 dragEvent->setDropAction(shift ? Qt::MoveAction : Qt::CopyAction);
                 dragEvent->accept();
                 return true;
@@ -8798,7 +9345,7 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
                     dragEvent->accept();
                     return true;
                 }
-                const bool shift = dragEvent->keyboardModifiers().testFlag(Qt::ShiftModifier);
+                const bool shift = dragEvent->modifiers().testFlag(Qt::ShiftModifier);
                 dragEvent->setDropAction(shift ? Qt::MoveAction : Qt::CopyAction);
                 dragEvent->accept();
                 return true;
@@ -8852,16 +9399,11 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
                     return true;
                 }
 
-                const bool shift = dropEvent->keyboardModifiers().testFlag(Qt::ShiftModifier);
-                // Ensure any preview locks are released before file ops
-                if (fmTlRenderPlayer) { fmTlRenderPlayer->stop(); }
-                if (shift) FileOpsQueue::instance().enqueueMove(sources, destDir);
-                else FileOpsQueue::instance().enqueueCopy(sources, destDir);
-                if (!fileOpsDialog) fileOpsDialog = new FileOpsProgressDialog(this);
-                fileOpsDialog->show(); fileOpsDialog->raise(); fileOpsDialog->activateWindow();
+                const bool shift = dropEvent->modifiers().testFlag(Qt::ShiftModifier);
+                queueFmFileOperation(sources, destDir, shift);
                 statusBar()->showMessage(QString("Queued %1 item(s) for %2").arg(sources.size()).arg(shift ? "move" : "copy"), 3000);
             }
-            dropEvent->setDropAction(dropEvent->keyboardModifiers().testFlag(Qt::ShiftModifier) ? Qt::MoveAction : Qt::CopyAction);
+            dropEvent->setDropAction(dropEvent->modifiers().testFlag(Qt::ShiftModifier) ? Qt::MoveAction : Qt::CopyAction);
             dropEvent->accept();
             return true;
         }
@@ -8871,7 +9413,7 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
         if (event->type() == QEvent::DragEnter) {
             QDragEnterEvent *dragEvent = static_cast<QDragEnterEvent*>(event);
             if (dragEvent->mimeData()->hasUrls() || dragEvent->mimeData()->hasFormat("application/x-kasset-asset-ids") || dragEvent->mimeData()->hasFormat("application/x-kasset-sequence-urls")) {
-                const bool shift = dragEvent->keyboardModifiers().testFlag(Qt::ShiftModifier);
+                const bool shift = dragEvent->modifiers().testFlag(Qt::ShiftModifier);
                 dragEvent->setDropAction(shift ? Qt::MoveAction : Qt::CopyAction);
                 dragEvent->accept();
                 return true;
@@ -8915,7 +9457,7 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
                     dragEvent->accept();
                     return true;
                 }
-                const bool shift = dragEvent->keyboardModifiers().testFlag(Qt::ShiftModifier);
+                const bool shift = dragEvent->modifiers().testFlag(Qt::ShiftModifier);
                 dragEvent->setDropAction(shift ? Qt::MoveAction : Qt::CopyAction);
                 dragEvent->accept();
                 return true;
@@ -8958,16 +9500,11 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
                     return true;
                 }
 
-                const bool shift = dropEvent->keyboardModifiers().testFlag(Qt::ShiftModifier);
-                // Ensure any preview locks are released before file ops
-                if (fmTlRenderPlayer) { fmTlRenderPlayer->stop(); }
-                if (shift) FileOpsQueue::instance().enqueueMove(sources, destDir);
-                else       FileOpsQueue::instance().enqueueCopy(sources, destDir);
-                if (!fileOpsDialog) fileOpsDialog = new FileOpsProgressDialog(this);
-                fileOpsDialog->show(); fileOpsDialog->raise(); fileOpsDialog->activateWindow();
+                const bool shift = dropEvent->modifiers().testFlag(Qt::ShiftModifier);
+                queueFmFileOperation(sources, destDir, shift);
                 statusBar()->showMessage(QString("Queued %1 item(s) for %2").arg(sources.size()).arg(shift ? "move" : "copy"), 3000);
             }
-            dropEvent->setDropAction(dropEvent->keyboardModifiers().testFlag(Qt::ShiftModifier) ? Qt::MoveAction : Qt::CopyAction);
+            dropEvent->setDropAction(dropEvent->modifiers().testFlag(Qt::ShiftModifier) ? Qt::MoveAction : Qt::CopyAction);
             dropEvent->accept();
             return true;
         }
@@ -9033,19 +9570,12 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
                         importProgressDialog->raise();
                         importProgressDialog->activateWindow();
 
-                        // Avoid premature dialog closure when importing folders then files
-                        disconnect(importer, &Importer::importFinished, this, &MainWindow::onImportComplete);
-
-                        for (const QString &dir : folderPaths) {
-                            importer->importFolder(dir, targetFolderId);
+                        if (!importer->importToAssetLibrary(filePaths, folderPaths, targetFolderId, true)) {
+                            importProgressDialog->reject();
+                            importProgressDialog->deleteLater();
+                            importProgressDialog = nullptr;
+                            statusBar()->showMessage("Import is already running or could not start", 3000);
                         }
-                        if (!filePaths.isEmpty()) {
-                            importer->importFiles(filePaths, targetFolderId);
-                        }
-
-                        // Reconnect and finalize
-                        connect(importer, &Importer::importFinished, this, &MainWindow::onImportComplete);
-                        onImportComplete();
 
                         dropEvent->acceptProposedAction();
                         return true;
@@ -9915,7 +10445,7 @@ void MainWindow::onAssetVersionsChanged(int assetId)
 // ===== File Manager Preview handlers =====
 void MainWindow::clearFmPreview()
 {
-    if (fmTlRenderPlayer) { fmTlRenderPlayer->stop(); }
+    if (fmPlayerLabPlayer) { fmPlayerLabPlayer->stop(); }
     if (fmVideoWidget) fmVideoWidget->hide();
     if (fmPrevFrameBtn) fmPrevFrameBtn->hide();
     if (fmPlayPauseBtn) fmPlayPauseBtn->hide();
@@ -10043,7 +10573,7 @@ void MainWindow::updateFmPreviewForIndex(const QModelIndex &idx)
         if (frames.isEmpty()) { clearFmPreview(); return; }
 
         // Stop any video playback and show image-based sequence view
-        if (fmTlRenderPlayer) { fmTlRenderPlayer->stop(); }
+        if (fmPlayerLabPlayer) { fmPlayerLabPlayer->stop(); }
         if (fmVideoWidget) fmVideoWidget->hide();
         if (fmImageView) fmImageView->show();
 
@@ -10108,13 +10638,13 @@ void MainWindow::updateFmPreviewForIndex(const QModelIndex &idx)
 
     if (isImageFile(ext)) {
         // Stop any media playback and hide media-specific widgets/controls
-        if (fmTlRenderPlayer) { fmTlRenderPlayer->stop(); }
+        if (fmPlayerLabPlayer) { fmPlayerLabPlayer->stop(); }
         hideNonImageWidgets();
 
         // Try OpenImageIO first for advanced formats (PSD/EXR/TIFF/etc.)
         QImage img;
         if (OIIOImageLoader::isOIIOSupported(path)) {
-            img = OIIOImageLoader::loadImage(path, 0, 0, OIIOImageLoader::ColorSpace::sRGB);
+            img = OIIOImageLoader::loadImage(path, 0, 0);
         }
         if (img.isNull()) {
             QImageReader reader(path);
@@ -10240,13 +10770,13 @@ void MainWindow::updateFmPreviewForIndex(const QModelIndex &idx)
                     }
                     // UTF-16 LE BOM
                     if (n >= 2 && b[0] == 0xFF && b[1] == 0xFE) {
-                        return QString::fromUtf16(reinterpret_cast<const ushort*>(b + 2), (n - 2) / 2);
+                        return QString::fromUtf16(reinterpret_cast<const char16_t*>(b + 2), (n - 2) / 2);
                     }
                     // UTF-16 BE BOM
                     if (n >= 2 && b[0] == 0xFE && b[1] == 0xFF) {
                         const int ulen = (n - 2) / 2;
-                        QVector<ushort> buf; buf.resize(ulen);
-                        for (int i = 0; i < ulen; ++i) buf[i] = (ushort(b[2 + 2*i]) << 8) | ushort(b[2 + 2*i + 1]);
+                        QVector<char16_t> buf; buf.resize(ulen);
+                        for (int i = 0; i < ulen; ++i) buf[i] = char16_t((ushort(b[2 + 2*i]) << 8) | ushort(b[2 + 2*i + 1]));
                         return QString::fromUtf16(buf.constData(), ulen);
                     }
                     // Heuristic: UTF-16 without BOM (look for lots of NULs at odd/even positions)
@@ -10259,10 +10789,10 @@ void MainWindow::updateFmPreviewForIndex(const QModelIndex &idx)
                         const bool le = (zeroOdd > zeroEven);
                         const int ulen = n / 2;
                         if (le) {
-                            return QString::fromUtf16(reinterpret_cast<const ushort*>(b), ulen);
+                            return QString::fromUtf16(reinterpret_cast<const char16_t*>(b), ulen);
                         } else {
-                            QVector<ushort> buf; buf.resize(ulen);
-                            for (int i = 0; i < ulen; ++i) buf[i] = (ushort(b[2*i]) << 8) | ushort(b[2*i + 1]);
+                            QVector<char16_t> buf; buf.resize(ulen);
+                            for (int i = 0; i < ulen; ++i) buf[i] = char16_t((ushort(b[2*i]) << 8) | ushort(b[2*i + 1]));
                             return QString::fromUtf16(buf.constData(), ulen);
                         }
                     }
@@ -10377,13 +10907,14 @@ if (isExcelFile(ext)) {
     }
 
     if (isAudioFile(ext) || isVideoFile(ext)) {
-        // Media branch: audio/video
+        fmCurrentPreviewPath = path;
+
         if (isVideoFile(ext)) {
             fmCurrentPreviewPath = path;
+            ensureFmVideoPreview();
             if (fmVideoWidget) {
                 fmVideoWidget->show();
-                // CRITICAL: Set video widget AFTER show() to ensure valid window handle
-                if (fmTlRenderPlayer) fmVideoWidget->setPlayer(fmTlRenderPlayer);
+                if (fmPlayerLabPlayer) fmVideoWidget->setPlayer(fmPlayerLabPlayer);
             }
             if (fmImageView) fmImageView->hide();
         } else {
@@ -10397,9 +10928,9 @@ if (isExcelFile(ext)) {
         if (fmVolumeSlider) fmVolumeSlider->show();
         if (fmMuteBtn) fmMuteBtn->show();
 
-        if (fmTlRenderPlayer) {
-            fmTlRenderPlayer->loadMedia(path);
-            fmTlRenderPlayer->pause();
+        if (fmPlayerLabPlayer) {
+            fmPlayerLabPlayer->loadMedia(path);
+            fmPlayerLabPlayer->pause();
             if (fmPlayPauseBtn) fmPlayPauseBtn->setIcon(icoMediaPlay(ThemeManager::instance().iconColor()));
         }
         return;
@@ -10481,7 +11012,7 @@ void MainWindow::loadFmSequenceFrame(int index)
     const QString path = fmSequenceFramePaths.at(index);
     QPixmap px;
     if (OIIOImageLoader::isOIIOSupported(path)) {
-        QImage img = OIIOImageLoader::loadImage(path, 0, 0, OIIOImageLoader::ColorSpace::sRGB);
+        QImage img = OIIOImageLoader::loadImage(path, 0, 0);
         if (!img.isNull()) px = QPixmap::fromImage(img);
     }
     if (px.isNull()) {
@@ -10559,13 +11090,8 @@ void MainWindow::onFmSelectionChanged()
 void MainWindow::onFmTogglePreview()
 {
     if (isSecondaryFmPaneActive()) {
-        const bool show = fmPreviewToggleButton ? fmPreviewToggleButton->isChecked()
-                                                : fmSecondaryPane->isPreviewVisible();
-        fmSecondaryPane->setPreviewVisible(show);
-        if (show) {
-            fmSecondaryPane->updatePreviewForIndex(fmSecondaryPane->currentIndex());
-        } else {
-            fmSecondaryPane->clearPreview();
+        if (fmSecondaryPane) {
+            fmSecondaryPane->setPreviewVisible(!fmSecondaryPane->isPreviewVisible());
         }
         return;
     }
@@ -10574,7 +11100,7 @@ void MainWindow::onFmTogglePreview()
     const bool show = fmPreviewToggleButton ? fmPreviewToggleButton->isChecked() : !fmPreviewInfoSplitter->isVisible();
     fmPreviewInfoSplitter->setVisible(show);
     if (!show) {
-        if (fmTlRenderPlayer) { fmTlRenderPlayer->stop(); }
+        if (fmPlayerLabPlayer) { fmPlayerLabPlayer->stop(); }
     } else {
         onFmSelectionChanged();
     }
@@ -10605,11 +11131,15 @@ void MainWindow::updateFmInfoPanel()
 
     if (!idx.isValid()) {
         // No selection - clear info panel
+        fmInfoVideoMetadataPath.clear();
+        if (infoMediaRequests)
+            infoMediaRequests->cancelChannel(QStringLiteral("fm-info-video"));
         if (fmInfoFileName) fmInfoFileName->setText("No selection");
         if (fmInfoFilePath) fmInfoFilePath->clear();
         if (fmInfoFileSize) fmInfoFileSize->clear();
         if (fmInfoFileType) fmInfoFileType->clear();
         if (fmInfoDimensions) fmInfoDimensions->clear();
+        clearFmInfoVideoMetadata();
         if (fmInfoCreated) fmInfoCreated->clear();
         if (fmInfoModified) fmInfoModified->clear();
         if (fmInfoPermissions) fmInfoPermissions->clear();
@@ -10622,12 +11152,23 @@ void MainWindow::updateFmInfoPanel()
         srcIdx = fmProxyModel->mapToSource(idx);
     }
 
-    // Get file path from model
     QString filePath = fmDirModel ? fmDirModel->filePath(srcIdx) : QString();
-    if (filePath.isEmpty()) return;
+    if (filePath.isEmpty()) {
+        fmInfoVideoMetadataPath.clear();
+        if (infoMediaRequests)
+            infoMediaRequests->cancelChannel(QStringLiteral("fm-info-video"));
+        clearFmInfoVideoMetadata();
+        return;
+    }
 
     QFileInfo fileInfo(filePath);
-    if (!fileInfo.exists()) return;
+    if (!fileInfo.exists()) {
+        fmInfoVideoMetadataPath.clear();
+        if (infoMediaRequests)
+            infoMediaRequests->cancelChannel(QStringLiteral("fm-info-video"));
+        clearFmInfoVideoMetadata();
+        return;
+    }
 
     // Update file name
     if (fmInfoFileName) {
@@ -10680,17 +11221,23 @@ void MainWindow::updateFmInfoPanel()
             } else {
                 dimensionsStr = "Dimensions: Unable to read";
             }
+            fmInfoVideoMetadataPath.clear();
+            infoMediaRequests->cancelChannel(QStringLiteral("fm-info-video"));
+            clearFmInfoVideoMetadata();
         } else {
             QStringList videoExts = {"mp4", "mov", "avi", "mkv", "wmv", "flv", "webm",
                                     "m4v", "mpg", "mpeg", "3gp", "mts", "m2ts", "mxf"};
             if (videoExts.contains(ext)) {
-                // TODO: Extract video metadata using tlRender/FFmpeg
-                // For now, just show "Video file"
                 dimensionsStr = "Video file";
+                requestFmInfoVideoMetadata(filePath);
+            } else {
+                fmInfoVideoMetadataPath.clear();
+                infoMediaRequests->cancelChannel(QStringLiteral("fm-info-video"));
+                clearFmInfoVideoMetadata();
             }
         }
 
-        fmInfoDimensions->setText(dimensionsStr);
+        if (fmInfoDimensions) fmInfoDimensions->setText(dimensionsStr);
     }
 
     // Update created date
@@ -10738,7 +11285,7 @@ void MainWindow::onFmOpenOverlay()
             }
             if (!imagePreviewOverlay) {
                 imagePreviewOverlay = new ImagePreviewOverlay(this);
-                imagePreviewOverlay->setGeometry(geometry());
+                imagePreviewOverlay->setGeometry(initialOverlayGeometry());
                 connect(imagePreviewOverlay, &ImagePreviewOverlay::closed, this, &MainWindow::closePreview);
                 connect(imagePreviewOverlay, &ImagePreviewOverlay::navigateRequested, this, &MainWindow::changeFmPreview);
             }
@@ -10750,7 +11297,7 @@ void MainWindow::onFmOpenOverlay()
             }
             if (!previewOverlay) {
                 previewOverlay = new PreviewOverlay(this);
-                previewOverlay->setGeometry(geometry());
+                previewOverlay->setGeometry(initialOverlayGeometry());
                 connect(previewOverlay, &PreviewOverlay::closed, this, &MainWindow::closePreview);
                 connect(previewOverlay, &PreviewOverlay::navigateRequested, this, &MainWindow::changeFmPreview);
             } else {
@@ -10804,7 +11351,7 @@ void MainWindow::onFmOpenOverlay()
             if (!previewOverlay) {
                 previewOverlay = new PreviewOverlay(this);
                 // Center overlay to the app window instead of screen top-left
-                previewOverlay->setGeometry(geometry());
+                previewOverlay->setGeometry(initialOverlayGeometry());
                 connect(previewOverlay, &PreviewOverlay::closed, this, &MainWindow::closePreview);
                 connect(previewOverlay, &PreviewOverlay::navigateRequested, this, &MainWindow::changeFmPreview);
             } else {
@@ -10862,6 +11409,8 @@ void MainWindow::moveEvent(QMoveEvent *event)
 
 void MainWindow::closeEvent(QCloseEvent* event)
 {
+    m_appClosing = true;
+    closePreview();
     // Save current folder context before closing
     int currentFolderId = assetsModel->folderId();
     if (currentFolderId > 0) {
@@ -10887,7 +11436,6 @@ void MainWindow::closeEvent(QCloseEvent* event)
 
         ContextPreserver::instance().saveFolderContext(currentFolderId, ctx);
     }
-
     // Save current tab
     if (mainTabs) {
         ContextPreserver::instance().saveLastActiveTab(mainTabs->currentIndex());
@@ -10930,8 +11478,17 @@ void MainWindow::closeEvent(QCloseEvent* event)
             s.setValue(QString("AssetManager/AssetTable/Col%1").arg(c), hh->sectionSize(c));
         }
     }
-    // Persist current File Manager path
-    if (fmDirModel) s.setValue("FileManager/CurrentPath", fmDirModel->rootPath());
+    // Persist current File Manager path only if it is still available.
+    if (fmDirModel) {
+        const FileUtils::PathAvailabilityResult result = FileUtils::checkPathAvailability(fmDirModel->rootPath());
+        if (result.available) {
+            s.setValue("FileManager/CurrentPath", result.normalizedPath);
+            s.setValue("FileManager/CurrentPathStorageFingerprint", result.storageFingerprint);
+        } else {
+            s.remove("FileManager/CurrentPath");
+            s.remove("FileManager/CurrentPathStorageFingerprint");
+        }
+    }
 
 
     // File Manager
@@ -10973,6 +11530,13 @@ void MainWindow::closeEvent(QCloseEvent* event)
         for (int c = 0; c < fmTree->model()->columnCount(); ++c) {
             s.setValue(QString("FileManager/Tree/Col%1").arg(c), th->sectionSize(c));
         }
+    }
+    if (fmDualPaneSplitter && fmDualPaneSplitter->isVisible()) {
+        s.setValue("FileManager/DualPaneSplitter", fmDualPaneSplitter->saveState());
+        QVariantList sizes; for (int v : fmDualPaneSplitter->sizes()) sizes << v; s.setValue("FileManager/DualPaneSplitterSizes", sizes);
+    }
+    if (fmSecondaryPane && fmSecondaryPane->isVisible()) {
+        fmSecondaryPane->saveState(s, "FileManager/SecondaryPane");
     }
     saveProjectManagerState(s);
 
@@ -11196,70 +11760,7 @@ void MainWindow::onEverythingSearchFileManager()
 
 void MainWindow::onEverythingImportRequested(const QStringList& paths)
 {
-    if (paths.isEmpty()) {
-        return;
-    }
-
-    // Import files into the asset library
-    int successCount = 0;
-    int failCount = 0;
-
-    QProgressDialog progress("Importing files...", "Cancel", 0, paths.size(), this);
-    progress.setWindowModality(Qt::WindowModal);
-    progress.setMinimumDuration(0);
-
-    for (int i = 0; i < paths.size(); ++i) {
-        if (progress.wasCanceled()) {
-            break;
-        }
-
-        progress.setValue(i);
-        progress.setLabelText(QString("Importing %1 of %2:\n%3")
-            .arg(i + 1)
-            .arg(paths.size())
-            .arg(QFileInfo(paths[i]).fileName()));
-
-        QApplication::processEvents();
-
-        // Import the file
-        QString filePath = paths[i];
-        QFileInfo fi(filePath);
-
-        if (fi.exists() && fi.isFile()) {
-            // Get or create root folder
-            int rootFolderId = DB::instance().ensureRootFolder();
-
-            // Add asset to database using fast metadata insert
-            int assetId = DB::instance().insertAssetMetadataFast(filePath, rootFolderId);
-            if (assetId > 0) {
-                successCount++;
-            } else {
-                failCount++;
-            }
-        } else {
-            failCount++;
-        }
-    }
-
-    progress.setValue(paths.size());
-
-    // Refresh asset view
-    if (assetsModel) {
-        assetsModel->reload();
-    }
-
-    // Show result
-    QString message = QString("Import complete:\n%1 succeeded, %2 failed")
-        .arg(successCount)
-        .arg(failCount);
-
-    if (successCount > 0) {
-        QMessageBox::information(this, "Import Complete", message);
-    } else {
-        QMessageBox::warning(this, "Import Failed", message);
-    }
-
-    statusBar()->showMessage(QString("Imported %1 file(s)").arg(successCount), 5000);
+    importToAssetLibrary(paths, QStringList());
 }
 
 QString MainWindow::fmPathForIndex(const QModelIndex& idx) const
@@ -11322,6 +11823,20 @@ void MainWindow::fmNavigateToPath(const QString& path, bool addToHistory)
 {
     if (path.isEmpty()) return;
 
+    FileUtils::PathAvailabilityResult result = FileUtils::checkPathAvailability(
+        path, FileUtils::PathAvailabilityMode::DirectoryOnly);
+    if (!result.available) {
+        if (fmPathBar && fmDirModel) {
+            fmPathBar->setText(QDir::toNativeSeparators(fmDirModel->rootPath()));
+        }
+        const QString msg = QString("Cannot navigate to '%1': %2").arg(path).arg(result.message);
+        statusBar()->showMessage(msg, 5000);
+        qWarning() << "[FileManager]" << msg;
+        return;
+    }
+
+    const QString normalizedPath = result.normalizedPath;
+
     // Cancel any pending thumbnail generation immediately
     // This ensures user clicks take priority over background work
     LivePreviewManager::instance().cancelPending();
@@ -11329,7 +11844,7 @@ void MainWindow::fmNavigateToPath(const QString& path, bool addToHistory)
     // Add current path to history before navigating (if requested)
     if (addToHistory && fmDirModel) {
         QString currentPath = fmDirModel->rootPath();
-        if (!currentPath.isEmpty() && currentPath != path) {
+        if (!currentPath.isEmpty() && currentPath != normalizedPath) {
             // Remove any forward history when navigating to a new location
             while (fmNavigationIndex < fmNavigationHistory.size() - 1) {
                 fmNavigationHistory.removeLast();
@@ -11341,23 +11856,25 @@ void MainWindow::fmNavigateToPath(const QString& path, bool addToHistory)
     }
 
     // Navigate to the new path
-    fmDirModel->setRootPath(path);
+    fmDirModel->setRootPath(normalizedPath);
 
     // Update path bar
     if (fmPathBar) {
-        fmPathBar->setText(QDir::toNativeSeparators(path));
+        fmPathBar->setText(QDir::toNativeSeparators(normalizedPath));
     }
 
     // Update directory watcher to current path
     if (fmDirectoryWatcher) {
         const QStringList watched = fmDirectoryWatcher->directories();
         if (!watched.isEmpty()) fmDirectoryWatcher->removePaths(watched);
-        fmDirectoryWatcher->addPath(path);
+        if (!fmDirectoryWatcher->addPath(normalizedPath)) {
+            qWarning() << "[FileManager] Failed to watch directory:" << normalizedPath;
+        }
     }
 
-    QModelIndex srcRoot = fmDirModel->index(path);
+    QModelIndex srcRoot = fmDirModel->index(normalizedPath);
     if (fmProxyModel) {
-        fmProxyModel->rebuildForRoot(path);
+        fmProxyModel->rebuildForRoot(normalizedPath);
         QModelIndex proxyRoot = fmProxyModel->mapFromSource(srcRoot);
         fmGridView->setRootIndex(proxyRoot);
         fmListView->setRootIndex(proxyRoot);
@@ -11367,16 +11884,16 @@ void MainWindow::fmNavigateToPath(const QString& path, bool addToHistory)
     }
 
     // Scroll tree to show the current folder
-    fmScrollTreeToPath(path);
+    fmScrollTreeToPath(normalizedPath);
 
-    // Persist current path
+    // Persist current path and storage fingerprint
     QSettings s("AugmentCode", "KAssetManager");
-    s.setValue("FileManager/CurrentPath", path);
+    s.setValue("FileManager/CurrentPath", normalizedPath);
+    s.setValue("FileManager/CurrentPathStorageFingerprint", result.storageFingerprint);
 
     // Update navigation button states
     fmUpdateNavigationButtons();
 }
-
 void MainWindow::fmScrollTreeToPath(const QString& path)
 {
     if (fmSuppressTreeSync) return;

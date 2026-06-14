@@ -1,37 +1,31 @@
 #include "live_preview_manager.h"
+#include "image_memory_limits.h"
 
 #include "oiio_image_loader.h"
 #include "utils.h"
 #if defined(HAVE_TLRENDER) && HAVE_TLRENDER
-#include "media/tlrender_player.h"
+#include "media/player_lab_player.h"
 #endif
 #include "thumbnail_cache_manager.h"
 
 
 #include <QtConcurrent/QtConcurrentRun>
+#include <QDateTime>
 #include <QFileInfo>
 #include <QImageReader>
+#include <QProcess>
+#include <QProcessEnvironment>
 #include <QRegularExpression>
 #include <QCoreApplication>
 #include <QGuiApplication>
 #include <QMutexLocker>
 #include <QDir>
 #include <algorithm>
+#include <cstring>
 #include <cmath>
 #include <stdexcept>
 
 #include <memory>
-
-#if defined(HAVE_FFMPEG) && HAVE_FFMPEG
-extern "C" {
-#include <libavformat/avformat.h>
-#include <libavcodec/avcodec.h>
-#include <libavutil/error.h>
-#include <libavutil/frame.h>
-#include <libswscale/swscale.h>
-}
-#endif
-
 
 namespace {
 
@@ -42,26 +36,63 @@ constexpr int kSeqUpperSearchMaxDoublings = 32;
 constexpr qint64 kSeqUpperSearchHardCap = 100000000; // 100M
 constexpr int kDecodeSafetyIterMax = 256;
 
+// FFmpeg/tlRender thumbnail extraction has shown heap corruption when many video
+// thumbnails are decoded concurrently from grid view. Keep video thumbnail decode
+// serialized; image/sequence thumbnail work remains parallel.
+
+qint64 probeVideoDurationMs(const QString& filePath, uint64_t cancellationToken, const std::atomic<uint64_t>& cancellationSource)
+{
+    QProcess ffprobe;
+    QStringList args;
+    args << QStringLiteral("-v") << QStringLiteral("error")
+         << QStringLiteral("-show_entries") << QStringLiteral("format=duration")
+         << QStringLiteral("-of") << QStringLiteral("default=noprint_wrappers=1:nokey=1")
+         << filePath;
+
+    QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+    env.remove(QStringLiteral("LD_LIBRARY_PATH"));
+    ffprobe.setProcessEnvironment(env);
+    ffprobe.start(QStringLiteral("/usr/bin/ffprobe"), args, QIODevice::ReadOnly);
+    if (!ffprobe.waitForStarted(3000)) {
+        return 0;
+    }
+
+    QElapsedTimer timer;
+    timer.start();
+    constexpr qint64 kProbeTimeoutMs = 5000;
+    while (!ffprobe.waitForFinished(25)) {
+        if (cancellationSource.load() != cancellationToken || timer.elapsed() >= kProbeTimeoutMs) {
+            ffprobe.kill();
+            ffprobe.waitForFinished(1000);
+            return 0;
+        }
+    }
+
+    if (ffprobe.exitStatus() != QProcess::NormalExit || ffprobe.exitCode() != 0) {
+        return 0;
+    }
+
+    bool ok = false;
+    const double seconds = QString::fromUtf8(ffprobe.readAllStandardOutput()).trimmed().toDouble(&ok);
+    if (!ok || seconds <= 0.0) {
+        return 0;
+    }
+    return qRound64(seconds * 1000.0);
+}
+
+QMutex& videoThumbnailDecodeMutex()
+{
+    static QMutex mutex;
+    return mutex;
+}
+
 constexpr qreal kDefaultPosterPosition = 0.05; // pick early frame for motion clips
+constexpr qint64 kFailureCooldownMs = 30000;
 constexpr int kSequenceMetaTtlMs = 30000;
 
 // Cache for video durations to avoid repeated tlRender queries during scrubbing
 static QHash<QString, qint64> s_durationCache;
 static QMutex s_durationCacheMutex;
-
-#if defined(HAVE_FFMPEG) && HAVE_FFMPEG
-QString ffmpegErrorString(int err)
-{
-    char buf[AV_ERROR_MAX_STRING_SIZE] = {};
-    av_strerror(err, buf, sizeof(buf));
-    return QString::fromUtf8(buf);
-}
-#else
-static QString ffmpegErrorString(int err)
-{
-    return QString::number(err);
-}
-#endif
 
 bool isImageExtension(const QString& suffix)
 {
@@ -160,19 +191,30 @@ LivePreviewManager::FrameHandle LivePreviewManager::cachedFrame(const QString& f
     return {};
 }
 
-void LivePreviewManager::requestFrame(const QString& filePath, const QSize& targetSize, qreal position)
+void LivePreviewManager::requestFrame(const QString& filePath, const QSize& targetSize, qreal position,
+                                      bool bypassSuspension)
 {
-    // Skip new decode requests entirely when suspended (during resize/splitter drag)
-    // Cached frames are still returned by cachedFrame(), but no new work is queued
-    if (m_requestsSuspended.load()) {
+    // Skip background decode requests while resize/playback has suspended thumbnail work.
+    // Interactive scrub requests pass bypassSuspension so Ctrl scrubbing still queues the
+    // frame the user is explicitly asking for.
+    if (!bypassSuspension && m_requestsSuspended.load()) {
         return;
     }
     
+    // Extract suffix from path directly (avoid QFileInfo for performance)
+    QString suffix;
+    int dotPos = filePath.lastIndexOf(QLatin1Char('.'));
+    if (dotPos >= 0 && dotPos < filePath.length() - 1) {
+        suffix = filePath.mid(dotPos + 1).toLower();
+    }
+    const bool videoRequest = isVideoExtension(suffix);
+
     // Rapid-event throttling: if requests are coming too fast (e.g., during resize/scroll),
-    // AND mouse button is pressed (user is actively dragging), skip entirely.
-    // This prevents thumbnail decode work during window resize and splitter drags.
+    // AND mouse button is pressed (user is actively dragging), skip entirely. Video scrub
+    // requests are exempt because the scrub controller cancels stale work first; dropping
+    // the newest request after cancellation leaves the UI waiting on no frame at all.
     qint64 elapsed = m_lastRequestTime.elapsed();
-    if (elapsed < 16) { // Less than ~1 frame at 60fps
+    if (!videoRequest && elapsed < 16) { // Less than ~1 frame at 60fps
         // If mouse is down (resize/splitter drag in progress), skip all new requests
         if (QGuiApplication::mouseButtons() != Qt::NoButton) {
             return; // Will be re-requested when user releases mouse
@@ -183,21 +225,13 @@ void LivePreviewManager::requestFrame(const QString& filePath, const QSize& targ
         }
     }
     m_lastRequestTime.restart();
-    
-    // Extract suffix from path directly (avoid QFileInfo for performance)
-    QString suffix;
-    int dotPos = filePath.lastIndexOf(QLatin1Char('.'));
-    if (dotPos >= 0 && dotPos < filePath.length() - 1) {
-        suffix = filePath.mid(dotPos + 1).toLower();
-    }
-    
+
     if (!isImageExtension(suffix) && !isHdrExtension(suffix) &&
         !isSequenceFriendlyExtension(suffix) && !isVideoExtension(suffix)) {
         return;
     }
 
     const QString key = makeCacheKey(filePath, targetSize, position);
-    
     // Check memory cache FIRST (fastest)
     // Check memory cache FIRST (fastest) - use read lock for concurrent reads
     {
@@ -233,6 +267,9 @@ void LivePreviewManager::requestFrame(const QString& filePath, const QSize& targ
         return;
     }
 
+    if (shouldSuppressRecentFailure(filePath, key)) {
+        return;
+    }
     // Check file exists before queueing expensive decode (use QFileInfo only if needed)
     QFileInfo info(filePath);
     if (!info.exists() || !info.isFile()) {
@@ -261,17 +298,25 @@ void LivePreviewManager::invalidate(const QString& filePath)
             }
         }
     }
-    // Clear any in-flight requests for this file path
+    // Invalidate bumps the global cancellation token below, so every active decode
+    // will discard its result. Clear all in-flight decode keys/sequence state here;
+    // otherwise unrelated canceled workers can leave stale keys that suppress
+    // future requests forever.
     {
         QMutexLocker locker(&m_mutex);
-        for (auto it = m_inFlight.begin(); it != m_inFlight.end(); ) {
-            if (it->startsWith(filePath + "|")) {
-                it = m_inFlight.erase(it);
+        const QString prefix = filePath + "|";
+        m_inFlight.clear();
+        m_sequenceQueue.clear();
+        m_activeSequenceLoads = 0;
+        for (auto it = m_recentFailures.begin(); it != m_recentFailures.end(); ) {
+            if (it.key().startsWith(prefix)) {
+                it = m_recentFailures.erase(it);
             } else {
                 ++it;
             }
         }
     }
+    ++m_cancellationToken;
 }
 
 void LivePreviewManager::clear()
@@ -283,6 +328,7 @@ void LivePreviewManager::clear()
     {
         QMutexLocker locker(&m_mutex);
         m_inFlight.clear();
+        m_recentFailures.clear();
         m_sequenceQueue.clear();
     }
 }
@@ -294,12 +340,11 @@ void LivePreviewManager::cancelPending()
     ++m_cancellationToken;
     
     QMutexLocker locker(&m_mutex);
-    // Clear pending queues
     m_inFlight.clear();
+    m_recentFailures.clear();
     m_sequenceQueue.clear();
     m_activeSequenceLoads = 0;
-    
-    qDebug() << "[LivePreview] Cancelled all pending requests, token:" << m_cancellationToken.load();
+
 }
 
 int LivePreviewManager::cacheEntryCount() const
@@ -377,6 +422,30 @@ QString LivePreviewManager::makeCacheKey(const QString& filePath, const QSize& t
     key += '|';
     key += QString::number(position, 'f', 3);
     return key;
+}
+
+bool LivePreviewManager::shouldSuppressRecentFailure(const QString& filePath, const QString& cacheKey) const
+{
+    Q_UNUSED(filePath);
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    QMutexLocker locker(&m_mutex);
+    return m_recentFailures.value(cacheKey, 0) > now;
+}
+
+void LivePreviewManager::rememberDecodeFailure(const QString& filePath, const QString& cacheKey, const QString& error)
+{
+    Q_UNUSED(filePath);
+    Q_UNUSED(error);
+    const qint64 until = QDateTime::currentMSecsSinceEpoch() + kFailureCooldownMs;
+    QMutexLocker locker(&m_mutex);
+    m_recentFailures.insert(cacheKey, until);
+}
+
+void LivePreviewManager::clearDecodeFailure(const QString& filePath, const QString& cacheKey)
+{
+    Q_UNUSED(filePath);
+    QMutexLocker locker(&m_mutex);
+    m_recentFailures.remove(cacheKey);
 }
 
 void LivePreviewManager::enqueueDecode(const Request& request, const QString& cacheKey)
@@ -474,7 +543,7 @@ void LivePreviewManager::startDecodeTask(const Request& request, const QString& 
                 if (isImageExtension(suffix) || isHdrExtension(suffix)) {
                     image = loadImageFrame(request, error);
                 } else {
-                    image = loadVideoFrame(request, error);
+                    image = loadVideoFrame(request, error, startToken);
                 }
             }
         } catch (const std::exception& e) {
@@ -517,12 +586,17 @@ void LivePreviewManager::startDecodeTask(const Request& request, const QString& 
             }
 
             if (image.isNull()) {
-                emit frameFailed(request.filePath, error.isEmpty() ? QStringLiteral("Unable to decode frame") : error);
+                const QString failure = error.isEmpty() ? QStringLiteral("Unable to decode frame") : error;
+                rememberDecodeFailure(request.filePath, cacheKey, failure);
+                emit frameFailed(request.filePath, failure);
             } else {
                 QPixmap pixmap = QPixmap::fromImage(image);
                 if (pixmap.isNull()) {
-                    emit frameFailed(request.filePath, QStringLiteral("Failed to convert image to pixmap"));
+                    const QString failure = QStringLiteral("Failed to convert image to pixmap");
+                    rememberDecodeFailure(request.filePath, cacheKey, failure);
+                    emit frameFailed(request.filePath, failure);
                 } else {
+                    clearDecodeFailure(request.filePath, cacheKey);
                     storeFrame(cacheKey, pixmap, request.position, request.targetSize);
                     emit frameReady(request.filePath, request.position, request.targetSize, pixmap);
                 }
@@ -599,6 +673,12 @@ QImage LivePreviewManager::loadImageFrame(const Request& request, QString& error
 #if defined(HAVE_OPENIMAGEIO) && HAVE_OPENIMAGEIO
         image = OIIOImageLoader::loadImage(request.filePath, request.targetSize.width(), request.targetSize.height());
         if (image.isNull()) {
+            QImageReader sizeProbe(request.filePath);
+            const QSize imageSize = sizeProbe.size();
+            if (!ImageMemoryLimits::isImageWithinMemoryLimit(imageSize.width(), imageSize.height())) {
+                error = ImageMemoryLimits::limitExceededMessage(QStringLiteral("Image exceeds the configured memory limit for live preview"));
+                return {};
+            }
             qDebug() << "[LivePreview] OIIO failed to load, falling back to Qt:" << request.filePath;
         }
 #endif
@@ -785,10 +865,15 @@ QImage LivePreviewManager::loadSequenceFrame(const Request& request, QString& er
     return image;
 }
 
-QImage LivePreviewManager::loadVideoFrame(const Request& request, QString& error)
+QImage LivePreviewManager::loadVideoFrame(const Request& request, QString& error, uint64_t cancellationToken)
 {
 #if defined(HAVE_TLRENDER) && HAVE_TLRENDER
     QFileInfo info(request.filePath);
+    QMutexLocker videoDecodeLocker(&videoThumbnailDecodeMutex());
+    if (m_cancellationToken.load() != cancellationToken) {
+        error = QStringLiteral("Cancelled");
+        return {};
+    }
     if (!info.exists()) {
         error = QStringLiteral("File does not exist");
         return {};
@@ -806,7 +891,13 @@ QImage LivePreviewManager::loadVideoFrame(const Request& request, QString& error
     }
 
     if (durationMs == 0) {
-        durationMs = TLRenderPlayer::queryDuration(request.filePath);
+        {
+            QMutexLocker locker(&s_durationMutex);
+            if (s_durationCache.contains(request.filePath)) {
+                durationMs = s_durationCache[request.filePath];
+            }
+        }
+        durationMs = probeVideoDurationMs(request.filePath, cancellationToken, m_cancellationToken);
         if (durationMs <= 0) {
             error = QStringLiteral("Failed to get video duration");
             return {};
@@ -815,19 +906,86 @@ QImage LivePreviewManager::loadVideoFrame(const Request& request, QString& error
         s_durationCache[request.filePath] = durationMs;
     }
 
-    qreal normalized = std::clamp(request.position, 0.0, 1.0);
+    const qreal normalized = std::clamp(request.position, 0.0, 1.0);
     qint64 positionMs = static_cast<qint64>(normalized * durationMs);
-    positionMs = std::clamp(positionMs, 0LL, durationMs);
+    positionMs = std::clamp(positionMs, 0LL, std::max(0LL, durationMs - 1));
 
-    QImage thumbnail = TLRenderPlayer::extractThumbnail(request.filePath, request.targetSize, positionMs);
-    if (thumbnail.isNull()) {
+    if (m_cancellationToken.load() != cancellationToken) {
+        error = QStringLiteral("Cancelled");
+        return {};
+    }
+
+    const int outputWidth = qMax(1, request.targetSize.width());
+    const int outputHeight = qMax(1, request.targetSize.height());
+    const QString scaleFilter = QStringLiteral(
+        "scale=%1:%2:force_original_aspect_ratio=decrease,"
+        "pad=%1:%2:(ow-iw)/2:(oh-ih)/2:color=black,"
+        "format=rgba").arg(outputWidth).arg(outputHeight);
+    QProcess ffmpeg;
+    QStringList args;
+    args << QStringLiteral("-v") << QStringLiteral("error")
+         << QStringLiteral("-ss") << QString::number(positionMs / 1000.0, 'f', 3)
+         << QStringLiteral("-i") << request.filePath
+         << QStringLiteral("-vf") << scaleFilter
+         << QStringLiteral("-frames:v") << QStringLiteral("1")
+         << QStringLiteral("-f") << QStringLiteral("rawvideo")
+         << QStringLiteral("-pix_fmt") << QStringLiteral("rgba")
+         << QStringLiteral("pipe:1");
+
+    QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+    env.remove(QStringLiteral("LD_LIBRARY_PATH"));
+    ffmpeg.setProcessEnvironment(env);
+    ffmpeg.start(QStringLiteral("/usr/bin/ffmpeg"), args, QIODevice::ReadOnly);
+    if (!ffmpeg.waitForStarted(3000)) {
+        error = QStringLiteral("Failed to start video decoder");
+        return {};
+    }
+
+    QElapsedTimer decodeTimer;
+    decodeTimer.start();
+    constexpr qint64 kVideoDecodeTimeoutMs = 15000;
+    while (!ffmpeg.waitForFinished(25)) {
+        if (m_cancellationToken.load() != cancellationToken) {
+            ffmpeg.kill();
+            ffmpeg.waitForFinished(1000);
+            error = QStringLiteral("Cancelled");
+            return {};
+        }
+        if (decodeTimer.elapsed() >= kVideoDecodeTimeoutMs) {
+            ffmpeg.kill();
+            ffmpeg.waitForFinished(1000);
+            error = QStringLiteral("Video decode timed out");
+            return {};
+        }
+    }
+
+    if (m_cancellationToken.load() != cancellationToken) {
+        error = QStringLiteral("Cancelled");
+        return {};
+    }
+    if (ffmpeg.exitStatus() != QProcess::NormalExit || ffmpeg.exitCode() != 0) {
         error = QStringLiteral("Failed to decode video frame");
         return {};
     }
+
+    const QByteArray frameData = ffmpeg.readAllStandardOutput();
+    const qsizetype expectedSize = qsizetype(outputWidth) * qsizetype(outputHeight) * 4;
+    if (frameData.size() != expectedSize) {
+        error = QStringLiteral("Failed to decode video frame");
+        return {};
+    }
+
+    QImage thumbnail(outputWidth, outputHeight, QImage::Format_RGBA8888);
+    if (thumbnail.isNull()) {
+        error = QStringLiteral("Failed to allocate video frame");
+        return {};
+    }
+    std::memcpy(thumbnail.bits(), frameData.constData(), static_cast<size_t>(expectedSize));
     return thumbnail;
 #else
     Q_UNUSED(request);
     Q_UNUSED(error);
+    Q_UNUSED(cancellationToken);
     return {};
 #endif
 }

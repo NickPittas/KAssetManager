@@ -8,12 +8,50 @@
 #include <QApplication>
 #include <QStyle>
 #include <QMessageBox>
+#include <QProcessEnvironment>
 
 #include "sequence_detector.h"
 
 #include <algorithm>
 
 static QString extOf(const QString& path){ return QFileInfo(path).suffix().toLower(); }
+
+namespace {
+
+QString toolSourceLabel(ConverterToolSource source)
+{
+    switch (source) {
+    case ConverterToolSource::BundledRuntime: return QStringLiteral("bundled runtime");
+    case ConverterToolSource::BundledDevCheckout: return QStringLiteral("bundled dev checkout");
+    case ConverterToolSource::EnvOverride: return QStringLiteral("environment override");
+    case ConverterToolSource::PathFallback: return QStringLiteral("PATH fallback");
+    case ConverterToolSource::Missing: return QStringLiteral("missing");
+    }
+
+    return QStringLiteral("unknown");
+}
+
+QString describeResolutionStatus(const QString& label, const ConverterToolResolution& resolution, const QString& unavailable)
+{
+    if (resolution.source == ConverterToolSource::Missing || resolution.resolvedPath.isEmpty()) {
+        return unavailable;
+    }
+
+    const QString suffix = resolution.isFallback() ? QStringLiteral(" (plain program name)") : QString();
+    return QStringLiteral("%1: %2 — %3%4")
+        .arg(label, toolSourceLabel(resolution.source), resolution.resolvedPath, suffix);
+}
+
+bool requireBundledConverters()
+{
+#ifdef Q_OS_LINUX
+    return qEnvironmentVariableIntValue("KASSETMANAGER_REQUIRE_BUNDLED_CONVERTERS") == 1;
+#else
+    return false;
+#endif
+}
+
+}
 
 MediaConvertDialog::MediaConvertDialog(const QStringList& sourcePaths, QWidget* parent)
     : QDialog(parent), m_sources(sourcePaths)
@@ -26,12 +64,20 @@ MediaConvertDialog::MediaConvertDialog(const QStringList& sourcePaths, QWidget* 
     buildUi();
     loadSettings();
 
-    m_ffmpeg = locateFfmpeg();
-    m_magick = locateMagick();
+    m_ffmpegResolution = locateFfmpeg();
+    m_magickResolution = locateMagick();
+
     QStringList notices;
-    if (m_ffmpeg.isEmpty()) notices << "FFmpeg not found (video/sequence conversions unavailable)";
-    if (m_magick.isEmpty()) notices << "ImageMagick not found (single-image conversions unavailable)";
-    if (!notices.isEmpty()) m_status->setText(notices.join(" · "));
+    notices << describeResolutionStatus(QStringLiteral("FFmpeg"),
+                                        m_ffmpegResolution,
+                                        QStringLiteral("FFmpeg not found (video/sequence conversions unavailable)"));
+    notices << describeResolutionStatus(QStringLiteral("ImageMagick"),
+                                        m_magickResolution,
+                                        QStringLiteral("ImageMagick not found (single-image conversions unavailable)"));
+    if (requireBundledConverters()) {
+        notices << QStringLiteral("Strict bundled converter verification enabled");
+    }
+    m_status->setText(notices.join(QStringLiteral(" · ")));
 }
 
 MediaConvertDialog::~MediaConvertDialog()
@@ -67,6 +113,9 @@ void MediaConvertDialog::buildUi()
     m_verifyBtn->setToolTip("Verify sequence (full directory scan)");
     {
         QStringList paths = {
+            QCoreApplication::applicationDirPath() + "/Icons/Verify.png",
+            QCoreApplication::applicationDirPath() + "/../Icons/Verify.png",
+            QCoreApplication::applicationDirPath() + "/../../Icons/Verify.png",
             QCoreApplication::applicationDirPath() + "/icons/Verify.png",
             QCoreApplication::applicationDirPath() + "/../icons/Verify.png",
             QCoreApplication::applicationDirPath() + "/../../icons/Verify.png",
@@ -271,7 +320,7 @@ void MediaConvertDialog::loadSettings()
     }
     if (outToSet.isEmpty()) {
         const QString last = s.value("MediaConvert/OutputDir").toString();
-        outToSet = last.isEmpty() ? QDir::homePath() : last;
+        outToSet = last.isEmpty() ? (QCoreApplication::applicationDirPath() + QStringLiteral("/data/exports")) : last;
     }
     m_outputDir->setText(outToSet);
     m_scaleW->setValue(s.value("MediaConvert/ScaleW", 0).toInt());
@@ -295,66 +344,15 @@ void MediaConvertDialog::saveSettings()
     if (m_movFps) s.setValue("MediaConvert/MOV/Fps", m_movFps->value());
 }
 
-QString MediaConvertDialog::locateFfmpeg() const
+ConverterToolResolution MediaConvertDialog::locateFfmpeg() const
 {
-    // 1) Next to app
-    QString d = QCoreApplication::applicationDirPath();
-#ifdef Q_OS_WIN
-    QString cand = QDir(d).filePath("ffmpeg.exe"); if (QFileInfo::exists(cand)) return cand;
-#endif
-    // 2) third_party
-    cand = QDir(QCoreApplication::applicationDirPath()).filePath("../../third_party/ffmpeg/bin/ffmpeg.exe");
-    if (QFileInfo::exists(cand)) return QFileInfo(cand).absoluteFilePath();
-    // 3) FFMPEG_ROOT
-    QString env = qEnvironmentVariable("FFMPEG_ROOT");
-    if (!env.isEmpty()) {
-        cand = QDir(env).filePath("bin/ffmpeg.exe"); if (QFileInfo::exists(cand)) return QFileInfo(cand).absoluteFilePath();
-    }
-    // 4) PATH
-    return "ffmpeg";
-
+    return resolveFfmpegTool(QCoreApplication::applicationDirPath());
 }
 
 
-QString MediaConvertDialog::locateMagick() const
+ConverterToolResolution MediaConvertDialog::locateMagick() const
 {
-    // 1) Next to app
-    QString d = QCoreApplication::applicationDirPath();
-#ifdef Q_OS_WIN
-    QString cand = QDir(d).filePath("magick.exe"); if (QFileInfo::exists(cand)) return cand;
-#endif
-    // 2) third_party common layouts (dev checkout)
-    {
-        const QString tp = QDir(QCoreApplication::applicationDirPath()).filePath("../../third_party");
-        // a) third_party/imagemagick/bin
-        QString p1 = QDir(tp).filePath("imagemagick/bin/magick.exe");
-        if (QFileInfo::exists(p1)) return QFileInfo(p1).absoluteFilePath();
-        // b) third_party/ImageMagick-*/magick.exe or .../bin/magick.exe
-        QDir tpd(tp);
-        if (tpd.exists()) {
-            const QStringList dirs = tpd.entryList(QStringList() << "ImageMagick*", QDir::Dirs | QDir::NoDotAndDotDot);
-            for (const QString& dn : dirs) {
-                QString root = tpd.filePath(dn);
-                QString pRoot = QDir(root).filePath("magick.exe"); if (QFileInfo::exists(pRoot)) return QFileInfo(pRoot).absoluteFilePath();
-                QString pBin  = QDir(root).filePath("bin/magick.exe"); if (QFileInfo::exists(pBin)) return QFileInfo(pBin).absoluteFilePath();
-            }
-        }
-    }
-    // 3) Environment variables (MAGICK_ROOT / IMAGEMAGICK_ROOT)
-    {
-        QString env = qEnvironmentVariable("MAGICK_ROOT");
-        if (!env.isEmpty()) {
-            QString pRoot = QDir(env).filePath("magick.exe"); if (QFileInfo::exists(pRoot)) return QFileInfo(pRoot).absoluteFilePath();
-            QString pBin  = QDir(env).filePath("bin/magick.exe"); if (QFileInfo::exists(pBin)) return QFileInfo(pBin).absoluteFilePath();
-        }
-        QString env2 = qEnvironmentVariable("IMAGEMAGICK_ROOT");
-        if (!env2.isEmpty()) {
-            QString pRoot = QDir(env2).filePath("magick.exe"); if (QFileInfo::exists(pRoot)) return QFileInfo(pRoot).absoluteFilePath();
-            QString pBin  = QDir(env2).filePath("bin/magick.exe"); if (QFileInfo::exists(pBin)) return QFileInfo(pBin).absoluteFilePath();
-        }
-    }
-    // 4) PATH
-    return "magick";
+    return resolveMagickTool(QCoreApplication::applicationDirPath());
 }
 
 
@@ -404,14 +402,32 @@ bool MediaConvertDialog::validateAndBuildTasks(QVector<MediaConverterWorker::Tas
     const auto target = static_cast<MediaConverterWorker::TargetKind>(targetData);
 
     // Validate external tool availability for the selected target
-    if ((target == MediaConverterWorker::TargetKind::VideoMP4 || target == MediaConverterWorker::TargetKind::VideoMOV ||
-         target == MediaConverterWorker::TargetKind::JpgSequence || target == MediaConverterWorker::TargetKind::PngSequence ||
-         target == MediaConverterWorker::TargetKind::TifSequence) && m_ffmpeg.isEmpty()) {
+    const bool usesFfmpeg =
+        target == MediaConverterWorker::TargetKind::VideoMP4 || target == MediaConverterWorker::TargetKind::VideoMOV ||
+        target == MediaConverterWorker::TargetKind::JpgSequence || target == MediaConverterWorker::TargetKind::PngSequence ||
+        target == MediaConverterWorker::TargetKind::TifSequence;
+    const bool usesMagick =
+        target == MediaConverterWorker::TargetKind::ImageJpg || target == MediaConverterWorker::TargetKind::ImagePng ||
+        target == MediaConverterWorker::TargetKind::ImageTif;
+
+    if (usesFfmpeg && m_ffmpegResolution.resolvedPath.isEmpty()) {
         error = "FFmpeg not found. Install it or set FFMPEG_ROOT to convert videos/sequences."; return false;
     }
-    if ((target == MediaConverterWorker::TargetKind::ImageJpg || target == MediaConverterWorker::TargetKind::ImagePng ||
-         target == MediaConverterWorker::TargetKind::ImageTif) && m_magick.isEmpty()) {
+    if (usesMagick && m_magickResolution.resolvedPath.isEmpty()) {
         error = "ImageMagick (magick) not found. Bundle it in third_party or set MAGICK_ROOT to convert single images."; return false;
+    }
+
+    if (requireBundledConverters()) {
+        if (usesFfmpeg && m_ffmpegResolution.isFallback()) {
+            error = QStringLiteral("Strict bundled verification is enabled, but FFmpeg resolved via PATH fallback (%1). Bundle ffmpeg/ffprobe next to the app or set FFMPEG_ROOT.")
+                .arg(m_ffmpegResolution.resolvedPath);
+            return false;
+        }
+        if (usesMagick && m_magickResolution.isFallback()) {
+            error = QStringLiteral("Strict bundled verification is enabled, but ImageMagick resolved via PATH fallback (%1). Bundle magick next to the app or set MAGICK_ROOT/IMAGEMAGICK_ROOT.")
+                .arg(m_magickResolution.resolvedPath);
+            return false;
+        }
     }
 
     int W = m_scaleW->value(); int H = m_scaleH->value();
@@ -484,15 +500,19 @@ void MediaConvertDialog::onStart()
 
     if (!m_thread.isRunning()) m_thread.start(QThread::LowPriority);
 
-    m_worker->setFfmpegPath(m_ffmpeg);
-    m_worker->setMagickPath(m_magick);
+    m_worker->setFfmpegPath(m_ffmpegResolution.resolvedPath);
+    m_worker->setMagickPath(m_magickResolution.resolvedPath);
 
     // invoke start on worker's thread
     QMetaObject::invokeMethod(m_worker, [this, tasks](){ m_worker->start(tasks); }, Qt::QueuedConnection);
 
     m_running = true;
     m_startBtn->setEnabled(false); m_cancelBtn->setEnabled(true);
-    m_status->setText("Starting...");
+    QStringList startStatus;
+    startStatus << QStringLiteral("Starting...");
+    startStatus << describeResolutionStatus(QStringLiteral("FFmpeg"), m_ffmpegResolution, QStringLiteral("FFmpeg unavailable"));
+    startStatus << describeResolutionStatus(QStringLiteral("ImageMagick"), m_magickResolution, QStringLiteral("ImageMagick unavailable"));
+    m_status->setText(startStatus.join(QStringLiteral(" · ")));
 }
 
 
@@ -625,4 +645,3 @@ void MediaConvertDialog::onVerifySequence()
     }
     m_status->setText("Verify: no image sequence in selection");
 }
-

@@ -19,14 +19,15 @@
 #include <QTimer>
 #include <QCheckBox>
 #include <QPushButton>
+#include <QPointer>
 
 class QSettings;
 class SequenceGroupingProxyModel;
 class FmGridViewEx;
 class FmListViewEx;
 class GridScrubController;
-class TLRenderPlayer;
-class TLRenderViewport;
+class PlayerLabPlayer;
+class PlayerLabViewport;
 
 #if defined(HAVE_QT_PDF)
 class QPdfDocument;
@@ -125,7 +126,7 @@ signals:
     void activated();  // Emitted when pane receives focus/click
     void fileDoubleClicked(const QString &path);
     void contextMenuRequested(const QPoint &globalPos);
-    void filesDropped(const QStringList &paths, const QString &targetDir);  // Emitted when files dropped
+    void filesDropped(const QStringList &paths, const QString &targetDir, bool moveRequested);  // Emitted when files dropped
 
 protected:
     void focusInEvent(QFocusEvent *event) override;
@@ -149,6 +150,7 @@ private:
     void setupConnections();
     void updateNavigationButtons();
     void applyActiveStyle();
+    void ensureVideoPreview();
 
     // Sequence playback helpers
     void loadSequenceFrame(int index);
@@ -181,32 +183,34 @@ private:
     FmListViewEx *m_listView = nullptr;
     GridScrubController *m_scrubController = nullptr;
     bool m_isGridMode = true;
+    bool m_destroying = false;
 
     // Preview panel
     QSplitter *m_previewInfoSplitter = nullptr;
     QWidget *m_previewPanel = nullptr;
-    QGraphicsView *m_imageView = nullptr;
+    QPointer<QGraphicsView> m_imageView;
     QGraphicsScene *m_imageScene = nullptr;
     QGraphicsPixmapItem *m_imageItem = nullptr;
-    TLRenderViewport *m_videoWidget = nullptr;
-    TLRenderPlayer *m_tlrenderPlayer = nullptr;
-    QPlainTextEdit *m_textView = nullptr;
-    QTableView *m_csvView = nullptr;
+    QPointer<PlayerLabViewport> m_videoWidget;
+    PlayerLabPlayer *m_playerLabPlayer = nullptr;
+    QWidget *m_previewContent = nullptr;
+    QPointer<QPlainTextEdit> m_textView;
+    QPointer<QTableView> m_csvView;
     QStandardItemModel *m_csvModel = nullptr;
 #if defined(HAVE_QT_PDF)
     QPdfDocument *m_pdfDoc = nullptr;
 #endif
 #if defined(HAVE_QT_PDF_WIDGETS)
-    QPdfView *m_pdfView = nullptr;
+    QPointer<QPdfView> m_pdfView;
 #endif
     int m_pdfCurrentPage = 0;
-    QToolButton *m_pdfPrevBtn = nullptr;
-    QToolButton *m_pdfNextBtn = nullptr;
-    QLabel *m_pdfPageLabel = nullptr;
-    QGraphicsView *m_svgView = nullptr;
+    QPointer<QToolButton> m_pdfPrevBtn;
+    QPointer<QToolButton> m_pdfNextBtn;
+    QPointer<QLabel> m_pdfPageLabel;
+    QPointer<QGraphicsView> m_svgView;
     QGraphicsScene *m_svgScene = nullptr;
     QGraphicsItem *m_svgItem = nullptr;
-    QCheckBox *m_alphaCheck = nullptr;
+    QPointer<QCheckBox> m_alphaCheck;
     bool m_imageFitToView = true;
     QImage m_originalImage;
     QString m_currentPreviewPath;
@@ -214,13 +218,13 @@ private:
     bool m_alphaOnlyMode = false;
 
     // Media controls
-    QPushButton *m_playPauseBtn = nullptr;
-    QPushButton *m_prevFrameBtn = nullptr;
-    QPushButton *m_nextFrameBtn = nullptr;
-    QSlider *m_positionSlider = nullptr;
-    QLabel *m_timeLabel = nullptr;
-    QSlider *m_volumeSlider = nullptr;
-    QPushButton *m_muteBtn = nullptr;
+    QPointer<QPushButton> m_playPauseBtn;
+    QPointer<QPushButton> m_prevFrameBtn;
+    QPointer<QPushButton> m_nextFrameBtn;
+    QPointer<QSlider> m_positionSlider;
+    QPointer<QLabel> m_timeLabel;
+    QPointer<QSlider> m_volumeSlider;
+    QPointer<QPushButton> m_muteBtn;
 
     // Sequence playback
     bool m_isSequence = false;

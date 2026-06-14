@@ -1,11 +1,14 @@
 #include "everything_search.h"
-#include "db.h"
 #include <QFileInfo>
 #include <QDir>
 #include <QDebug>
 #include <QCoreApplication>
+#include <QSet>
+#ifdef _WIN32
 #include <windows.h>
+#endif
 
+#ifdef _WIN32
 // Everything SDK function pointer typedefs
 typedef void (__stdcall *Everything_SetSearchW_t)(LPCWSTR lpString);
 typedef void (__stdcall *Everything_SetMatchCase_t)(BOOL bEnable);
@@ -25,6 +28,7 @@ typedef DWORD (__stdcall *Everything_GetMajorVersion_t)();
 typedef DWORD (__stdcall *Everything_GetMinorVersion_t)();
 typedef DWORD (__stdcall *Everything_GetRevision_t)();
 typedef BOOL (__stdcall *Everything_IsDBLoaded_t)();
+#endif
 
 EverythingSearch& EverythingSearch::instance() {
     static EverythingSearch instance;
@@ -60,6 +64,11 @@ EverythingSearch::~EverythingSearch() {
 }
 
 bool EverythingSearch::initialize() {
+#ifndef _WIN32
+    qInfo() << "[EverythingSearch] Not available on this platform";
+    m_available = false;
+    return false;
+#else
     if (m_available) {
         return true;
     }
@@ -88,9 +97,13 @@ bool EverythingSearch::initialize() {
     m_available = true;
     qInfo() << "[EverythingSearch] Initialized successfully - Version:" << getVersion();
     return true;
+#endif
 }
 
 bool EverythingSearch::loadDLL() {
+#ifndef _WIN32
+    return false;
+#else
     // Get application directory
     QString appDir = QCoreApplication::applicationDirPath();
 
@@ -124,6 +137,7 @@ bool EverythingSearch::loadDLL() {
 
     qWarning() << "[EverythingSearch] Failed to load Everything DLL from any location";
     return false;
+#endif
 }
 
 void EverythingSearch::unloadDLL() {
@@ -136,6 +150,9 @@ void EverythingSearch::unloadDLL() {
 }
 
 bool EverythingSearch::loadFunctions() {
+#ifndef _WIN32
+    return false;
+#else
     if (!m_library) return false;
     
     // Load all required function pointers
@@ -165,15 +182,23 @@ bool EverythingSearch::loadFunctions() {
     }
     
     return true;
+#endif
 }
 
 bool EverythingSearch::isEverythingRunning() const {
+#ifndef _WIN32
+    return false;
+#else
     if (!m_isDBLoaded) return false;
     auto func = reinterpret_cast<Everything_IsDBLoaded_t>(m_isDBLoaded);
     return func() != 0;
+#endif
 }
 
 QString EverythingSearch::getVersion() const {
+#ifndef _WIN32
+    return QStringLiteral("Unavailable");
+#else
     if (!m_getMajorVersion || !m_getMinorVersion || !m_getRevision) {
         return "Unknown";
     }
@@ -187,10 +212,18 @@ QString EverythingSearch::getVersion() const {
     DWORD revision = getRev();
 
     return QString("%1.%2.%3").arg(major).arg(minor).arg(revision);
+#endif
 }
 
 QVector<EverythingResult> EverythingSearch::search(const QString& query, int maxResults) {
     QVector<EverythingResult> results;
+
+#ifndef _WIN32
+    Q_UNUSED(query);
+    Q_UNUSED(maxResults);
+    qInfo() << "[EverythingSearch] Search is unavailable on this platform";
+    return results;
+#else
     
     if (!m_available) {
         qWarning() << "[EverythingSearch] Not initialized";
@@ -282,6 +315,7 @@ QVector<EverythingResult> EverythingSearch::search(const QString& query, int max
     }
     
     return results;
+#endif
 }
 
 QVector<EverythingResult> EverythingSearch::searchWithFilter(const QString& query, const QString& fileTypes, int maxResults) {
@@ -298,4 +332,3 @@ QVector<EverythingResult> EverythingSearch::searchWithFilter(const QString& quer
     
     return search(fullQuery, maxResults);
 }
-

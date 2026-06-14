@@ -1,4 +1,5 @@
 #include "project_db.h"
+#include "project_path_utils.h"
 #include <QDir>
 #include <QDebug>
 #include <QFile>
@@ -729,16 +730,14 @@ int ProjectDB::ensureFolderForPath(int projectId, const QString& absolutePath) {
         return 0;
     }
 
-    QString watchPath = QDir::cleanPath(proj.watchPath);
-    QString dirPath = QDir::cleanPath(absolutePath);
+    QString watchPath = ProjectPathUtils::cleanPath(proj.watchPath);
+    QString dirPath = ProjectPathUtils::cleanPath(absolutePath);
     if (dirPath.isEmpty()) {
         dirPath = watchPath;
     }
 
     // Ensure the target path is inside the project
-    QString watchLower = watchPath.toLower();
-    QString dirLower = dirPath.toLower();
-    if (!dirLower.startsWith(watchLower)) {
+    if (!ProjectPathUtils::isSameOrChildPath(watchPath, dirPath)) {
         return getProjectRootFolderId(projectId);
     }
 
@@ -896,11 +895,11 @@ int ProjectDB::resyncAssetFolders(int projectId) {
         } else {
             folderPath = watchPath + "/" + pathParts.join("/");
         }
-        folderPath = QDir::cleanPath(folderPath);
-        pathToFolderId.insert(folderPath.toLower(), fid);
+        folderPath = ProjectPathUtils::cleanPath(folderPath);
+        pathToFolderId.insert(ProjectPathUtils::keyForPath(folderPath), fid);
     }
     // Also map the watch path itself to project root
-    pathToFolderId.insert(watchPath.toLower(), projectRootId);
+    pathToFolderId.insert(ProjectPathUtils::keyForPath(watchPath), projectRootId);
     
     qDebug() << "[ProjectDB] resyncAssetFolders: built" << pathToFolderId.size() << "folder path mappings";
     
@@ -920,7 +919,7 @@ int ProjectDB::resyncAssetFolders(int projectId) {
     
     int fixed = 0;
     int imported = 0;
-    QSet<QString> existingPathsLower;
+    QSet<QString> existingPathKeys;
     QSet<int> changedFolders;
     QSqlQuery upd(m_db);
     upd.prepare("UPDATE assets SET virtual_folder_id = ? WHERE id = ?");
@@ -929,10 +928,10 @@ int ProjectDB::resyncAssetFolders(int projectId) {
         int assetId = aq.value(0).toInt();
         QString filePath = aq.value(1).toString();
         int currentFolderId = aq.value(2).toInt();
-        existingPathsLower.insert(QDir::cleanPath(filePath).toLower());
+        existingPathKeys.insert(ProjectPathUtils::keyForPath(filePath));
         
         // Get the directory containing this file
-        QString assetDir = QDir::cleanPath(QFileInfo(filePath).absolutePath()).toLower();
+        QString assetDir = ProjectPathUtils::keyForPath(QFileInfo(filePath).absolutePath());
         
         // Find matching folder
         int correctFolderId = pathToFolderId.value(assetDir, 0);
@@ -957,9 +956,9 @@ int ProjectDB::resyncAssetFolders(int projectId) {
     // Scan filesystem for missing files and import them
     QDirIterator it(watchPath, QDir::Files, QDirIterator::Subdirectories);
     while (it.hasNext()) {
-        QString filePath = QDir::cleanPath(it.next());
-        QString normalized = filePath.toLower();
-        if (existingPathsLower.contains(normalized)) {
+        QString filePath = ProjectPathUtils::cleanPath(it.next());
+        QString normalized = ProjectPathUtils::keyForPath(filePath);
+        if (existingPathKeys.contains(normalized)) {
             continue;
         }
 
@@ -973,7 +972,7 @@ int ProjectDB::resyncAssetFolders(int projectId) {
         int assetId = insertAssetMetadataFast(filePath, folderId);
         if (assetId > 0) {
             imported++;
-            existingPathsLower.insert(normalized);
+            existingPathKeys.insert(normalized);
             changedFolders.insert(folderId);
             qDebug() << "[ProjectDB] resyncAssetFolders: imported missing file" << filePath;
         }

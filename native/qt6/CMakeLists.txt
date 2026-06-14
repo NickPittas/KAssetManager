@@ -1,5 +1,8 @@
 cmake_minimum_required(VERSION 3.21)
-cmake_minimum_required(VERSION 3.21)
+
+if(POLICY CMP0144)
+    cmake_policy(SET CMP0144 NEW)
+endif()
 
 # Set vcpkg toolchain file from environment if not already set
 if(NOT DEFINED CMAKE_TOOLCHAIN_FILE)
@@ -7,14 +10,18 @@ if(NOT DEFINED CMAKE_TOOLCHAIN_FILE)
         set(CMAKE_TOOLCHAIN_FILE "$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake" CACHE STRING "Vcpkg toolchain file")
         # Default triplet; can be overridden by user
         if(NOT DEFINED VCPKG_TARGET_TRIPLET)
-            set(VCPKG_TARGET_TRIPLET "x64-windows" CACHE STRING "Vcpkg target triplet")
+            if(WIN32)
+                set(VCPKG_TARGET_TRIPLET "x64-windows" CACHE STRING "Vcpkg target triplet")
+            else()
+                set(VCPKG_TARGET_TRIPLET "x64-linux" CACHE STRING "Vcpkg target triplet")
+            endif()
         endif()
         message(STATUS "Using vcpkg toolchain: ${CMAKE_TOOLCHAIN_FILE}")
         message(STATUS "Using vcpkg triplet: ${VCPKG_TARGET_TRIPLET}")
     endif()
 endif()
 
-project(KAssetManagerQt VERSION 1.8.5 LANGUAGES CXX)
+project(KAssetManagerQt VERSION 2.0 LANGUAGES CXX)
 # Optional static analysis / sanitizers
 option(ENABLE_ASAN "Enable AddressSanitizer (Clang/GCC only)" OFF)
 if(ENABLE_ASAN)
@@ -74,8 +81,13 @@ endif()
 
 if(BUILD_APP)
 
-find_package(QT NAMES Qt6 REQUIRED COMPONENTS Widgets Multimedia MultimediaWidgets Sql Concurrent Svg SvgWidgets OpenGLWidgets)
-find_package(Qt6 REQUIRED COMPONENTS Widgets Multimedia MultimediaWidgets Sql Concurrent Svg SvgWidgets OpenGLWidgets)
+
+find_package(QT NAMES Qt6 REQUIRED COMPONENTS Widgets Multimedia MultimediaWidgets Sql Concurrent Svg SvgWidgets OpenGL OpenGLWidgets Quick QuickWidgets DBus)
+find_package(Qt6 REQUIRED COMPONENTS Widgets Multimedia MultimediaWidgets Sql Concurrent Svg SvgWidgets OpenGL OpenGLWidgets Quick QuickWidgets DBus)
+
+# --- FFmpeg via pkg-config (for player_lab GPU decoder) ---
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET libavcodec libavformat libavutil libswscale libswresample)
 # Optional: Qt PDF (viewer) if available
 find_package(Qt6 QUIET COMPONENTS Pdf PdfWidgets)
 # ActiveQt (QAxObject) for Office-to-PDF conversion on Windows (optional)
@@ -123,8 +135,12 @@ endif()
 set(_tlrender_candidates
     "${CMAKE_SOURCE_DIR}/../third_party/tlRender-build/install-Release"
     "${CMAKE_SOURCE_DIR}/../../third_party/tlRender-build/install-Release"
+    "${CMAKE_SOURCE_DIR}/../third_party/tlRender-install-Release"
+    "${CMAKE_SOURCE_DIR}/../../third_party/tlRender-install-Release"
     "${CMAKE_CURRENT_LIST_DIR}/../third_party/tlRender-build/install-Release"
     "${CMAKE_CURRENT_LIST_DIR}/../../third_party/tlRender-build/install-Release"
+    "${CMAKE_CURRENT_LIST_DIR}/../third_party/tlRender-install-Release"
+    "${CMAKE_CURRENT_LIST_DIR}/../../third_party/tlRender-install-Release"
 )
 foreach(_candidate IN LISTS _tlrender_candidates)
     get_filename_component(_abs_candidate "${_candidate}" ABSOLUTE)
@@ -140,12 +156,21 @@ if(TLRENDER_ROOT)
     list(PREPEND CMAKE_PREFIX_PATH "${TLRENDER_ROOT}" "${TLRENDER_ROOT}/share/ftk")
     message(STATUS "Using tlRender from ${TLRENDER_ROOT}")
     
-    # Force CMake to use tlRender's bundled ZLIB to avoid duplicate symbol issues
-    # tlRender bundles a static zlib that was used during its build
-    # We must set these as CACHE FORCE to override vcpkg's zlib
+    # Force CMake to use tlRender's bundled ZLIB to avoid duplicate symbol issues.
+    # The install layout differs by platform (.lib on Windows, libz.a on Linux).
+    set(_tlrender_zlib_library "")
+    if(WIN32 AND EXISTS "${TLRENDER_ROOT}/lib/zlib.lib")
+        set(_tlrender_zlib_library "${TLRENDER_ROOT}/lib/zlib.lib")
+    elseif(EXISTS "${TLRENDER_ROOT}/lib/libz.a")
+        set(_tlrender_zlib_library "${TLRENDER_ROOT}/lib/libz.a")
+    elseif(EXISTS "${TLRENDER_ROOT}/lib64/libz.a")
+        set(_tlrender_zlib_library "${TLRENDER_ROOT}/lib64/libz.a")
+    endif()
     set(ZLIB_ROOT "${TLRENDER_ROOT}" CACHE PATH "ZLIB root" FORCE)
-    set(ZLIB_LIBRARY "${TLRENDER_ROOT}/lib/zlib.lib" CACHE FILEPATH "ZLIB library" FORCE)
-    set(ZLIB_LIBRARY_RELEASE "${TLRENDER_ROOT}/lib/zlib.lib" CACHE FILEPATH "ZLIB Release library" FORCE)
+    if(_tlrender_zlib_library)
+        set(ZLIB_LIBRARY "${_tlrender_zlib_library}" CACHE FILEPATH "ZLIB library" FORCE)
+        set(ZLIB_LIBRARY_RELEASE "${_tlrender_zlib_library}" CACHE FILEPATH "ZLIB Release library" FORCE)
+    endif()
     set(ZLIB_INCLUDE_DIR "${TLRENDER_ROOT}/include" CACHE PATH "ZLIB include dir" FORCE)
     # Clear any cached found status
     unset(ZLIB_FOUND CACHE)
@@ -176,7 +201,8 @@ if(TLRENDER_ROOT)
 else()
     message(FATAL_ERROR "tlRender not found! tlRender is required for video/image sequence playback.\n"
         "Build tlRender by running:\n"
-        "  cd third_party/tlRender-build && .\\build-tlrender.ps1\n"
+        "  Linux: configure/build tlRender into third_party/tlRender-install-Release\n"
+        "  Windows: cd third_party/tlRender-build && .\\build-tlrender.ps1\n"
         "This will build tlRender with all dependencies including OpenColorIO and OpenImageIO.")
 endif()
 
@@ -233,12 +259,20 @@ qt_add_executable(kassetmanagerqt WIN32
     src/assets_table_model.h
     src/importer.h
     src/importer.cpp
+    src/import_controller.h
+    src/import_controller.cpp
+    src/db_worker.h
+    src/db_worker.cpp
     src/live_preview_manager.h
     src/live_preview_manager.cpp
+    src/media_async_request.h
+    src/media_async_request.cpp
     src/log_manager.h
     src/log_manager.cpp
     src/progress_manager.h
     src/progress_manager.cpp
+    src/runtime_paths.h
+    src/runtime_paths.cpp
     src/tags_model.h
     src/preview_overlay.h
     src/preview_overlay.cpp
@@ -275,6 +309,8 @@ qt_add_executable(kassetmanagerqt WIN32
     src/fm_views_ex.cpp
     src/file_manager_pane.h
     src/file_manager_pane.cpp
+    src/image_memory_limits.h
+    src/image_memory_limits.cpp
     src/oiio_image_loader.h
     src/oiio_image_loader.cpp
     src/project_folder_watcher.h
@@ -316,13 +352,22 @@ qt_add_executable(kassetmanagerqt WIN32
     src/thumbnail_generator_dialog.cpp
     src/thumbnail_generator_worker.h
     src/thumbnail_generator_worker.cpp
-    # tlRender integration - professional video/sequence playback with OCIO
-    src/media/tlrender_player.h
-    src/media/tlrender_player.cpp
-    src/media/tlrender_widget.h
-    src/media/tlrender_widget.cpp
-    src/media/tlrender_viewport.h
-    src/media/tlrender_viewport.cpp
+    # Wayland video playback
+    src/media/media_player_types.h
+    src/media/ffmpeg_mov_player.h
+    src/media/ffmpeg_mov_player.cpp
+    src/media/player_lab_player.h
+    src/media/player_lab_player.cpp
+    src/media/player_lab_viewport.h
+    src/media/player_lab_viewport.cpp
+    # player_lab GPU playback stack (validated standalone)
+    player_lab/player_types.h
+    player_lab/ffmpeg_gpu_decoder.h
+    player_lab/ffmpeg_gpu_decoder.cpp
+    player_lab/gpu_player.h
+    player_lab/gpu_player.cpp
+    player_lab/gpu_player_widget.h
+    player_lab/gpu_player_widget.cpp
     src/theme_manager.h
     src/theme_manager.cpp
     src/annotation_items.h
@@ -340,6 +385,7 @@ target_compile_definitions(kassetmanagerqt PRIVATE
 
 target_include_directories(kassetmanagerqt PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/player_lab
 )
 
 # Add tlRender include directories
@@ -370,7 +416,7 @@ if(TLRENDER_FOUND)
         tlRender::tlUI          # UI widgets
         tlRender::tlDevice      # Device handling
     )
-    
+
     # Link Qt integration libraries if available
     if(TLRENDER_HAS_QT)
         target_link_libraries(kassetmanagerqt PRIVATE
@@ -378,16 +424,15 @@ if(TLRENDER_FOUND)
             tlRender::tlQtWidget    # Qt widget implementations (Viewport, etc.)
         )
     endif()
-    
+
     # Add compile definitions to enable tlRender + bundled deps code paths.
     # NOTE: We intentionally rely on tlRender's bundled dependencies to avoid ABI/version mixing.
-    # These are used throughout the app (thumbnails, still-image preview, OCIO UI lists).
+    # These are used throughout the app (thumbnails and still-image preview).
     target_compile_definitions(kassetmanagerqt PRIVATE
       HAVE_TLRENDER=1
       HAVE_OPENIMAGEIO=1
-      HAVE_OCIO=1
     )
-    
+
     # Windows system libraries required by tlRender dependencies
     if(WIN32)
         target_link_libraries(kassetmanagerqt PRIVATE
@@ -408,8 +453,8 @@ if(TLRENDER_FOUND)
             dwmapi
         )
     endif()
-    
-    message(STATUS "tlRender linked via imported targets with OCIO color management")
+
+    message(STATUS "tlRender linked via imported targets")
 endif()
 
 # FFmpeg is provided by tlRender as a transitive dependency
@@ -426,10 +471,29 @@ target_link_libraries(kassetmanagerqt PRIVATE
     Qt6::MultimediaWidgets
     Qt6::Sql
     Qt6::Concurrent
+    Qt6::DBus
     Qt6::Svg
     Qt6::SvgWidgets
+    Qt6::OpenGL
     Qt6::OpenGLWidgets
+    Qt6::Quick
+    Qt6::QuickWidgets
 )
+
+target_link_libraries(kassetmanagerqt PRIVATE PkgConfig::FFMPEG)
+
+# PlayerLab H.264 playback requires the system FFmpeg build because it exposes
+# NVIDIA CUVID/NVDEC decoders (for example h264_cuvid). tlRender's bundled
+# FFmpeg shares the same SONAMEs but is built without those decoders; if its
+# library directory appears first in RUNPATH, the real app silently falls back
+# to 4K software H.264 decode and plays MKV at ~8-11 fps. Keep tlRender's path
+# available for its other bundled libraries, but prefer the FFmpeg libdir found
+# by pkg-config for FFmpeg SONAME resolution.
+if(FFMPEG_LIBRARY_DIRS)
+    list(GET FFMPEG_LIBRARY_DIRS 0 _playerlab_ffmpeg_libdir)
+    set_property(TARGET kassetmanagerqt APPEND PROPERTY BUILD_RPATH "${_playerlab_ffmpeg_libdir}")
+    set_property(TARGET kassetmanagerqt APPEND PROPERTY INSTALL_RPATH "${_playerlab_ffmpeg_libdir}")
+endif()
 # Link Qt PDF if available (widgets optional)
 if (TARGET Qt6::Pdf)
   target_link_libraries(kassetmanagerqt PRIVATE Qt6::Pdf)
@@ -442,7 +506,7 @@ endif()
 
 # OpenImageIO is provided by tlRender - no need to link separately
 
-# Link minizip-ng (vcpkg target) - separate from tlRender's bundled minizip-ng
+# Link minizip-ng from the tlRender install
 target_link_libraries(kassetmanagerqt PRIVATE MINIZIP::minizip-ng)
 target_compile_definitions(kassetmanagerqt PRIVATE HAVE_MINIZIP_NG)
 
@@ -456,21 +520,71 @@ endif()
 install(TARGETS kassetmanagerqt RUNTIME DESTINATION bin)
 
 # Install icons folder
-set(_ICONS_DIR "${CMAKE_SOURCE_DIR}/../../icons")
+set(_ICONS_DIR "${CMAKE_SOURCE_DIR}/../../Icons")
 if(EXISTS "${_ICONS_DIR}")
   install(DIRECTORY "${_ICONS_DIR}" DESTINATION bin)
-  message(STATUS "Icons folder will be installed to bin/icons directory")
+  message(STATUS "Icons folder will be installed to bin/Icons directory")
 else()
   message(WARNING "Icons folder not found at ${_ICONS_DIR}")
 endif()
 
-# Install bundled ACES OCIO config (ships with repo) so the portable build has a known-good config.
-set(_ACES_OCIO_DIR "${CMAKE_SOURCE_DIR}/../../OpenColorIO-Config-ACES-1.2")
-if(EXISTS "${_ACES_OCIO_DIR}")
-  install(DIRECTORY "${_ACES_OCIO_DIR}" DESTINATION bin)
-  message(STATUS "ACES OCIO config will be installed to bin/OpenColorIO-Config-ACES-1.2")
-else()
-  message(WARNING "ACES OCIO config folder not found at ${_ACES_OCIO_DIR}")
+if(UNIX AND NOT APPLE)
+  set(_LINUX_PACKAGING_DIR "${CMAKE_CURRENT_SOURCE_DIR}/packaging/linux")
+  set(_APP_ICON_PNG "${CMAKE_SOURCE_DIR}/../../icon.png")
+
+  # Keep Linux assets in the install tree even before AppImage assembly.
+  # The packaged layout needs qt.conf next to the installed executable, but a
+  # qt.conf beside the build-tree executable overrides Fedora's system Qt plugin
+  # paths and breaks direct local runs from the build directory.
+  set(_QT_CONF "${CMAKE_CURRENT_BINARY_DIR}/install-qt.conf")
+  file(WRITE "${_QT_CONF}" "[Paths]\nPlugins=../plugins\n")
+  install(FILES "${_QT_CONF}" DESTINATION bin RENAME qt.conf)
+
+  if(EXISTS "${_LINUX_PACKAGING_DIR}/kassetmanager.desktop")
+    install(FILES "${_LINUX_PACKAGING_DIR}/kassetmanager.desktop" DESTINATION share/applications)
+  endif()
+
+  if(EXISTS "${_LINUX_PACKAGING_DIR}/AppRun.env")
+    install(FILES "${_LINUX_PACKAGING_DIR}/AppRun.env" DESTINATION share/kassetmanager)
+  endif()
+
+  if(EXISTS "${_APP_ICON_PNG}")
+    install(FILES "${_APP_ICON_PNG}" DESTINATION share/icons/hicolor/256x256/apps RENAME kassetmanager.png)
+  else()
+    message(WARNING "App icon not found at ${_APP_ICON_PNG}")
+  endif()
+
+  if(TLRENDER_ROOT)
+    foreach(_tlrender_lib_dir lib lib64)
+      if(EXISTS "${TLRENDER_ROOT}/${_tlrender_lib_dir}")
+        file(GLOB _TLRENDER_SO_FILES
+          "${TLRENDER_ROOT}/${_tlrender_lib_dir}/*.so"
+          "${TLRENDER_ROOT}/${_tlrender_lib_dir}/*.so.*")
+        if(_TLRENDER_SO_FILES)
+          install(FILES ${_TLRENDER_SO_FILES} DESTINATION lib)
+        endif()
+      endif()
+    endforeach()
+  endif()
+
+  set(_LINUX_FFMPEG_BIN "${CMAKE_SOURCE_DIR}/../../third_party/ffmpeg/bin")
+  if(EXISTS "${_LINUX_FFMPEG_BIN}/ffmpeg" AND EXISTS "${_LINUX_FFMPEG_BIN}/ffprobe")
+    install(PROGRAMS
+      "${_LINUX_FFMPEG_BIN}/ffmpeg"
+      "${_LINUX_FFMPEG_BIN}/ffprobe"
+      DESTINATION bin)
+  endif()
+
+  set(_LINUX_MAGICK_CANDIDATES
+    "${CMAKE_SOURCE_DIR}/../../third_party/imagemagick/bin/magick"
+    "${CMAKE_SOURCE_DIR}/../../third_party/imagemagick/magick"
+  )
+  foreach(_linux_magick IN LISTS _LINUX_MAGICK_CANDIDATES)
+    if(EXISTS "${_linux_magick}")
+      install(PROGRAMS "${_linux_magick}" DESTINATION bin)
+      break()
+    endif()
+  endforeach()
 endif()
 
 # Packaging: deploy Qt runtime. Prefer Qt6DeploySupport if available.
@@ -579,12 +693,16 @@ if(BUILD_TESTS)
     add_subdirectory(tests)
 endif()
 
-# CPack configuration (NSIS + ZIP)
+# CPack configuration
 set(CPACK_PACKAGE_NAME "KAsset Manager Qt")
 set(CPACK_PACKAGE_VENDOR "KAM")
 set(CPACK_PACKAGE_VERSION ${PROJECT_VERSION})
 set(CPACK_PACKAGE_INSTALL_DIRECTORY "KAssetManagerQt")
-set(CPACK_GENERATOR "ZIP;NSIS")
+if(WIN32)
+  set(CPACK_GENERATOR "ZIP;NSIS")
+else()
+  set(CPACK_GENERATOR "TGZ")
+endif()
 include(CPack)
 
 

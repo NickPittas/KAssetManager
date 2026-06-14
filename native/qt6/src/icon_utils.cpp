@@ -10,6 +10,8 @@
 #include <QScreen>
 #include <QGuiApplication>
 #include <QHash>
+#include <QDir>
+#include <QFileInfo>
 
 // Icon generation helpers
 // Creates DPI-aware icons that render crisply on High DPI displays
@@ -43,26 +45,75 @@ QIcon mkIcon(const std::function<void(QPainter&, const QRectF&)>& draw, const QC
     return QIcon(pm);
 }
 
-QIcon loadPngIcon(const QString& filename, const QColor& targetColor)
+QString findIconPath(const QString& filename)
 {
-    // Try multiple possible locations for the icons folder
+    const QString appDir = QCoreApplication::applicationDirPath();
+    const QString baseName = QFileInfo(filename).fileName();
+    const QString normalized = filename.startsWith(QStringLiteral("media/"), Qt::CaseInsensitive)
+        ? QStringLiteral("Media/") + filename.mid(6)
+        : filename;
+    const QString lowerNormalized = normalized.toLower();
+
     QStringList searchPaths = {
-        QCoreApplication::applicationDirPath() + "/icons/" + filename,
-        QCoreApplication::applicationDirPath() + "/../icons/" + filename,
-        QCoreApplication::applicationDirPath() + "/../../icons/" + filename
+        appDir + "/Icons/" + normalized,
+        appDir + "/../Icons/" + normalized,
+        appDir + "/../../Icons/" + normalized,
+        appDir + "/../../../Icons/" + normalized,
+        appDir + "/icons/" + lowerNormalized,
+        appDir + "/../icons/" + lowerNormalized,
+        appDir + "/../../icons/" + lowerNormalized,
+        appDir + "/../../../icons/" + lowerNormalized,
+        appDir + "/Icons/Media/" + baseName,
+        appDir + "/../Icons/Media/" + baseName,
+        appDir + "/../../Icons/Media/" + baseName,
+        appDir + "/../../../Icons/Media/" + baseName,
+        appDir + "/Icons/Annotation/" + baseName,
+        appDir + "/../Icons/Annotation/" + baseName,
+        appDir + "/../../Icons/Annotation/" + baseName,
+        appDir + "/../../../Icons/Annotation/" + baseName,
+        appDir + "/../Resources/icons/" + normalized,
+        appDir + "/../../Resources/icons/" + normalized,
+        appDir + "/../../../Resources/icons/" + normalized,
+        QDir::currentPath() + "/Icons/" + normalized,
+        QDir::currentPath() + "/Icons/Media/" + baseName,
+        QDir::currentPath() + "/Icons/Annotation/" + baseName,
+        QDir::currentPath() + "/../Icons/" + normalized,
+        QDir::currentPath() + "/../Icons/Media/" + baseName,
+        QDir::currentPath() + "/../Icons/Annotation/" + baseName,
+        QDir::currentPath() + "/../../Icons/" + normalized,
+        QDir::currentPath() + "/../../Icons/Media/" + baseName,
+        QDir::currentPath() + "/../../Icons/Annotation/" + baseName,
+        QDir::currentPath() + "/../../../Icons/" + normalized,
+        QDir::currentPath() + "/../../../Icons/Media/" + baseName,
+        QDir::currentPath() + "/../../../Icons/Annotation/" + baseName
     };
 
-    QString foundPath;
     for (const QString& path : searchPaths) {
         if (QFile::exists(path)) {
-            foundPath = path;
-            break;
+            return path;
         }
     }
 
+    return QString();
+}
+
+QIcon loadRawPngIcon(const QString& filename)
+{
+    const QString foundPath = findIconPath(filename);
     if (foundPath.isEmpty()) {
-        qWarning() << "Failed to find icon:" << filename << "- searched paths:" << searchPaths;
-        // Return a fallback empty icon
+        qWarning() << "Failed to find raw icon:" << filename;
+        return QIcon();
+    }
+
+    return QIcon(foundPath);
+}
+
+QIcon loadPngIcon(const QString& filename, const QColor& targetColor)
+{
+    const QString foundPath = findIconPath(filename);
+
+    if (foundPath.isEmpty()) {
+        qWarning() << "Failed to find icon:" << filename;
         return QIcon();
     }
 
@@ -309,26 +360,54 @@ QIcon getFileTypeIcon(const QString &ext, const QColor& color) {
 
 // Icon providers
 
-// Cached standard icons - standardIcon() is expensive (shell calls on Windows)
+// Cached provider icons. Do not depend on the platform icon theme here:
+// AppImages often run without the host theme paths that QStyle's standard
+// icons resolve through, which leaves QFileSystemModel tree/list icons blank.
 namespace {
     static QIcon& cachedDirIcon() {
         static QIcon icon;
-        if (icon.isNull()) icon = QApplication::style()->standardIcon(QStyle::SP_DirIcon);
+        if (icon.isNull()) {
+            icon = mkIcon([](QPainter& p, const QRectF& r) {
+                QPainterPath folder;
+                folder.moveTo(r.x() + 2, r.y() + 9);
+                folder.lineTo(r.x() + 10, r.y() + 9);
+                folder.lineTo(r.x() + 13, r.y() + 12);
+                folder.lineTo(r.right() - 2, r.y() + 12);
+                folder.lineTo(r.right() - 2, r.bottom() - 3);
+                folder.lineTo(r.x() + 2, r.bottom() - 3);
+                folder.closeSubpath();
+                p.drawPath(folder);
+            }, QColor(235, 190, 80));
+        }
         return icon;
     }
     static QIcon& cachedDriveIcon() {
         static QIcon icon;
-        if (icon.isNull()) icon = QApplication::style()->standardIcon(QStyle::SP_DriveHDIcon);
+        if (icon.isNull()) {
+            icon = mkIcon([](QPainter& p, const QRectF& r) {
+                QRectF body(r.x() + 3, r.y() + 9, r.width() - 6, r.height() - 10);
+                p.drawRoundedRect(body, 2, 2);
+                p.drawLine(body.left() + 3, body.bottom() - 6, body.right() - 3, body.bottom() - 6);
+                p.drawEllipse(QPointF(body.right() - 6, body.bottom() - 3), 1.5, 1.5);
+            }, QColor(180, 190, 205));
+        }
         return icon;
     }
     static QIcon& cachedComputerIcon() {
         static QIcon icon;
-        if (icon.isNull()) icon = QApplication::style()->standardIcon(QStyle::SP_ComputerIcon);
+        if (icon.isNull()) {
+            icon = mkIcon([](QPainter& p, const QRectF& r) {
+                QRectF screen(r.x() + 3, r.y() + 5, r.width() - 6, r.height() - 10);
+                p.drawRoundedRect(screen, 2, 2);
+                p.drawLine(r.center().x(), screen.bottom(), r.center().x(), r.bottom() - 2);
+                p.drawLine(r.x() + 9, r.bottom() - 2, r.right() - 9, r.bottom() - 2);
+            }, QColor(180, 190, 205));
+        }
         return icon;
     }
     static QIcon& cachedFileIcon() {
         static QIcon icon;
-        if (icon.isNull()) icon = QApplication::style()->standardIcon(QStyle::SP_FileIcon);
+        if (icon.isNull()) icon = icoFileGeneric();
         return icon;
     }
 }

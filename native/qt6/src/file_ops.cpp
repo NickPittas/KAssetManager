@@ -12,6 +12,9 @@
 #include <QAbstractButton>
 #include <QPushButton>
 #include <QDebug>
+#include <QStack>
+
+#include <functional>
 
 #include "file_utils.h"
 #include <QApplication>
@@ -33,6 +36,341 @@ static QString typeToString(FileOpsQueue::Type t) {
     }
     return "";
 }
+
+#ifndef _WIN32
+static bool samePath(const QString& a, const QString& b)
+{
+    return QFileInfo(a).absoluteFilePath() == QFileInfo(b).absoluteFilePath();
+}
+
+static QString uniqueNameInDirNonWindows(const QString& dir, const QString& baseName)
+{
+    QString name = baseName;
+    QString path = QDir(dir).filePath(name);
+    int i = 2;
+    while (FileUtils::pathExists(path)) {
+        const QFileInfo fi(baseName);
+        const QString stem = fi.completeBaseName();
+        const QString ext = fi.suffix();
+        if (ext.isEmpty()) name = QString("%1 (%2)").arg(stem).arg(i++);
+        else name = QString("%1 (%2).%3").arg(stem).arg(i++).arg(ext);
+        path = QDir(dir).filePath(name);
+    }
+    return path;
+}
+
+struct FileOpProgressState
+{
+    qint64 completedFiles = 0;
+    qint64 totalFiles = 0;
+    qint64 completedWork = 0;
+    qint64 totalWork = 0;
+    qint64 currentWork = 0;
+    QString currentFile;
+};
+
+struct FileOpEstimate
+{
+    qint64 fileCount = 0;
+    qint64 workUnits = 0;
+};
+
+static FileOpEstimate estimatePath(const QString& path)
+{
+    FileOpEstimate estimate;
+    QFileInfo rootInfo(path);
+    if (!rootInfo.exists()) {
+        return estimate;
+    }
+
+    if (rootInfo.isFile()) {
+        estimate.fileCount = 1;
+        estimate.workUnits = qMax<qint64>(1, rootInfo.size());
+        return estimate;
+    }
+
+    QStack<QString> pending;
+    pending.push(rootInfo.absoluteFilePath());
+    while (!pending.isEmpty()) {
+        const QString currentPath = pending.pop();
+        const QFileInfo currentInfo(currentPath);
+        if (currentInfo.isDir()) {
+            estimate.workUnits += 1;
+            const QFileInfoList entries = QDir(currentPath).entryInfoList(QDir::NoDotAndDotDot | QDir::AllEntries);
+            for (const QFileInfo& entry : entries) {
+                pending.push(entry.absoluteFilePath());
+            }
+        } else {
+            estimate.fileCount += 1;
+            estimate.workUnits += qMax<qint64>(1, currentInfo.size());
+        }
+    }
+
+    if (estimate.fileCount == 0) {
+        estimate.fileCount = 1;
+    }
+    return estimate;
+}
+
+static qint64 estimatePathWorkUnits(const QString& path)
+{
+    return estimatePath(path).workUnits;
+}
+
+static qint64 estimateBatchWorkUnits(const QStringList& paths)
+{
+    qint64 total = 0;
+    for (const QString& path : paths) {
+        total += estimatePathWorkUnits(path);
+    }
+    return qMax<qint64>(1, total);
+}
+
+static qint64 estimateBatchFileCount(const QStringList& paths)
+{
+    qint64 total = 0;
+    for (const QString& path : paths) {
+        total += estimatePath(path).fileCount;
+    }
+    return qMax<qint64>(1, total);
+}
+
+static bool removeRecursivelyNonWindowsWithProgress(const QString& path,
+                                                    std::atomic_bool& cancel,
+                                                    FileOpProgressState* progress,
+                                                    const std::function<void(const FileOpProgressState&)>& reportProgress,
+                                                    QString* errorOut)
+{
+    if (!FileUtils::pathExists(path)) return true;
+
+    const QFileInfo fi(path);
+    if (cancel.load()) return false;
+
+    if (fi.isDir()) {
+        const QFileInfoList entries = QDir(path).entryInfoList(QDir::NoDotAndDotDot | QDir::AllEntries);
+        for (const QFileInfo& entry : entries) {
+            if (!removeRecursivelyNonWindowsWithProgress(entry.absoluteFilePath(), cancel, progress, reportProgress, errorOut)) {
+                return false;
+            }
+        }
+        if (!QDir().rmdir(path)) {
+            if (errorOut) *errorOut = QObject::tr("Failed to permanently delete: %1").arg(path);
+            return false;
+        }
+        if (progress) {
+            progress->currentFile = path;
+            progress->completedWork += 1;
+            progress->currentWork = progress->completedWork;
+            reportProgress(*progress);
+        }
+        return true;
+    }
+
+    const qint64 fileWork = qMax<qint64>(1, fi.size());
+    if (!QFile::remove(path)) {
+        if (errorOut) *errorOut = QObject::tr("Failed to permanently delete: %1").arg(path);
+        return false;
+    }
+    if (progress) {
+        progress->currentFile = path;
+        progress->completedFiles += 1;
+        progress->completedWork += fileWork;
+        progress->currentWork = progress->completedWork;
+        reportProgress(*progress);
+    }
+    return true;
+}
+
+static bool copyFileWithProgressNonWindows(const QString& src,
+                                           const QString& dst,
+                                           std::atomic_bool& cancel,
+                                           FileOpProgressState* progress,
+                                           const std::function<void(const FileOpProgressState&)>& reportProgress,
+                                           QString* errorOut)
+{
+    QFile in(src);
+    QFile out(dst);
+    if (!in.open(QIODevice::ReadOnly)) {
+        if (errorOut) *errorOut = QObject::tr("Failed to open %1").arg(src);
+        return false;
+    }
+    QDir().mkpath(QFileInfo(dst).absolutePath());
+    if (!out.open(QIODevice::WriteOnly)) {
+        if (errorOut) *errorOut = QObject::tr("Failed to write %1").arg(dst);
+        return false;
+    }
+    const qint64 totalBytes = qMax<qint64>(1, in.size());
+    qint64 copiedBytes = 0;
+    const qint64 baseWork = progress ? progress->completedWork : 0;
+    QByteArray buf;
+    buf.resize(4 * 1024 * 1024);
+    while (!in.atEnd()) {
+        if (cancel.load()) {
+            out.close();
+            out.remove();
+            return false;
+        }
+        const qint64 r = in.read(buf.data(), buf.size());
+        if (r <= 0) break;
+        const qint64 w = out.write(buf.constData(), r);
+        if (w != r) {
+            if (errorOut) *errorOut = QObject::tr("Write error %1").arg(dst);
+            out.close();
+            return false;
+        }
+        copiedBytes += w;
+        if (progress) {
+            progress->currentFile = src;
+            progress->currentWork = baseWork + copiedBytes;
+            reportProgress(*progress);
+        }
+    }
+    out.flush();
+    out.close();
+    in.close();
+    if (progress) {
+        progress->completedFiles += 1;
+        progress->completedWork += totalBytes;
+        progress->currentWork = progress->completedWork;
+        progress->currentFile = src;
+        reportProgress(*progress);
+    }
+    return true;
+}
+
+static bool copyRecursivelyNonWindows(const QString& src,
+                                      const QString& dst,
+                                      std::atomic_bool& cancel,
+                                      FileOpProgressState* progress,
+                                      const std::function<void(const FileOpProgressState&)>& reportProgress,
+                                      QString* errorOut)
+{
+    const QFileInfo sourceInfo(src);
+    if (sourceInfo.isDir()) {
+        QDir dstDir(dst);
+        if (!dstDir.exists() && !QDir().mkpath(dst)) {
+            if (errorOut) *errorOut = QObject::tr("Failed to create directory %1").arg(dst);
+            return false;
+        }
+        if (progress) {
+            progress->currentFile = src;
+            progress->completedWork += 1;
+            progress->currentWork = progress->completedWork;
+            reportProgress(*progress);
+        }
+        const QFileInfoList entries = QDir(src).entryInfoList(QDir::NoDotAndDotDot | QDir::AllEntries);
+        for (const QFileInfo& entry : entries) {
+            if (cancel.load()) return false;
+            const QString target = dstDir.filePath(entry.fileName());
+            if (!copyRecursivelyNonWindows(entry.absoluteFilePath(), target, cancel, progress, reportProgress, errorOut)) {
+                return false;
+            }
+        }
+        return true;
+    }
+    return copyFileWithProgressNonWindows(src, dst, cancel, progress, reportProgress, errorOut);
+}
+
+static bool copyEntryToDestination(const QString& src,
+                                   const QString& destinationDir,
+                                   std::atomic_bool& cancel,
+                                   FileOpProgressState* progress,
+                                   const std::function<void(const FileOpProgressState&)>& reportProgress,
+                                   QString* errorOut)
+{
+    const QFileInfo sourceInfo(src);
+    if (!sourceInfo.exists()) {
+        if (errorOut) *errorOut = QObject::tr("Source does not exist: %1").arg(src);
+        return false;
+    }
+
+    const QString targetPath = uniqueNameInDirNonWindows(destinationDir, sourceInfo.fileName());
+    if (sourceInfo.isDir()) {
+        return copyRecursivelyNonWindows(src, targetPath, cancel, progress, reportProgress, errorOut);
+    }
+    return copyFileWithProgressNonWindows(src, targetPath, cancel, progress, reportProgress, errorOut);
+}
+
+static bool moveEntryToDestination(const QString& src,
+                                   const QString& destinationDir,
+                                   std::atomic_bool& cancel,
+                                   FileOpProgressState* progress,
+                                   const std::function<void(const FileOpProgressState&)>& reportProgress,
+                                   QString* errorOut)
+{
+    const QFileInfo sourceInfo(src);
+    if (!sourceInfo.exists()) {
+        if (errorOut) *errorOut = QObject::tr("Source does not exist: %1").arg(src);
+        return false;
+    }
+
+    QString targetPath = QDir(destinationDir).filePath(sourceInfo.fileName());
+    if (samePath(src, targetPath)) {
+        return true;
+    }
+    if (FileUtils::pathExists(targetPath)) {
+        targetPath = uniqueNameInDirNonWindows(destinationDir, sourceInfo.fileName());
+    }
+
+    if (QDir().rename(src, targetPath)) {
+        if (progress) {
+            progress->completedFiles += estimatePath(src).fileCount;
+            progress->completedWork += estimatePathWorkUnits(src);
+            progress->currentWork = progress->completedWork;
+            progress->currentFile = src;
+            reportProgress(*progress);
+        }
+        return true;
+    }
+
+    if (!copyEntryToDestination(src, destinationDir, cancel, progress, reportProgress, errorOut)) {
+        return false;
+    }
+
+    if (!removeRecursivelyNonWindowsWithProgress(src, cancel, nullptr, [](const FileOpProgressState&) {}, errorOut)) {
+        if (errorOut && errorOut->isEmpty()) {
+            *errorOut = QObject::tr("Moved copy created, but failed to remove original: %1").arg(src);
+        }
+        return false;
+    }
+    return true;
+}
+
+static bool deleteEntry(const QString& path,
+                        bool permanent,
+                        std::atomic_bool& cancel,
+                        FileOpProgressState* progress,
+                        const std::function<void(const FileOpProgressState&)>& reportProgress,
+                        QString* errorOut)
+{
+    if (!FileUtils::pathExists(path)) {
+        return true;
+    }
+    if (cancel.load()) {
+        return false;
+    }
+
+    if (!permanent) {
+        QString pathInTrash;
+        if (QFile::moveToTrash(path, &pathInTrash)) {
+            if (progress) {
+                progress->currentFile = path;
+                progress->completedFiles += estimatePath(path).fileCount;
+                progress->completedWork += estimatePathWorkUnits(path);
+                progress->currentWork = progress->completedWork;
+                reportProgress(*progress);
+            }
+            return true;
+        }
+        if (errorOut) {
+            *errorOut = QObject::tr("Failed to move to trash: %1").arg(path);
+        }
+        return false;
+    }
+
+    return removeRecursivelyNonWindowsWithProgress(path, cancel, progress, reportProgress, errorOut);
+}
+#endif
 
 FileOpsQueue& FileOpsQueue::instance()
 {
@@ -132,6 +470,7 @@ void FileOpsQueue::startNext()
     Item &item = m_queue[idx];
     item.status = "In Progress";
     item.completedFiles = 0;
+    item.completedWork = 0;
     m_cancel.store(false);
     m_running = true;
 
@@ -288,7 +627,64 @@ void FileOpsQueue::startNext()
                 << "success=" << success << "aborted=" << aborted << "code=" << codeStr
                 << (opError.isEmpty() ? QString() : QString("error=%1").arg(opError));
 #else
-        opError = QStringLiteral("OS-level file operations not supported on this platform");
+        FileOpProgressState progress;
+        progress.totalFiles = estimateBatchFileCount(sources);
+        progress.totalWork = estimateBatchWorkUnits(sources);
+        progress.currentWork = 0;
+        auto markProgress = [this, itemId](const FileOpProgressState& progressState) {
+            {
+                QMutexLocker lk(&m_mutex);
+                for (Item &queued : m_queue) {
+                    if (queued.id == itemId) {
+                        queued.completedFiles = progressState.completedFiles;
+                        queued.totalFiles = progressState.totalFiles;
+                        queued.completedWork = progressState.currentWork;
+                        queued.totalWork = progressState.totalWork;
+                        queued.currentFile = progressState.currentFile;
+                        break;
+                    }
+                }
+            }
+            emit progressChanged(progressState.currentWork, progressState.totalWork, progressState.currentFile);
+            emit queueChanged();
+        };
+        markProgress(progress);
+
+        success = true;
+        for (const QString& source : sources) {
+            if (m_cancel.load()) {
+                aborted = true;
+                success = false;
+                break;
+            }
+
+            QString localError;
+            bool stepOk = false;
+            if (type == Type::Copy) {
+                stepOk = copyEntryToDestination(source, dest, m_cancel, &progress, markProgress, &localError);
+            } else if (type == Type::Move) {
+                stepOk = moveEntryToDestination(source, dest, m_cancel, &progress, markProgress, &localError);
+            } else {
+                stepOk = deleteEntry(source, permanent, m_cancel, &progress, markProgress, &localError);
+            }
+
+            if (!stepOk) {
+                if (m_cancel.load()) {
+                    aborted = true;
+                }
+                success = false;
+                opError = localError;
+                break;
+            }
+
+            progress.currentFile = source;
+            progress.currentWork = progress.completedWork;
+            markProgress(progress);
+        }
+
+        if (!success && opError.isEmpty() && aborted) {
+            opError = QStringLiteral("Operation cancelled");
+        }
 #endif
 
         emit itemFinished(itemId, success, opError);
@@ -387,4 +783,3 @@ bool FileOpsQueue::removeRecursively(const QString& path, std::atomic_bool& canc
         return QFile::remove(path);
     }
 }
-

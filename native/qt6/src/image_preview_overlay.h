@@ -87,7 +87,6 @@ private:
     double currentZoom = 1.0;
     bool fitMode = true;
 
-    OIIOImageLoader::ColorSpace currentColorSpace = OIIOImageLoader::ColorSpace::sRGB;
 };
 
 #endif // IMAGE_PREVIEW_OVERLAY_H

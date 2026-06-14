@@ -1,7 +1,7 @@
 #include "thumbnail_generator_worker.h"
 #include "thumbnail_cache_manager.h"
 #if defined(HAVE_TLRENDER) && HAVE_TLRENDER
-#include "media/tlrender_player.h"
+#include "media/player_lab_player.h"
 #endif
 #include "oiio_image_loader.h"
 #include <QFileInfo>
@@ -228,8 +228,8 @@ bool ThumbnailGeneratorWorker::generateVideoThumbnails(int index, const QString&
     int generated = 0;
 
 #if defined(HAVE_TLRENDER) && HAVE_TLRENDER
-    // tlRender build: use TLRenderPlayer's static helpers (currently FFmpeg-backed)
-    const qint64 durationMs = TLRenderPlayer::queryDuration(filePath);
+    // tlRender build: use PlayerLabPlayer's static helpers (currently FFmpeg-backed)
+    const qint64 durationMs = PlayerLabPlayer::queryDuration(filePath);
     if (durationMs <= 0) {
         emit logLine(QString("  ERROR: Failed to get video duration"));
         emit logLine(QString("  Path: %1").arg(filePath));
@@ -242,7 +242,7 @@ bool ThumbnailGeneratorWorker::generateVideoThumbnails(int index, const QString&
         qint64 positionMs = static_cast<qint64>(pos * durationMs);
         positionMs = std::clamp(positionMs, 0LL, durationMs);
 
-        QImage thumbnail = TLRenderPlayer::extractThumbnail(filePath, size, positionMs);
+        QImage thumbnail = PlayerLabPlayer::extractThumbnail(filePath, size, positionMs);
         if (thumbnail.isNull()) {
             emit logLine(QString("  WARNING: Failed to extract thumbnail at position %1 (%2s)")
                 .arg(pos)
