@@ -48,7 +48,7 @@ jobs:
         uses: jurplel/install-qt-action@v4
         with:
           version: 6.6.3
-          arch: linux_gcc_64
+          arch: gcc_64
           modules: qtmultimedia
           cache: true
       - name: Configure (ASan + clang-tidy)
@@ -80,7 +80,7 @@ jobs:
         uses: jurplel/install-qt-action@v4
         with:
           version: 6.6.3
-          arch: linux_gcc_64
+          arch: gcc_64
           modules: qtmultimedia
           cache: true
       - name: Configure (Coverage)
