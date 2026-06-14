@@ -83,6 +83,9 @@ void LogManager::clear() {
 
 void customMessageHandler(QtMsgType type, const QMessageLogContext& context, const QString& msg) {
     Q_UNUSED(context);
+    if (msg.startsWith(QStringLiteral("spaVisitChoice: parse error"))) {
+        return;
+    }
     QString level;
     if (!shouldLogQtMessage(type, &level)) {
         return;

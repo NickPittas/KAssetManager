@@ -1,4 +1,8 @@
 find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Sql Concurrent Test OpenGL OpenGLWidgets DBus)
+find_package(PkgConfig QUIET)
+if(PkgConfig_FOUND)
+    pkg_check_modules(LIBMPV QUIET IMPORTED_TARGET mpv NO_CMAKE_PATH NO_CMAKE_ENVIRONMENT_PATH)
+endif()
 
 # Test executable: test_simple
 add_executable(test_simple
@@ -22,6 +26,64 @@ add_executable(test_db
     ../src/runtime_paths.h
 )
 
+# Test executable: test_db_worker
+add_executable(test_db_worker
+    test_db_worker.cpp
+    ../src/db_worker.cpp
+    ../src/db_worker.h
+)
+
+# Test executable: test_project_watchers
+add_executable(test_project_watchers
+    test_project_watchers.cpp
+    ../src/project_folder_watcher.cpp
+    ../src/project_folder_watcher.h
+    ../src/project_manager_watcher.cpp
+    ../src/project_manager_watcher.h
+    ../src/file_utils.cpp
+    ../src/file_utils.h
+    ../src/project_db.cpp
+    ../src/project_db.h
+    ../src/project_path_utils.h
+    ../src/project_version_detector.cpp
+    ../src/project_version_detector.h
+    ../src/log_manager.cpp
+    ../src/log_manager.h
+    ../src/runtime_paths.cpp
+    ../src/runtime_paths.h
+)
+
+set_property(TARGET test_project_watchers PROPERTY AUTOMOC ON)
+
+target_link_libraries(test_project_watchers PRIVATE Qt6::Test Qt6::Core Qt6::Sql Qt6::Concurrent)
+target_include_directories(test_project_watchers PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+
+add_test(NAME test_project_watchers COMMAND test_project_watchers)
+install(TARGETS test_project_watchers DESTINATION bin)
+
+
+# Test executable: test_media_async_request
+add_executable(test_media_async_request
+    test_media_async_request.cpp
+    ../src/media_async_request.cpp
+    ../src/media_async_request.h
+)
+
+set_property(TARGET test_media_async_request PROPERTY AUTOMOC ON)
+
+target_link_libraries(test_media_async_request PRIVATE Qt6::Test Qt6::Core Qt6::Concurrent)
+target_include_directories(test_media_async_request PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+
+add_test(NAME test_media_async_request COMMAND test_media_async_request)
+install(TARGETS test_media_async_request DESTINATION bin)
+set_property(TARGET test_db_worker PROPERTY AUTOMOC ON)
+
+target_link_libraries(test_db_worker PRIVATE Qt6::Test Qt6::Sql Qt6::Core)
+target_include_directories(test_db_worker PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+
+add_test(NAME test_db_worker COMMAND test_db_worker)
+install(TARGETS test_db_worker DESTINATION bin)
+
 target_link_libraries(test_db PRIVATE Qt6::Test Qt6::Sql Qt6::Core)
 target_include_directories(test_db PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
 
@@ -43,6 +105,34 @@ target_link_libraries(test_project_db PRIVATE Qt6::Test Qt6::Sql Qt6::Core)
 target_include_directories(test_project_db PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
 
 add_test(NAME test_project_db COMMAND test_project_db)
+
+# Test executable: test_project_assets_model
+add_executable(test_project_assets_model
+    test_project_assets_model.cpp
+    ../src/project_assets_model.cpp
+    ../src/project_assets_model.h
+    ../src/project_db.cpp
+    ../src/project_db.h
+    ../src/project_version_detector.cpp
+    ../src/project_version_detector.h
+    ../src/i_asset_database.h
+    ../src/project_path_utils.h
+    ../src/log_manager.cpp
+    ../src/log_manager.h
+    ../src/runtime_paths.cpp
+    ../src/runtime_paths.h
+)
+
+set_property(TARGET test_project_assets_model PROPERTY AUTOMOC ON)
+
+target_link_libraries(test_project_assets_model PRIVATE Qt6::Test Qt6::Core Qt6::Sql)
+
+target_include_directories(test_project_assets_model PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+
+add_test(NAME test_project_assets_model COMMAND test_project_assets_model)
+set_tests_properties(test_project_assets_model PROPERTIES WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/install_run/bin")
+
+install(TARGETS test_project_assets_model DESTINATION bin)
 
 # Test executable: test_models
 add_executable(test_models
@@ -78,7 +168,7 @@ add_test(NAME test_sequence_detector COMMAND test_sequence_detector)
 set_tests_properties(test_sequence_detector PROPERTIES WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/install_run/bin")
 
 # Install test executables to bin directory
-install(TARGETS test_simple test_db test_project_db test_models test_sequence_detector DESTINATION bin)
+install(TARGETS test_simple test_db test_project_db test_project_assets_model test_models test_sequence_detector DESTINATION bin)
 
 
 # Test executable: test_importer
@@ -86,6 +176,10 @@ add_executable(test_importer
     test_importer.cpp
     ../src/importer.cpp
     ../src/importer.h
+    ../src/import_controller.cpp
+    ../src/import_controller.h
+    ../src/db_worker.cpp
+    ../src/db_worker.h
     ../src/db.cpp
     ../src/db.h
     ../src/log_manager.cpp
@@ -162,7 +256,7 @@ set_tests_properties(test_live_preview_manager PROPERTIES WORKING_DIRECTORY "${C
 target_compile_definitions(test_live_preview_manager PRIVATE
     HAVE_OPENIMAGEIO=0
     HAVE_FFMPEG=0
-    HAVE_TLRENDER=0
+    HAVE_TLRENDER=1
 )
 
 install(TARGETS test_live_preview_manager DESTINATION bin)
@@ -249,36 +343,34 @@ set_tests_properties(test_icon_utils PROPERTIES WORKING_DIRECTORY "${CMAKE_BINAR
 
 install(TARGETS test_icon_utils DESTINATION bin)
 
-# Test executable: test_tlrender_playback_harness
-add_executable(test_tlrender_playback_harness
-    test_tlrender_playback_harness.cpp
+# Test executable: test_player_lab_playback_harness
+add_executable(test_player_lab_playback_harness
+    test_player_lab_playback_harness.cpp
     real_media_test_helper.cpp
     ../src/file_utils.cpp
     ../src/file_utils.h
     ../src/media/ffmpeg_mov_player.cpp
     ../src/media/ffmpeg_mov_player.h
-    ../src/media/ffmpeg_mov_viewport.cpp
-    ../src/media/ffmpeg_mov_viewport.h
-    ../src/media/tlrender_player.cpp
-    ../src/media/tlrender_player.h
+    ../src/media/player_lab_player.cpp
+    ../src/media/player_lab_player.h
     ../src/platform_session.h
     ../src/media/media_player_types.h
-    ../src/media/libmpv_headers.h
-    ../src/media/libmpv_runtime.cpp
-    ../src/media/libmpv_runtime.h
-    ../src/media/mpv_player.cpp
-    ../src/media/mpv_player.h
-    ../src/media/mpv_viewport.cpp
-    ../src/media/mpv_viewport.h
-    ../src/media/tlrender_viewport.cpp
-    ../src/media/tlrender_viewport.h
+    ../src/media/player_lab_viewport.cpp
+    ../src/media/player_lab_viewport.h
+ ../player_lab/player_types.h
+ ../player_lab/ffmpeg_gpu_decoder.cpp
+ ../player_lab/ffmpeg_gpu_decoder.h
+ ../player_lab/gpu_player.cpp
+ ../player_lab/gpu_player.h
+ ../player_lab/gpu_player_widget.cpp
+ ../player_lab/gpu_player_widget.h
     ../src/video_metadata.cpp
     ../src/video_metadata.h
 )
 
-set_property(TARGET test_tlrender_playback_harness PROPERTY AUTOMOC ON)
+set_property(TARGET test_player_lab_playback_harness PROPERTY AUTOMOC ON)
 
-target_link_libraries(test_tlrender_playback_harness PRIVATE
+target_link_libraries(test_player_lab_playback_harness PRIVATE
     Qt6::Test
     Qt6::Core
     Qt6::Gui
@@ -302,13 +394,22 @@ target_link_libraries(test_tlrender_playback_harness PRIVATE
     tlRender::tlQt
     tlRender::tlQtWidget
     MINIZIP::minizip-ng
+    PkgConfig::FFMPEG
+
 )
 
-target_include_directories(test_tlrender_playback_harness PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/../src
+if(FFMPEG_LIBRARY_DIRS)
+    list(GET FFMPEG_LIBRARY_DIRS 0 _playerlab_ffmpeg_libdir)
+    set_property(TARGET test_player_lab_playback_harness APPEND PROPERTY BUILD_RPATH "${_playerlab_ffmpeg_libdir}")
+    set_property(TARGET test_player_lab_playback_harness APPEND PROPERTY INSTALL_RPATH "${_playerlab_ffmpeg_libdir}")
+endif()
+
+target_include_directories(test_player_lab_playback_harness PRIVATE
+ ${CMAKE_CURRENT_SOURCE_DIR}/../src
+ ${CMAKE_CURRENT_SOURCE_DIR}/../player_lab
 )
 
-target_compile_definitions(test_tlrender_playback_harness PRIVATE
+target_compile_definitions(test_player_lab_playback_harness PRIVATE
     HAVE_TLRENDER=1
     HAVE_OPENIMAGEIO=1
     HAVE_FFMPEG
@@ -316,16 +417,78 @@ target_compile_definitions(test_tlrender_playback_harness PRIVATE
 
 if(TLRENDER_FOUND)
     if(TLRENDER_INCLUDE_DIR)
-        target_include_directories(test_tlrender_playback_harness PRIVATE ${TLRENDER_INCLUDE_DIR})
+        target_include_directories(test_player_lab_playback_harness PRIVATE ${TLRENDER_INCLUDE_DIR})
     elseif(TLRENDER_ROOT)
-        target_include_directories(test_tlrender_playback_harness PRIVATE "${TLRENDER_ROOT}/include")
+        target_include_directories(test_player_lab_playback_harness PRIVATE "${TLRENDER_ROOT}/include")
     endif()
 endif()
 
-add_test(NAME test_tlrender_playback_harness COMMAND test_tlrender_playback_harness)
-set_tests_properties(test_tlrender_playback_harness PROPERTIES WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/install_run/bin")
+add_test(NAME test_player_lab_playback_harness COMMAND test_player_lab_playback_harness)
+set_tests_properties(test_player_lab_playback_harness PROPERTIES WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/install_run/bin")
 
-install(TARGETS test_tlrender_playback_harness DESTINATION bin)
+install(TARGETS test_player_lab_playback_harness DESTINATION bin)
+
+get_filename_component(KASSET_REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../.." ABSOLUTE)
+set(KASSET_MDK_SDK_DIR "${KASSET_REPO_ROOT}/third_party/mdk-sdk")
+set(KASSET_MDK_CMAKE "${KASSET_MDK_SDK_DIR}/lib/cmake/FindMDK.cmake")
+if(EXISTS "${KASSET_MDK_CMAKE}")
+    include("${KASSET_MDK_CMAKE}")
+
+    add_executable(test_mdk_embedded_poc
+        test_mdk_embedded_poc.cpp
+    )
+
+    set_property(TARGET test_mdk_embedded_poc PROPERTY AUTOMOC ON)
+
+    target_link_libraries(test_mdk_embedded_poc PRIVATE
+        Qt6::Test
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Widgets
+        Qt6::OpenGL
+        Qt6::OpenGLWidgets
+        mdk
+    )
+
+    set_target_properties(test_mdk_embedded_poc PROPERTIES
+        BUILD_RPATH "${KASSET_MDK_SDK_DIR}/lib/amd64"
+        INSTALL_RPATH "$ORIGIN;${KASSET_MDK_SDK_DIR}/lib/amd64"
+    )
+
+    add_test(NAME test_mdk_embedded_poc COMMAND test_mdk_embedded_poc)
+    set_tests_properties(test_mdk_embedded_poc PROPERTIES WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/install_run/bin")
+    install(TARGETS test_mdk_embedded_poc DESTINATION bin)
+else()
+    message(STATUS "MDK embedded PoC disabled: ${KASSET_MDK_CMAKE} was not found")
+endif()
+
+if(LIBMPV_FOUND)
+    add_executable(test_libmpv_embedded_poc
+        test_libmpv_embedded_poc.cpp
+    )
+
+    set_property(TARGET test_libmpv_embedded_poc PROPERTY AUTOMOC ON)
+
+    target_link_libraries(test_libmpv_embedded_poc PRIVATE
+        Qt6::Test
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Widgets
+        Qt6::OpenGL
+        Qt6::OpenGLWidgets
+        PkgConfig::LIBMPV
+    )
+
+    target_include_directories(test_libmpv_embedded_poc PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src
+    )
+
+    add_test(NAME test_libmpv_embedded_poc COMMAND test_libmpv_embedded_poc)
+    set_tests_properties(test_libmpv_embedded_poc PROPERTIES WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/install_run/bin")
+    install(TARGETS test_libmpv_embedded_poc DESTINATION bin)
+else()
+    message(STATUS "libmpv embedded PoC disabled: pkg-config package 'mpv' was not found")
+endif()
 
 # Test executable: test_grid_scrub
 add_executable(test_grid_scrub
@@ -372,3 +535,18 @@ add_test(NAME test_annotation_items COMMAND test_annotation_items)
 set_tests_properties(test_annotation_items PROPERTIES WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/install_run/bin")
 
 install(TARGETS test_annotation_items DESTINATION bin)
+# Test executable: test_file_utils
+add_executable(test_file_utils
+    test_file_utils.cpp
+    ../src/file_utils.cpp
+    ../src/file_utils.h
+)
+
+target_link_libraries(test_file_utils PRIVATE Qt6::Test Qt6::Core)
+
+target_include_directories(test_file_utils PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+
+add_test(NAME test_file_utils COMMAND test_file_utils)
+set_tests_properties(test_file_utils PROPERTIES WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/install_run/bin")
+
+install(TARGETS test_file_utils DESTINATION bin)

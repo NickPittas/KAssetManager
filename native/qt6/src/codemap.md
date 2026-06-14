@@ -38,7 +38,7 @@ Implements the main Qt Widgets application, including data models, project/file 
 1. `MainWindow` or File Manager opens `PreviewOverlay` for the selected asset.
 2. `PreviewOverlay` routes by media type:
    - images/sequences through `QGraphicsScene`/`QGraphicsView`
-   - video through `TLRenderPlayer` + `TLRenderViewport`
+   - video through `PlayerLabPlayer` + `PlayerLabViewport`
 3. In this branch, video annotation mode keeps the video widget visible and overlays `annotationOverlayView` on top of it.
 4. `PreviewOverlay::eventFilter()` translates mouse events from the active annotation surface into scene coordinates and forwards them to `AnnotationLayer`.
 5. `AnnotationLayer` creates concrete `AnnotationItem` objects and serializes them per frame in `frameAnnotations`.
@@ -53,7 +53,7 @@ Implements the main Qt Widgets application, including data models, project/file 
 ## Verified Branch-Specific Findings
 - `PlatformSession::shouldUseRasterPreviewFallbackOnWayland()` always returns `isWayland()`, so Wayland preview defaults to the raster path.
 - `PreviewOverlay::enableAnnotationMode()` for video sets `annotationLayer` to `annotationOverlayScene`, not `imageScene`.
-- `PreviewOverlay::captureCurrentFrame()` still depends on `TLRenderPlayer::getCurrentFrame()` for video export and annotation capture.
+- `PreviewOverlay::captureCurrentFrame()` still depends on `PlayerLabPlayer::getCurrentFrame()` for video export and annotation capture.
 
 ## Integration
 - Consumed by: `kassetmanagerqt`

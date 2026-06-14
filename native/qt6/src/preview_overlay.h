@@ -29,6 +29,7 @@
 #include <QMutex>
 #include <QThreadPool>
 #include <QRunnable>
+#include <QPixmap>
 #include <QPainter>
 #include <QStyleOptionSlider>
 #include <QSet>
@@ -40,8 +41,9 @@
 
 #include "oiio_image_loader.h"
 #include "sequence_detector.h"
-#include "media/tlrender_player.h"
-#include "media/tlrender_viewport.h"
+#include "media/player_lab_player.h"
+
+#include "media/player_lab_viewport.h"
 
 // Forward declarations
 class SequenceFrameCache;
@@ -92,7 +94,7 @@ public:
     {
         m_isVideo = isVideo;
         m_fps = (fps > 0.0) ? fps : 24.0;
-        update();
+        invalidateStaticTimeline();
     }
 
     /**
@@ -102,7 +104,7 @@ public:
     void setCachedFrames(const QSet<int> &frames)
     {
         m_cachedFrames = frames;
-        update(); // Trigger repaint
+        invalidateStaticTimeline();
     }
 
     /**
@@ -115,7 +117,7 @@ public:
     void markFrameCached(int frameIndex)
     {
         m_cachedFrames.insert(frameIndex);
-        update(); // Trigger repaint
+        invalidateStaticTimeline();
     }
 
     /**
@@ -126,7 +128,7 @@ public:
     void clearCachedFrames()
     {
         m_cachedFrames.clear();
-        update(); // Trigger repaint
+        invalidateStaticTimeline();
     }
     
     /**
@@ -136,7 +138,7 @@ public:
     void setAnnotatedFrames(const QSet<int> &frames)
     {
         m_annotatedFrames = frames;
-        update(); // Trigger repaint
+        invalidateStaticTimeline();
     }
     
     /**
@@ -146,7 +148,7 @@ public:
     void markFrameAnnotated(int frameIndex)
     {
         m_annotatedFrames.insert(frameIndex);
-        update(); // Trigger repaint
+        invalidateStaticTimeline();
     }
     
     /**
@@ -156,7 +158,7 @@ public:
     void unmarkFrameAnnotated(int frameIndex)
     {
         m_annotatedFrames.remove(frameIndex);
-        update(); // Trigger repaint
+        invalidateStaticTimeline();
     }
     
     /**
@@ -165,7 +167,7 @@ public:
     void clearAnnotatedFrames()
     {
         m_annotatedFrames.clear();
-        update(); // Trigger repaint
+        invalidateStaticTimeline();
     }
 
 protected:
@@ -214,20 +216,66 @@ protected:
     {
         Q_UNUSED(event);
 
-        QStyleOptionSlider opt;
-        initStyleOption(&opt);
-        QRect grooveRect = style()->subControlRect(QStyle::CC_Slider, &opt, QStyle::SC_SliderGroove, this);
-
-        // Build a thicker, clip-like timeline centered on the style groove
-        const int timelineHeight = 26;
-        const int centerY = grooveRect.center().y();
-        QRectF timelineRect(grooveRect.left(), centerY - timelineHeight / 2.0, grooveRect.width(), timelineHeight);
-        timelineRect = timelineRect.intersected(rect());
+        const QRectF timelineRect = timelineRectForCurrentStyle();
+        ensureStaticTimelineCache(timelineRect);
 
         QPainter painter(this);
         painter.setRenderHint(QPainter::Antialiasing);
+        painter.drawPixmap(0, 0, m_staticTimelineCache);
+        drawPlayhead(painter, timelineRect);
+    }
 
-        // Base clip body
+    void resizeEvent(QResizeEvent *event) override
+    {
+        QSlider::resizeEvent(event);
+        invalidateStaticTimeline();
+    }
+
+    void sliderChange(SliderChange change) override
+    {
+        const QRect oldPlayhead = playheadUpdateRect();
+        QSlider::sliderChange(change);
+        if (change == SliderValueChange) {
+            update(oldPlayhead.united(playheadUpdateRect()));
+        } else if (change == SliderRangeChange || change == SliderOrientationChange) {
+            invalidateStaticTimeline();
+        }
+    }
+
+private:
+    void invalidateStaticTimeline()
+    {
+        m_staticTimelineDirty = true;
+        update();
+    }
+
+    QRectF timelineRectForCurrentStyle() const
+    {
+        QStyleOptionSlider opt;
+        const_cast<CachedFrameSlider*>(this)->initStyleOption(&opt);
+        const QRect grooveRect = style()->subControlRect(
+            QStyle::CC_Slider, &opt, QStyle::SC_SliderGroove, this);
+        const int timelineHeight = 26;
+        const int centerY = grooveRect.center().y();
+        QRectF timelineRect(grooveRect.left(),
+                            centerY - timelineHeight / 2.0,
+                            grooveRect.width(),
+                            timelineHeight);
+        return timelineRect.intersected(rect());
+    }
+
+    void ensureStaticTimelineCache(const QRectF& timelineRect)
+    {
+        if (!m_staticTimelineDirty && m_staticTimelineCache.size() == size()) {
+            return;
+        }
+
+        m_staticTimelineCache = QPixmap(size());
+        m_staticTimelineCache.fill(Qt::transparent);
+
+        QPainter painter(&m_staticTimelineCache);
+        painter.setRenderHint(QPainter::Antialiasing);
+
         painter.setPen(Qt::NoPen);
         painter.setBrush(QColor(30, 30, 32));
         painter.drawRoundedRect(timelineRect, 5, 5);
@@ -240,83 +288,126 @@ protected:
         const double totalUnits = static_cast<double>(maximum() - minimum());
         const double unitsPerSecond = m_isVideo ? 1000.0 : qMax(1.0, m_fps);
 
-        // Alternate shading for each second plus a thin guide line
         if (totalUnits > 0.0) {
             const double totalSeconds = totalUnits / unitsPerSecond;
             const int stripeCount = static_cast<int>(std::ceil(totalSeconds));
-            QColor stripeLight(255, 255, 255, 18);
-            QColor stripeDark(255, 255, 255, 6);
-            QColor secondLine(255, 255, 255, 60);
+            const QColor stripeLight(255, 255, 255, 18);
+            const QColor stripeDark(255, 255, 255, 6);
+            const QColor secondLine(255, 255, 255, 60);
 
             for (int sec = 0; sec < stripeCount; ++sec) {
                 const double startUnit = minimum() + (sec * unitsPerSecond);
-                const double endUnit = qMin<double>(minimum() + ((sec + 1) * unitsPerSecond), maximum());
-                const double startX = timelineRect.left() + ((startUnit - minimum()) / totalUnits) * timelineRect.width();
-                const double endX = timelineRect.left() + ((endUnit - minimum()) / totalUnits) * timelineRect.width();
+                const double endUnit = qMin<double>(
+                    minimum() + ((sec + 1) * unitsPerSecond), maximum());
+                const double startX = timelineRect.left() +
+                    ((startUnit - minimum()) / totalUnits) * timelineRect.width();
+                const double endX = timelineRect.left() +
+                    ((endUnit - minimum()) / totalUnits) * timelineRect.width();
 
-                const QRectF stripeRect(startX, timelineRect.top() + 1, qMax(1.0, endX - startX), timelineRect.height() - 2);
+                const QRectF stripeRect(startX,
+                                        timelineRect.top() + 1,
+                                        qMax(1.0, endX - startX),
+                                        timelineRect.height() - 2);
                 painter.fillRect(stripeRect, (sec % 2 == 0) ? stripeLight : stripeDark);
 
                 const double tickX = qMin(endX, timelineRect.right());
                 painter.setPen(QPen(secondLine, 1));
-                painter.drawLine(QPointF(tickX, timelineRect.top() + 1), QPointF(tickX, timelineRect.bottom() - 1));
+                painter.drawLine(QPointF(tickX, timelineRect.top() + 1),
+                                 QPointF(tickX, timelineRect.bottom() - 1));
             }
         }
 
-        auto drawSegments = [&](const QSet<int>& values, const QColor& color, int barHeight, int topPadding) {
-            if (values.isEmpty() || totalUnits <= 0.0) return;
-            QVector<int> sorted = values.values();
-            std::sort(sorted.begin(), sorted.end());
+        drawSegments(painter, timelineRect, m_cachedFrames,
+                     QColor(220, 50, 50, 200), 4, 4);
+        drawSegments(painter, timelineRect, m_annotatedFrames,
+                     QColor(50, 220, 100, 210), 4,
+                     static_cast<int>(timelineRect.height()) - 8);
 
-            painter.setPen(Qt::NoPen);
-            painter.setBrush(color);
+        m_staticTimelineDirty = false;
+    }
 
-            int rangeStart = sorted[0];
-            int rangeEnd = sorted[0];
-            for (int i = 1; i <= sorted.size(); ++i) {
-                if (i < sorted.size() && sorted[i] == rangeEnd + 1) {
-                    rangeEnd = sorted[i];
-                } else {
-                    const double startX = timelineRect.left() + ((rangeStart - minimum()) / totalUnits) * timelineRect.width();
-                    const double endX = timelineRect.left() + ((rangeEnd - minimum()) / totalUnits) * timelineRect.width();
-                    const QRectF segment(startX,
-                                         timelineRect.top() + topPadding,
-                                         qMax(2.0, endX - startX),
-                                         barHeight);
-                    painter.drawRoundedRect(segment, 2, 2);
-
-                    if (i < sorted.size()) {
-                        rangeStart = sorted[i];
-                        rangeEnd = sorted[i];
-                    }
-                }
-            }
-        };
-
-        // Cached and annotated frame strips inside the clip
-        drawSegments(m_cachedFrames, QColor(220, 50, 50, 200), 4, 4);
-        drawSegments(m_annotatedFrames, QColor(50, 220, 100, 210), 4, static_cast<int>(timelineRect.height()) - 8);
-
-        // Playhead as a vertical line (editor-style scrubber)
-        double playheadX = timelineRect.left();
-        if (totalUnits > 0.0) {
-            playheadX = timelineRect.left() + ((value() - minimum()) / totalUnits) * timelineRect.width();
+    void drawSegments(QPainter& painter,
+                      const QRectF& timelineRect,
+                      const QSet<int>& values,
+                      const QColor& color,
+                      int barHeight,
+                      int topPadding) const
+    {
+        const double totalUnits = static_cast<double>(maximum() - minimum());
+        if (values.isEmpty() || totalUnits <= 0.0) {
+            return;
         }
-        QColor playheadColor(255, 125, 85);
+
+        QVector<int> sorted = values.values();
+        std::sort(sorted.begin(), sorted.end());
+
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(color);
+
+        int rangeStart = sorted[0];
+        int rangeEnd = sorted[0];
+        for (int i = 1; i <= sorted.size(); ++i) {
+            if (i < sorted.size() && sorted[i] == rangeEnd + 1) {
+                rangeEnd = sorted[i];
+                continue;
+            }
+
+            const double startX = timelineRect.left() +
+                ((rangeStart - minimum()) / totalUnits) * timelineRect.width();
+            const double endX = timelineRect.left() +
+                ((rangeEnd - minimum()) / totalUnits) * timelineRect.width();
+            const QRectF segment(startX,
+                                 timelineRect.top() + topPadding,
+                                 qMax(2.0, endX - startX),
+                                 barHeight);
+            painter.drawRoundedRect(segment, 2, 2);
+
+            if (i < sorted.size()) {
+                rangeStart = sorted[i];
+                rangeEnd = sorted[i];
+            }
+        }
+    }
+
+    double playheadX(const QRectF& timelineRect) const
+    {
+        const double totalUnits = static_cast<double>(maximum() - minimum());
+        if (totalUnits <= 0.0) {
+            return timelineRect.left();
+        }
+        return timelineRect.left() +
+            ((value() - minimum()) / totalUnits) * timelineRect.width();
+    }
+
+    QRect playheadUpdateRect() const
+    {
+        const QRectF timelineRect = timelineRectForCurrentStyle();
+        const double x = playheadX(timelineRect);
+        return QRect(static_cast<int>(std::floor(x)) - 8,
+                     static_cast<int>(std::floor(timelineRect.top())) - 10,
+                     17,
+                     static_cast<int>(std::ceil(timelineRect.height())) + 20)
+            .intersected(rect());
+    }
+
+    void drawPlayhead(QPainter& painter, const QRectF& timelineRect) const
+    {
+        const double x = playheadX(timelineRect);
+        const QColor playheadColor(255, 125, 85);
         painter.setPen(QPen(playheadColor, 2));
-        painter.drawLine(QPointF(playheadX, timelineRect.top() - 6), QPointF(playheadX, timelineRect.bottom() + 6));
+        painter.drawLine(QPointF(x, timelineRect.top() - 6),
+                         QPointF(x, timelineRect.bottom() + 6));
 
         painter.setBrush(playheadColor);
         painter.setPen(Qt::NoPen);
         const QVector<QPointF> head = {
-            QPointF(playheadX, timelineRect.top() - 8),
-            QPointF(playheadX - 6, timelineRect.top() - 1),
-            QPointF(playheadX + 6, timelineRect.top() - 1)
+            QPointF(x, timelineRect.top() - 8),
+            QPointF(x - 6, timelineRect.top() - 1),
+            QPointF(x + 6, timelineRect.top() - 1)
         };
         painter.drawPolygon(head.constData(), head.size());
     }
 
-private:
     int pixelPosToRangeValue(const QPoint& pos) const
     {
         QStyleOptionSlider opt;
@@ -328,6 +419,8 @@ private:
         return minimum() + qRound(t * (maximum() - minimum()));
     }
 
+    QPixmap m_staticTimelineCache;
+    bool m_staticTimelineDirty = true;
     bool m_isVideo = true;
     double m_fps = 24.0;
     QSet<int> m_cachedFrames;
@@ -437,11 +530,11 @@ private slots:
     void hideControls();
     void onSequenceTimerTick();
 
-    // TLRenderPlayer signal handlers
+    // PlayerLabPlayer signal handlers
     void onPlayerPositionChanged(qint64 positionMs);
     void onPlayerDurationChanged(qint64 durationMs);
-    void onPlayerMediaInfo(const TLRenderPlayer::MediaInfo& info);
-    void onPlayerPlaybackStateChanged(TLRenderPlayer::PlaybackState state);
+    void onPlayerMediaInfo(const PlayerLabPlayer::MediaInfo& info);
+    void onPlayerPlaybackStateChanged(PlayerLabPlayer::PlaybackState state);
     void onPlayerError(const QString& errorString);
     void onPlayerEndOfStream();
     
@@ -484,6 +577,9 @@ private:
     void setPlaybackControlsVisible(bool visible);
     void setControlsHeightForImage(bool imageMode);
     void setControlsVisible(bool visible);
+    void requestVideoScrubSeek(qint64 positionMs);
+    void issueVideoScrubSeek(qint64 positionMs);
+    void completeVideoScrubSeek(qint64 presentedPositionMs);
     QWidget* activeVideoWidget() const;
     void hideVideoWidgets();
     void toggleStillImageFit();
@@ -547,9 +643,9 @@ private:
     QTableView *tableView;
     QStandardItemModel *tableModel;
 
-    // tlRender media player
-    TLRenderPlayer *m_player;
-    TLRenderViewport *m_renderWidget;
+    // PlayerLab media player / raster viewport
+    PlayerLabPlayer *m_player;
+    PlayerLabViewport *m_renderWidget;
 #ifdef HAVE_QT_PDF
     QPdfDocument *pdfDoc;
     QPdfView *pdfView;
@@ -565,6 +661,7 @@ private:
     QString currentFilePath;
     QString currentFileType;
     bool isVideo;
+    bool m_tearingDown = false;
     QTimer *controlsTimer;
 
     // Seek/step state
@@ -575,6 +672,19 @@ private:
     double detectedFps = 0.0;
     qint64 lastKnownPosition = -1; // Store position for display during pause
     int lastKnownVideoFrame = -1; // Explicitly tracked frame number for annotation accuracy
+    QElapsedTimer playerPositionUiThrottle;
+    qint64 pendingPlayerPositionMs = -1;
+    bool videoScrubSeekInFlight = false;
+    bool resumePlaybackAfterVideoScrub = false;
+    qint64 pendingVideoScrubSeekMs = -1;
+    // Monotonic scrub-seek generation. Bumped on file change / stop so any
+    // late position callback from the previous clip cannot re-arm a stale
+    // scrub-seek chain into the new file.
+    quint64 videoScrubSeekSerial = 0;
+    // Serial captured when issueVideoScrubSeek() fired; completeVideoScrubSeek
+    // ignores completions whose serial does not match (stale callback from a
+    // previous file / before a stop).
+    quint64 videoScrubSeekIssuedSerial = 0;
     // Embedded timecode metadata (if probed via FFmpeg)
     bool hasEmbeddedTimecode = false;
     QString embeddedStartTimecode;

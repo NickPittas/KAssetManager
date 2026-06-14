@@ -1,4 +1,4 @@
-﻿#include <QApplication>
+#include <QApplication>
 #include <QGuiApplication>
 #include <QDebug>
 #include <QDir>
@@ -18,7 +18,7 @@
 #include "theme_manager.h"
 #include "platform_session.h"
 #ifdef HAVE_TLRENDER
-#include "media/tlrender_player.h"
+#include "media/player_lab_player.h"
 #endif
 
 #ifdef Q_OS_WIN

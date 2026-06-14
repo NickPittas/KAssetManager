@@ -6,6 +6,7 @@
 #include <QPixmap>
 #include <QAbstractItemView>
 #include <QModelIndex>
+#include <QPointer>
 #include <QHash>
 #include <QString>
 #include <functional>
@@ -54,6 +55,7 @@ public:
     void setSequenceGroupingEnabled(bool enabled);
     bool isSequenceGroupingEnabled() const;
     bool canScrubFile(const QString& filePath) const;
+    void endScrub();
 
 protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
@@ -72,11 +74,10 @@ private:
     QRect currentThumbRect() const;
     void resetCtrlTracking();
     void beginScrub();
-    void endScrub();
 
     QAbstractItemView *m_view = nullptr;
     std::function<QString(const QModelIndex&)> m_pathResolver;
-    GridScrubOverlay *m_overlay = nullptr;
+    QPointer<GridScrubOverlay> m_overlay;
     QModelIndex m_currentIndex;
     QString m_currentPath;
     qreal m_position;

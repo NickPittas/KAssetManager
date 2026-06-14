@@ -25,6 +25,7 @@
 #include <QFileSystemModel>
 #include <QListWidget>
 
+#include <QVariant>
 #include <QFileSystemWatcher>
 
 #include <QToolButton>
@@ -39,16 +40,18 @@ class SequenceGroupingProxyModel;
 class GridScrubController;
 class FileManagerPane;
 
+class ImportController;
 class ImportProgressDialog;
 class ProjectFolderWatcher;
+class MediaAsyncRequest;
 class EverythingFolderModel;
 class ProjectsModel;
 class ProjectAssetsModel;
 class ProjectItemDelegate;
 class ProjectManagerWatcher;
 class ProjectImportController;
-class TLRenderPlayer;
-class TLRenderViewport;
+class PlayerLabPlayer;
+class PlayerLabViewport;
 
 class MainWindow : public QMainWindow
 {
@@ -232,6 +235,12 @@ private:
     void refreshFileManagerViewsForPaths(const QStringList& paths, const QString& destination = QString());
     void importToAssetLibrary(const QStringList& filePaths, const QStringList& folderPaths);
     void updateFmInfoPanel();
+    void requestAssetInfoVideoMetadata(const QString& filePath);
+    void requestFmInfoVideoMetadata(const QString& filePath);
+    void applyAssetInfoVideoMetadata(const QVariantMap& metadata);
+    void applyFmInfoVideoMetadata(const QVariantMap& metadata);
+    void clearAssetInfoVideoMetadata();
+    void clearFmInfoVideoMetadata();
     void fmNavigateToPath(const QString& path, bool addToHistory = true);
     void fmUpdateNavigationButtons();
     void fmScrollTreeToPath(const QString& path);
@@ -256,6 +265,7 @@ private:
     bool m_windowResizing = false; // guard to skip heavy updates during resize/move
     QTimer m_resizeSettleTimer; // fires after resize/move stops
     QTimer m_splitterSaveTimer; // debounces splitter state persistence
+    bool m_appClosing = false;
 
     void setupUi();
     void setupConnections();
@@ -319,7 +329,7 @@ private:
     QWidget *infoPanel;
 
     // Importer
-    class Importer *importer;
+    ImportController *importer = nullptr;
 
     // Filters
     QLineEdit *searchBox;
@@ -366,6 +376,11 @@ private:
     QLabel *infoBitrate;
     QLabel *infoTimecode;
     QLabel *infoCameraInfo;
+
+    // Async info-panel media metadata
+    MediaAsyncRequest *infoMediaRequests = nullptr;
+    QString assetInfoVideoMetadataPath;
+    QString fmInfoVideoMetadataPath;
     QLabel *infoShotInfo;
     QLabel *infoCreated;
     QLabel *infoModified;
@@ -481,7 +496,7 @@ private:
     class QGraphicsView *fmImageView = nullptr;
     class QGraphicsScene *fmImageScene = nullptr;
     class QGraphicsPixmapItem *fmImageItem = nullptr;
-    TLRenderViewport *fmVideoWidget = nullptr; // tlRender viewport for video playback
+    PlayerLabViewport *fmVideoWidget = nullptr; // tlRender viewport for video playback
     QWidget *fmPreviewContent = nullptr;
     // Additional preview widgets
     class QPlainTextEdit *fmTextView = nullptr;           // TXT/LOG
@@ -498,7 +513,7 @@ private:
     QImage fmOriginalImage; QString fmCurrentPreviewPath; bool fmPreviewHasAlpha = false; bool fmAlphaOnlyMode = false;
     QPoint fmPreviewDragStartPos; bool fmPreviewDragPending = false;
     // Media - tlRender player
-    class TLRenderPlayer *fmTlRenderPlayer = nullptr;
+    class PlayerLabPlayer *fmPlayerLabPlayer = nullptr;
     QPushButton *fmPlayPauseBtn;
     QPushButton *fmPrevFrameBtn = nullptr;
     QPushButton *fmNextFrameBtn = nullptr;
@@ -638,9 +653,9 @@ private:
     class QGraphicsView *pmImageView = nullptr;
     class QGraphicsScene *pmImageScene = nullptr;
     class QGraphicsPixmapItem *pmImageItem = nullptr;
-    TLRenderViewport *pmVideoWidget = nullptr;
+    PlayerLabViewport *pmVideoWidget = nullptr;
     QWidget *pmPreviewContent = nullptr;
-    class TLRenderPlayer *pmTlRenderPlayer = nullptr;
+    class PlayerLabPlayer *pmPlayerLabPlayer = nullptr;
     
     // Media controls
     QPushButton *pmPlayPauseBtn = nullptr;
@@ -678,8 +693,8 @@ private:
     int pmUnreadNotificationCount = 0;
     ProjectManagerWatcher *pmWatcher = nullptr;
     
-    // PM import - uses Importer with ProjectDB (same as Asset Manager)
-    Importer *pmImporter = nullptr;
+    // PM import
+    ImportController *pmImporter = nullptr;
     ImportProgressDialog *pmImportProgressDialog = nullptr;
     int pmPendingImportProjectId = -1;
     

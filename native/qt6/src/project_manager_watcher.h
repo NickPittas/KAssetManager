@@ -8,6 +8,7 @@
 #include <QSet>
 #include <QStringList>
 #include <QDateTime>
+#include <QFuture>
 
 /**
  * @brief Watches project folders for new files and manages notifications.
@@ -72,12 +73,20 @@ private slots:
     void onProcessChanges();
 
 private:
+    struct DirectoryScanResult {
+        QString rootPath;
+        QStringList directories;
+        QHash<QString, QSet<QString>> dirFiles;
+        QHash<QString, QDateTime> dirModTimes;
+    };
+
+    // Scan directories and files off the watcher thread.
+    static DirectoryScanResult scanDirectoryTree(const QString& rootPath);
+
+    void applyInitialScan(int projectId, int generation, const DirectoryScanResult& result);
+
     // Scan a single directory (non-recursive) - returns files in that dir only
-    QStringList scanSingleDirectory(const QString& dirPath) const;
-    
-    // Build initial cache with directory mod times
-    void buildDirectoryCache(int projectId, const QString& rootPath);
-    
+    static QStringList scanSingleDirectory(const QString& dirPath);
     // Process only changed directories efficiently
     void processChangedDirectories(int projectId);
 
@@ -106,6 +115,9 @@ private:
     
     // Full rescan requests (manual trigger)
     QSet<int> m_pendingFullScans;
+
+    // Project ID -> async scan generation. Stale scans are ignored.
+    QHash<int, int> m_scanGenerations;
     
     // Throttle logging to prevent spam
     qint64 m_lastLogTime = 0;

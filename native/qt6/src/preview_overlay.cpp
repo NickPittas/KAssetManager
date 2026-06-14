@@ -1,7 +1,7 @@
 #include "preview_overlay.h"
 #include "icon_utils.h"
-#include "media/tlrender_player.h"
-#include "media/tlrender_viewport.h"
+#include "media/player_lab_player.h"
+#include "media/player_lab_viewport.h"
 #include "file_utils.h"
 // Compatibility macros for tlRender
 #define PLAYER_PTR m_player
@@ -9,13 +9,14 @@
 #define PLAYER_PAUSE() do { if (m_player) m_player->pause(); } while (0)
 #define PLAYER_STOP() do { if (m_player) m_player->stop(); } while (0)
 #define PLAYER_SEEK(pos) do { if (m_player) m_player->seek(pos); } while (0)
+#define PLAYER_SEEK_ASYNC(pos) do { if (m_player) m_player->seekAsync(pos); } while (0)
 #define PLAYER_DURATION() (m_player ? m_player->duration() : 0)
 #define PLAYER_POSITION() (m_player ? m_player->position() : 0)
 #define PLAYER_SET_URI(uri) do { if (m_player) m_player->load(uri); } while (0)
-#define PLAYER_STATE() (m_player ? m_player->playbackState() : TLRenderPlayer::PlaybackState::Stopped)
-#define PLAYER_STATE_PLAYING TLRenderPlayer::PlaybackState::Playing
-#define PLAYER_STATE_PAUSED TLRenderPlayer::PlaybackState::Paused
-#define PLAYER_STATE_STOPPED TLRenderPlayer::PlaybackState::Stopped
+#define PLAYER_STATE() (m_player ? m_player->playbackState() : PlayerLabPlayer::PlaybackState::Stopped)
+#define PLAYER_STATE_PLAYING PlayerLabPlayer::PlaybackState::Playing
+#define PLAYER_STATE_PAUSED PlayerLabPlayer::PlaybackState::Paused
+#define PLAYER_STATE_STOPPED PlayerLabPlayer::PlaybackState::Stopped
 #include "oiio_image_loader.h"
 #include <QMessageBox>
 #include <QVBoxLayout>
@@ -45,10 +46,6 @@
 #endif
 #include <QFontDatabase>
 #include <QTextOption>
-#if __has_include(<QOpenGLWidget>)
-#  include <QOpenGLWidget>
-#  define KAM_HAVE_QOPENGLWIDGET 1
-#endif
 #include <QElapsedTimer>
 
 #include <QVector>
@@ -132,16 +129,14 @@ void activatePreviewWindow(QWidget* window, QWidget* preferredFocus = nullptr)
     });
 }
 
-void syncAnnotationOverlayToVideo(QGraphicsView* overlayView,
-                                  QGraphicsScene* overlayScene,
-                                  QWidget* videoContainer)
+void syncAnnotationOverlayToVideo(QGraphicsView* overlayView, QGraphicsScene* overlayScene, QWidget* videoContainer)
 {
     if (!overlayView || !overlayScene || !videoContainer) {
         return;
     }
 
     QRect displayedRect(QPoint(0, 0), videoContainer->size());
-    if (auto *renderViewport = qobject_cast<TLRenderViewport*>(videoContainer)) {
+    if (auto *renderViewport = qobject_cast<PlayerLabViewport*>(videoContainer)) {
         displayedRect = renderViewport->displayedContentRect();
     }
 
@@ -154,13 +149,11 @@ void syncAnnotationOverlayToVideo(QGraphicsView* overlayView,
         overlayScene->setSceneRect(QRectF(QPointF(0, 0), QSizeF(displayedRect.size())));
     }
 
-    // The overlay geometry already matches the displayed video rect. Fit the
-    // frame-space scene into that rect and let mapToScene() provide the only
-    // coordinate transform for annotation input.
-    overlayView->resetTransform();
-    overlayView->setSceneRect(overlayScene->sceneRect());
+    // overlay geometry already matches displayed video rect. Fit
+    // frame-space scene into that rect, preserving annotation mapping.
     overlayView->fitInView(overlayScene->sceneRect(), Qt::KeepAspectRatio);
 }
+
 
 } // namespace
 
@@ -262,9 +255,25 @@ PreviewOverlay::PreviewOverlay(QWidget *parent)
 PreviewOverlay::~PreviewOverlay()
 {
     qDebug() << "[PreviewOverlay::~PreviewOverlay] Destructor starting";
-    
-    // Ensure all playback modes are fully stopped before destruction
+    m_tearingDown = true;
+
+    if (m_renderWidget) {
+        m_renderWidget->setPlayer(nullptr);
+        disconnect(m_renderWidget, nullptr, this, nullptr);
+    }
+
+    if (m_player) {
+        disconnect(m_player, nullptr, this, nullptr);
+    }
+
+    // Stop backend state after UI receivers are detached. PlayerLabPlayer::stop()
+    // emits playback/position signals; during QObject child destruction those
+    // must not re-enter PreviewOverlay or PlayerLabViewport.
     stopPlayback();
+    
+    if (m_player) {
+        disconnect(m_player, nullptr, this, nullptr);
+    }
     if (sequenceTimer) {
         sequenceTimer->stop();
     }
@@ -392,12 +401,6 @@ void PreviewOverlay::setupUi()
 
     // Image view with zoom/pan support (for images and videos)
     imageView = new QGraphicsView(this);
-#if defined(KAM_HAVE_QOPENGLWIDGET) && !(defined(HAVE_TLRENDER) && HAVE_TLRENDER) && !defined(Q_OS_LINUX)
-    // Use OpenGL-backed viewport for smoother video/image scaling when available.
-    // When tlRender is enabled, avoid an extra QOpenGLWidget to reduce context churn.
-    imageView->setViewport(new QOpenGLWidget());
-// else: fall back to default raster viewport
-#endif
     imageScene = new QGraphicsScene(this);
     imageView->setScene(imageScene);
     imageView->setStyleSheet("QGraphicsView { background-color: #000000; border: none; }");
@@ -735,11 +738,11 @@ void PreviewOverlay::setupUi()
     if (loopModeCombo) {
         connect(loopModeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int idx) {
             if (!isVideo || !m_player) return;
-            TLRenderPlayer::LoopMode mode = TLRenderPlayer::LoopMode::Loop;
+            PlayerLabPlayer::LoopMode mode = PlayerLabPlayer::LoopMode::Loop;
             switch (idx) {
-                case 0: mode = TLRenderPlayer::LoopMode::Loop; break;
-                case 1: mode = TLRenderPlayer::LoopMode::Once; break;
-                case 2: mode = TLRenderPlayer::LoopMode::PingPong; break;
+                case 0: mode = PlayerLabPlayer::LoopMode::Loop; break;
+                case 1: mode = PlayerLabPlayer::LoopMode::Once; break;
+                case 2: mode = PlayerLabPlayer::LoopMode::PingPong; break;
             }
             m_player->setLoopMode(mode);
             controlsTimer->start();
@@ -785,14 +788,14 @@ void PreviewOverlay::ensurePlayer()
         return;
     }
 
-    m_player = new TLRenderPlayer(this);
+    m_player = new PlayerLabPlayer(this);
 
-    connect(m_player, &TLRenderPlayer::positionChanged, this, &PreviewOverlay::onPlayerPositionChanged);
-    connect(m_player, &TLRenderPlayer::durationChanged, this, &PreviewOverlay::onPlayerDurationChanged);
-    connect(m_player, &TLRenderPlayer::mediaInfoReady, this, &PreviewOverlay::onPlayerMediaInfo);
-    connect(m_player, &TLRenderPlayer::playbackStateChanged, this, &PreviewOverlay::onPlayerPlaybackStateChanged);
-    connect(m_player, &TLRenderPlayer::error, this, &PreviewOverlay::onPlayerError);
-    connect(m_player, &TLRenderPlayer::endOfStream, this, &PreviewOverlay::onPlayerEndOfStream);
+    connect(m_player, &PlayerLabPlayer::positionChanged, this, &PreviewOverlay::onPlayerPositionChanged);
+    connect(m_player, &PlayerLabPlayer::durationChanged, this, &PreviewOverlay::onPlayerDurationChanged);
+    connect(m_player, &PlayerLabPlayer::mediaInfoReady, this, &PreviewOverlay::onPlayerMediaInfo);
+    connect(m_player, &PlayerLabPlayer::playbackStateChanged, this, &PreviewOverlay::onPlayerPlaybackStateChanged);
+    connect(m_player, &PlayerLabPlayer::error, this, &PreviewOverlay::onPlayerError);
+    connect(m_player, &PlayerLabPlayer::endOfStream, this, &PreviewOverlay::onPlayerEndOfStream);
 
     m_player->setVolume(0.5);
 }
@@ -804,12 +807,12 @@ void PreviewOverlay::ensureRenderWidget()
     }
 
     if (!m_renderWidget) {
-        m_renderWidget = new TLRenderViewport(this);
+        m_renderWidget = new PlayerLabViewport(this);
         m_renderWidget->setFocusPolicy(Qt::NoFocus);
         m_renderWidget->installEventFilter(this);
-        connect(m_renderWidget, &TLRenderViewport::fpsChanged, this, [this](double fps) {
+        connect(m_renderWidget, &PlayerLabViewport::fpsChanged, this, [this](double fps) {
             currentPlaybackFps = fps;
-            if (fpsLabel && fps > 0.0 && isVideo && m_player && m_player->playbackState() == TLRenderPlayer::PlaybackState::Playing) {
+            if (fpsLabel && fps > 0.0 && isVideo && m_player && m_player->playbackState() == PlayerLabPlayer::PlaybackState::Playing) {
                 fpsLabel->setText(QString::number(fps, 'f', 1) + " fps");
             }
         });
@@ -823,8 +826,11 @@ void PreviewOverlay::ensureRenderWidget()
         }
     }
 
-    m_renderWidget->setPlayer(m_player);
+    if (m_renderWidget->player() != m_player) {
+        m_renderWidget->setPlayer(m_player);
+    }
 }
+
 
 void PreviewOverlay::showAsset(const QString &filePath, const QString &fileName, const QString &fileType)
 {
@@ -1028,6 +1034,23 @@ void PreviewOverlay::showVideo(const QString &filePath)
     // Stop any existing playback
     PLAYER_STOP();
 
+    // --- Full-viewer file lifecycle cleanup ---
+    // Before loading a different video, cancel any in-flight still-frame
+    // retries on the widget and reset PreviewOverlay scrub state. Without
+    // this, a pending scrub/seek completion or a QTimer::singleShot retry
+    // from the previous file can run into the new file (next/previous
+    // crash root cause). Bumping the scrub serial also invalidates any
+    // late onPlayerPositionChanged -> completeVideoScrubSeek callback.
+    if (m_renderWidget) {
+        m_renderWidget->cancelPendingFrameRequests();
+        m_renderWidget->resetMeasuredFps();
+    }
+    ++videoScrubSeekSerial;
+    videoScrubSeekInFlight = false;
+    pendingVideoScrubSeekMs = -1;
+    resumePlaybackAfterVideoScrub = false;
+    userSeeking = false;
+
     // Hide other content and show video widget
     if (textView) textView->hide();
     if (tableView) tableView->hide();
@@ -1128,6 +1151,91 @@ void PreviewOverlay::onPlayPauseClicked()
     controlsTimer->start();
 }
 
+void PreviewOverlay::issueVideoScrubSeek(qint64 positionMs)
+{
+    if (!m_player) {
+        videoScrubSeekInFlight = false;
+        return;
+    }
+
+    qint64 clampedPosition = positionMs;
+    if (positionSlider) {
+        clampedPosition = qBound<qint64>(static_cast<qint64>(positionSlider->minimum()),
+                                         clampedPosition,
+                                         static_cast<qint64>(positionSlider->maximum()));
+    }
+
+    pendingVideoScrubSeekMs = -1;
+    videoScrubSeekInFlight = true;
+    // Stamp this seek with the current generation so a late position
+    // callback from before a file change / stop (serial was bumped) is
+    // ignored by completeVideoScrubSeek().
+    videoScrubSeekIssuedSerial = videoScrubSeekSerial;
+    m_player->seekAsync(clampedPosition);
+}
+
+void PreviewOverlay::requestVideoScrubSeek(qint64 positionMs)
+{
+    if (!m_player) {
+        return;
+    }
+
+    qint64 clampedPosition = positionMs;
+    if (positionSlider) {
+        clampedPosition = qBound<qint64>(static_cast<qint64>(positionSlider->minimum()),
+                                         clampedPosition,
+                                         static_cast<qint64>(positionSlider->maximum()));
+    }
+
+    // Supersede, do not just queue. The previous design only recorded the
+    // latest drag value in pendingVideoScrubSeekMs and waited for
+    // completeVideoScrubSeek() (driven by onPlayerPositionChanged) to issue
+    // it. But when the external GL presenter owns the decoder queue and
+    // playback is paused (the normal drag state), position updates do not
+    // flow back, so completeVideoScrubSeek() never ran — every drag value
+    // after the first was stranded until mouse release.
+    //
+    // Now each new drag value is issued directly. The decoder bumps its seek
+    // generation on every seek and the widget bumps m_stillFrameRequestSerial
+    // on every showOneFreshFrame(), so frames from a superseded seek are
+    // discarded and only the latest drag position is presented. Issuing the
+    // seek is cheap (sets a target + bumps generation); the decode loop
+    // services only the most recent, which is the coalescing we want.
+    issueVideoScrubSeek(clampedPosition);
+}
+
+void PreviewOverlay::completeVideoScrubSeek(qint64 presentedPositionMs)
+{
+    // Ignore stale completions: if the scrub serial changed (file load /
+    // stop) after this seek was issued, the callback belongs to the
+    // previous clip and must not touch the current scrub state.
+    if (videoScrubSeekIssuedSerial != videoScrubSeekSerial) {
+        return;
+    }
+    if (!videoScrubSeekInFlight && pendingVideoScrubSeekMs < 0) {
+        return;
+    }
+
+    videoScrubSeekInFlight = false;
+
+    // With supersede-style requestVideoScrubSeek(), pendingVideoScrubSeekMs
+    // is normally -1 (each drag value is issued directly). Keep the pending
+    // re-issue path for any legacy caller that still sets it.
+    if (pendingVideoScrubSeekMs >= 0) {
+        const qint64 pendingPosition = pendingVideoScrubSeekMs;
+        pendingVideoScrubSeekMs = -1;
+        if (qAbs(pendingPosition - presentedPositionMs) > qMax<qint64>(1, qRound64(frameDurationMs() / 2.0))) {
+            issueVideoScrubSeek(pendingPosition);
+            return;
+        }
+    }
+
+    if (resumePlaybackAfterVideoScrub && !userSeeking) {
+        resumePlaybackAfterVideoScrub = false;
+        PLAYER_PLAY();
+    }
+}
+
 void PreviewOverlay::onSliderMoved(int position)
 {
     if (isSequence) {
@@ -1142,7 +1250,7 @@ void PreviewOverlay::onSliderMoved(int position)
         return;
     }
 
-    m_player->seek(position);
+    requestVideoScrubSeek(position);
     const double fps = detectedFps > 0.0 ? detectedFps : 24.0;
     lastKnownVideoFrame = static_cast<int>(qMax<qint64>(0, qRound64((position / 1000.0) * fps)));
 
@@ -1194,6 +1302,15 @@ void PreviewOverlay::onSliderPressed()
         return;
     }
     wasPlayingBeforeSeek = (PLAYER_STATE() == PLAYER_STATE_PLAYING);
+    // Start a fresh scrub run: clear any stranded state from a previous
+    // scrub and reset the widget's measured-fps window so paused still
+    // frames shown during the drag do not contaminate the fps metric.
+    videoScrubSeekInFlight = false;
+    resumePlaybackAfterVideoScrub = false;
+    pendingVideoScrubSeekMs = -1;
+    if (m_renderWidget) {
+        m_renderWidget->resetMeasuredFps();
+    }
     // Capture position before pausing for seek
     lastKnownPosition = PLAYER_POSITION();
     PLAYER_PAUSE();
@@ -1218,7 +1335,17 @@ void PreviewOverlay::onSliderReleased()
         userSeeking = false;
         return;
     }
-    m_player->seek(pos);
+    requestVideoScrubSeek(pos);
+    // Resume playback immediately if we were playing before the scrub.
+    // Relying on completeVideoScrubSeek() to resume is unreliable when the
+    // external GL presenter owns the queue (paused seeks do not emit
+    // positionChanged, so the completion callback never fires). The seek
+    // above already bumped the decoder generation, so playback advances
+    // from the requested position; stale pre-seek frames are discarded.
+    if (wasPlayingBeforeSeek) {
+        PLAYER_PLAY();
+    }
+    resumePlaybackAfterVideoScrub = false;
     
     // Calculate and explicitly track the frame number we seeked to
     const double fps = detectedFps > 0.0 ? detectedFps : 24.0;
@@ -1233,8 +1360,6 @@ void PreviewOverlay::onSliderReleased()
     // If in annotation mode for video, update frame immediately
     if (annotationModeEnabled && isVideo) {
         updateVideoAnnotationFrame();
-    } else if (wasPlayingBeforeSeek) {
-        PLAYER_PLAY();
     }
     
     userSeeking = false;
@@ -1673,7 +1798,7 @@ void PreviewOverlay::keyPressEvent(QKeyEvent *event)
                     break;
                 }
                 // If already playing forward, just ensure rate is 1.0
-                if (PLAYER_STATE() == TLRenderPlayer::PlaybackState::Playing &&
+                if (PLAYER_STATE() == PlayerLabPlayer::PlaybackState::Playing &&
                     m_player->playbackRate() > 0) {
                     // Already playing forward, do nothing or could increase speed
                 } else {
@@ -2464,10 +2589,33 @@ void PreviewOverlay::onSequenceTimerTick()
 void PreviewOverlay::stopPlayback()
 {
     qDebug() << "[PreviewOverlay] Stopping playback";
+    if (m_tearingDown && !m_player && !sequencePlaying && !frameCache) {
+        return;
+    }
+
 
     // Stop video playback
     if (m_player) {
         PLAYER_STOP();
+    }
+
+    // Reset full-viewer scrub/seek state so a stale completion callback
+    // cannot re-arm a scrub chain after stop or into the next file load.
+    // Bumping the scrub serial also invalidates any late
+    // onPlayerPositionChanged -> completeVideoScrubSeek callback.
+    ++videoScrubSeekSerial;
+    videoScrubSeekInFlight = false;
+    pendingVideoScrubSeekMs = -1;
+    resumePlaybackAfterVideoScrub = false;
+    userSeeking = false;
+
+    // Cancel the widget's pending still-frame retries and reset its measured
+    // fps so no QTimer::singleShot from the previous media runs into a stop
+    // or the next file load. This closes the next/previous crash window
+    // where a scrub retry could target a now-dead decoder/decoder queue.
+    if (!m_tearingDown && m_renderWidget) {
+        m_renderWidget->cancelPendingFrameRequests();
+        m_renderWidget->resetMeasuredFps();
     }
 
     // Stop sequence playback
@@ -2498,14 +2646,32 @@ void PreviewOverlay::onDurationChanged(qint64 duration)
 }
 
 // ============================================================================
-// TLRenderPlayer Signal Handlers
+// PlayerLabPlayer Signal Handlers
 // ============================================================================
 
 void PreviewOverlay::onPlayerPositionChanged(qint64 positionMs)
 {
+    if (m_tearingDown) {
+        return;
+    }
+
     if (!m_player) {
         return;
     }
+    const bool playing = m_player->playbackState() == PlayerLabPlayer::PlaybackState::Playing;
+    if (playing) {
+        pendingPlayerPositionMs = positionMs;
+        if (playerPositionUiThrottle.isValid() && playerPositionUiThrottle.elapsed() < 33) {
+            return;
+        }
+        playerPositionUiThrottle.restart();
+        positionMs = pendingPlayerPositionMs;
+    } else {
+        pendingPlayerPositionMs = -1;
+        playerPositionUiThrottle.invalidate();
+    }
+
+    completeVideoScrubSeek(positionMs);
     qDebug() << "[PreviewOverlay] onPlayerPositionChanged:"
              << "positionMs=" << positionMs
              << "slider range=[" << positionSlider->minimum() << "," << positionSlider->maximum() << "]"
@@ -2515,7 +2681,6 @@ void PreviewOverlay::onPlayerPositionChanged(qint64 positionMs)
         positionSlider->setValue(static_cast<int>(positionMs));
         qDebug() << "[PreviewOverlay] slider setValue result:" << positionSlider->value();
     }
-
     qint64 durationMs = m_player->duration();
     updateVideoTimeDisplays(positionMs, durationMs);
     
@@ -2523,13 +2688,17 @@ void PreviewOverlay::onPlayerPositionChanged(qint64 positionMs)
     lastKnownPosition = positionMs;
     
     // When playing back, clear the explicit frame tracking so we calculate from position
-    if (m_player->playbackState() == TLRenderPlayer::PlaybackState::Playing) {
+    if (m_player->playbackState() == PlayerLabPlayer::PlaybackState::Playing) {
         lastKnownVideoFrame = -1;
     }
 }
 
 void PreviewOverlay::onPlayerDurationChanged(qint64 durationMs)
 {
+    if (m_tearingDown) {
+        return;
+    }
+
     if (durationMs > 0) {
         positionSlider->setRange(0, static_cast<int>(durationMs));
         if (positionSlider->value() > durationMs) {
@@ -2538,8 +2707,12 @@ void PreviewOverlay::onPlayerDurationChanged(qint64 durationMs)
     }
 }
 
-void PreviewOverlay::onPlayerMediaInfo(const TLRenderPlayer::MediaInfo& info)
+void PreviewOverlay::onPlayerMediaInfo(const PlayerLabPlayer::MediaInfo& info)
 {
+    if (m_tearingDown) {
+        return;
+    }
+
     qDebug() << "[PreviewOverlay] tlRender media info:"
              << "Duration:" << info.durationMs << "ms"
              << "TotalFrames:" << info.totalFrames
@@ -2584,9 +2757,13 @@ void PreviewOverlay::onPlayerMediaInfo(const TLRenderPlayer::MediaInfo& info)
     positionSlider->setTimelineContext(true, detectedFps > 0.0 ? detectedFps : info.fps);
 }
 
-void PreviewOverlay::onPlayerPlaybackStateChanged(TLRenderPlayer::PlaybackState state)
+void PreviewOverlay::onPlayerPlaybackStateChanged(PlayerLabPlayer::PlaybackState state)
 {
-    if (!m_player && state != TLRenderPlayer::PlaybackState::Playing) {
+    if (m_tearingDown) {
+        return;
+    }
+
+    if (!m_player && state != PlayerLabPlayer::PlaybackState::Playing) {
         if (playPauseBtn) playPauseBtn->setIcon(playIcon);
         return;
     }
@@ -2594,15 +2771,18 @@ void PreviewOverlay::onPlayerPlaybackStateChanged(TLRenderPlayer::PlaybackState 
     qDebug() << "[PreviewOverlay] tlRender state changed to:" << static_cast<int>(state);
 
     switch (state) {
-        case TLRenderPlayer::PlaybackState::Playing:
+        case PlayerLabPlayer::PlaybackState::Playing:
             if (playPauseBtn) playPauseBtn->setIcon(pauseIcon);
             break;
-        case TLRenderPlayer::PlaybackState::Paused:
-        case TLRenderPlayer::PlaybackState::Stopped:
+        case PlayerLabPlayer::PlaybackState::Paused:
+        case PlayerLabPlayer::PlaybackState::Stopped:
             if (playPauseBtn) playPauseBtn->setIcon(playIcon);
             if (isVideo && m_player && lastKnownPosition >= 0) {
                 qint64 durationMs = m_player->duration();
                 updateVideoTimeDisplays(lastKnownPosition, durationMs);
+                if (positionSlider && !positionSlider->isSliderDown()) {
+                    positionSlider->setValue(static_cast<int>(lastKnownPosition));
+                }
             }
             break;
     }
@@ -2622,13 +2802,13 @@ void PreviewOverlay::onPlayerEndOfStream()
         return;
     }
 
-    const TLRenderPlayer::LoopMode loopMode = m_player->loopMode();
-    if (loopMode == TLRenderPlayer::LoopMode::Once) {
-        m_player->pause();
-    } else {
-        m_player->stop();
-        m_player->seek(0);
-    }
+    // Pause presentation at the final frame. Do NOT call stop()+seek(0) for
+    // non-loop end: seeking after stop can restart the decoder (the backend
+    // may reopen the decode pipeline to service the seek) and has caused
+    // end-of-video segfaults. Loop mode is already handled by GpuPlayer's
+    // own loop mechanism (the looped() signal), so we must not build a
+    // second loop path here.
+    m_player->pause();
     if (playPauseBtn) playPauseBtn->setIcon(playIcon);
 }
 
@@ -3563,7 +3743,7 @@ void PreviewOverlay::enableAnnotationMode(bool enable)
             qDebug() << "[PreviewOverlay] Entering annotation mode - initialized frame to:" << lastKnownVideoFrame;
             
             QImage videoFrame = m_player->getCurrentFrame();
-            const TLRenderPlayer::MediaInfo info = m_player->mediaInfo();
+            const PlayerLabPlayer::MediaInfo info = m_player->mediaInfo();
             const QSize overlayFrameSize = !videoFrame.isNull()
                 ? videoFrame.size()
                 : QSize(info.width, info.height);

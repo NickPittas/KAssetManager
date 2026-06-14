@@ -10,14 +10,18 @@
 #include <limits>
 #include <clocale>
 
-#include "media/tlrender_player.h"
-#include "media/tlrender_viewport.h"
+#include "media/player_lab_player.h"
+#include "media/player_lab_viewport.h"
 #include "platform_session.h"
 #include "real_media_test_helper.h"
 
 namespace {
 
 constexpr const char* kBenchmarkFileEnvVar = "KASSETMANAGER_TLRENDER_BENCHMARK_FILE";
+constexpr const char* kBenchmarkViewportWidthEnvVar = "KASSETMANAGER_TLRENDER_BENCHMARK_VIEWPORT_WIDTH";
+constexpr const char* kBenchmarkViewportHeightEnvVar = "KASSETMANAGER_TLRENDER_BENCHMARK_VIEWPORT_HEIGHT";
+constexpr const char* kBenchmarkDurationMsEnvVar = "KASSETMANAGER_TLRENDER_BENCHMARK_DURATION_MS";
+constexpr const char* kBenchmarkHashFramesEnvVar = "KASSETMANAGER_TLRENDER_BENCHMARK_HASH_FRAMES";
 constexpr int kWarmupTimeoutMs = 30000;
 constexpr int kPlaybackProbeMs = 2000;
 constexpr int kMinimumDistinctFps = 24;
@@ -79,8 +83,8 @@ QString playbackMetricsSummary(const QString& filePath, const PlaybackObservatio
 bool waitForMediaReadyOrFail(QSignalSpy& mediaSpy, QSignalSpy& errorSpy, int timeoutMs, QString* errorOut);
 
 bool loadPlayerAndViewport(const QString& filePath,
-                          TLRenderPlayer* player,
-                          TLRenderViewport* viewport,
+                          PlayerLabPlayer* player,
+                          PlayerLabViewport* viewport,
                           QSignalSpy* mediaSpy,
                           QSignalSpy* errorSpy,
                           QSignalSpy* frameSpy,
@@ -90,7 +94,12 @@ bool loadPlayerAndViewport(const QString& filePath,
         return false;
     }
 
-    viewport->resize(1280, 720);
+    bool widthOk = false;
+    bool heightOk = false;
+    const int envWidth = qEnvironmentVariableIntValue(kBenchmarkViewportWidthEnvVar, &widthOk);
+    const int envHeight = qEnvironmentVariableIntValue(kBenchmarkViewportHeightEnvVar, &heightOk);
+    viewport->resize((widthOk && envWidth > 0) ? envWidth : 1280,
+                     (heightOk && envHeight > 0) ? envHeight : 720);
     viewport->show();
     viewport->setPlayer(player);
 
@@ -111,7 +120,7 @@ bool loadPlayerAndViewport(const QString& filePath,
     }, kWarmupTimeoutMs);
 }
 
-void advanceForBackwardTests(TLRenderPlayer* player, QSignalSpy* frameSpy)
+void advanceForBackwardTests(PlayerLabPlayer* player, QSignalSpy* frameSpy)
 {
     player->play();
     QTRY_VERIFY_WITH_TIMEOUT(frameSpy->count() > 10, kWarmupTimeoutMs);
@@ -156,7 +165,7 @@ bool waitForMediaReadyOrFail(QSignalSpy& mediaSpy, QSignalSpy& errorSpy, int tim
     return false;
 }
 
-PlaybackObservation observePlayback(TLRenderPlayer& player, TLRenderViewport& viewport, int durationMs)
+PlaybackObservation observePlayback(PlayerLabPlayer& player, PlayerLabViewport& viewport, int durationMs, bool hashFrames = true)
 {
     PlaybackObservation result;
     qint64 lastRenderedSignalElapsedMs = -1;
@@ -166,7 +175,7 @@ PlaybackObservation observePlayback(TLRenderPlayer& player, TLRenderViewport& vi
     QElapsedTimer timer;
     timer.start();
 
-    QObject::connect(&viewport, &TLRenderViewport::frameRendered, &viewport, [&]() {
+    QObject::connect(&viewport, &PlayerLabViewport::frameRendered, &viewport, [&]() {
         ++result.renderedSignals;
         const qint64 nowMs = timer.elapsed();
         if (lastRenderedSignalElapsedMs >= 0) {
@@ -182,19 +191,21 @@ PlaybackObservation observePlayback(TLRenderPlayer& player, TLRenderViewport& vi
             result.firstRevision = result.lastRevision;
         }
 
-        const QByteArray currentFingerprint = fingerprintImage(viewport.currentRasterFrameForTest());
-        if (!currentFingerprint.isEmpty() && currentFingerprint != result.lastFingerprint) {
-            ++result.distinctFrames;
-            result.lastFingerprint = currentFingerprint;
-        }
+        if (hashFrames) {
+            const QByteArray currentFingerprint = fingerprintImage(viewport.currentRasterFrameForTest());
+            if (!currentFingerprint.isEmpty() && currentFingerprint != result.lastFingerprint) {
+                ++result.distinctFrames;
+                result.lastFingerprint = currentFingerprint;
+            }
 
-        const QByteArray presentedFingerprint = fingerprintImage(viewport.currentPresentedFrameForTest());
-        if (!presentedFingerprint.isEmpty() && presentedFingerprint != result.lastPresentedFingerprint) {
-            ++result.distinctPresentedFrames;
-            result.lastPresentedFingerprint = presentedFingerprint;
+            const QByteArray presentedFingerprint = fingerprintImage(viewport.currentPresentedFrameForTest());
+            if (!presentedFingerprint.isEmpty() && presentedFingerprint != result.lastPresentedFingerprint) {
+                ++result.distinctPresentedFrames;
+                result.lastPresentedFingerprint = presentedFingerprint;
+            }
         }
     }, Qt::DirectConnection);
-    QObject::connect(&player, &TLRenderPlayer::currentFrameChanged, &viewport, [&](qint64 frameNumber) {
+    QObject::connect(&player, &PlayerLabPlayer::currentFrameChanged, &viewport, [&](qint64 frameNumber) {
         ++result.playerFrameSignals;
         if (frameNumber != result.lastPlayerFrameNumber) {
             ++result.distinctPlayerFrames;
@@ -225,7 +236,7 @@ PlaybackObservation observePlayback(TLRenderPlayer& player, TLRenderViewport& vi
 
 } // namespace
 
-class TestTLRenderPlaybackHarness : public QObject
+class TestPlayerLabPlaybackHarness : public QObject
 {
     Q_OBJECT
 
@@ -236,6 +247,7 @@ private slots:
     void megyViewerCadence();
     void bloodHitAlphaViewerProgresses();
     void benchmarkEnvFile();
+    void benchmarkEnvFileAsyncSeekIsNonBlocking();
     void mp4StepBackwardUpdatesRasterFrame();
     void mp4SeekToPreviousFrameUpdatesRasterFrame();
     void mp4ReversePlaybackUpdatesRasterFrame();
@@ -244,14 +256,14 @@ private slots:
     void allMovFilesStepBackwardAndReverse();
 };
 
-void TestTLRenderPlaybackHarness::initTestCase()
+void TestPlayerLabPlaybackHarness::initTestCase()
 {
     setlocale(LC_NUMERIC, "C");
     QVERIFY2(PlatformSession::shouldUseRasterPreviewFallbackOnWayland(),
              "Playback harness must exercise the real Wayland raster preview path");
 }
 
-void TestTLRenderPlaybackHarness::sunshine25fpsViewerCadence()
+void TestPlayerLabPlaybackHarness::sunshine25fpsViewerCadence()
 {
     const auto media = RealMediaTestHelper::resolve(
         QStringLiteral("ELLIOT_HD_ST_EN_24FPS_20260408.mov"),
@@ -261,14 +273,14 @@ void TestTLRenderPlaybackHarness::sunshine25fpsViewerCadence()
     }
     const QString filePath = media.filePath;
 
-    TLRenderPlayer player;
-    TLRenderViewport viewport;
+    PlayerLabPlayer player;
+    PlayerLabViewport viewport;
     viewport.resize(1280, 720);
     viewport.show();
     viewport.setPlayer(&player);
 
-    QSignalSpy mediaSpy(&player, &TLRenderPlayer::mediaInfoReady);
-    QSignalSpy errorSpy(&player, &TLRenderPlayer::error);
+    QSignalSpy mediaSpy(&player, &PlayerLabPlayer::mediaInfoReady);
+    QSignalSpy errorSpy(&player, &PlayerLabPlayer::error);
     QVERIFY(mediaSpy.isValid());
     QVERIFY(errorSpy.isValid());
 
@@ -282,30 +294,54 @@ void TestTLRenderPlaybackHarness::sunshine25fpsViewerCadence()
     QVERIFY2(!viewport.currentRasterFrameForTest().isNull(), "Viewport never produced an initial raster frame");
 
     player.resetFrameAcquisitionStatsForTest();
-    player.play();
-    const PlaybackObservation observation = observePlayback(player, viewport, kPlaybackProbeMs);
-    const TLRenderPlayer::FrameAcquisitionStats frameStats = player.frameAcquisitionStatsForTest();
+    bool durationOk = false;
+    const int envDurationMs = qEnvironmentVariableIntValue(kBenchmarkDurationMsEnvVar, &durationOk);
+    const int probeDurationMs = (durationOk && envDurationMs > 0) ? envDurationMs : kPlaybackProbeMs;
+    const bool hashFrames = qEnvironmentVariableIsSet(kBenchmarkHashFramesEnvVar)
+        ? qEnvironmentVariableIntValue(kBenchmarkHashFramesEnvVar) != 0
+        : true;
+    const PlaybackObservation observation = observePlayback(player, viewport, probeDurationMs, hashFrames);
+    const PlayerLabPlayer::FrameAcquisitionStats frameStats = player.frameAcquisitionStatsForTest();
 
     QVERIFY2(observation.renderedSignals > 0,
              qPrintable(QStringLiteral("No viewer-side frameRendered signals observed for %1").arg(filePath)));
-    QVERIFY2(observation.distinctFrames > 0,
-             qPrintable(QStringLiteral("Viewer never presented a distinct raster frame for %1").arg(filePath)));
-    QVERIFY2(observation.measuredDistinctFps >= kMinimumDistinctFps,
-             qPrintable(QStringLiteral(
-                            "Expected >= %1 distinct viewer fps for %2, observed %3 fps (%4 distinct frames, %5 render signals, %6 distinct player frames, %7 fallback extractions, last image type %8, last cached conversion %9 ms, last fallback %10 ms)")
-                            .arg(kMinimumDistinctFps)
-                            .arg(filePath)
-                            .arg(observation.measuredDistinctFps, 0, 'f', 2)
-                            .arg(observation.distinctFrames)
-                            .arg(observation.renderedSignals)
-                            .arg(observation.distinctPlayerFrames)
-                            .arg(frameStats.fallbackExtractions)
-                            .arg(frameStats.lastCachedImageType)
-                           .arg(frameStats.lastCachedConversionNs / 1000000.0, 0, 'f', 2)
-                           .arg(frameStats.lastFallbackExtractionNs / 1000000.0, 0, 'f', 2)));
+    if (hashFrames) {
+        QVERIFY2(observation.distinctFrames > 0,
+                 qPrintable(QStringLiteral("Viewer never presented a distinct raster frame for %1").arg(filePath)));
+        QVERIFY2(observation.measuredDistinctFps >= kMinimumDistinctFps,
+                 qPrintable(QStringLiteral(
+                                "Expected >= %1 distinct viewer fps for %2, observed %3 fps (%4 distinct frames, %5 render signals, %6 distinct player frames, %7 fallback extractions, last image type %8, last cached conversion %9 ms, last fallback %10 ms)")
+                                .arg(kMinimumDistinctFps)
+                                .arg(filePath)
+                                .arg(observation.measuredDistinctFps, 0, 'f', 2)
+                                .arg(observation.distinctFrames)
+                                .arg(observation.renderedSignals)
+                                .arg(observation.distinctPlayerFrames)
+                                .arg(frameStats.fallbackExtractions)
+                                .arg(frameStats.lastCachedImageType)
+                                .arg(frameStats.lastCachedConversionNs / 1000000.0, 0, 'f', 2)
+                                .arg(frameStats.lastFallbackExtractionNs / 1000000.0, 0, 'f', 2)));
+    } else {
+        QVERIFY2(observation.measuredRenderedSignalFps >= kMinimumDistinctFps,
+                 qPrintable(QStringLiteral(
+                                "Expected >= %1 rendered signal fps for %2, observed %3 fps (%4 render signals, %5 distinct player frames)")
+                                .arg(kMinimumDistinctFps)
+                                .arg(filePath)
+                                .arg(observation.measuredRenderedSignalFps, 0, 'f', 2)
+                                .arg(observation.renderedSignals)
+                                .arg(observation.distinctPlayerFrames)));
+        QVERIFY2(observation.measuredPlayerFrameFps >= kMinimumDistinctFps,
+                 qPrintable(QStringLiteral(
+                                "Expected >= %1 player frame fps for %2, observed %3 fps (%4 distinct player frames, %5 render signals)")
+                                .arg(kMinimumDistinctFps)
+                                .arg(filePath)
+                                .arg(observation.measuredPlayerFrameFps, 0, 'f', 2)
+                                .arg(observation.distinctPlayerFrames)
+                                .arg(observation.renderedSignals)));
+    }
 }
 
-void TestTLRenderPlaybackHarness::atmosphereViewerCadence()
+void TestPlayerLabPlaybackHarness::atmosphereViewerCadence()
 {
     const auto media = RealMediaTestHelper::resolve(
         QStringLiteral("Atmosphere-019.mov"),
@@ -315,14 +351,14 @@ void TestTLRenderPlaybackHarness::atmosphereViewerCadence()
     }
     const QString filePath = media.filePath;
 
-    TLRenderPlayer player;
-    TLRenderViewport viewport;
+    PlayerLabPlayer player;
+    PlayerLabViewport viewport;
     viewport.resize(1280, 720);
     viewport.show();
     viewport.setPlayer(&player);
 
-    QSignalSpy mediaSpy(&player, &TLRenderPlayer::mediaInfoReady);
-    QSignalSpy errorSpy(&player, &TLRenderPlayer::error);
+    QSignalSpy mediaSpy(&player, &PlayerLabPlayer::mediaInfoReady);
+    QSignalSpy errorSpy(&player, &PlayerLabPlayer::error);
     QVERIFY(mediaSpy.isValid());
     QVERIFY(errorSpy.isValid());
 
@@ -338,7 +374,7 @@ void TestTLRenderPlaybackHarness::atmosphereViewerCadence()
     player.resetFrameAcquisitionStatsForTest();
     player.play();
     const PlaybackObservation observation = observePlayback(player, viewport, kPlaybackProbeMs);
-    const TLRenderPlayer::FrameAcquisitionStats frameStats = player.frameAcquisitionStatsForTest();
+    const PlayerLabPlayer::FrameAcquisitionStats frameStats = player.frameAcquisitionStatsForTest();
 
     QVERIFY2(observation.renderedSignals > 0,
              qPrintable(QStringLiteral("No viewer-side frameRendered signals observed for %1").arg(filePath)));
@@ -359,7 +395,7 @@ void TestTLRenderPlaybackHarness::atmosphereViewerCadence()
                             .arg(frameStats.lastFallbackExtractionNs / 1000000.0, 0, 'f', 2)));
 }
 
-void TestTLRenderPlaybackHarness::megyViewerCadence()
+void TestPlayerLabPlaybackHarness::megyViewerCadence()
 {
     const auto media = RealMediaTestHelper::resolve(
         QStringLiteral("ELLIOT_HD_ST_EN_24FPS_20260408.mov"),
@@ -369,14 +405,14 @@ void TestTLRenderPlaybackHarness::megyViewerCadence()
     }
     const QString filePath = media.filePath;
 
-    TLRenderPlayer player;
-    TLRenderViewport viewport;
+    PlayerLabPlayer player;
+    PlayerLabViewport viewport;
     viewport.resize(1280, 720);
     viewport.show();
     viewport.setPlayer(&player);
 
-    QSignalSpy mediaSpy(&player, &TLRenderPlayer::mediaInfoReady);
-    QSignalSpy errorSpy(&player, &TLRenderPlayer::error);
+    QSignalSpy mediaSpy(&player, &PlayerLabPlayer::mediaInfoReady);
+    QSignalSpy errorSpy(&player, &PlayerLabPlayer::error);
     QVERIFY(mediaSpy.isValid());
     QVERIFY(errorSpy.isValid());
 
@@ -392,7 +428,7 @@ void TestTLRenderPlaybackHarness::megyViewerCadence()
     player.resetFrameAcquisitionStatsForTest();
     player.play();
     const PlaybackObservation observation = observePlayback(player, viewport, kPlaybackProbeMs);
-    const TLRenderPlayer::FrameAcquisitionStats frameStats = player.frameAcquisitionStatsForTest();
+    const PlayerLabPlayer::FrameAcquisitionStats frameStats = player.frameAcquisitionStatsForTest();
 
     QVERIFY2(observation.renderedSignals > 0,
              qPrintable(QStringLiteral("No viewer-side frameRendered signals observed for %1").arg(filePath)));
@@ -413,7 +449,7 @@ void TestTLRenderPlaybackHarness::megyViewerCadence()
                             .arg(frameStats.lastFallbackExtractionNs / 1000000.0, 0, 'f', 2)));
 }
 
-void TestTLRenderPlaybackHarness::bloodHitAlphaViewerProgresses()
+void TestPlayerLabPlaybackHarness::bloodHitAlphaViewerProgresses()
 {
     const auto media = RealMediaTestHelper::resolve(
         QStringLiteral("Atmosphere-019.mov"),
@@ -423,14 +459,14 @@ void TestTLRenderPlaybackHarness::bloodHitAlphaViewerProgresses()
     }
     const QString filePath = media.filePath;
 
-    TLRenderPlayer player;
-    TLRenderViewport viewport;
+    PlayerLabPlayer player;
+    PlayerLabViewport viewport;
     viewport.resize(1280, 720);
     viewport.show();
     viewport.setPlayer(&player);
 
-    QSignalSpy mediaSpy(&player, &TLRenderPlayer::mediaInfoReady);
-    QSignalSpy errorSpy(&player, &TLRenderPlayer::error);
+    QSignalSpy mediaSpy(&player, &PlayerLabPlayer::mediaInfoReady);
+    QSignalSpy errorSpy(&player, &PlayerLabPlayer::error);
     QVERIFY(mediaSpy.isValid());
     QVERIFY(errorSpy.isValid());
 
@@ -446,7 +482,7 @@ void TestTLRenderPlaybackHarness::bloodHitAlphaViewerProgresses()
     player.resetFrameAcquisitionStatsForTest();
     player.play();
     const PlaybackObservation observation = observePlayback(player, viewport, kPlaybackProbeMs);
-    const TLRenderPlayer::FrameAcquisitionStats frameStats = player.frameAcquisitionStatsForTest();
+    const PlayerLabPlayer::FrameAcquisitionStats frameStats = player.frameAcquisitionStatsForTest();
 
     QVERIFY2(observation.renderedSignals > 1,
              qPrintable(QStringLiteral("Expected repeated viewer renders for alpha MOV %1, observed %2 signals")
@@ -461,7 +497,7 @@ void TestTLRenderPlaybackHarness::bloodHitAlphaViewerProgresses()
                              .arg(frameStats.lastCachedImageType)));
 }
 
-void TestTLRenderPlaybackHarness::benchmarkEnvFile()
+void TestPlayerLabPlaybackHarness::benchmarkEnvFile()
 {
     const QString configuredPath = qEnvironmentVariable(kBenchmarkFileEnvVar).trimmed();
     if (configuredPath.isEmpty()) {
@@ -471,14 +507,19 @@ void TestTLRenderPlaybackHarness::benchmarkEnvFile()
     const QString filePath = QFileInfo(configuredPath).absoluteFilePath();
     QVERIFY2(QFileInfo::exists(filePath), qPrintable(QStringLiteral("Benchmark file does not exist: %1").arg(filePath)));
 
-    TLRenderPlayer player;
-    TLRenderViewport viewport;
-    viewport.resize(1280, 720);
+    PlayerLabPlayer player;
+    PlayerLabViewport viewport;
+    bool widthOk = false;
+    bool heightOk = false;
+    const int envWidth = qEnvironmentVariableIntValue(kBenchmarkViewportWidthEnvVar, &widthOk);
+    const int envHeight = qEnvironmentVariableIntValue(kBenchmarkViewportHeightEnvVar, &heightOk);
+    viewport.resize((widthOk && envWidth > 0) ? envWidth : 1280,
+                    (heightOk && envHeight > 0) ? envHeight : 720);
     viewport.show();
     viewport.setPlayer(&player);
 
-    QSignalSpy mediaSpy(&player, &TLRenderPlayer::mediaInfoReady);
-    QSignalSpy errorSpy(&player, &TLRenderPlayer::error);
+    QSignalSpy mediaSpy(&player, &PlayerLabPlayer::mediaInfoReady);
+    QSignalSpy errorSpy(&player, &PlayerLabPlayer::error);
     QVERIFY(mediaSpy.isValid());
     QVERIFY(errorSpy.isValid());
 
@@ -493,31 +534,98 @@ void TestTLRenderPlaybackHarness::benchmarkEnvFile()
 
     player.resetFrameAcquisitionStatsForTest();
     player.play();
-    const PlaybackObservation observation = observePlayback(player, viewport, kPlaybackProbeMs);
+    bool durationOk = false;
+    const int envDurationMs = qEnvironmentVariableIntValue(kBenchmarkDurationMsEnvVar, &durationOk);
+    const int probeDurationMs = (durationOk && envDurationMs > 0) ? envDurationMs : kPlaybackProbeMs;
+    const bool hashFrames = qEnvironmentVariableIsSet(kBenchmarkHashFramesEnvVar)
+        ? qEnvironmentVariableIntValue(kBenchmarkHashFramesEnvVar) != 0
+        : true;
+    const PlaybackObservation observation = observePlayback(player, viewport, probeDurationMs, hashFrames);
     qInfo().noquote() << playbackMetricsSummary(filePath, observation);
 
     QVERIFY2(observation.renderedSignals > 0,
              qPrintable(QStringLiteral("No viewer-side frameRendered signals observed for %1").arg(filePath)));
-    QVERIFY2(observation.distinctFrames > 0,
-             qPrintable(QStringLiteral("Viewer never presented a distinct raster frame for %1").arg(filePath)));
+    if (hashFrames) {
+        QVERIFY2(observation.distinctFrames > 0,
+                 qPrintable(QStringLiteral("Viewer never presented a distinct raster frame for %1").arg(filePath)));
+    }
     QVERIFY2(observation.distinctPlayerFrames > 0,
              qPrintable(QStringLiteral("Player never reported a distinct frame for %1").arg(filePath)));
 }
 
-void TestTLRenderPlaybackHarness::mp4StepBackwardUpdatesRasterFrame()
-{
-    const QString filePath = QStringLiteral("/mnt/ssd2/Tests/Videos/Ns Ethereal 1.mp4");
-    QVERIFY2(QFileInfo::exists(filePath), qPrintable(QStringLiteral("Required MP4 test file missing: %1").arg(filePath)));
 
-    TLRenderPlayer player;
-    TLRenderViewport viewport;
+void TestPlayerLabPlaybackHarness::benchmarkEnvFileAsyncSeekIsNonBlocking()
+{
+    const QString configuredPath = qEnvironmentVariable(kBenchmarkFileEnvVar).trimmed();
+    if (configuredPath.isEmpty()) {
+        QSKIP("Set KASSETMANAGER_TLRENDER_BENCHMARK_FILE to benchmark async seek on arbitrary media");
+    }
+
+    const QString filePath = QFileInfo(configuredPath).absoluteFilePath();
+    QVERIFY2(QFileInfo::exists(filePath), qPrintable(QStringLiteral("Benchmark file does not exist: %1").arg(filePath)));
+
+    PlayerLabPlayer player;
+    PlayerLabViewport viewport;
     viewport.resize(1280, 720);
     viewport.show();
     viewport.setPlayer(&player);
 
-    QSignalSpy mediaSpy(&player, &TLRenderPlayer::mediaInfoReady);
-    QSignalSpy errorSpy(&player, &TLRenderPlayer::error);
-    QSignalSpy frameSpy(&player, &TLRenderPlayer::currentFrameChanged);
+    QSignalSpy mediaSpy(&player, &PlayerLabPlayer::mediaInfoReady);
+    QSignalSpy errorSpy(&player, &PlayerLabPlayer::error);
+    QVERIFY(mediaSpy.isValid());
+    QVERIFY(errorSpy.isValid());
+
+    player.loadMedia(filePath);
+
+    QString loadError;
+    QVERIFY2(waitForMediaReadyOrFail(mediaSpy, errorSpy, kWarmupTimeoutMs, &loadError),
+             qPrintable(QStringLiteral("Benchmark file failed to become ready: %1 (%2)").arg(filePath, loadError)));
+    QTRY_VERIFY_WITH_TIMEOUT(viewport.rasterPresentationRevisionForTest() > 0, kWarmupTimeoutMs);
+
+    const qint64 duration = player.duration();
+    QVERIFY2(duration > 0, "Async seek benchmark requires known duration");
+    const qint64 revisionBeforeSeek = viewport.rasterPresentationRevisionForTest();
+
+    qint64 worstSeekCallMs = 0;
+    const QList<qreal> positions{0.12, 0.24, 0.36, 0.48, 0.60, 0.72};
+    const qint64 finalSeekMs = qRound64(positions.last() * duration);
+    QElapsedTimer presentationTimer;
+    presentationTimer.start();
+    for (qreal normalized : positions) {
+        QElapsedTimer callTimer;
+        callTimer.start();
+        player.seekAsync(qRound64(normalized * duration));
+        worstSeekCallMs = qMax(worstSeekCallMs, callTimer.elapsed());
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 1);
+    }
+
+    QVERIFY2(worstSeekCallMs < 50,
+             qPrintable(QStringLiteral("Async seek call blocked for %1 ms on %2").arg(worstSeekCallMs).arg(filePath)));
+    QTRY_VERIFY_WITH_TIMEOUT(qAbs(player.position() - finalSeekMs) < 250, 1000);
+    const qint64 finalPresentationMs = presentationTimer.elapsed();
+    QVERIFY2(viewport.rasterPresentationRevisionForTest() > revisionBeforeSeek,
+             "Async seek did not advance the raster presentation revision");
+    QVERIFY2(!viewport.currentRasterFrameForTest().isNull(), "Async seek did not present a raster frame");
+    qInfo().noquote() << QStringLiteral("Async seek worst call for %1: %2 ms, final frame in %3 ms")
+                         .arg(filePath)
+                         .arg(worstSeekCallMs)
+                         .arg(finalPresentationMs);
+}
+
+void TestPlayerLabPlaybackHarness::mp4StepBackwardUpdatesRasterFrame()
+{
+    const QString filePath = QStringLiteral("/mnt/ssd2/Tests/Videos/Ns Ethereal 1.mp4");
+    QVERIFY2(QFileInfo::exists(filePath), qPrintable(QStringLiteral("Required MP4 test file missing: %1").arg(filePath)));
+
+    PlayerLabPlayer player;
+    PlayerLabViewport viewport;
+    viewport.resize(1280, 720);
+    viewport.show();
+    viewport.setPlayer(&player);
+
+    QSignalSpy mediaSpy(&player, &PlayerLabPlayer::mediaInfoReady);
+    QSignalSpy errorSpy(&player, &PlayerLabPlayer::error);
+    QSignalSpy frameSpy(&player, &PlayerLabPlayer::currentFrameChanged);
     QVERIFY(mediaSpy.isValid());
     QVERIFY(errorSpy.isValid());
     QVERIFY(frameSpy.isValid());
@@ -557,20 +665,20 @@ void TestTLRenderPlaybackHarness::mp4StepBackwardUpdatesRasterFrame()
                             .arg(frameBeforeStep).arg(player.currentFrame())));
 }
 
-void TestTLRenderPlaybackHarness::mp4ReversePlaybackUpdatesRasterFrame()
+void TestPlayerLabPlaybackHarness::mp4ReversePlaybackUpdatesRasterFrame()
 {
     const QString filePath = QStringLiteral("/mnt/ssd2/Tests/Videos/Ns Ethereal 1.mp4");
     QVERIFY2(QFileInfo::exists(filePath), qPrintable(QStringLiteral("Required MP4 test file missing: %1").arg(filePath)));
 
-    TLRenderPlayer player;
-    TLRenderViewport viewport;
+    PlayerLabPlayer player;
+    PlayerLabViewport viewport;
     viewport.resize(1280, 720);
     viewport.show();
     viewport.setPlayer(&player);
 
-    QSignalSpy mediaSpy(&player, &TLRenderPlayer::mediaInfoReady);
-    QSignalSpy errorSpy(&player, &TLRenderPlayer::error);
-    QSignalSpy frameSpy(&player, &TLRenderPlayer::currentFrameChanged);
+    QSignalSpy mediaSpy(&player, &PlayerLabPlayer::mediaInfoReady);
+    QSignalSpy errorSpy(&player, &PlayerLabPlayer::error);
+    QSignalSpy frameSpy(&player, &PlayerLabPlayer::currentFrameChanged);
     QVERIFY(mediaSpy.isValid());
     QVERIFY(errorSpy.isValid());
     QVERIFY(frameSpy.isValid());
@@ -626,20 +734,20 @@ void TestTLRenderPlaybackHarness::mp4ReversePlaybackUpdatesRasterFrame()
                             .arg(frameBeforeReverse).arg(player.currentFrame())));
 }
 
-void TestTLRenderPlaybackHarness::mp4SeekToPreviousFrameUpdatesRasterFrame()
+void TestPlayerLabPlaybackHarness::mp4SeekToPreviousFrameUpdatesRasterFrame()
 {
     const QString filePath = QStringLiteral("/mnt/ssd2/Tests/Videos/Ns Ethereal 1.mp4");
     QVERIFY2(QFileInfo::exists(filePath), qPrintable(QStringLiteral("Required MP4 test file missing: %1").arg(filePath)));
 
-    TLRenderPlayer player;
-    TLRenderViewport viewport;
+    PlayerLabPlayer player;
+    PlayerLabViewport viewport;
     viewport.resize(1280, 720);
     viewport.show();
     viewport.setPlayer(&player);
 
-    QSignalSpy mediaSpy(&player, &TLRenderPlayer::mediaInfoReady);
-    QSignalSpy errorSpy(&player, &TLRenderPlayer::error);
-    QSignalSpy frameSpy(&player, &TLRenderPlayer::currentFrameChanged);
+    QSignalSpy mediaSpy(&player, &PlayerLabPlayer::mediaInfoReady);
+    QSignalSpy errorSpy(&player, &PlayerLabPlayer::error);
+    QSignalSpy frameSpy(&player, &PlayerLabPlayer::currentFrameChanged);
     QVERIFY(mediaSpy.isValid());
     QVERIFY(errorSpy.isValid());
     QVERIFY(frameSpy.isValid());
@@ -680,20 +788,20 @@ void TestTLRenderPlaybackHarness::mp4SeekToPreviousFrameUpdatesRasterFrame()
                             .arg(frameBeforeSeek).arg(player.currentFrame())));
 }
 
-void TestTLRenderPlaybackHarness::movStepBackwardUpdatesRasterFrame()
+void TestPlayerLabPlaybackHarness::movStepBackwardUpdatesRasterFrame()
 {
     const QString filePath = QStringLiteral("/mnt/ssd2/Tests/Videos/Cut1GRAPHICS.mov");
     QVERIFY2(QFileInfo::exists(filePath), qPrintable(QStringLiteral("Required MOV test file missing: %1").arg(filePath)));
 
-    TLRenderPlayer player;
-    TLRenderViewport viewport;
+    PlayerLabPlayer player;
+    PlayerLabViewport viewport;
     viewport.resize(1280, 720);
     viewport.show();
     viewport.setPlayer(&player);
 
-    QSignalSpy mediaSpy(&player, &TLRenderPlayer::mediaInfoReady);
-    QSignalSpy errorSpy(&player, &TLRenderPlayer::error);
-    QSignalSpy frameSpy(&player, &TLRenderPlayer::currentFrameChanged);
+    QSignalSpy mediaSpy(&player, &PlayerLabPlayer::mediaInfoReady);
+    QSignalSpy errorSpy(&player, &PlayerLabPlayer::error);
+    QSignalSpy frameSpy(&player, &PlayerLabPlayer::currentFrameChanged);
     QVERIFY(mediaSpy.isValid());
     QVERIFY(errorSpy.isValid());
     QVERIFY(frameSpy.isValid());
@@ -733,20 +841,20 @@ void TestTLRenderPlaybackHarness::movStepBackwardUpdatesRasterFrame()
                             .arg(frameBeforeStep).arg(player.currentFrame())));
 }
 
-void TestTLRenderPlaybackHarness::movReversePlaybackUpdatesRasterFrame()
+void TestPlayerLabPlaybackHarness::movReversePlaybackUpdatesRasterFrame()
 {
     const QString filePath = QStringLiteral("/mnt/ssd2/Tests/Videos/Cut1GRAPHICS.mov");
     QVERIFY2(QFileInfo::exists(filePath), qPrintable(QStringLiteral("Required MOV test file missing: %1").arg(filePath)));
 
-    TLRenderPlayer player;
-    TLRenderViewport viewport;
+    PlayerLabPlayer player;
+    PlayerLabViewport viewport;
     viewport.resize(1280, 720);
     viewport.show();
     viewport.setPlayer(&player);
 
-    QSignalSpy mediaSpy(&player, &TLRenderPlayer::mediaInfoReady);
-    QSignalSpy errorSpy(&player, &TLRenderPlayer::error);
-    QSignalSpy frameSpy(&player, &TLRenderPlayer::currentFrameChanged);
+    QSignalSpy mediaSpy(&player, &PlayerLabPlayer::mediaInfoReady);
+    QSignalSpy errorSpy(&player, &PlayerLabPlayer::error);
+    QSignalSpy frameSpy(&player, &PlayerLabPlayer::currentFrameChanged);
     QVERIFY(mediaSpy.isValid());
     QVERIFY(errorSpy.isValid());
     QVERIFY(frameSpy.isValid());
@@ -790,7 +898,7 @@ void TestTLRenderPlaybackHarness::movReversePlaybackUpdatesRasterFrame()
                             .arg(frameBeforeReverse).arg(player.currentFrame())));
 }
 
-void TestTLRenderPlaybackHarness::allMovFilesStepBackwardAndReverse()
+void TestPlayerLabPlaybackHarness::allMovFilesStepBackwardAndReverse()
 {
     const QStringList files = {
         QStringLiteral("/mnt/ssd2/Tests/Videos/Atmosphere-019.mov"),
@@ -803,11 +911,11 @@ void TestTLRenderPlaybackHarness::allMovFilesStepBackwardAndReverse()
     for (const QString& filePath : files) {
         QVERIFY2(QFileInfo::exists(filePath), qPrintable(QStringLiteral("Required MOV test file missing: %1").arg(filePath)));
 
-        TLRenderPlayer player;
-        TLRenderViewport viewport;
-        QSignalSpy mediaSpy(&player, &TLRenderPlayer::mediaInfoReady);
-        QSignalSpy errorSpy(&player, &TLRenderPlayer::error);
-        QSignalSpy frameSpy(&player, &TLRenderPlayer::currentFrameChanged);
+        PlayerLabPlayer player;
+        PlayerLabViewport viewport;
+        QSignalSpy mediaSpy(&player, &PlayerLabPlayer::mediaInfoReady);
+        QSignalSpy errorSpy(&player, &PlayerLabPlayer::error);
+        QSignalSpy frameSpy(&player, &PlayerLabPlayer::currentFrameChanged);
         QString loadError;
 
         QVERIFY2(loadPlayerAndViewport(filePath, &player, &viewport, &mediaSpy, &errorSpy, &frameSpy, &loadError),
@@ -856,5 +964,5 @@ void TestTLRenderPlaybackHarness::allMovFilesStepBackwardAndReverse()
     }
 }
 
-QTEST_MAIN(TestTLRenderPlaybackHarness)
-#include "test_tlrender_playback_harness.moc"
+QTEST_MAIN(TestPlayerLabPlaybackHarness)
+#include "test_player_lab_playback_harness.moc"

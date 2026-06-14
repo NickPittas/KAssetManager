@@ -21,6 +21,7 @@ public:
     void setSequenceDetectionEnabled(bool enabled);
     bool sequenceDetectionEnabled() const { return m_sequenceDetectionEnabled; }
 
+    static bool isMediaFile(const QString& path);
     bool importPaths(const QStringList& paths);
     bool importFile(const QString& filePath, int parentFolderId = 0);
     bool importFolder(const QString& dirPath, int parentFolderId = 0);
@@ -48,7 +49,6 @@ signals:
     void importFinished();
 
 private:
-    static bool isMediaFile(const QString& path);
     IAssetDatabase& m_db; // Reference to the database (either DB or ProjectDB)
     bool m_sequenceDetectionEnabled = true;
 };

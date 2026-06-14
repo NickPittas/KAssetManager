@@ -81,8 +81,13 @@ endif()
 
 if(BUILD_APP)
 
+
 find_package(QT NAMES Qt6 REQUIRED COMPONENTS Widgets Multimedia MultimediaWidgets Sql Concurrent Svg SvgWidgets OpenGL OpenGLWidgets Quick QuickWidgets DBus)
 find_package(Qt6 REQUIRED COMPONENTS Widgets Multimedia MultimediaWidgets Sql Concurrent Svg SvgWidgets OpenGL OpenGLWidgets Quick QuickWidgets DBus)
+
+# --- FFmpeg via pkg-config (for player_lab GPU decoder) ---
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET libavcodec libavformat libavutil libswscale libswresample)
 # Optional: Qt PDF (viewer) if available
 find_package(Qt6 QUIET COMPONENTS Pdf PdfWidgets)
 # ActiveQt (QAxObject) for Office-to-PDF conversion on Windows (optional)
@@ -254,8 +259,14 @@ qt_add_executable(kassetmanagerqt WIN32
     src/assets_table_model.h
     src/importer.h
     src/importer.cpp
+    src/import_controller.h
+    src/import_controller.cpp
+    src/db_worker.h
+    src/db_worker.cpp
     src/live_preview_manager.h
     src/live_preview_manager.cpp
+    src/media_async_request.h
+    src/media_async_request.cpp
     src/log_manager.h
     src/log_manager.cpp
     src/progress_manager.h
@@ -341,23 +352,22 @@ qt_add_executable(kassetmanagerqt WIN32
     src/thumbnail_generator_dialog.cpp
     src/thumbnail_generator_worker.h
     src/thumbnail_generator_worker.cpp
-    # tlRender integration - professional video/sequence playback
+    # Wayland video playback
     src/media/media_player_types.h
-    src/media/libmpv_headers.h
-    src/media/libmpv_runtime.h
-    src/media/libmpv_runtime.cpp
-    src/media/mpv_player.h
-    src/media/mpv_player.cpp
-    src/media/mpv_viewport.h
-    src/media/mpv_viewport.cpp
     src/media/ffmpeg_mov_player.h
     src/media/ffmpeg_mov_player.cpp
-    src/media/ffmpeg_mov_viewport.h
-    src/media/ffmpeg_mov_viewport.cpp
-    src/media/tlrender_player.h
-    src/media/tlrender_player.cpp
-    src/media/tlrender_viewport.h
-    src/media/tlrender_viewport.cpp
+    src/media/player_lab_player.h
+    src/media/player_lab_player.cpp
+    src/media/player_lab_viewport.h
+    src/media/player_lab_viewport.cpp
+    # player_lab GPU playback stack (validated standalone)
+    player_lab/player_types.h
+    player_lab/ffmpeg_gpu_decoder.h
+    player_lab/ffmpeg_gpu_decoder.cpp
+    player_lab/gpu_player.h
+    player_lab/gpu_player.cpp
+    player_lab/gpu_player_widget.h
+    player_lab/gpu_player_widget.cpp
     src/theme_manager.h
     src/theme_manager.cpp
     src/annotation_items.h
@@ -375,6 +385,7 @@ target_compile_definitions(kassetmanagerqt PRIVATE
 
 target_include_directories(kassetmanagerqt PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/player_lab
 )
 
 # Add tlRender include directories
@@ -468,6 +479,21 @@ target_link_libraries(kassetmanagerqt PRIVATE
     Qt6::Quick
     Qt6::QuickWidgets
 )
+
+target_link_libraries(kassetmanagerqt PRIVATE PkgConfig::FFMPEG)
+
+# PlayerLab H.264 playback requires the system FFmpeg build because it exposes
+# NVIDIA CUVID/NVDEC decoders (for example h264_cuvid). tlRender's bundled
+# FFmpeg shares the same SONAMEs but is built without those decoders; if its
+# library directory appears first in RUNPATH, the real app silently falls back
+# to 4K software H.264 decode and plays MKV at ~8-11 fps. Keep tlRender's path
+# available for its other bundled libraries, but prefer the FFmpeg libdir found
+# by pkg-config for FFmpeg SONAME resolution.
+if(FFMPEG_LIBRARY_DIRS)
+    list(GET FFMPEG_LIBRARY_DIRS 0 _playerlab_ffmpeg_libdir)
+    set_property(TARGET kassetmanagerqt APPEND PROPERTY BUILD_RPATH "${_playerlab_ffmpeg_libdir}")
+    set_property(TARGET kassetmanagerqt APPEND PROPERTY INSTALL_RPATH "${_playerlab_ffmpeg_libdir}")
+endif()
 # Link Qt PDF if available (widgets optional)
 if (TARGET Qt6::Pdf)
   target_link_libraries(kassetmanagerqt PRIVATE Qt6::Pdf)

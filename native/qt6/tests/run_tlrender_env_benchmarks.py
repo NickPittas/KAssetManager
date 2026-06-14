@@ -14,7 +14,7 @@ from pathlib import Path
 
 DEFAULT_VIDEO_DIR = Path("/mnt/ssd2/Tests/Videos")
 DEFAULT_HARNESS = Path(
-    "build-linux-recovery-native-qt6/tests/test_tlrender_playback_harness"
+    "build-linux-recovery-native-qt6/tests/test_player_lab_playback_harness"
 )
 FPS_TOLERANCE = 0.6
 
@@ -38,7 +38,7 @@ class BenchmarkRow:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Run test_tlrender_playback_harness benchmarkEnvFile for each video in a directory."
+        description="Run test_player_lab_playback_harness benchmarkEnvFile for each video in a directory."
     )
     parser.add_argument(
         "--video-dir",
@@ -48,7 +48,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--harness",
         default=str(DEFAULT_HARNESS),
-        help=f"Path to test_tlrender_playback_harness (default: {DEFAULT_HARNESS})",
+        help=f"Path to test_player_lab_playback_harness (default: {DEFAULT_HARNESS})",
     )
     parser.add_argument(
         "--tolerance",

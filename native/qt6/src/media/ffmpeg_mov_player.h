@@ -45,6 +45,7 @@ public:
     void pause();
     void stop();
     void seek(qint64 positionMs);
+    void seekAsync(qint64 positionMs);
     void seekToFrame(qint64 frameNumber);
     void stepForward();
     void stepBackward();
@@ -121,7 +122,7 @@ private:
     int decodeQueueCapacity() const;
     void resetPlaybackClock();
     bool fallbackToSoftwareDecoding(qint64 restartPositionMs, quint64 generation, bool satisfySeek, QString* errorString = nullptr);
-    bool ensureConversionContext(AVFrame* frame);
+    bool ensureConversionContext(AVFrame* frame, const QSize& outputSize);
     void postReverseSeek();
     void postReverseSeekIfNeeded();
     qint64 timestampToMs(int64_t pts) const;
@@ -174,6 +175,8 @@ private:
     int m_swsSourceFormat{-1};
     int m_swsWidth{0};
     int m_swsHeight{0};
+    int m_swsOutputWidth{0};
+    int m_swsOutputHeight{0};
     int64_t m_lastPresentedPts{-1};
     bool m_hardwareDecodingActive{false};
 
@@ -193,6 +196,8 @@ private:
     qint64 m_pendingSeekMs{0};
     int64_t m_pendingSeekTs{0};
     bool m_pendingSeekPreferPreviousFrame{false};
+    bool m_pendingSeekAsync{false};
+    bool m_pendingSeekResumePlayback{false};
     quint64 m_decodeGeneration{0};
     QString m_pendingDecodeError;
 };
