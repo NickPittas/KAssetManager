@@ -360,26 +360,54 @@ QIcon getFileTypeIcon(const QString &ext, const QColor& color) {
 
 // Icon providers
 
-// Cached standard icons - standardIcon() is expensive (shell calls on Windows)
+// Cached provider icons. Do not depend on the platform icon theme here:
+// AppImages often run without the host theme paths that QStyle's standard
+// icons resolve through, which leaves QFileSystemModel tree/list icons blank.
 namespace {
     static QIcon& cachedDirIcon() {
         static QIcon icon;
-        if (icon.isNull()) icon = QApplication::style()->standardIcon(QStyle::SP_DirIcon);
+        if (icon.isNull()) {
+            icon = mkIcon([](QPainter& p, const QRectF& r) {
+                QPainterPath folder;
+                folder.moveTo(r.x() + 2, r.y() + 9);
+                folder.lineTo(r.x() + 10, r.y() + 9);
+                folder.lineTo(r.x() + 13, r.y() + 12);
+                folder.lineTo(r.right() - 2, r.y() + 12);
+                folder.lineTo(r.right() - 2, r.bottom() - 3);
+                folder.lineTo(r.x() + 2, r.bottom() - 3);
+                folder.closeSubpath();
+                p.drawPath(folder);
+            }, QColor(235, 190, 80));
+        }
         return icon;
     }
     static QIcon& cachedDriveIcon() {
         static QIcon icon;
-        if (icon.isNull()) icon = QApplication::style()->standardIcon(QStyle::SP_DriveHDIcon);
+        if (icon.isNull()) {
+            icon = mkIcon([](QPainter& p, const QRectF& r) {
+                QRectF body(r.x() + 3, r.y() + 9, r.width() - 6, r.height() - 10);
+                p.drawRoundedRect(body, 2, 2);
+                p.drawLine(body.left() + 3, body.bottom() - 6, body.right() - 3, body.bottom() - 6);
+                p.drawEllipse(QPointF(body.right() - 6, body.bottom() - 3), 1.5, 1.5);
+            }, QColor(180, 190, 205));
+        }
         return icon;
     }
     static QIcon& cachedComputerIcon() {
         static QIcon icon;
-        if (icon.isNull()) icon = QApplication::style()->standardIcon(QStyle::SP_ComputerIcon);
+        if (icon.isNull()) {
+            icon = mkIcon([](QPainter& p, const QRectF& r) {
+                QRectF screen(r.x() + 3, r.y() + 5, r.width() - 6, r.height() - 10);
+                p.drawRoundedRect(screen, 2, 2);
+                p.drawLine(r.center().x(), screen.bottom(), r.center().x(), r.bottom() - 2);
+                p.drawLine(r.x() + 9, r.bottom() - 2, r.right() - 9, r.bottom() - 2);
+            }, QColor(180, 190, 205));
+        }
         return icon;
     }
     static QIcon& cachedFileIcon() {
         static QIcon icon;
-        if (icon.isNull()) icon = QApplication::style()->standardIcon(QStyle::SP_FileIcon);
+        if (icon.isNull()) icon = icoFileGeneric();
         return icon;
     }
 }

@@ -242,6 +242,7 @@ private:
     void clearAssetInfoVideoMetadata();
     void clearFmInfoVideoMetadata();
     void fmNavigateToPath(const QString& path, bool addToHistory = true);
+    void navigateActiveFmPaneToPath(const QString& path, bool addToHistory = true);
     void fmUpdateNavigationButtons();
     void fmScrollTreeToPath(const QString& path);
     void amUpdateNavigationButtons();

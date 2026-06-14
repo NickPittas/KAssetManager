@@ -4,12 +4,12 @@ This guide documents the complete process for creating a working AppImage of KAs
 
 ## Overview
 
-AppImage packaging bundles the application with its dependencies into a single executable file that runs on most Linux distributions. The current Fedora 43 KDE Wayland baseline has working video playback, timeline scrubbing, hover scrubbing, thumbnails, and live Wayland/tlRender raster video color matching VLC/ffmpeg thumbnails after corrected YUV chroma scaling. AppImage video thumbnails use external `/usr/bin/ffmpeg` extraction for robust process isolation. The process involves:
+AppImage packaging stages the application into an AppDir, bundles app/Qt runtime pieces, and emits a single executable. The current Fedora KDE/Wayland baseline has working video playback, timeline scrubbing, hover scrubbing, thumbnails, dual-pane File Manager state, and built-in tree/list folder icons that do not depend on the host icon theme. The process involves:
 
-1. Building the application with proper CMake configuration
-2. Installing to a staging directory (AppDir)
-3. Using linuxdeploy or AppImage tools to bundle dependencies
-4. Creating the final AppImage
+1. Building the application with the AppImage CMake settings
+2. Installing to `build-linux-appimage/AppDir/usr`
+3. Copying Qt runtime libraries/plugins through the controlled `qtpaths` path, or using linuxdeploy only when explicitly requested and validated
+4. Creating the final AppImage with `appimagetool`
 
 ## Prerequisites
 
@@ -23,19 +23,16 @@ AppImage packaging bundles the application with its dependencies into a single e
 
 ### Optional Tools
 
-- **linuxdeploy** (for automatic dependency bundling)
-- **linuxdeploy-plugin-qt** (for Qt-specific bundling)
+- **linuxdeploy** and **linuxdeploy-plugin-qt** are supported by the script, but the controlled `qtpaths` packaging path is preferred on the current Fedora baseline. Broad linuxdeploy dependency sweeps can bundle low-level system-coupled libraries and produce an AppImage that crashes before `main`.
 
 You can find these tools in your package manager or download official AppImage versions:
 
 ```bash
-# Download official AppImage tools to project-local directory
+# Download appimagetool to a project-local ignored directory
 mkdir -p tools/appimage
 cd tools/appimage
 curl -L -o appimagetool-x86_64.AppImage https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
-curl -L -o linuxdeploy-x86_64.AppImage https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
-curl -L -o linuxdeploy-plugin-qt-x86_64.AppImage https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
-chmod +x *.AppImage
+chmod +x appimagetool-x86_64.AppImage
 cd ../..
 ```
 
@@ -46,102 +43,63 @@ cd ../..
 **Critical**: Always start with a clean build directory. Stale CMake caches can cause issues with incorrect paths (e.g., FFmpeg pointing to non-existent `.worktrees/` directories).
 
 ```bash
-# Remove old build artifacts
-rm -rf /home/npittas/KAssetManager/build-linux-appimage
-mkdir -p /home/npittas/KAssetManager/build-linux-appimage
+rm -rf build-linux-appimage
 ```
 
-### Step 2: Configure with CMake
+### Step 2: Build and Install to AppDir
 
-**Important Flags**:
-- `-DCMAKE_INSTALL_LIBDIR=lib`: Fedora defaults to `lib64`, but tlRender installs libraries to `lib/`. This mismatch causes segfaults because the binary's RUNPATH (`$ORIGIN/../lib64`) points to a non-existent directory.
-- `-DCMAKE_PREFIX_PATH`: Point to the tlRender installation directory
-- `-DCMAKE_BUILD_TYPE=Release`: Create optimized release build
+`scripts/build-linux-appimage.sh` configures, builds, and installs the release application into the AppDir staging tree. It sets the important AppImage flags, including `CMAKE_INSTALL_LIBDIR=lib`, so Fedora's `lib64` default does not break the package RUNPATH.
 
 ```bash
-cd /home/npittas/KAssetManager
-
-cmake -S native/qt6 -B build-linux-appimage -G Ninja \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DBUILD_APP=ON \
-  -DBUILD_TESTS=OFF \
-  -DCMAKE_INSTALL_LIBDIR=lib \
-  -DCMAKE_PREFIX_PATH="/home/npittas/KAssetManager/third_party/tlRender-install-Release"
+scripts/build-linux-appimage.sh
 ```
 
-### Step 3: Build the Application
-
-```bash
-ninja -j$(nproc) -C /home/npittas/KAssetManager/build-linux-appimage
-```
-
-This creates the executable at `build-linux-appimage/kassetmanagerqt`
-
-### Step 4: Install to AppDir
-
-The build helper installs directly into the AppDir staging tree. The installed executable receives the package-layout `qt.conf` automatically; do not place that file beside the build-tree executable used for local development runs.
-
-```bash
-cmake --install /home/npittas/KAssetManager/build-linux-appimage \
-  --prefix /home/npittas/KAssetManager/build-linux-appimage/AppDir/usr
-```
-
-This creates the AppDir structure:
+Expected AppDir structure:
 - `AppDir/usr/bin/kassetmanagerqt` (main executable)
-- `AppDir/usr/lib/` (libraries)
+- `AppDir/usr/lib/` (app/Qt runtime libraries)
 - `AppDir/usr/plugins/` (Qt plugins)
-- `AppDir/usr/qml/` (Qt QML files, if needed)
+- `AppDir/usr/qml/` (Qt QML files, if copied)
 
-### Step 5: Create the AppImage
+### Step 3: Create the AppImage
 
-There are two approaches:
-
-#### Option A: Using linuxdeploy (Recommended, if it works)
+Preferred Fedora baseline path:
 
 ```bash
-cd /home/npittas/KAssetManager
-
-export APPIMAGETOOL="$PWD/tools/appimage/appimagetool-x86_64.AppImage"
-export LINUXDEPLOY="$PWD/tools/appimage/linuxdeploy-x86_64.AppImage"
-export LINUXDEPLOY_PLUGIN_QT="$PWD/tools/appimage/linuxdeploy-plugin-qt-x86_64.AppImage"
-export NO_STRIP=1  # Fedora 43 uses newer ELF format
-
-bash scripts/package-appimage.sh
+APPIMAGETOOL=tools/appimage/appimagetool-x86_64.AppImage \
+  scripts/package-appimage.sh
 ```
 
-**Known Issues with linuxdeploy**:
-- May fail with "Failed to run plugin: qt (exit code: 1)"
-- Sometimes has issues with `qmake -query`
+This path uses `qtpaths` to copy Qt runtime libraries and plugins into the AppDir, then invokes `appimagetool`.
 
-#### Option B: Using qtpaths fallback (More reliable)
+#### linuxdeploy path
 
-If linuxdeploy fails, use the fallback method that copies Qt plugins using `qtpaths`:
+The script still supports linuxdeploy when both variables are set:
 
 ```bash
-cd /home/npittas/KAssetManager
-
-export APPIMAGETOOL="$PWD/tools/appimage/appimagetool-x86_64.AppImage"
-export LINUXDEPLOY=""  # Disable linuxdeploy
-export LINUXDEPLOY_PLUGIN_QT=""  # Disable plugin
-export NO_STRIP=1  # Avoid ELF format issues
-
-bash scripts/package-appimage.sh
+LINUXDEPLOY=tools/appimage/linuxdeploy-x86_64.AppImage \
+LINUXDEPLOY_PLUGIN_QT=tools/appimage/linuxdeploy-plugin-qt-x86_64.AppImage \
+APPIMAGETOOL=tools/appimage/appimagetool-x86_64.AppImage \
+  scripts/package-appimage.sh
 ```
 
-### Step 6: Verify the AppImage
+Validate linuxdeploy-built artifacts carefully. On the current Fedora baseline, linuxdeploy over-bundled low-level system libraries during testing and the resulting AppImage segfaulted before `main`.
+
+### Step 4: Verify the AppImage
 
 ```bash
-# Extract and test (doesn't require display)
-cd /tmp
-rm -rf appimage-test &>/dev/null
-/home/npittas/KAssetManager/KAssetManager-2.0-x86_64.AppImage --appimage-extract
-
-# Test with offscreen platform (no display needed)
-cd squashfs-root/usr/bin
-QT_QPA_PLATFORM=offscreen timeout 5 ./kassetmanagerqt 2>&1
-
-# Should print Qt messages and exit with code 124 (timeout), NOT 139 (segfault)
+timeout 8 ./KAssetManager-2.0-x86_64.AppImage
 ```
+
+Expected result: exit code `124` from `timeout`, which means the GUI stayed alive until killed. An immediate `139` exit means a launch crash.
+
+Check staged dependency closure:
+
+```bash
+LD_LIBRARY_PATH=build-linux-appimage/AppDir/usr/lib \
+  ldd build-linux-appimage/AppDir/usr/bin/kassetmanagerqt
+```
+
+Expected result: no `not found` entries.
 
 ## Troubleshooting
 
@@ -149,11 +107,11 @@ QT_QPA_PLATFORM=offscreen timeout 5 ./kassetmanagerqt 2>&1
 
 | Symptom | Cause | Fix |
 |--------|-------|-----|
-| **Segfault (Exit 139)** | RUNPATH points to `lib64` but libraries in `lib/` | Add `-DCMAKE_INSTALL_LIBDIR=lib` to cmake |
+| **Segfault (Exit 139) immediately on launch** | Incompatible bundled low-level system library or bad RUNPATH | Rebuild from a clean AppDir with the controlled `qtpaths` packaging path and verify no `not found` entries |
 | **"file INSTALL cannot find qt.conf"** | Outdated build files from older CMake packaging logic | Reconfigure with the current branch and rerun `scripts/build-linux-appimage.sh` |
-| **linuxdeploy-plugin-qt: "Failed to run plugin"** | linuxdeploy can't query qmake | Set `LINUXDEPLOY=""` to use fallback |
-| **Incompatible library versions bundled** | Multiple FFmpeg versions (.61, .62, .59) | Remove duplicates before packaging |
-| **Stales CMake cache** | FFmpeg_CFLAGS points to `.worktrees/` | Wipe build directory and reconfigure |
+| **linuxdeploy-plugin-qt: "Failed to run plugin"** | linuxdeploy cannot query qmake or deploy a plugin | Use the default `qtpaths` path by omitting `LINUXDEPLOY` and `LINUXDEPLOY_PLUGIN_QT` |
+| **Missing folder/tree/list icons in AppImage** | Runtime depended on host icon theme | Current `icon_utils.cpp` uses generated fallback provider icons; rebuild the app/AppImage |
+| **Stale CMake cache** | Build tree points to old absolute worktree paths | Wipe build directory and reconfigure |
 
 ### Critical Details
 
@@ -174,7 +132,7 @@ If you see `a-*.d` files in the root:
 
 #### Using NO_STRIP=1
 
-Fedora 43 uses a newer ELF format with `.relr.dyn` sections that older `strip` tools don't recognize. This causes linuxdeploy to fail when trying to strip libraries. Setting `NO_STRIP=1` skips the stripping step.
+Fedora uses ELF sections that older strip tools may not recognize. The package script defaults `NO_STRIP=1` for linuxdeploy runs. The controlled `qtpaths` path does not rely on linuxdeploy stripping.
 
 ## Scripts Reference
 
@@ -188,17 +146,17 @@ Handles CMake configuration and build. Key features:
 ### Package Script (`scripts/package-appimage.sh`)
 
 Handles AppImage creation with:
-- linuxdeploy support (if available)
-- qtpaths fallback (if linuxdeploy fails)
-- Proper environment setup
-- AppImage generation
+- AppRun, desktop, and icon metadata generation
+- Qt runtime library/plugin copying via `qtpaths`
+- optional linuxdeploy support when explicitly configured
+- AppImage generation through `appimagetool`
 
 ## Final AppImage Location
 
 After successful build:
-- **Main AppImage**: `/home/npittas/KAssetManager/KAssetManager-2.0-x86_64.AppImage`
+- **Main AppImage**: `KAssetManager-2.0-x86_64.AppImage` in the repository root
 
-This file is ready to distribute and run on most Linux distributions.
+The AppImage should be treated as a generated artifact, not committed source.
 
 ## Testing on Target Systems
 

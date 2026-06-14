@@ -1,61 +1,70 @@
-# linux-port-fedora43-wt/
+# KAssetManager repository codemap
 
-<!-- Explorer: Fill in this section with architectural understanding -->
+This codemap is a current navigation snapshot for maintainers. It is not a substitute for reading the live source path before changing behavior.
 
-## Responsibility
+## Root
 
-<!-- What is this folder's job in the system? -->
+- `README.md` — current product overview, build/package quickstart, cleanup policy.
+- `AGENTS.md` — repository workflow rules for agent-assisted work.
+- `CMakeLists.txt` / `native/qt6/CMakeLists.txt` — native Qt build entry points.
+- `scripts/` — packaging/build automation.
+- `docs/` — user, install, architecture, dependency, and AppImage documentation.
+- `third_party/` — checked-in third-party payloads used by local builds. Some package config files are intentionally relocatable so this checkout does not depend on old absolute worktree paths.
 
-## Design
+## Application source: `native/qt6/src/`
 
-<!-- Key patterns, abstractions, architectural decisions -->
+### Main window and UI orchestration
 
-## Flow
+- `mainwindow.h/.cpp` owns the primary application window and most cross-panel wiring.
+- File Manager responsibilities inside `MainWindow` include tree/favorites/path-bar routing, active-pane state, dual-pane creation, splitter persistence, preview/player teardown, and toolbar synchronization.
+- Current dual-pane behavior: tree selection, tree activation, favorites activation, path-bar entry, and folder double-click navigation call `navigateActiveFmPaneToPath(...)`, so navigation targets the active explorer pane.
 
-<!-- How does data/control flow through this module? -->
+### File Manager panes and scrubbing
 
-## Integration
+- `file_manager_pane.h/.cpp` encapsulates each explorer pane: path, view mode, selection, preview sizing, embedded preview/player widgets, and event filters.
+- `grid_scrub.h/.cpp` implements Ctrl-hover grid scrubbing. It ignores synthetic cursor-warp mouse moves, avoids duplicate requests per move, and exposes cleanup through `endScrub()`.
+- `live_preview_manager.h/.cpp` provides frame requests and preview decode management. Scrub requests can bypass global preview suspension so hover scrubbing remains responsive.
+- `icon_utils.h/.cpp` provides generated vector icons and `KFileIconProvider`. Provider icons are cached internally and do not depend on platform icon themes, which keeps folder/tree/list icons visible in AppImages.
 
-<!-- How does it connect to other parts of the system? -->
-# Repository Atlas: KAssetManager (linux-port-fedora43-wt)
+### Preview/playback
 
-## Project Responsibility
-Qt 6 / C++20 desktop asset manager with three major shells inside one application:
-- Asset Manager for the indexed library
-- File Manager for direct filesystem browsing
-- Project Manager for watch-folder based project ingest
+- `preview_overlay.*`, `live_preview_manager.*`, and `thumbnail_generator_worker.*` handle image/video preview surfaces, thumbnails, and async decode requests.
+- `player_lab/` contains the GPU/FFmpeg player implementation and validation harnesses used by the main app integration.
+- Exit teardown in `MainWindow::~MainWindow()` disconnects/block-signals from player objects, detaches video widgets, unloads media while UI objects are still valid, and deletes the secondary pane deterministically.
 
-This worktree contains branch-specific Linux/Wayland preview behavior and must be treated as the source of truth for current playback and annotation work.
+### Data and models
 
-## Entry Points
-- `native/qt6/src/main.cpp`: process startup, Qt application attributes, Wayland/OpenGL toggles, database initialization, main window creation
-- `native/qt6/src/mainwindow.cpp`: top-level UI orchestration for Asset Manager, File Manager, Project Manager, overlay launching, and preview routing
-- `native/qt6/CMakeLists.txt`: authoritative build wiring for app, tlRender integration, Qt modules, and platform dependency discovery
+- `db*`, `database_worker.*`, and `project_db.*` provide SQLite access and async worker paths.
+- `assets_model.*`, `project_assets_model.*`, `virtual_folders.*`, `tags_model.*`, and project model files back the asset library and project views.
+- `importer.*`, `import_controller.*`, `project_import_worker.*`, and watcher files handle import/project-folder workflows.
 
-## Branch-Specific Verified Findings
-- Wayland raster preview fallback is enabled unconditionally by `PlatformSession::shouldUseRasterPreviewFallbackOnWayland()` returning `isWayland()`.
-- `PreviewOverlay` video annotation in this worktree uses a transparent `annotationOverlayView` over the active video widget, not the still-image `imageScene` path described in the older checkout.
-- `TLRenderViewport` has two rendering paths:
-  - native `tl::qtwidget::Viewport`
-  - Wayland raster fallback via `QLabel` fed by `TLRenderPlayer::getCurrentFrame()`
+### Runtime helpers
 
-## Directory Map
-| Directory | Responsibility | Detailed Map |
-|-----------|----------------|--------------|
-| `native/qt6/` | Qt application build, dependency wiring, and test target definitions. | `native/qt6/codemap.md` |
-| `native/qt6/src/` | Main application code: window shell, models, preview overlays, importers, DB access, file operations. | `native/qt6/src/codemap.md` |
-| `native/qt6/src/media/` | tlRender player, viewport wrappers, OpenGL widget, and preview rendering integration. | `native/qt6/src/media/codemap.md` |
-| `scripts/` | Windows build and packaging automation. | `scripts/codemap.md` |
+- `runtime_paths.*` resolves app data and runtime paths.
+- `theme_manager.*`, `settings_dialog.*`, `user_guide_dialog.*`, and UI helper files provide supporting dialogs and styling.
 
-## Preview / Annotation Flow
-1. `MainWindow` selects an asset and opens `PreviewOverlay`.
-2. `PreviewOverlay::showVideo()` ensures `TLRenderPlayer` and `TLRenderViewport` exist, loads media, and starts playback.
-3. On Wayland, `TLRenderViewport` uses raster fallback and paints a `QLabel` pixmap from `TLRenderPlayer::getCurrentFrame()`.
-4. When annotation mode is enabled for video, `PreviewOverlay` keeps the live video widget visible and layers `annotationOverlayView` above it.
-5. Annotation input is converted from overlay view coordinates to scene coordinates in `PreviewOverlay::eventFilter()` and forwarded into `AnnotationLayer`.
+## Packaging and generated outputs
 
-## Verification Scope
-This atlas was rebuilt from the active worktree under:
-`/home/npittas/KAssetManager/.worktrees/linux-port-fedora43-wt`
+### Linux AppImage
 
-Older codemap files from the main checkout should be treated as background context only.
+- `scripts/build-linux-appimage.sh` configures/builds/installs the Qt app into `build-linux-appimage/AppDir/usr` with `CMAKE_INSTALL_LIBDIR=lib`.
+- `scripts/package-appimage.sh` creates `AppRun`, copies desktop/icon metadata, harvests Qt plugins and Qt runtime libraries via `qtpaths` when linuxdeploy is not explicitly configured, and invokes `appimagetool`.
+- The controlled `qtpaths` path is preferred on the current Fedora baseline. Broad linuxdeploy dependency sweeps can over-bundle low-level host libraries and produce an AppImage that crashes before `main`.
+- Generated outputs: `build-linux-appimage/`, `KAssetManager-*.AppImage`, and local downloaded tools under `tools/appimage/`. These are ignored and reproducible.
+
+### Local build trees
+
+- `native/qt6/build/`, `native/qt6/build-integration/`, `build-test/`, and player-lab build folders are generated CMake build outputs and safe to remove when cleaning.
+
+## Documentation map
+
+- `docs/USER_GUIDE.md` — user-facing workflow guide.
+- `docs/INSTALL.md` — install/setup details.
+- `docs/APPIMAGE_CREATION.md` — Linux package creation and verification workflow.
+- `docs/ARCHITECTURE.md` — architecture and threading/I/O notes.
+- `docs/DEPENDENCIES.md` — dependency inventory and security notes.
+- `docs/CODEMAP.md` and nested folder codemaps may exist as older snapshots; verify against live files before relying on them.
+
+## Cleanup policy
+
+Remove or leave untracked generated artifacts: AppImages, AppDir/build trees, `scratch/`, `graphify-out/`, recorder sessions/logs, validation screenshots, temporary thumbnails, and downloaded local tool binaries. Keep source, documentation, scripts, and intentional relocatable third-party package metadata.

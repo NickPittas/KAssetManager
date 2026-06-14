@@ -3,7 +3,7 @@
 ## Copyright Contributors to the OpenEXR Project.
 ##
 
-prefix=/home/npittas/KAssetManager/.worktrees/linux-port-fedora43-wt/third_party/tlRender-install-Release
+prefix=${pcfiledir}/../..
 exec_prefix=${prefix}
 libdir=${exec_prefix}/lib64
 includedir=${prefix}/include

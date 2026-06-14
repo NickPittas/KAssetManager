@@ -1727,7 +1727,7 @@ void MainWindow::setupFileManagerUi()
             return;
         }
 
-        fmNavigateToPath(result.normalizedPath, true);
+        navigateActiveFmPaneToPath(result.normalizedPath, true);
     });
     rightLayout->addWidget(fmPathBar);
 
@@ -2612,12 +2612,7 @@ void MainWindow::onFmTreeCurrentChanged(const QModelIndex &current, const QModel
                 fmPendingNavigationPath.clear();
                 
                 fmSuppressTreeSync = true;
-                // Navigate the active pane (primary or secondary)
-                if (fmSecondaryPane && fmSecondaryPane->isVisible() && !fmPrimaryPaneActive) {
-                    fmSecondaryPane->navigateToPath(path, true);
-                } else {
-                    fmNavigateToPath(path, true);
-                }
+                navigateActiveFmPaneToPath(path, true);
                 fmSuppressTreeSync = false;
             }
         });
@@ -2638,7 +2633,7 @@ void MainWindow::onFmTreeActivated(const QModelIndex &index)
     }
 
     fmSuppressTreeSync = true;
-    fmNavigateToPath(path, true);
+    navigateActiveFmPaneToPath(path, true);
     fmSuppressTreeSync = false;
 }
 
@@ -2702,7 +2697,7 @@ void MainWindow::onFmItemDoubleClicked(const QModelIndex &index)
 
     QFileInfo fi(path);
     if (fi.isDir()) {
-        fmNavigateToPath(path, true);
+        navigateActiveFmPaneToPath(path, true);
         return;
     }
 
@@ -3120,7 +3115,7 @@ void MainWindow::onFmFavoriteActivated(QListWidgetItem* item)
     if (!item) return;
     QString path = item->data(Qt::UserRole).toString();
     if (path.isEmpty()) return;
-    fmNavigateToPath(path, true);
+    navigateActiveFmPaneToPath(path, true);
 }
 
 void MainWindow::loadFmFavorites()
@@ -3953,6 +3948,17 @@ void MainWindow::setActiveFmPane(bool primary)
 bool MainWindow::isSecondaryFmPaneActive() const
 {
     return fmSecondaryPane && fmSecondaryPane->isVisible() && !fmPrimaryPaneActive;
+}
+
+void MainWindow::navigateActiveFmPaneToPath(const QString& path, bool addToHistory)
+{
+    if (isSecondaryFmPaneActive()) {
+        fmSecondaryPane->navigateToPath(path, addToHistory);
+        syncFmToolbarFromActivePane();
+        return;
+    }
+
+    fmNavigateToPath(path, addToHistory);
 }
 
 QStringList MainWindow::selectedPathsForActiveFmPane() const

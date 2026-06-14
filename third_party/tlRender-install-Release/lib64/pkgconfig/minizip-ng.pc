@@ -1,8 +1,8 @@
-prefix=/home/npittas/KAssetManager/.worktrees/linux-port-fedora43-wt/third_party/tlRender-install-Release
-exec_prefix=/home/npittas/KAssetManager/.worktrees/linux-port-fedora43-wt/third_party/tlRender-install-Release
-libdir=/home/npittas/KAssetManager/.worktrees/linux-port-fedora43-wt/third_party/tlRender-install-Release/lib64
-sharedlibdir=/home/npittas/KAssetManager/.worktrees/linux-port-fedora43-wt/third_party/tlRender-install-Release/lib64
-includedir=/home/npittas/KAssetManager/.worktrees/linux-port-fedora43-wt/third_party/tlRender-install-Release/include/minizip-ng
+prefix=${pcfiledir}/../..
+exec_prefix=${prefix}
+libdir=${prefix}/lib64
+sharedlibdir=${exec_prefix}/lib64
+includedir=${prefix}/include/minizip-ng
 
 Name: minizip-ng
 Description: Zip manipulation library

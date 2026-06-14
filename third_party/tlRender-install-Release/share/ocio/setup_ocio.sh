@@ -2,11 +2,13 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright Contributors to the OpenColorIO Project.
 
+TLRENDER_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+
 # For OS X
-export DYLD_LIBRARY_PATH="/home/npittas/KAssetManager/.worktrees/linux-port-fedora43-wt/third_party/tlRender-install-Release/lib:${DYLD_LIBRARY_PATH}"
+export DYLD_LIBRARY_PATH="${TLRENDER_ROOT}/lib:${DYLD_LIBRARY_PATH}"
 
 # For Linux
-export LD_LIBRARY_PATH="/home/npittas/KAssetManager/.worktrees/linux-port-fedora43-wt/third_party/tlRender-install-Release/lib:${LD_LIBRARY_PATH}"
+export LD_LIBRARY_PATH="${TLRENDER_ROOT}/lib:${LD_LIBRARY_PATH}"
 
-export PATH="/home/npittas/KAssetManager/.worktrees/linux-port-fedora43-wt/third_party/tlRender-install-Release/bin:${PATH}"
-export PYTHONPATH="/home/npittas/KAssetManager/.worktrees/linux-port-fedora43-wt/third_party/tlRender-install-Release/:${PYTHONPATH}"
+export PATH="${TLRENDER_ROOT}/bin:${PATH}"
+export PYTHONPATH="${TLRENDER_ROOT}/:${PYTHONPATH}"

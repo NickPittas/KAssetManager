@@ -1,4 +1,4 @@
-prefix=${pcfiledir}/../../
+prefix=${pcfiledir}/../..
 includedir=${prefix}/include
 libdir=${prefix}/lib64
 

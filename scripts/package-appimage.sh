@@ -38,6 +38,19 @@ copy_tree_if_present() {
     cp -a "$src/." "$dst/"
   fi
 }
+copy_qt_runtime_libraries() {
+  qt_lib_dir="$1"
+  if [[ ! -d "$qt_lib_dir" ]]; then
+    return
+  fi
+
+  mkdir -p "$usr_dir/lib"
+  shopt -s nullglob
+  for lib in "$qt_lib_dir"/libQt6*.so.6 "$qt_lib_dir"/libQt6*.so.6.*; do
+    cp -a "$lib" "$usr_dir/lib/"
+  done
+  shopt -u nullglob
+}
 
 if [[ ! -d "$usr_dir" ]]; then
   printf 'Missing AppDir staging at %s\nRun scripts/build-linux-appimage.sh first.\n' "$usr_dir" >&2
@@ -85,12 +98,16 @@ cp "$icon_file" "$appdir_root/kassetmanager.png"
 
 if [[ -n "$linuxdeploy_bin" && -n "$linuxdeploy_plugin_qt_bin" ]]; then
   export QMAKE="${QMAKE:-$(command -v qmake6 || command -v qmake || true)}"
-  export EXTRA_PLATFORM_PLUGINS="libqwayland-egl.so;libqwayland-generic.so;libqxcb.so"
-  prepend_path LD_LIBRARY_PATH "$usr_dir/lib"
+  export EXTRA_PLATFORM_PLUGINS="libqwayland.so;libqxcb.so"
+  # linuxdeploy's bundled strip is older than Fedora's RELR-enabled ELF output.
+  # Stripping is size-only; keep packaging deterministic instead of failing on
+  # valid host-built Qt/plugin libraries.
+  export NO_STRIP="${NO_STRIP:-1}"
   "$linuxdeploy_bin" \
     --appdir "$appdir_root" \
     --desktop-file "$desktop_file" \
     --icon-file "$icon_file" \
+    --exclude-library 'libudev.so*' \
     --plugin qt
 else
   qtpaths_bin="$(command -v qtpaths6 || command -v qtpaths || true)"
@@ -107,6 +124,8 @@ else
     copy_tree_if_present "$qt_plugins_dir/wayland-shell-integration" "$usr_dir/plugins/wayland-shell-integration"
     copy_tree_if_present "$qt_plugins_dir/multimedia" "$usr_dir/plugins/multimedia"
     copy_tree_if_present "$qt_qml_dir" "$usr_dir/qml"
+    qt_lib_dir="$($qtpaths_bin --query QT_INSTALL_LIBS)"
+    copy_qt_runtime_libraries "$qt_lib_dir"
     printf 'linuxdeploy not found; copied Qt plugins from %s via qtpaths.\n' "$qt_plugins_dir" >&2
   else
     printf 'linuxdeploy and qtpaths not found; leaving Qt plugin harvesting unresolved.\n' >&2

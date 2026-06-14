@@ -73,6 +73,16 @@ squashfs-root/
 *.log
 
 # Agent/session artifacts
+# Generated agent/analysis outputs
+scratch/
+graphify-out/
+rr-session-*.json
+rr-session-*.res.log
+
+# Generated validation captures
+validation_outputs/
+thumbnail*.png
+
 .octto/
 .pi/
 

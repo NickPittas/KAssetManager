@@ -1,214 +1,126 @@
 # KAsset Manager
 
-**Professional asset management software for Windows, with a validated Fedora 43 KDE Wayland baseline** - Organize, tag, rate, and manage digital assets including images (PNG, JPG, TIF, EXR, IFF, PSD), videos (MOV, MP4, AVI), and audio (MP3) files.
+Native Qt 6 asset manager for browsing, previewing, tagging, rating, and organizing production media on Windows and Linux. The current validated Linux baseline is Fedora KDE/Wayland with AppImage packaging.
 
-## Overview
+## Current status
 
-KAsset Manager is a native Qt 6 desktop application that provides a professional-grade solution for managing digital media assets. Whether you're a VFX artist, photographer, video editor, or content creator, KAsset Manager helps you organize, find, and preview your files efficiently.
+- Linux AppImage artifact: `KAssetManager-2.0-x86_64.AppImage`
+- Linux validation baseline: Fedora KDE/Wayland
+- Runtime stack: Qt 6, SQLite, tlRender/OpenImageIO/FFmpeg-backed preview paths
+- AppImage packaging uses a controlled AppDir flow that bundles Qt runtime libraries/plugins and app media libraries while leaving low-level system-coupled libraries such as `libudev`/`libsystemd` to the host.
 
-Current platform status:
+## Key features
 
-- Windows remains a supported packaged platform
-- Fedora 43 KDE Wayland is the current validated Linux baseline
-- Linux packaging targets AppImage; current release artifact is `KAssetManager-2.0-x86_64.AppImage`
+### File Manager
 
-### Key Features
+- Dual-pane explorer layout with persistent secondary-pane path, view mode, preview size, and splitter sizes.
+- Folder tree, favorites, path bar, and folder double-click navigation target whichever explorer pane is active.
+- Grid and list views with folders-first sorting.
+- Built-in folder/drive/file fallback icons so packaged AppImages do not depend on host icon themes for the tree/list folder icons.
+- Ctrl-hover scrubbing over grid cards for videos and image sequences, including secondary panes.
 
-#### 🤖 **Intelligent tools**
+### Asset Library
 
-- **Everything Search Integration** - Ultra-fast disk-wide search with bulk import
-- **Database Health Agent** - Automated health checks and maintenance
-- **Bulk Rename Intelligence** - Pattern-based renaming with preview and rollback
-- **Sequence Intelligence** - Automatic gap detection and version tracking
-- **Context Preserver** - Per-folder UI state persistence
+- Virtual folders for organizing assets without moving files on disk.
+- Drag-and-drop import plus File Manager “Add to Library”. Folder imports preserve hierarchy.
+- Multi-tag assignment, tag management, 5-star ratings, and combined filtering.
+- Search and sortable grid/list views.
 
-#### 🗂️ **Organization**
+### Preview and playback
 
-- **Virtual Folder System** - Organize assets without moving files on disk
-- **Hierarchical Structure** - Create nested folders for complex projects
-- **Drag-and-Drop Import** - Import files and folders with a simple drag
-- **Batch Operations** - Move, tag, and rate multiple assets at once
+- Image preview with zoom/pan.
+- Video and image-sequence playback with timeline, volume, frame stepping, and scrubbing.
+- Live preview streaming through the Linux/tlRender/FFmpeg path with OpenImageIO for still images.
+- Annotation tools for frame-accurate review workflows.
 
-- **Add to Library (Explorer-style)** - From File Manager, add files or entire folders; when folders are selected, their subfolder hierarchy is preserved and recreated in the Asset Manager
+## Build and package on Linux
 
-#### 🏷️ **Tagging & Rating**
+### Build AppDir
 
-- **Multi-Tag Support** - Assign multiple tags to each asset
-- **Tag Management** - Create, rename, delete, and merge tags
-- **5-Star Rating System** - Rate assets for quality or importance
-- **Smart Filtering** - Filter by tags (AND/OR mode), rating, and file type
+```bash
+scripts/build-linux-appimage.sh
+```
 
-#### 🔍 **Search & Filter**
+This configures `native/qt6`, builds the release target, and installs into:
 
-- **Real-time Search** - Find assets by name instantly
-- **Advanced Filters** - Combine search, tags, rating, and file type
-- **Sortable Views** - Sort by name, type, size, date, or rating
-- **Grid & List Views** - Switch between thumbnail grid and detailed list
+```text
+build-linux-appimage/AppDir/usr
+```
 
-- **Folders-first Sorting** - In File Manager (grid and list), folders are always listed before files regardless of sort column or order
+### Create AppImage
 
-#### 👁️ **Preview & Playback**
+`appimagetool` is required. Keep downloaded packaging tools project-local under `tools/appimage/` if you use AppImage downloads.
 
-- **Full-Screen Preview** - View images, videos, and sequences
-- **Image Zoom & Pan** - Inspect images in detail
-- **Video Playback** - Play videos with timeline, volume controls, frame stepping, and scrubbing
-- **Image Sequences** - Automatic detection and playback at 24fps
-- **HDR/EXR Support** - Color space selection (Linear, sRGB, Rec.709)
-- **Hover Scrubbing and Thumbnails** - Hold Ctrl over grid cards to scrub videos and image sequences; AppImage video thumbnails use external `/usr/bin/ffmpeg` extraction for robust process isolation
-- **Wayland Color Match** - Live Wayland/tlRender raster video now matches VLC/ffmpeg thumbnails after corrected YUV chroma scaling
-- **Synchronized Navigation** - Arrow keys navigate between assets in full-screen preview while automatically highlighting the current asset in the background grid/list
-- **Focus Restoration** - When closing full-size preview, selection and keyboard focus return to the last previewed item so you can continue navigating with arrow keys instantly
+```bash
+APPIMAGETOOL=tools/appimage/appimagetool-x86_64.AppImage \
+  scripts/package-appimage.sh
+```
 
-#### 🖊️ **Annotation Tools**
+The package script:
 
-- **Frame-Accurate Annotations** - Annotate any frame of videos or image sequences with pixel-perfect accuracy
-- **5 Drawing Tools** - Freehand pen, text labels, rectangles, circles/ellipses, and arrows
-- **Per-Frame Storage** - Each frame maintains its own set of annotations
-- **Color & Width Control** - Customize annotation colors and pen widths (1-20px)
-- **Undo/Redo Support** - Full undo/redo stack for annotation edits
-- **Export Capabilities** - Save individual annotated frames or batch export all annotated frames as PNG/JPG
-- **Timeline Markers** - Visual indicators on timeline showing which frames have annotations
-- **Professional Workflow** - Pause playback, annotate, step frame-by-frame with keyboard shortcuts
+- creates `AppRun`
+- copies desktop/icon metadata
+- copies Qt runtime libraries and plugins through `qtpaths` when linuxdeploy is not explicitly configured
+- supports linuxdeploy + Qt plugin, but the controlled `qtpaths` path is preferred on Fedora because broad linuxdeploy dependency sweeps can bundle incompatible system-coupled libraries
+- writes `KAssetManager-2.0-x86_64.AppImage` in the repository root
 
-#### 🚀 **Performance**
+### Smoke test the AppImage
 
-- **Live Preview Streaming** - tlRender (mrv2) for video/sequences, OpenImageIO for all still images with in-memory caching; playback, scrubbing, and thumbnails are working on the Fedora AppImage baseline
-- **Smart Caching** - LRU pixmap cache (~512MB) keeps recent frames warm
-- **Database Indexes** - Optimized queries for large libraries
-- **Lazy Loading** - Decode only when cards enter the viewport
+A successful GUI launch should stay alive until killed by `timeout`; an immediate `139` exit means a launch crash.
 
-#### 📊 **Professional Formats**
+```bash
+timeout 8 ./KAssetManager-2.0-x86_64.AppImage
+```
 
-- **Images**: PNG, JPG, JPEG, BMP, GIF, TIFF, TIF, EXR, HDR, PFM, PSD, IFF, RAW (all formats handled by OpenImageIO for consistent quality and proper aspect ratio)
-- **Videos**: MOV, MP4, AVI, MP5, MKV, WMV (playback via tlRender/FFmpeg; conversion via FFmpeg)
-- **Audio**: MP3, WAV, OGG, FLAC
-- **Sequences**: Automatic detection of numbered image sequences
-- **External DnD aware:** Explorer/Desktop receives individual frame files; Nuke/After Effects receive folder paths (single sequence import)
+Check unresolved dependencies from the staged binary:
 
-## Quick Start
+```bash
+LD_LIBRARY_PATH=build-linux-appimage/AppDir/usr/lib \
+  ldd build-linux-appimage/AppDir/usr/bin/kassetmanagerqt
+```
 
-### Build and Run
+## Windows build
 
 ```powershell
-# Build and package (creates dist/portable/)
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-windows.ps1 -Generator Ninja -Package
-
-# Run the application
 .\dist\portable\bin\kassetmanagerqt.exe
 ```
 
-### Using the Application
+## Project structure
 
-1. **Import Assets** - Drag and drop files or folders onto the main window
-   - Or select files/folders in File Manager and click "Add to Library" (folders preserve their hierarchy in the Asset Manager)
-
-2. **Navigate Folders** - Click folders in the left tree to view their contents
-3. **Select Assets** - Click to select, Ctrl+Click to multi-select, Shift+Click for range
-4. **Tag Assets** - Right-click assets and choose "Assign Tag"
-5. **Rate Assets** - Right-click and choose "Set Rating"
-6. **Filter** - Use the filters panel on the right to search and filter assets
-7. **Preview** - Double-click an asset to open preview mode
-8. **Get Help** - Press F1 or select Help → User Guide to view the embedded documentation
+```text
+native/qt6/                  Qt 6 C++ application
+native/qt6/src/              Main app, file manager, preview, database, import, models
+native/qt6/player_lab/       GPU/FFmpeg player experiments and validation harnesses
+scripts/                     Linux AppImage and platform build helpers
+docs/                        User, install, architecture, dependency, and packaging docs
+third_party/                 Checked-in third-party runtime/development payloads used by builds
+build-linux-appimage/        Generated AppDir/build staging; ignored and safe to delete
+native/qt6/build*/           Generated local CMake build trees; ignored and safe to delete
+tools/appimage/              Downloaded local packaging tools; ignored and reproducible
+```
 
 ## Documentation
 
-### For Users
+- [docs/USER_GUIDE.md](docs/USER_GUIDE.md) — user workflows and UI behavior
+- [docs/INSTALL.md](docs/INSTALL.md) — setup and installation notes
+- [docs/APPIMAGE_CREATION.md](docs/APPIMAGE_CREATION.md) — Linux AppImage build/package/verification workflow
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — application architecture
+- [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md) — dependency and security notes
+- [codemap.md](codemap.md) — generated repository navigation snapshot; use it for orientation only, then inspect live files before editing
 
-- [docs/USER_GUIDE.md](docs/USER_GUIDE.md) — Complete user guide with workflows and tips
+## Cleanup policy
 
-### Installation
+Generated build outputs, AppImages, local packaging tools, scratch plans, graph exports, recorder sessions, screenshots, and validation captures are not source-of-truth. They should remain ignored/untracked and can be regenerated from scripts and docs.
 
-- [docs/INSTALL.md](docs/INSTALL.md) — Build and installation instructions
-- [docs/linux-wayland-validation.md](docs/linux-wayland-validation.md) — Fedora 43 Wayland validation notes, playback corpus, and AppImage status
+Tracked source, documentation, build scripts, and relocatable third-party package metadata are source-of-truth and should be committed when changed intentionally.
 
-### For Developers
+## System requirements
 
-- [docs/DEVELOPER_GUIDE.md](docs/DEVELOPER_GUIDE.md) — Developer setup, testing, coding standards
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — Architecture and threading/I-O model
-- [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md) — Dependencies, versions, and security notes
-- [CODEBASE_REVIEW_REPORT.md](CODEBASE_REVIEW_REPORT.md) — Comprehensive audit and fixes summary
-
-## Project Structure
-
-```text
-KAssetManager/
-├── native/qt6/          # Qt 6 C++ application
-│   ├── src/             # C++ source files
-│   │   ├── mainwindow.* # Main application window
-│   │   ├── db.*         # SQLite database layer
-│   │   ├── assets_model.* # Assets data model
-│   │   ├── virtual_folders.* # Folder tree model
-│   │   ├── tags_model.* # Tags model
-│   │   ├── importer.*   # File import logic
-│   │   └── live_preview_manager.* # Live preview streaming
-│   ├── CMakeLists.txt   # Build configuration
-│   └── build/           # Build output (generated)
-├── scripts/             # Build scripts
-│   └── build-windows.ps1 # Windows build script
-├── dist/                # Distribution output (generated)
-│   └── portable/        # Portable application package
-└── docs/                # Documentation
-```
-
-## Database Schema
-
-SQLite database stored in persistent user data location (see [docs/INSTALL.md](docs/INSTALL.md) for exact path):
-
-- **virtual_folders** - Folder hierarchy
-- **assets** - Asset metadata (file path, size, type, rating, etc.)
-- **tags** - Tag definitions
-- **asset_tags** - Many-to-many relationship between assets and tags
-- **asset_versions** - Version history for assets
-- **project_folders** - Watched project folders
-
-## Troubleshooting
-
-### Common Issues
-
-**Live preview not showing:**
-
-- Give the decoder a moment to cache the first frame (large EXR/ProRes files can take a second).
-- Check `debug.log` for `[LivePreview]` warnings about codecs or permissions.
-- Ensure the bundled tlRender/runtime libraries are present in the packaged build (Windows portable/installer or Linux AppImage/AppDir runtime layout).
-
-**Import not working:**
-
-- Verify file permissions (files must be readable)
-- Ensure files are not locked by another application
-- Check available disk space for the database and cached previews
-
-**Preview not opening:**
-
-- Verify the file format is supported
-- Check that the file still exists at the original path
-- Try right-click → Preview instead of double-click
-
-**Performance issues:**
-
-- Reduce thumbnail size using the slider
-- Use filters to reduce the number of visible assets
-- Close preview when not in use to free memory
-- Restart the application if it becomes sluggish
-
-**Database errors:**
-
-- Export your database as a backup (Settings → Export Database)
-- Try importing a backup if corruption occurs
-- As a last resort, clear the database and re-import assets
-
-### Getting Help
-
-- Press **F1** in the application or select **Help → User Guide** to view the embedded documentation
-- Check the **[docs/USER_GUIDE.md](docs/USER_GUIDE.md)** for detailed instructions
-- Review **[TECH.md](TECH.md)** for technical information
-- Report bugs on GitHub Issues (include steps to reproduce)
-
-## System Requirements
-
-- **OS**: Windows 10/11 (64-bit), Fedora 43 KDE Wayland validated baseline
-- **RAM**: 4GB minimum, 8GB+ recommended
-- **Disk**: 500MB for application plus space for cached previews
-- **Display**: 1920x1080 or higher recommended
+- Windows 10/11 64-bit or modern 64-bit Linux
+- 4 GB RAM minimum, 8 GB+ recommended
+- 500 MB+ application/runtime disk footprint plus media/cache space
+- GPU/OpenGL stack suitable for Qt and video preview
 
 ## License
 
