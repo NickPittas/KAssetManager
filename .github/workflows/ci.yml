@@ -24,7 +24,6 @@ jobs:
         with:
           version: 6.6.3
           arch: win64_msvc2019_64
-          modules: qtbase
           cache: true
       - name: Configure (tests only)
         run: |
@@ -49,7 +48,6 @@ jobs:
         with:
           version: 6.6.3
           arch: linux_gcc_64
-          modules: qtbase
           cache: true
       - name: Configure (ASan + clang-tidy)
         env:
@@ -81,7 +79,6 @@ jobs:
         with:
           version: 6.6.3
           arch: linux_gcc_64
-          modules: qtbase
           cache: true
       - name: Configure (Coverage)
         env:
