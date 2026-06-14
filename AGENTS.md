@@ -6,6 +6,12 @@ Before working on any task, inspect the exact relevant source files, build files
 
 For deep work on a specific folder, prefer that folder's current documentation if it exists and is directly relevant; otherwise trace the live code path.
 
+## Graphify Knowledge Graph
+
+- If `graphify-out/graph.json` exists and the task asks about repository structure, architecture, code paths, dependencies, historical rationale, or where to make a change, use `graphify query` first to orient before falling back to direct file inspection.
+- Treat graphify as a navigation and context index, not as final authority. Confirm implementation details against live source files before editing.
+- Do not delete `graphify-out/` during cleanup unless the user explicitly asks to remove the knowledge graph or you immediately regenerate it in the same task.
+
 ## General Agent Workflow
 
 For all non-trivial implementation, debugging, refactor, and validation tasks, follow this workflow:
