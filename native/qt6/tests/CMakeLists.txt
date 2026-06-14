@@ -343,6 +343,7 @@ set_tests_properties(test_icon_utils PROPERTIES WORKING_DIRECTORY "${CMAKE_BINAR
 
 install(TARGETS test_icon_utils DESTINATION bin)
 
+if(TARGET tlRender::tlTimeline)
 # Test executable: test_player_lab_playback_harness
 add_executable(test_player_lab_playback_harness
     test_player_lab_playback_harness.cpp
@@ -427,6 +428,7 @@ add_test(NAME test_player_lab_playback_harness COMMAND test_player_lab_playback_
 set_tests_properties(test_player_lab_playback_harness PROPERTIES WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/install_run/bin")
 
 install(TARGETS test_player_lab_playback_harness DESTINATION bin)
+endif()
 
 get_filename_component(KASSET_REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../.." ABSOLUTE)
 set(KASSET_MDK_SDK_DIR "${KASSET_REPO_ROOT}/third_party/mdk-sdk")
