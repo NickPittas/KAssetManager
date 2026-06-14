@@ -1,4 +1,4 @@
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Sql Concurrent Test OpenGL OpenGLWidgets DBus)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Multimedia MultimediaWidgets Sql Concurrent Test Svg SvgWidgets OpenGL OpenGLWidgets Quick QuickWidgets DBus)
 find_package(PkgConfig QUIET)
 if(PkgConfig_FOUND)
     pkg_check_modules(LIBMPV QUIET IMPORTED_TARGET mpv NO_CMAKE_PATH NO_CMAKE_ENVIRONMENT_PATH)
