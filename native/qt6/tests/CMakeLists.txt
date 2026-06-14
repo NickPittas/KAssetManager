@@ -8,6 +8,7 @@ endif()
 add_executable(test_simple
     test_simple.cpp
 )
+set_property(TARGET test_simple PROPERTY AUTOMOC ON)
 
 target_link_libraries(test_simple PRIVATE Qt6::Test)
 target_include_directories(test_simple PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
@@ -25,6 +26,7 @@ add_executable(test_db
     ../src/runtime_paths.cpp
     ../src/runtime_paths.h
 )
+set_property(TARGET test_db PROPERTY AUTOMOC ON)
 
 # Test executable: test_db_worker
 add_executable(test_db_worker
@@ -100,6 +102,7 @@ add_executable(test_project_db
     ../src/runtime_paths.cpp
     ../src/runtime_paths.h
 )
+set_property(TARGET test_project_db PROPERTY AUTOMOC ON)
 
 target_link_libraries(test_project_db PRIVATE Qt6::Test Qt6::Sql Qt6::Core)
 target_include_directories(test_project_db PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
@@ -146,6 +149,7 @@ add_executable(test_models
     ../src/runtime_paths.cpp
     ../src/runtime_paths.h
 )
+set_property(TARGET test_models PROPERTY AUTOMOC ON)
 
 target_link_libraries(test_models PRIVATE Qt6::Test Qt6::Sql Qt6::Core Qt6::Widgets)
 target_include_directories(test_models PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
@@ -159,6 +163,7 @@ add_executable(test_sequence_detector
     ../src/sequence_detector.cpp
     ../src/sequence_detector.h
 )
+set_property(TARGET test_sequence_detector PROPERTY AUTOMOC ON)
 
 target_link_libraries(test_sequence_detector PRIVATE Qt6::Test Qt6::Core)
 
@@ -190,6 +195,7 @@ add_executable(test_importer
     ../src/sequence_detector.h
     ../src/file_utils.h
 )
+set_property(TARGET test_importer PROPERTY AUTOMOC ON)
 
 target_link_libraries(test_importer PRIVATE Qt6::Test Qt6::Sql Qt6::Core Qt6::Widgets)
 
@@ -207,6 +213,7 @@ add_executable(test_utils
     test_utils.cpp
     ../src/utils.h
 )
+set_property(TARGET test_utils PROPERTY AUTOMOC ON)
 
 target_link_libraries(test_utils PRIVATE Qt6::Test Qt6::Core)
 
@@ -233,6 +240,7 @@ add_executable(test_live_preview_manager
     ../src/utils.cpp
     ../src/utils.h
 )
+set_property(TARGET test_live_preview_manager PROPERTY AUTOMOC ON)
 
 # Needs Widgets for QPixmap, and Concurrent for QtConcurrent::run
 target_link_libraries(test_live_preview_manager PRIVATE
@@ -256,7 +264,7 @@ set_tests_properties(test_live_preview_manager PROPERTIES WORKING_DIRECTORY "${C
 target_compile_definitions(test_live_preview_manager PRIVATE
     HAVE_OPENIMAGEIO=0
     HAVE_FFMPEG=0
-    HAVE_TLRENDER=1
+    HAVE_TLRENDER=0
 )
 
 install(TARGETS test_live_preview_manager DESTINATION bin)
@@ -267,6 +275,7 @@ add_executable(test_media_converter_worker
     ../src/media_converter_worker.cpp
     ../src/media_converter_worker.h
 )
+set_property(TARGET test_media_converter_worker PROPERTY AUTOMOC ON)
 
 target_link_libraries(test_media_converter_worker PRIVATE Qt6::Test Qt6::Core Qt6::Widgets)
 
@@ -283,6 +292,7 @@ add_executable(test_virtual_drag
     ../src/virtual_drag.cpp
     ../src/virtual_drag.h
 )
+set_property(TARGET test_virtual_drag PROPERTY AUTOMOC ON)
 
 target_link_libraries(test_virtual_drag PRIVATE Qt6::Test Qt6::Core Qt6::Gui)
 
@@ -299,6 +309,7 @@ add_executable(test_drag_utils
     ../src/drag_utils.cpp
     ../src/drag_utils.h
 )
+set_property(TARGET test_drag_utils PROPERTY AUTOMOC ON)
 
 target_link_libraries(test_drag_utils PRIVATE Qt6::Test Qt6::Core Qt6::Gui Qt6::Widgets Qt6::DBus)
 
@@ -315,6 +326,7 @@ add_executable(test_everything_search
     ../src/everything_search.cpp
     ../src/everything_search.h
 )
+set_property(TARGET test_everything_search PROPERTY AUTOMOC ON)
 
 target_link_libraries(test_everything_search PRIVATE Qt6::Test Qt6::Core)
 
@@ -496,6 +508,7 @@ endif()
 add_executable(test_grid_scrub
     test_grid_scrub.cpp
 )
+set_property(TARGET test_grid_scrub PROPERTY AUTOMOC ON)
 
 target_link_libraries(test_grid_scrub PRIVATE Qt6::Test Qt6::Core Qt6::Widgets)
 
@@ -510,6 +523,7 @@ install(TARGETS test_grid_scrub DESTINATION bin)
 add_executable(test_platform_session
     test_platform_session.cpp
 )
+set_property(TARGET test_platform_session PROPERTY AUTOMOC ON)
 
 target_link_libraries(test_platform_session PRIVATE Qt6::Test Qt6::Core)
 
@@ -543,6 +557,7 @@ add_executable(test_file_utils
     ../src/file_utils.cpp
     ../src/file_utils.h
 )
+set_property(TARGET test_file_utils PROPERTY AUTOMOC ON)
 
 target_link_libraries(test_file_utils PRIVATE Qt6::Test Qt6::Core)
 
