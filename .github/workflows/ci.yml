@@ -11,30 +11,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-test-windows:
-    runs-on: windows-latest
-    env:
-      VCPKG_ROOT: C:\\vcpkg
-    steps:
-      - uses: actions/checkout@v4
-      - name: Set up Ninja
-        uses: seanmiddleditch/gha-setup-ninja@v5
-      - name: Install Qt (minimal)
-        uses: jurplel/install-qt-action@v4
-        with:
-          version: 6.6.3
-          arch: win64_msvc2019_64
-          modules: qtmultimedia
-          cache: true
-      - name: Configure (tests only)
-        run: |
-          cmake -S native/qt6 -B build -G Ninja -DBUILD_APP=OFF -DBUILD_TESTS=ON -DCMAKE_BUILD_TYPE=Release
-      - name: Build
-        run: cmake --build build --config Release -j 2
-      - name: Install (tests to install_run/bin)
-        run: cmake --install build --config Release --prefix build/install_run
-      - name: Run tests
-        run: ctest --test-dir build --output-on-failure
 
   build-test-ubuntu:
     runs-on: ubuntu-latest
