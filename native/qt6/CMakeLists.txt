@@ -155,6 +155,16 @@ if(TLRENDER_ROOT)
     # ftk is in share/ftk, tlRender is in lib/cmake/tlRender
     list(PREPEND CMAKE_PREFIX_PATH "${TLRENDER_ROOT}" "${TLRENDER_ROOT}/share/ftk")
     message(STATUS "Using tlRender from ${TLRENDER_ROOT}")
+
+    # Vendored dependencies were installed to lib64 (Fedora-style GNUInstallDirs).
+    # CMake 4 config-mode search does not glob <prefix>/lib64/cmake/<name> for
+    # CMAKE_PREFIX_PATH entries, so register each vendored config dir explicitly.
+    file(GLOB _tlrender_lib64_configs LIST_DIRECTORIES true "${TLRENDER_ROOT}/lib64/cmake/*")
+    foreach(_cfg_dir ${_tlrender_lib64_configs})
+        get_filename_component(_pkg_name "${_cfg_dir}" NAME)
+        string(REGEX REPLACE "-[0-9][0-9.]*$" "" _pkg_name "${_pkg_name}")
+        set("${_pkg_name}_DIR" "${_cfg_dir}" CACHE FILEPATH "Vendored ${_pkg_name} package config dir" FORCE)
+    endforeach()
     
     # Force CMake to use tlRender's bundled ZLIB to avoid duplicate symbol issues.
     # The install layout differs by platform (.lib on Windows, libz.a on Linux).

@@ -99,10 +99,42 @@ cp "$icon_file" "$appdir_root/kassetmanager.png"
 if [[ -n "$linuxdeploy_bin" && -n "$linuxdeploy_plugin_qt_bin" ]]; then
   export QMAKE="${QMAKE:-$(command -v qmake6 || command -v qmake || true)}"
   export EXTRA_PLATFORM_PLUGINS="libqwayland.so;libqxcb.so"
-  # linuxdeploy's bundled strip is older than Fedora's RELR-enabled ELF output.
-  # Stripping is size-only; keep packaging deterministic instead of failing on
-  # valid host-built Qt/plugin libraries.
+  # linuxdeploy's bundled strip is older than some hosts' RELR-enabled ELF
+  # output. Stripping is size-only; keep packaging deterministic instead of
+  # failing on valid host-built Qt/plugin libraries.
   export NO_STRIP="${NO_STRIP:-1}"
+  # linuxdeploy-plugin-qt resolves plugin deployment inside the AppDir;
+  # pre-stage the plugin categories the app uses from the host Qt so it
+  # deploys their dependency closures. Curated: only plugins whose deps
+  # resolve on a stock Qt install (ibase/odbc/mysql/psql drivers, tiff/webp
+  # image formats etc. would drag in optional system libs).
+  _host_qt_plugins="$("${QMAKE}" -query QT_INSTALL_PLUGINS)"
+  rm -rf "$usr_dir/lib/qt6/plugins"
+  mkdir -p "$usr_dir/lib/qt6/plugins"
+  for _p in platforms/libqwayland.so platforms/libqxcb.so \
+            imageformats/libqgif.so imageformats/libqico.so imageformats/libqjpeg.so imageformats/libqsvg.so \
+            iconengines/libqsvgicon.so sqldrivers/libqsqlite.so multimedia \
+            wayland-decoration-client wayland-graphics-integration-client wayland-shell-integration; do
+    if [[ -e "$_host_qt_plugins/$_p" ]]; then
+      mkdir -p "$usr_dir/lib/qt6/plugins/$(dirname "$_p")"
+      cp -a "$_host_qt_plugins/$_p" "$usr_dir/lib/qt6/plugins/$_p"
+    fi
+  done
+  # qmlimportscanner lives outside PATH on some distros (Arch: $QT_INSTALL_ARCHDATA);
+  # expose the host copy via a shim dir so plugin-qt can find it.
+  _qt_archdata="$("${QMAKE}" -query QT_INSTALL_ARCHDATA)"
+  for _cand in "$_qt_archdata/qmlimportscanner" "$_qt_archdata/bin/qmlimportscanner" "$_qt_archdata/libexec/qmlimportscanner"; do
+    if [[ -x "$_cand" ]]; then
+      mkdir -p "$repo_root/tools/appimage/qt-host-bin"
+      ln -sf "$_cand" "$repo_root/tools/appimage/qt-host-bin/qmlimportscanner"
+      prepend_path PATH "$repo_root/tools/appimage/qt-host-bin"
+      break
+    fi
+  done
+  # App links QtQuick but ships no QML sources; an empty qml dir keeps
+  # qmlimportscanner happy without bundling the whole QML runtime.
+  mkdir -p "$usr_dir/lib/qt6/qml"
+  prepend_path LD_LIBRARY_PATH "$usr_dir/lib"
   "$linuxdeploy_bin" \
     --appdir "$appdir_root" \
     --desktop-file "$desktop_file" \

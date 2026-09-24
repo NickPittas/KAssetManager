@@ -5,6 +5,7 @@ This guide covers building, packaging, and running KAsset Manager on Windows and
 ### Supported platforms
 - Windows 10/11 (64-bit) — full application
 - Fedora 43 KDE Wayland — validated Linux runtime baseline and AppImage target
+- Arch Linux / Omarchy (Wayland) — validated self-contained AppImage build host (Qt 6.11, glibc 2.44)
 - Linux CI/tests-only configuration also exists for headless verification
 
 ### Prerequisites (Windows)
@@ -101,15 +102,18 @@ Notes:
 
 For detailed step-by-step instructions, troubleshooting, and common failure modes, see: [docs/APPIMAGE_CREATION.md](../docs/APPIMAGE_CREATION.md)
 
-Quick start:
+Quick start (full details, prerequisites, and the one-time `tools/appimage/`
+tool setup — linuxdeploy, linuxdeploy-plugin-qt, appimagetool plus name
+symlinks — in the guide above):
 
 ```bash
 # Full build (recommended for first build)
 rm -rf /home/npittas/KAssetManager/build-linux-appimage
 ./scripts/build-linux-appimage.sh
-./scripts/package-appimage.sh
+PATH="$PWD/tools/appimage:$PATH" ./scripts/package-appimage.sh
 
-# Result: KAssetManager-2.0-x86_64.AppImage
+# Result: KAssetManager-2.0-x86_64.AppImage (bundles its own Qt runtime,
+# no host Qt dependency)
 ```
 
 Run AppImage:
