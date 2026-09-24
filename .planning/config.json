@@ -1,0 +1,27 @@
+{
+  "model_profile": "genius",
+  "model_assignments": {
+    "planning": "github copilot gpt-5.4 medium",
+    "research": "github copilot gpt-5.4 medium",
+    "plan_check": "github copilot gpt-5.4 medium",
+    "execution": "github-copilot sonnet 4.6",
+    "verification": "copilot opus 4.6"
+  },
+  "workflow": {
+    "research": true,
+    "plan_check": true,
+    "verifier": true,
+    "auto_advance": true,
+    "nyquist_validation": false,
+    "ui_phase": true,
+    "ui_safety_gate": false,
+    "use_worktrees": true,
+    "_auto_chain_active": false
+  },
+  "git": {
+    "branching_strategy": "none"
+  },
+  "hooks": {
+    "context_warnings": true
+  }
+}

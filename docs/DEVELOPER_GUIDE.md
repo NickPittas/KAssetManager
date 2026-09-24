@@ -10,6 +10,8 @@ native/qt6/
   CMakeLists.txt       # build configuration (app + tests)
 scripts/
   build-windows.ps1    # Windows build/packaging helper
+  build-linux-appimage.sh
+  package-appimage.sh
 docs/
   ARCHITECTURE.md, DEPENDENCIES.md, INSTALL.md, USER_GUIDE.md
 ```
@@ -28,11 +30,28 @@ docs/
   - OpenImageIO via vcpkg (HAVE_OPENIMAGEIO automatically defined when found).
   - ImageMagick portable via IMAGEMAGICK_ROOT (only used at runtime for conversions).
 
+### Linux baseline
+- Fedora 43 KDE Wayland is the current validated Linux runtime baseline.
+- The active Linux playback work in this branch uses:
+  - tlRender where still applicable
+  - a rewritten FFmpeg MOV player path for demanding MOV playback on Wayland
+- `mpv` should be treated as inactive/stubbed for this Linux runtime path.
+
+### Linux packaging
+- Linux packaging currently targets AppImage first.
+- AppDir/AppImage helpers live in:
+  - `scripts/build-linux-appimage.sh`
+  - `scripts/package-appimage.sh`
+  - `native/qt6/packaging/linux/`
+- The current AppImage runtime is expected to use a per-user writable Qt data root when the executable directory is not writable.
+
 ### Testing
 - Unit tests use QtTest. Build with -DBUILD_TESTS=ON
 - Run locally:
   - Windows: after install step, test binaries in native/qt6/build/<gen>/install_run/bin
   - Linux: ctest --test-dir build --output-on-failure
+  - Fedora 43 Wayland app runtime: `./build-linux-recovery-native-qt6/kassetmanagerqt`
+  - Linux AppImage runtime: `./KAssetManager-x86_64.AppImage`
 - Notes:
   - Some tests disable heavy features by compiling with definitions set to 0 and using guards `#if defined(HAVE_...) && HAVE_...` in code
   - Prefer deterministic test cases (QSignalSpy with bounded wait)
@@ -41,7 +60,8 @@ docs/
 
 ### Logging
 - A single message handler funnels Qt logs to LogManager
-- LogManager is thread-safe, keeps a ring buffer (~1000 entries), and writes to app.log near the executable
+- LogManager is thread-safe, keeps a ring buffer (~1000 entries), and writes to a writable runtime log path
+- On packaged/AppImage Linux runs, the writable log path must not resolve inside the mounted AppImage
 - Avoid logging sensitive data. File paths and error summaries are acceptable
 
 ### Database patterns
@@ -50,6 +70,7 @@ docs/
 - Heavy DB operations are batched in transactions
 - Prepared statements and IN-clauses are used for bulk operations; placeholder strings are built safely
 - Schema versioning via PRAGMA user_version; migrations performed on startup as needed
+- Linux/AppImage runtime data should resolve through the shared runtime-path helper rather than writing into the mounted application directory
 
 ### Threading and I/O
 - UI thread must remain responsive; no blocking I/O on UI
@@ -60,9 +81,14 @@ docs/
 
 ### Live preview and conversions
 - tlRender powers video and image-sequence playback; OpenImageIO handles all still image formats for consistent quality and behavior; FFmpeg is no longer used for playback.
+- On the current Fedora 43 Wayland branch, demanding MOV playback uses the rewritten FFmpeg MOV player path rather than relying on `mpv`.
 - RAII wrappers ensure FFmpeg resources used by the Convert dialog are released on all paths.
 - Image conversions use ImageMagick; video conversions use FFmpeg via the Convert dialog/tools.
 - Conversion Pause/Resume is disabled by design.
+
+### Linux validation corpus
+- Local Linux/Wayland playback validation was run against `/mnt/ssd2/Tests/`, especially `/mnt/ssd2/Tests/Videos/`.
+- See `docs/linux-wayland-validation.md` for the accepted playback set and current Linux/AppImage notes.
 
 ### Security & hardening (summary)
 See CODEBASE_REVIEW_REPORT.md for the detailed audit. Implemented highlights:

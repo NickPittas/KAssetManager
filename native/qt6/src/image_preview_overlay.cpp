@@ -1,4 +1,5 @@
 #include "image_preview_overlay.h"
+#include "icon_utils.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -59,8 +60,7 @@ void ImagePreviewOverlay::setupUi()
     topLayout->addStretch();
 
     toggleAnnotationBtn = new QPushButton(this);
-    QString annotationIconPath = QCoreApplication::applicationDirPath() + "/Icons/Annotation/Annotate.png";
-    toggleAnnotationBtn->setIcon(QIcon(annotationIconPath));
+    toggleAnnotationBtn->setIcon(loadRawPngIcon(QStringLiteral("Annotation/Annotate.png")));
     toggleAnnotationBtn->setIconSize(QSize(24, 24));
     toggleAnnotationBtn->setText(" Annotate");
     toggleAnnotationBtn->setFocusPolicy(Qt::NoFocus);
@@ -129,7 +129,7 @@ void ImagePreviewOverlay::showImage(const QString &filePath, const QString &file
     QImage image;
     QPixmap newPixmap;
     if (OIIOImageLoader::isOIIOSupported(filePath)) {
-        image = OIIOImageLoader::loadImage(filePath, 0, 0, currentColorSpace);
+        image = OIIOImageLoader::loadImage(filePath, 0, 0);
         if (!image.isNull()) {
             newPixmap = QPixmap::fromImage(image);
         }
@@ -372,10 +372,8 @@ void ImagePreviewOverlay::setupAnnotationToolbar()
                          "QPushButton:hover { background-color: #555; }"
                          "QPushButton:checked { background-color: #58a6ff; }";
 
-    QString iconPath = QCoreApplication::applicationDirPath() + "/Icons/Annotation/";
-
     QPushButton *selectToolBtn = new QPushButton(annotationToolbar);
-    selectToolBtn->setIcon(QIcon(iconPath + "cursor.png"));
+    selectToolBtn->setIcon(loadRawPngIcon(QStringLiteral("Annotation/cursor.png")));
     selectToolBtn->setIconSize(QSize(24, 24));
     selectToolBtn->setCheckable(true);
     selectToolBtn->setFocusPolicy(Qt::NoFocus);
@@ -394,7 +392,7 @@ void ImagePreviewOverlay::setupAnnotationToolbar()
     toolbarLayout->addWidget(selectToolBtn);
 
     penToolBtn = new QPushButton(annotationToolbar);
-    penToolBtn->setIcon(QIcon(iconPath + "paint.png"));
+    penToolBtn->setIcon(loadRawPngIcon(QStringLiteral("Annotation/paint.png")));
     penToolBtn->setIconSize(QSize(24, 24));
     penToolBtn->setCheckable(true);
     penToolBtn->setFocusPolicy(Qt::NoFocus);
@@ -404,7 +402,7 @@ void ImagePreviewOverlay::setupAnnotationToolbar()
     toolbarLayout->addWidget(penToolBtn);
 
     textToolBtn = new QPushButton(annotationToolbar);
-    textToolBtn->setIcon(QIcon(iconPath + "text.png"));
+    textToolBtn->setIcon(loadRawPngIcon(QStringLiteral("Annotation/text.png")));
     textToolBtn->setIconSize(QSize(24, 24));
     textToolBtn->setCheckable(true);
     textToolBtn->setFocusPolicy(Qt::NoFocus);
@@ -414,7 +412,7 @@ void ImagePreviewOverlay::setupAnnotationToolbar()
     toolbarLayout->addWidget(textToolBtn);
 
     rectangleToolBtn = new QPushButton(annotationToolbar);
-    rectangleToolBtn->setIcon(QIcon(iconPath + "Rectangle.png"));
+    rectangleToolBtn->setIcon(loadRawPngIcon(QStringLiteral("Annotation/Rectangle.png")));
     rectangleToolBtn->setIconSize(QSize(24, 24));
     rectangleToolBtn->setCheckable(true);
     rectangleToolBtn->setFocusPolicy(Qt::NoFocus);
@@ -424,7 +422,7 @@ void ImagePreviewOverlay::setupAnnotationToolbar()
     toolbarLayout->addWidget(rectangleToolBtn);
 
     ellipseToolBtn = new QPushButton(annotationToolbar);
-    ellipseToolBtn->setIcon(QIcon(iconPath + "circle.png"));
+    ellipseToolBtn->setIcon(loadRawPngIcon(QStringLiteral("Annotation/circle.png")));
     ellipseToolBtn->setIconSize(QSize(24, 24));
     ellipseToolBtn->setCheckable(true);
     ellipseToolBtn->setFocusPolicy(Qt::NoFocus);
@@ -434,7 +432,7 @@ void ImagePreviewOverlay::setupAnnotationToolbar()
     toolbarLayout->addWidget(ellipseToolBtn);
 
     arrowToolBtn = new QPushButton(annotationToolbar);
-    arrowToolBtn->setIcon(QIcon(iconPath + "arrow.png"));
+    arrowToolBtn->setIcon(loadRawPngIcon(QStringLiteral("Annotation/arrow.png")));
     arrowToolBtn->setIconSize(QSize(24, 24));
     arrowToolBtn->setCheckable(true);
     arrowToolBtn->setFocusPolicy(Qt::NoFocus);
@@ -475,7 +473,7 @@ void ImagePreviewOverlay::setupAnnotationToolbar()
     toolbarLayout->addStretch();
 
     undoBtn = new QPushButton(annotationToolbar);
-    undoBtn->setIcon(QIcon(iconPath + "undo.png"));
+    undoBtn->setIcon(loadRawPngIcon(QStringLiteral("Annotation/undo.png")));
     undoBtn->setIconSize(QSize(24, 24));
     undoBtn->setStyleSheet(buttonStyle);
     undoBtn->setFocusPolicy(Qt::NoFocus);
@@ -484,7 +482,7 @@ void ImagePreviewOverlay::setupAnnotationToolbar()
     toolbarLayout->addWidget(undoBtn);
 
     redoBtn = new QPushButton(annotationToolbar);
-    redoBtn->setIcon(QIcon(iconPath + "redo.png"));
+    redoBtn->setIcon(loadRawPngIcon(QStringLiteral("Annotation/redo.png")));
     redoBtn->setIconSize(QSize(24, 24));
     redoBtn->setStyleSheet(buttonStyle);
     redoBtn->setFocusPolicy(Qt::NoFocus);
@@ -493,7 +491,7 @@ void ImagePreviewOverlay::setupAnnotationToolbar()
     toolbarLayout->addWidget(redoBtn);
 
     clearAnnotationsBtn = new QPushButton(annotationToolbar);
-    clearAnnotationsBtn->setIcon(QIcon(iconPath + "clear.png"));
+    clearAnnotationsBtn->setIcon(loadRawPngIcon(QStringLiteral("Annotation/clear.png")));
     clearAnnotationsBtn->setIconSize(QSize(24, 24));
     clearAnnotationsBtn->setStyleSheet(buttonStyle);
     clearAnnotationsBtn->setFocusPolicy(Qt::NoFocus);
@@ -502,7 +500,7 @@ void ImagePreviewOverlay::setupAnnotationToolbar()
     toolbarLayout->addWidget(clearAnnotationsBtn);
 
     saveFrameBtn = new QPushButton(annotationToolbar);
-    saveFrameBtn->setIcon(QIcon(iconPath + "save.png"));
+    saveFrameBtn->setIcon(loadRawPngIcon(QStringLiteral("Annotation/save.png")));
     saveFrameBtn->setIconSize(QSize(24, 24));
     saveFrameBtn->setStyleSheet(buttonStyle);
     saveFrameBtn->setFocusPolicy(Qt::NoFocus);

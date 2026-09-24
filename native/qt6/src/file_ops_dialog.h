@@ -15,7 +15,7 @@ public:
 
 private slots:
     void refreshList();
-    void onProgress(int current, int total, const QString& currentFile);
+    void onProgress(qint64 current, qint64 total, const QString& currentFile);
     void onCurrentChanged(const FileOpsQueue::Item& item);
     void onItemFinished(int id, bool success, const QString& error);
 
@@ -28,4 +28,3 @@ private:
     QPushButton* closeBtn;
     QTimer refreshTimer;
 };
-

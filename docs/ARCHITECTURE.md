@@ -11,7 +11,7 @@ This document summarizes core runtime subsystems and cross‑cutting concerns: t
 - Background work
   - LivePreviewManager
     - Decoding and thumbnail generation run off the UI thread via QtConcurrent::run().
-    - Video and image-sequence playback/preview use tlRender (mrv2) as the primary backend with OCIO support; OpenImageIO is used for all still image formats (unified for consistency, quality, and proper aspect ratio handling). FFmpeg is only used by the Convert dialog, not for live playback.
+    - Video and image-sequence playback/preview use tlRender (mrv2) as the primary backend with OCIO support; OpenImageIO is used for all still image formats (unified for consistency, quality, and proper aspect ratio handling). FFmpeg is used by the Convert dialog/tools and, on Linux/Wayland, as the live MOV playback backend via `FFmpegMovPlayer`.
     - Results are delivered back to the UI using queued connections.
     - Uses QCache with LRU semantics and a small metadata cache for image sequences.
   - Media conversion

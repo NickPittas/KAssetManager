@@ -2,6 +2,7 @@
 #include <QDebug>
 #include <QDir>
 #include <QDirIterator>
+#include "file_utils.h"
 
 ProjectFolderWatcher::ProjectFolderWatcher(QObject* parent)
     : QObject(parent)
@@ -29,8 +30,9 @@ void ProjectFolderWatcher::addProjectFolder(int projectFolderId, const QString& 
 {
     qDebug() << "ProjectFolderWatcher::addProjectFolder" << projectFolderId << path;
     
-    if (!QDir(path).exists()) {
-        qWarning() << "ProjectFolderWatcher: Path does not exist:" << path;
+    const auto availability = FileUtils::checkPathAvailability(path, FileUtils::PathAvailabilityMode::DirectoryOnly);
+    if (!availability.available) {
+        qWarning() << "ProjectFolderWatcher: Path is not watchable:" << path << availability.message;
         return;
     }
     
@@ -127,19 +129,23 @@ void ProjectFolderWatcher::onDirectoryChanged(const QString& path)
     
     int projectFolderId = m_pathToProjectId[path];
     
-    // Check if new subdirectories were added (only immediate children)
-    if (QDir(path).exists()) {
+    const auto availability = FileUtils::checkPathAvailability(path, FileUtils::PathAvailabilityMode::DirectoryOnly);
+    if (availability.available) {
         QDir d(path);
         const QFileInfoList subdirs = d.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
         for (const QFileInfo& fi : subdirs) {
             const QString subDir = fi.absoluteFilePath();
             if (!m_pathToProjectId.contains(subDir)) {
-                if (m_watcher->addPath(subDir)) {
+                const auto subdirAvailability = FileUtils::checkPathAvailability(subDir, FileUtils::PathAvailabilityMode::DirectoryOnly);
+                if (subdirAvailability.available && m_watcher->addPath(subDir)) {
                     m_pathToProjectId[subDir] = projectFolderId;
                     qDebug() << "ProjectFolderWatcher: Started watching new subdirectory" << subDir;
                 }
             }
         }
+    } else {
+        qWarning() << "ProjectFolderWatcher: Changed path is unavailable:" << path << availability.message;
+        return;
     }
 
     // Add to pending refreshes and start/restart timer
@@ -179,6 +185,11 @@ void ProjectFolderWatcher::onRefreshTimeout()
     for (int projectFolderId : m_pendingRefreshes) {
         if (m_projectIdToPath.contains(projectFolderId)) {
             QString path = m_projectIdToPath[projectFolderId];
+            const auto availability = FileUtils::checkPathAvailability(path, FileUtils::PathAvailabilityMode::DirectoryOnly);
+            if (!availability.available) {
+                qWarning() << "ProjectFolderWatcher: Skipping unavailable refresh path:" << path << availability.message;
+                continue;
+            }
             qDebug() << "ProjectFolderWatcher: Emitting change signal for project" << projectFolderId << path;
             emit projectFolderChanged(projectFolderId, path);
         }

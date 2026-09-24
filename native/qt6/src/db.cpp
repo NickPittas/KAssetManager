@@ -22,7 +22,7 @@ static QString computeFileSha256(const QString& path)
     while (true) {
         qint64 n = f.read(buf.data(), buf.size());
         if (n <= 0) break;
-        hasher.addData(buf.constData(), (int)n);
+        hasher.addData(QByteArrayView(buf.constData(), n));
     }
     return hasher.result().toHex();
 }
@@ -199,27 +199,6 @@ int DB::schemaUserVersion() const {
 
 bool DB::setSchemaUserVersion(int v) {
     return exec(QStringLiteral("PRAGMA user_version=%1").arg(v));
-}
-
-QSqlQuery DB::prepared(const QString& key, const QString& sql) const
-{
-    // Note: QSqlQuery is an implicitly shared handle; safe to return by value within the same thread
-    auto it = m_stmtCache.find(key);
-    if (it != m_stmtCache.end()) {
-        // If SQL text changed for this key, re-prepare
-        if (m_stmtSql.value(key) == sql) {
-            return it.value();
-        }
-        m_stmtCache.erase(it);
-    }
-    QSqlQuery q(m_db);
-    if (!q.prepare(sql)) {
-        qWarning() << "prepare() failed:" << sql << q.lastError();
-        return q; // returns invalid; caller should handle
-    }
-    m_stmtSql.insert(key, sql);
-    m_stmtCache.insert(key, q);
-    return q;
 }
 
 bool DB::hasColumn(const QString& table, const QString& column) const {
@@ -623,7 +602,7 @@ bool DB::setAssetsRating(const QList<int>& assetIds, int rating){
 
     QSqlQuery q(m_db);
     q.prepare(sql);
-    if (rating < 0) q.addBindValue(QVariant(QVariant::Int)); else q.addBindValue(rating);
+    if (rating < 0) q.addBindValue(QVariant(QMetaType::fromType<int>())); else q.addBindValue(rating);
     for (int id : assetIds) q.addBindValue(id);
     bool ok = q.exec();
 
@@ -788,7 +767,8 @@ QHash<int, QStringList> DB::tagsForAssets(const QList<int>& assetIds) const {
 
     const QString inList = marks.join(',');
     const QString sql = QString("SELECT at.asset_id, t.name FROM asset_tags at JOIN tags t ON t.id=at.tag_id WHERE at.asset_id IN (%1) ORDER BY at.asset_id").arg(inList);
-    QSqlQuery q = prepared(QStringLiteral("tagsForAssets_%1").arg(assetIds.size()), sql);
+    QSqlQuery q(m_db);
+    q.prepare(sql);
     for (int id : assetIds) q.addBindValue(id);
     if (q.exec()) {
         while (q.next()) {
@@ -804,7 +784,8 @@ QHash<int, QStringList> DB::tagsForAssets(const QList<int>& assetIds) const {
 int DB::getAssetIdByPath(const QString& filePath) const
 {
     QFileInfo fi(filePath);
-    QSqlQuery q = prepared(QStringLiteral("getAssetIdByPath"), QStringLiteral("SELECT id FROM assets WHERE file_path=?"));
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral("SELECT id FROM assets WHERE file_path=?"));
     q.addBindValue(fi.absoluteFilePath());
     if (q.exec() && q.next()) { bool ok=false; int id=q.value(0).toInt(&ok); if (ok) return id; }
     return 0;
@@ -813,7 +794,8 @@ int DB::getAssetIdByPath(const QString& filePath) const
 QVector<AssetVersionRow> DB::listAssetVersions(int assetId) const
 {
     QVector<AssetVersionRow> rows;
-    QSqlQuery q = prepared(QStringLiteral("listAssetVersions"), QStringLiteral("SELECT id, asset_id, version_number, version_name, file_path, file_size, checksum, created_at, COALESCE(notes,'') FROM asset_versions WHERE asset_id=? ORDER BY version_number ASC"));
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral("SELECT id, asset_id, version_number, version_name, file_path, file_size, checksum, created_at, COALESCE(notes,'') FROM asset_versions WHERE asset_id=? ORDER BY version_number ASC"));
     q.addBindValue(assetId);
     if (q.exec()) {
         while (q.next()) {

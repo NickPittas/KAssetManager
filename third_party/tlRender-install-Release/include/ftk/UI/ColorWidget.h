@@ -1,0 +1,165 @@
+// SPDX-License-Identifier: BSD-3-Clause
+// Copyright Contributors to the feather-tk project.
+
+#pragma once
+
+#include <ftk/UI/IWidget.h>
+
+namespace ftk
+{
+    //! \name Color Widgets
+    ///@{
+
+    //! RGB color widget.
+    //!
+    //! \todo Add support for displaying pixel types like U8, U16, etc.?
+    class FTK_API_TYPE RGBColorWidget : public IWidget
+    {
+    protected:
+        void _init(
+            const std::shared_ptr<Context>&,
+            const std::shared_ptr<IWidget>& parent);
+
+        RGBColorWidget();
+
+    public:
+        FTK_API virtual ~RGBColorWidget();
+
+        //! Create a new widget.
+        FTK_API static std::shared_ptr<RGBColorWidget> create(
+            const std::shared_ptr<Context>&,
+            const std::shared_ptr<IWidget>& parent = nullptr);
+
+        //! Get the color.
+        FTK_API const Color4F& getColor() const;
+
+        //! Set the color.
+        FTK_API void setColor(const Color4F&);
+
+        //! Set the callback.
+        FTK_API void setCallback(const std::function<void(const Color4F&)>&);
+
+        //! Set the callback with a flag for whether the widget is presssed.
+        FTK_API void setPressedCallback(const std::function<void(const Color4F&, bool)>&);
+
+        //! Get the margin role.
+        FTK_API SizeRole getMarginRole() const;
+
+        //! Set the margin role.
+        FTK_API void setMarginRole(SizeRole);
+
+        FTK_API Size2I getSizeHint() const override;
+        FTK_API void setGeometry(const Box2I&) override;
+
+    private:
+        void _colorUpdate();
+
+        FTK_PRIVATE();
+    };
+
+    //! HSV color widget.
+    class FTK_API_TYPE HSVColorWidget : public IWidget
+    {
+    protected:
+        void _init(
+            const std::shared_ptr<Context>&,
+            const std::shared_ptr<IWidget>& parent);
+
+        HSVColorWidget();
+
+    public:
+        FTK_API virtual ~HSVColorWidget();
+
+        //! Create a new widget.
+        FTK_API static std::shared_ptr<HSVColorWidget> create(
+            const std::shared_ptr<Context>&,
+            const std::shared_ptr<IWidget>& parent = nullptr);
+
+        //! Get the color.
+        FTK_API const Color4F& getColor() const;
+
+        //! Set the color.
+        FTK_API void setColor(const Color4F&);
+
+        //! Set the callback.
+        FTK_API void setCallback(const std::function<void(const Color4F&)>&);
+
+        //! Set the callback with a flag for whether the widget is presssed.
+        FTK_API void setPressedCallback(const std::function<void(const Color4F&, bool)>&);
+
+        //! Get the margin role.
+        FTK_API SizeRole getMarginRole() const;
+
+        //! Set the margin role.
+        FTK_API void setMarginRole(SizeRole);
+
+        FTK_API Size2I getSizeHint() const override;
+        FTK_API void setGeometry(const Box2I&) override;
+
+    private:
+        void _colorUpdate();
+
+        FTK_PRIVATE();
+    };
+
+    //! Color widget mode.
+    enum class FTK_API_TYPE ColorWidgetMode
+    {
+        RGB,
+        HSV,
+
+        Count,
+        First = RGB
+    };
+    FTK_ENUM(ColorWidgetMode);
+
+    //! Color widget.
+    //!
+    //! \todo Add support for displaying pixel types like U8, U16, etc.?
+    class FTK_API_TYPE ColorWidget : public IWidget
+    {
+    protected:
+        void _init(
+            const std::shared_ptr<Context>&,
+            const std::shared_ptr<IWidget>& parent);
+
+        ColorWidget();
+
+    public:
+        FTK_API virtual ~ColorWidget();
+
+        //! Create a new widget.
+        FTK_API static std::shared_ptr<ColorWidget> create(
+            const std::shared_ptr<Context>&,
+            const std::shared_ptr<IWidget>& parent = nullptr);
+
+        //! Get the color.
+        FTK_API const Color4F& getColor() const;
+
+        //! Set the color.
+        FTK_API void setColor(const Color4F&);
+
+        //! Set the callback.
+        FTK_API void setCallback(const std::function<void(const Color4F&)>&);
+
+        //! Set the callback with a flag for whether the widget is presssed.
+        FTK_API void setPressedCallback(const std::function<void(const Color4F&, bool)>&);
+
+        //! Get the widget mode.
+        FTK_API ColorWidgetMode getMode() const;
+
+        //! Set the widget mode.
+        FTK_API void setMode(ColorWidgetMode);
+
+        FTK_API Size2I getSizeHint() const override;
+        FTK_API void setGeometry(const Box2I&) override;
+
+    private:
+        void _modeUpdate();
+        void _colorUpdate();
+
+        FTK_PRIVATE();
+    };
+
+    ///@}
+}

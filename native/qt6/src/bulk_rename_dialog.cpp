@@ -229,6 +229,13 @@ void BulkRenameDialog::updatePreview() {
     for (int i = 0; i < m_previewItems.size(); ++i) {
         RenamePreviewItem& item = m_previewItems[i];
         item.newName = applyPattern(item.originalName, i);
+        item.hasConflict = false;
+        item.conflictReason.clear();
+
+        QFileInfo originalInfo(item.fullPath);
+        const QString candidatePath = originalInfo.dir().filePath(item.newName);
+        const bool nameUnchanged = item.newName == item.originalName;
+        const bool existingPathConflict = !nameUnchanged && QFileInfo::exists(candidatePath);
 
         // Check for conflicts
         if (newNames.contains(item.newName)) {
@@ -239,12 +246,14 @@ void BulkRenameDialog::updatePreview() {
             item.hasConflict = true;
             item.conflictReason = "Empty name";
             m_hasConflicts = true;
-        } else if (item.newName == item.originalName) {
+        } else if (existingPathConflict) {
+            item.hasConflict = true;
+            item.conflictReason = "Target already exists";
+            m_hasConflicts = true;
+        } else if (nameUnchanged) {
             item.hasConflict = false;
             item.conflictReason = "No change";
         } else {
-            item.hasConflict = false;
-            item.conflictReason = "";
             newNames.insert(item.newName);
         }
     }
@@ -465,14 +474,12 @@ bool BulkRenameDialog::performFileRename() {
             QMessageBox::critical(this, "Invalid Name",
                 QString("The new name '%1' is invalid. It must not contain '/' or '\\' or be '.'/'..'.")
                     .arg(item.newName));
-            // Rollback previous renames
             for (const auto& pair : renamedFiles) {
                 QFile rollbackFile(pair.second);
                 rollbackFile.rename(pair.first);
             }
             return false;
         }
-
 
         QFileInfo originalInfo(item.fullPath);
         QString newPath = originalInfo.dir().filePath(item.newName);
@@ -486,21 +493,6 @@ bool BulkRenameDialog::performFileRename() {
                         .arg(item.fullPath)
                         .arg(newPath)
                         .arg(file.errorString()));
-        // Validate that newName does not traverse directories or include separators
-        if (item.newName == "." || item.newName == ".." || item.newName.contains('/') || item.newName.contains('\\')) {
-            QMessageBox::critical(this, "Invalid Name",
-                QString("The new name '%1' is invalid. It must not contain '/' or '\\' or be '.'/'..'.")
-                    .arg(item.newName));
-            // Rollback previous renames
-            for (const auto& pair : renamedFiles) {
-                QFile rollbackFile(pair.second);
-                rollbackFile.rename(pair.first);
-            }
-            return false;
-        }
-
-
-                // Rollback previous renames
                 for (const auto& pair : renamedFiles) {
                     QFile rollbackFile(pair.second);
                     rollbackFile.rename(pair.first);

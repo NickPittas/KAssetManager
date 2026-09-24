@@ -25,8 +25,9 @@ SequenceGroupingProxyModel::SequenceGroupingProxyModel(QObject* parent)
 
 void SequenceGroupingProxyModel::setGroupingEnabled(bool on) {
     if (m_enabled == on) return;
+    beginFilterChange();
     m_enabled = on;
-    invalidateFilter();
+    endFilterChange(Direction::Rows);
 }
 
 bool SequenceGroupingProxyModel::groupingEnabled() const {
@@ -35,8 +36,9 @@ bool SequenceGroupingProxyModel::groupingEnabled() const {
 
 void SequenceGroupingProxyModel::setHideFolders(bool hide) {
     if (m_hideFolders == hide) return;
+    beginFilterChange();
     m_hideFolders = hide;
-    invalidateFilter();
+    endFilterChange(Direction::Rows);
 }
 
 bool SequenceGroupingProxyModel::hideFolders() const {
@@ -45,10 +47,11 @@ bool SequenceGroupingProxyModel::hideFolders() const {
 
 void SequenceGroupingProxyModel::rebuildForRoot(const QString& dirPath) {
     m_requestedDir = dirPath;
+    beginFilterChange();
     m_hidden.clear();
     m_infoByRepr.clear();
     m_keyByRepr.clear();
-    invalidateFilter();
+    endFilterChange(Direction::Rows);
 
     if (!m_enabled || dirPath.isEmpty()) {
         m_pendingDir.clear();
@@ -146,10 +149,11 @@ void SequenceGroupingProxyModel::startBuild(const QString& dirPath) {
 }
 
 void SequenceGroupingProxyModel::applyBuildResult(BuildResult&& result) {
+    beginFilterChange();
     m_hidden = std::move(result.hidden);
     m_infoByRepr = std::move(result.infoByRepr);
     m_keyByRepr = std::move(result.keyByRepr);
-    invalidateFilter();
+    endFilterChange(Direction::Rows);
 }
 
 SequenceGroupingProxyModel::BuildResult SequenceGroupingProxyModel::buildSequences(const QString& dirPath) {

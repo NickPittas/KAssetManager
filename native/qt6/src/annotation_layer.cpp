@@ -201,13 +201,12 @@ void AnnotationLayer::handleMouseMove(QGraphicsSceneMouseEvent* event)
 
 void AnnotationLayer::handleMouseRelease(QGraphicsSceneMouseEvent* event)
 {
-    Q_UNUSED(event);
-    
     if (!m_isDrawing) {
         return;
     }
     
     if (m_currentMode != Text) {
+        updateDrawingItem(event->scenePos());
         finishDrawing();
     }
 }

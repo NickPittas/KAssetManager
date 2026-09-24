@@ -25,6 +25,7 @@
 #include <QFileSystemModel>
 #include <QListWidget>
 
+#include <QVariant>
 #include <QFileSystemWatcher>
 
 #include <QToolButton>
@@ -39,16 +40,18 @@ class SequenceGroupingProxyModel;
 class GridScrubController;
 class FileManagerPane;
 
+class ImportController;
 class ImportProgressDialog;
 class ProjectFolderWatcher;
+class MediaAsyncRequest;
 class EverythingFolderModel;
 class ProjectsModel;
 class ProjectAssetsModel;
 class ProjectItemDelegate;
 class ProjectManagerWatcher;
 class ProjectImportController;
-class TLRenderPlayer;
-class TLRenderViewport;
+class PlayerLabPlayer;
+class PlayerLabViewport;
 
 class MainWindow : public QMainWindow
 {
@@ -223,13 +226,23 @@ private slots:
     void onFmTreeChildrenFetched(const QModelIndex &parent); // Handle async tree fetch completion
 
 private:
+    QRect initialOverlayGeometry() const;
     QString fmPathForIndex(const QModelIndex& idx) const;
     QModelIndex fmIndexForPath(const QString& path);
     void fmRefreshTreeModel();
     void releaseAnyPreviewLocksForPaths(const QStringList& paths);
+    void queueFmFileOperation(const QStringList& sources, const QString& destDir, bool moveRequested);
+    void refreshFileManagerViewsForPaths(const QStringList& paths, const QString& destination = QString());
     void importToAssetLibrary(const QStringList& filePaths, const QStringList& folderPaths);
     void updateFmInfoPanel();
+    void requestAssetInfoVideoMetadata(const QString& filePath);
+    void requestFmInfoVideoMetadata(const QString& filePath);
+    void applyAssetInfoVideoMetadata(const QVariantMap& metadata);
+    void applyFmInfoVideoMetadata(const QVariantMap& metadata);
+    void clearAssetInfoVideoMetadata();
+    void clearFmInfoVideoMetadata();
     void fmNavigateToPath(const QString& path, bool addToHistory = true);
+    void navigateActiveFmPaneToPath(const QString& path, bool addToHistory = true);
     void fmUpdateNavigationButtons();
     void fmScrollTreeToPath(const QString& path);
     void amUpdateNavigationButtons();
@@ -253,6 +266,7 @@ private:
     bool m_windowResizing = false; // guard to skip heavy updates during resize/move
     QTimer m_resizeSettleTimer; // fires after resize/move stops
     QTimer m_splitterSaveTimer; // debounces splitter state persistence
+    bool m_appClosing = false;
 
     void setupUi();
     void setupConnections();
@@ -316,7 +330,7 @@ private:
     QWidget *infoPanel;
 
     // Importer
-    class Importer *importer;
+    ImportController *importer = nullptr;
 
     // Filters
     QLineEdit *searchBox;
@@ -358,6 +372,17 @@ private:
     QLabel *infoFileSize;
     QLabel *infoFileType;
     QLabel *infoDimensions;
+    QLabel *infoVideoCodec;
+    QLabel *infoAudioCodec;
+    QLabel *infoBitrate;
+    QLabel *infoTimecode;
+    QLabel *infoCameraInfo;
+
+    // Async info-panel media metadata
+    MediaAsyncRequest *infoMediaRequests = nullptr;
+    QString assetInfoVideoMetadataPath;
+    QString fmInfoVideoMetadataPath;
+    QLabel *infoShotInfo;
     QLabel *infoCreated;
     QLabel *infoModified;
     QLabel *infoPermissions;
@@ -472,7 +497,8 @@ private:
     class QGraphicsView *fmImageView = nullptr;
     class QGraphicsScene *fmImageScene = nullptr;
     class QGraphicsPixmapItem *fmImageItem = nullptr;
-    TLRenderViewport *fmVideoWidget = nullptr; // tlRender viewport for video playback
+    PlayerLabViewport *fmVideoWidget = nullptr; // tlRender viewport for video playback
+    QWidget *fmPreviewContent = nullptr;
     // Additional preview widgets
     class QPlainTextEdit *fmTextView = nullptr;           // TXT/LOG
     class QTableView *fmCsvView = nullptr;                // CSV table
@@ -488,7 +514,7 @@ private:
     QImage fmOriginalImage; QString fmCurrentPreviewPath; bool fmPreviewHasAlpha = false; bool fmAlphaOnlyMode = false;
     QPoint fmPreviewDragStartPos; bool fmPreviewDragPending = false;
     // Media - tlRender player
-    class TLRenderPlayer *fmTlRenderPlayer = nullptr;
+    class PlayerLabPlayer *fmPlayerLabPlayer = nullptr;
     QPushButton *fmPlayPauseBtn;
     QPushButton *fmPrevFrameBtn = nullptr;
     QPushButton *fmNextFrameBtn = nullptr;
@@ -506,6 +532,8 @@ private:
     // Helpers for tree/context operations
     QStringList getSelectedFmTreePaths() const;
     void onFmPasteInto(const QString& destDir);
+    bool confirmAndQueueFmDelete(const QStringList& paths, bool permanentDelete);
+    void showFileOpsDialog();
     void doPermanentDelete(const QStringList& paths);
 
     QSlider *fmPositionSlider;
@@ -532,6 +560,12 @@ private:
     QLabel *fmInfoFileSize = nullptr;
     QLabel *fmInfoFileType = nullptr;
     QLabel *fmInfoDimensions = nullptr;
+    QLabel *fmInfoVideoCodec = nullptr;
+    QLabel *fmInfoAudioCodec = nullptr;
+    QLabel *fmInfoBitrate = nullptr;
+    QLabel *fmInfoTimecode = nullptr;
+    QLabel *fmInfoCameraInfo = nullptr;
+    QLabel *fmInfoShotInfo = nullptr;
     QLabel *fmInfoCreated = nullptr;
     QLabel *fmInfoModified = nullptr;
     QLabel *fmInfoPermissions = nullptr;
@@ -548,6 +582,8 @@ private:
     // Helpers
     void updateFmPreviewForIndex(const QModelIndex &idx);
     void clearFmPreview();
+    void ensureFmVideoPreview();
+    void ensurePmVideoPreview();
 
     // Dual-pane File Manager support
     FileManagerPane *fmSecondaryPane = nullptr;  // Secondary pane (optional, togglable)
@@ -618,8 +654,9 @@ private:
     class QGraphicsView *pmImageView = nullptr;
     class QGraphicsScene *pmImageScene = nullptr;
     class QGraphicsPixmapItem *pmImageItem = nullptr;
-    TLRenderViewport *pmVideoWidget = nullptr;
-    class TLRenderPlayer *pmTlRenderPlayer = nullptr;
+    PlayerLabViewport *pmVideoWidget = nullptr;
+    QWidget *pmPreviewContent = nullptr;
+    class PlayerLabPlayer *pmPlayerLabPlayer = nullptr;
     
     // Media controls
     QPushButton *pmPlayPauseBtn = nullptr;
@@ -657,8 +694,8 @@ private:
     int pmUnreadNotificationCount = 0;
     ProjectManagerWatcher *pmWatcher = nullptr;
     
-    // PM import - uses Importer with ProjectDB (same as Asset Manager)
-    Importer *pmImporter = nullptr;
+    // PM import
+    ImportController *pmImporter = nullptr;
     ImportProgressDialog *pmImportProgressDialog = nullptr;
     int pmPendingImportProjectId = -1;
     
@@ -671,6 +708,7 @@ private:
     void pmNavigateBack();
     void pmNavigateUp();
     QStringList getSelectedPmAssetPaths() const;
+    QString pmCurrentDestinationDir() const;
     void restoreProjectManagerState();
     void saveProjectManagerState(QSettings& s);
     QModelIndex pmIndexForProjectId(int projectId) const;

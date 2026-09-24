@@ -1,5 +1,5 @@
-#ifdef _WIN32
 #include "virtual_drag.h"
+#ifdef _WIN32
 #include <windows.h>
 #include <shlobj.h>
 #include <shellapi.h>
@@ -11,6 +11,7 @@
 #include <QFile>
 #include <QDir>
 #include <QFileInfo>
+#include <QCoreApplication>
 
 static UINT CF_FILEDESCRIPTORW_ID() { static UINT id = RegisterClipboardFormatW(CFSTR_FILEDESCRIPTORW); return id; }
 static UINT CF_FILECONTENTS_ID()   { static UINT id = RegisterClipboardFormatW(CFSTR_FILECONTENTS);   return id; }
@@ -113,7 +114,8 @@ private:
     FORMATETC m_fmtPrefEffect = makeFormatEtc(CF_PREFERREDDROPEFFECT_ID(), TYMED_HGLOBAL);
 public:
     VirtualFileDataObject(const QVector<VirtualDrag::VirtualFile> &files)
-        : m_files(files) {}
+        : m_tmpDir(QCoreApplication::applicationDirPath() + QStringLiteral("/data/tmp/virtual-drag-XXXXXX"))
+        , m_files(files) {}
 
     // IUnknown
     HRESULT __stdcall QueryInterface(REFIID riid, void **ppv) override {
@@ -485,6 +487,9 @@ bool startRealPathsDrag(const QVector<QString> &paths) {
 
 #else
 // Non-Windows stub
-namespace VirtualDrag { bool startVirtualDrag(const QVector<VirtualFile>&) { return false; } }
+namespace VirtualDrag {
+bool startVirtualDrag(const QVector<VirtualFile>&) { return false; }
+bool startRealPathsDrag(const QVector<QString>&) { return false; }
+bool startAdaptivePathsDrag(const QVector<QString>&, const QVector<QString>&) { return false; }
+}
 #endif
-

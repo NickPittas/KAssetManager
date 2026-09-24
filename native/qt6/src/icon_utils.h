@@ -4,11 +4,14 @@
 #include <QIcon>
 #include <QColor>
 #include <QFileIconProvider>
+#include <QString>
 #include <functional>
 #include <QPainter>
 
 // Icon generation helpers
 QIcon mkIcon(const std::function<void(QPainter&, const QRectF&)>& draw, const QColor& color = QColor(235,235,235));
+QString findIconPath(const QString& filename);
+QIcon loadRawPngIcon(const QString& filename);
 QIcon loadPngIcon(const QString& filename, const QColor& targetColor = QColor(255, 255, 255));
 
 // General icons

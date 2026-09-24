@@ -8,6 +8,8 @@
 #include <QUrl>
 #include <QDebug>
 #include <algorithm>
+#include <QSet>
+#include <QMetaObject>
 
 ProjectAssetsModel::ProjectAssetsModel(QObject* parent)
     : QAbstractListModel(parent)
@@ -168,28 +170,28 @@ void ProjectAssetsModel::setFolderId(int id) {
     if (m_folderId == id) return;
     m_folderId = id;
     emit folderIdChanged();
-    applyFilters();
+    scheduleFilterReset();
 }
 
 void ProjectAssetsModel::setSearchQuery(const QString& query) {
     if (m_searchQuery == query) return;
     m_searchQuery = query;
     emit searchQueryChanged();
-    applyFilters();
+    scheduleFilterReset();
 }
 
 void ProjectAssetsModel::setTypeFilter(int f) {
     if (m_typeFilter == f) return;
     m_typeFilter = f;
     emit typeFilterChanged();
-    applyFilters();
+    scheduleFilterReset();
 }
 
 void ProjectAssetsModel::setShowAllVersions(bool show) {
     if (m_showAllVersions == show) return;
     m_showAllVersions = show;
     emit showAllVersionsChanged();
-    applyFilters();
+    scheduleFilterReset();
 }
 
 QVariantMap ProjectAssetsModel::get(int row) const {
@@ -248,9 +250,31 @@ bool ProjectAssetsModel::removeAssets(const QVariantList& assetIds) {
 void ProjectAssetsModel::scheduleReload() {
     m_reloadTimer.start();
 }
+void ProjectAssetsModel::scheduleFilterReset() {
+    if (m_filterResetPending)
+        return;
+    m_filterResetPending = true;
+    QMetaObject::invokeMethod(this, [this] {
+        if (!m_filterResetPending)
+            return;
+        m_filterResetPending = false;
+        performFilterReset();
+    }, Qt::QueuedConnection);
+}
+
+void ProjectAssetsModel::performFilterReset() {
+    m_isResetting = true;
+    beginResetModel();
+    rebuildFilteredIndexes();
+    endResetModel();
+    m_isResetting = false;
+}
 
 void ProjectAssetsModel::reload() {
+    m_filterResetPending = false;
+
     beginResetModel();
+    m_isResetting = true;
 
     m_allRows.clear();
     m_filteredRowIndexes.clear();
@@ -261,17 +285,18 @@ void ProjectAssetsModel::reload() {
 
     if (m_projectId <= 0) {
         qDebug() << "[ProjectAssetsModel] reload - no project set, returning empty";
+        m_isResetting = false;
         endResetModel();
         return;
     }
 
     QSqlDatabase db = ProjectDB::instance().database();
 
-    // First, load all subfolders for this project (we'll filter in applyFilters)
+    // First, load all subfolders for this project (we'll filter in rebuildFilteredIndexes)
     QSqlQuery fq(db);
     fq.prepare("SELECT id, name, parent_id FROM virtual_folders WHERE project_id = ? ORDER BY name");
     fq.addBindValue(m_projectId);
-    
+
     if (fq.exec()) {
         while (fq.next()) {
             ProjectAssetRow r;
@@ -285,7 +310,7 @@ void ProjectAssetsModel::reload() {
         }
         qDebug() << "[ProjectAssetsModel] reload - loaded" << m_allRows.size() << "folders";
     }
-    
+
     int folderCount = m_allRows.size();
 
     // Query assets for this project
@@ -304,6 +329,7 @@ void ProjectAssetsModel::reload() {
 
     if (!q.exec()) {
         qWarning() << "[ProjectAssetsModel] reload query failed:" << q.lastError();
+        m_isResetting = false;
         endResetModel();
         return;
     }
@@ -351,10 +377,11 @@ void ProjectAssetsModel::reload() {
         qDebug() << "  folderId:" << sorted[i].first << "count:" << sorted[i].second;
     }
 
-    // Detect and apply version grouping
+    // Detect version groups and rebuild filtered indexes under the existing reset
     detectVersionGroups();
-    applyFilters();
+    rebuildFilteredIndexes();
 
+    m_isResetting = false;
     endResetModel();
 }
 
@@ -423,25 +450,24 @@ void ProjectAssetsModel::detectVersionGroups() {
     }
 }
 
-void ProjectAssetsModel::applyFilters() {
-    beginResetModel();
+void ProjectAssetsModel::rebuildFilteredIndexes() {
     m_filteredRowIndexes.clear();
 
-    static const QSet<QString> imageTypes = {"jpg", "jpeg", "png", "gif", "bmp", "tiff", "tif", 
+    static const QSet<QString> imageTypes = {"jpg", "jpeg", "png", "gif", "bmp", "tiff", "tif",
                                               "webp", "exr", "hdr", "psd", "tga"};
-    static const QSet<QString> videoTypes = {"mp4", "mov", "avi", "mkv", "wmv", "flv", "webm", 
+    static const QSet<QString> videoTypes = {"mp4", "mov", "avi", "mkv", "wmv", "flv", "webm",
                                               "m4v", "mpg", "mpeg", "mxf"};
     static const QSet<QString> projectTypes = {"aep", "aepx", "nk"};
 
     QString searchLower = m_searchQuery.toLower();
-    
+
     int skippedFolder = 0, skippedVersion = 0, skippedType = 0, skippedSearch = 0;
 
     // First pass: add folders at the top (if showing a specific folder)
     for (int i = 0; i < m_allRows.size(); ++i) {
         const ProjectAssetRow& r = m_allRows.at(i);
         if (!r.isFolder) continue;
-        
+
         // For folders, folderId is their parent_id
         // Only show immediate child folders of the current folder
         if (m_folderId > 0) {
@@ -452,7 +478,7 @@ void ProjectAssetsModel::applyFilters() {
             // Or optionally show only root folders (parent_id = root folder)
             continue;  // Skip folders in "all assets" view
         }
-        
+
         // Search filter for folders
         if (!searchLower.isEmpty()) {
             if (!r.fileName.toLower().contains(searchLower)) {
@@ -460,10 +486,10 @@ void ProjectAssetsModel::applyFilters() {
                 continue;
             }
         }
-        
+
         m_filteredRowIndexes.append(i);
     }
-    
+
     int folderCount = m_filteredRowIndexes.size();
 
     // Second pass: add assets
@@ -480,7 +506,7 @@ void ProjectAssetsModel::applyFilters() {
         // Version filtering: only show primary versions unless showAllVersions is true
         if (!m_showAllVersions && !r.isPrimaryVersion && !r.versionGroupKey.isEmpty()) {
             // Check if this row is part of a version group and is not primary
-            if (m_versionGroups.contains(r.versionGroupKey) && 
+            if (m_versionGroups.contains(r.versionGroupKey) &&
                 m_versionGroups[r.versionGroupKey].size() > 1) {
                 skippedVersion++;
                 continue;  // Skip non-primary versions
@@ -503,13 +529,23 @@ void ProjectAssetsModel::applyFilters() {
         m_filteredRowIndexes.append(i);
     }
 
-    qDebug() << "[ProjectAssetsModel] applyFilters - folderId:" << m_folderId
+    qDebug() << "[ProjectAssetsModel] rebuildFilteredIndexes - folderId:" << m_folderId
              << "typeFilter:" << m_typeFilter
              << "total:" << m_allRows.size()
              << "filtered:" << m_filteredRowIndexes.size()
              << "(folders:" << folderCount << ")"
-             << "skipped(folder:" << skippedFolder << "version:" << skippedVersion 
+             << "skipped(folder:" << skippedFolder << "version:" << skippedVersion
              << "type:" << skippedType << "search:" << skippedSearch << ")";
+}
 
+void ProjectAssetsModel::applyFilters() {
+    if (m_isResetting) {
+        scheduleFilterReset();
+        return;
+    }
+    m_isResetting = true;
+    beginResetModel();
+    rebuildFilteredIndexes();
     endResetModel();
+    m_isResetting = false;
 }

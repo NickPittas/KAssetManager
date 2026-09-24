@@ -7,21 +7,31 @@
 #include "theme_manager.h"
 #include "icon_utils.h"
 #include "oiio_image_loader.h"
-#include "media/tlrender_player.h"
-#include "media/tlrender_viewport.h"
+#include "media/player_lab_player.h"
+#include "media/player_lab_viewport.h"
 
+#include "file_utils.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
+#include <QApplication>
+#include <QDataStream>
+#include <QDragEnterEvent>
+#include <QDragMoveEvent>
+#include <QDropEvent>
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QHeaderView>
 #include <QFileInfo>
 #include <QDir>
+#include <QMimeData>
 #include <QSettings>
 #include <QFrame>
 #include <QFontDatabase>
 #include <QTime>
+#include <QUrl>
 #include <QImageReader>
+
+#include <algorithm>
 
 #if defined(HAVE_QT_PDF)
 #include <QPdfDocument>
@@ -35,14 +45,12 @@ FileManagerPane::FileManagerPane(QWidget *parent)
 {
     // Allow free resizing - no minimum size constraint
     setMinimumSize(0, 0);
-    
+
     setupUi();
     setupConnections();
-    
-    // Default to first drive
-    QFileInfoList drives = QDir::drives();
-    if (!drives.isEmpty()) {
-        QString path = QDir::toNativeSeparators(drives.first().absoluteFilePath());
+
+    const QString path = FileUtils::firstAvailableDirectory();
+    if (!path.isEmpty()) {
         navigateToPath(path, false);
     }
 }
@@ -51,6 +59,29 @@ FileManagerPane::~FileManagerPane()
 {
     if (m_sequenceTimer) {
         m_sequenceTimer->stop();
+    }
+    m_destroying = true;
+    if (m_gridView && m_gridView->selectionModel()) {
+        disconnect(m_gridView->selectionModel(), nullptr, this, nullptr);
+    }
+    if (m_listView && m_listView->selectionModel()) {
+        disconnect(m_listView->selectionModel(), nullptr, this, nullptr);
+    }
+    if (m_videoWidget) {
+        m_videoWidget->setPlayer(nullptr);
+    }
+    if (m_playerLabPlayer) {
+        m_playerLabPlayer->stop();
+        m_playerLabPlayer->unloadMedia();
+    }
+    if (m_scrubController) {
+        m_scrubController->endScrub();
+        if (m_gridView && m_gridView->viewport()) {
+            m_gridView->viewport()->removeEventFilter(m_scrubController);
+        }
+        if (m_gridView) {
+            m_gridView->removeEventFilter(m_scrubController);
+        }
     }
 }
 
@@ -73,18 +104,16 @@ void FileManagerPane::setupUi()
         QString path = m_pathBar->text().trimmed();
         if (path.isEmpty()) return;
         path = QDir::fromNativeSeparators(path);
-        QFileInfo fi(path);
-        if (!fi.exists()) {
-            // Restore current path
+        const FileUtils::PathAvailabilityResult result = FileUtils::checkPathAvailability(
+            path, FileUtils::PathAvailabilityMode::FileOrContainingDirectory);
+        if (!result.available) {
             if (m_dirModel) {
                 m_pathBar->setText(QDir::toNativeSeparators(m_dirModel->rootPath()));
             }
+            qWarning() << result.message;
             return;
         }
-        if (fi.isFile()) {
-            path = fi.absolutePath();
-        }
-        navigateToPath(path, true);
+        navigateToPath(result.normalizedPath, true);
     });
     mainLayout->addWidget(m_pathBar);
 
@@ -422,14 +451,8 @@ void FileManagerPane::setupPreviewPanel()
     pv->addLayout(alphaRow);
 
     // Video widget (tlRender viewport)
-    m_videoWidget = new TLRenderViewport(m_previewPanel);
-    m_videoWidget->setMinimumHeight(0);  // Allow free resizing
-    m_videoWidget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    m_videoWidget->hide();
-
     // tlRender player
-    m_tlrenderPlayer = new TLRenderPlayer(m_previewPanel);
-    m_videoWidget->setPlayer(m_tlrenderPlayer);
+    m_playerLabPlayer = new PlayerLabPlayer(m_previewPanel);
 
     // Media controls
     QHBoxLayout *mc = new QHBoxLayout();
@@ -495,20 +518,20 @@ void FileManagerPane::setupPreviewPanel()
             else playSequence();
             return;
         }
-        if (!m_tlrenderPlayer) return;
-        if (m_tlrenderPlayer->playbackState() == TLRenderPlayer::PlaybackState::Playing) {
-            m_tlrenderPlayer->pause();
+        if (!m_playerLabPlayer) return;
+        if (m_playerLabPlayer->playbackState() == PlayerLabPlayer::PlaybackState::Playing) {
+            m_playerLabPlayer->pause();
             m_playPauseBtn->setIcon(icoMediaPlay(ThemeManager::instance().iconColor()));
         } else {
-            m_tlrenderPlayer->play();
+            m_playerLabPlayer->play();
             m_playPauseBtn->setIcon(icoMediaPause(ThemeManager::instance().iconColor()));
         }
     });
 
-    connect(m_tlrenderPlayer, &TLRenderPlayer::positionChanged, this, [this](qint64 pos) {
+    connect(m_playerLabPlayer, &PlayerLabPlayer::positionChanged, this, [this](qint64 pos) {
         if (m_isSequence) return;
-        qint64 duration = m_tlrenderPlayer->duration();
-        if (m_tlrenderPlayer && duration > 0) {
+        qint64 duration = m_playerLabPlayer->duration();
+        if (m_playerLabPlayer && duration > 0) {
             m_positionSlider->blockSignals(true);
             m_positionSlider->setValue(int(pos * 1000 / duration));
             m_positionSlider->blockSignals(false);
@@ -523,30 +546,29 @@ void FileManagerPane::setupPreviewPanel()
             loadSequenceFrame(v);
             return;
         }
-        qint64 duration = m_tlrenderPlayer->duration();
-        if (m_tlrenderPlayer && duration > 0) {
-            m_tlrenderPlayer->seek(qint64(v) * duration / 1000);
+        qint64 duration = m_playerLabPlayer->duration();
+        if (m_playerLabPlayer && duration > 0) {
+            m_playerLabPlayer->seekAsync(qint64(v) * duration / 1000);
         }
     });
 
     connect(m_volumeSlider, &QSlider::valueChanged, this, [this](int v) {
-        if (m_tlrenderPlayer) m_tlrenderPlayer->setVolume(v / 100.0f);
+        if (m_playerLabPlayer) m_playerLabPlayer->setVolume(v / 100.0f);
     });
 
     connect(m_muteBtn, &QPushButton::clicked, this, [this] {
-        if (!m_tlrenderPlayer) return;
-        bool newMuted = !m_tlrenderPlayer->isMuted();
-        m_tlrenderPlayer->setMuted(newMuted);
+        if (!m_playerLabPlayer) return;
+        bool newMuted = !m_playerLabPlayer->isMuted();
+        m_playerLabPlayer->setMuted(newMuted);
         m_muteBtn->setIcon(newMuted ? icoMediaMute() : icoMediaAudio());
     });
 
     // Preview content
-    QWidget *previewContent = new QWidget(m_previewPanel);
-    QVBoxLayout *pc = new QVBoxLayout(previewContent);
+    m_previewContent = new QWidget(m_previewPanel);
+    QVBoxLayout *pc = new QVBoxLayout(m_previewContent);
     pc->setContentsMargins(0, 0, 0, 0);
     pc->setSpacing(4);
     pc->addWidget(m_imageView, 1);
-    pc->addWidget(m_videoWidget, 1);
     pc->addWidget(m_textView, 1);
     pc->addWidget(m_csvView, 1);
 #if defined(HAVE_QT_PDF_WIDGETS)
@@ -554,7 +576,7 @@ void FileManagerPane::setupPreviewPanel()
 #endif
     pc->addWidget(m_svgView, 1);
 
-    pv->addWidget(previewContent);
+    pv->addWidget(m_previewContent);
     pv->addLayout(mc);
     pv->addLayout(docc);
 
@@ -651,10 +673,17 @@ void FileManagerPane::navigateToPath(const QString &path, bool addToHistory)
 {
     if (path.isEmpty()) return;
 
-    QFileInfo fi(path);
-    if (!fi.exists()) return;
+    const FileUtils::PathAvailabilityResult result = FileUtils::checkPathAvailability(
+        path, FileUtils::PathAvailabilityMode::DirectoryOnly);
+    if (!result.available) {
+        if (m_dirModel) {
+            m_pathBar->setText(QDir::toNativeSeparators(m_dirModel->rootPath()));
+        }
+        qWarning() << result.message;
+        return;
+    }
 
-    QString targetPath = fi.isDir() ? fi.absoluteFilePath() : fi.absolutePath();
+    const QString targetPath = result.normalizedPath;
 
     if (addToHistory) {
         // Truncate forward history if we're not at the end
@@ -721,7 +750,7 @@ void FileManagerPane::refresh()
     }
 
     // Force a model refresh by flipping the root path.
-    QString tempPath = QDir::tempPath();
+    QString tempPath = QCoreApplication::applicationDirPath();
     m_dirModel->setRootPath(tempPath);
     m_dirModel->setRootPath(path);
 
@@ -932,7 +961,7 @@ void FileManagerPane::pasteFromClipboard()
     QString destDir = currentPath();
     if (destDir.isEmpty()) return;
     
-    emit filesDropped(m_clipboardPaths, destDir);
+    emit filesDropped(m_clipboardPaths, destDir, m_clipboardCutMode);
     
     // Clear clipboard if it was a cut operation
     if (m_clipboardCutMode) {
@@ -986,25 +1015,25 @@ void FileManagerPane::updatePreviewForIndex(const QModelIndex &idx)
                                             "py", "cpp", "h", "c", "hpp"};
 
     // Hide all preview widgets first
-    m_imageView->hide();
-    m_videoWidget->hide();
-    m_textView->hide();
-    m_csvView->hide();
-    m_svgView->hide();
-    m_prevFrameBtn->hide();
-    m_playPauseBtn->hide();
-    m_nextFrameBtn->hide();
-    m_positionSlider->hide();
-    m_timeLabel->hide();
-    m_volumeSlider->hide();
-    m_muteBtn->hide();
-    m_alphaCheck->hide();
+    if (m_imageView) m_imageView->hide();
+    if (m_videoWidget) m_videoWidget->hide();
+    if (m_textView) m_textView->hide();
+    if (m_csvView) m_csvView->hide();
+    if (m_svgView) m_svgView->hide();
+    if (m_prevFrameBtn) m_prevFrameBtn->hide();
+    if (m_playPauseBtn) m_playPauseBtn->hide();
+    if (m_nextFrameBtn) m_nextFrameBtn->hide();
+    if (m_positionSlider) m_positionSlider->hide();
+    if (m_timeLabel) m_timeLabel->hide();
+    if (m_volumeSlider) m_volumeSlider->hide();
+    if (m_muteBtn) m_muteBtn->hide();
+    if (m_alphaCheck) m_alphaCheck->hide();
 #if defined(HAVE_QT_PDF_WIDGETS)
     if (m_pdfView) m_pdfView->hide();
 #endif
-    m_pdfPrevBtn->hide();
-    m_pdfNextBtn->hide();
-    m_pdfPageLabel->hide();
+    if (m_pdfPrevBtn) m_pdfPrevBtn->hide();
+    if (m_pdfNextBtn) m_pdfNextBtn->hide();
+    if (m_pdfPageLabel) m_pdfPageLabel->hide();
 
     if (imageExts.contains(suffix)) {
         // Load image
@@ -1031,9 +1060,10 @@ void FileManagerPane::updatePreviewForIndex(const QModelIndex &idx)
         }
     } else if (videoExts.contains(suffix)) {
         // Video preview
-        if (m_tlrenderPlayer) {
-            m_tlrenderPlayer->loadMedia(filePath);
-            m_videoWidget->show();
+        if (m_playerLabPlayer) {
+            ensureVideoPreview();
+            m_playerLabPlayer->loadMedia(filePath);
+            if (m_videoWidget) m_videoWidget->show();
             m_playPauseBtn->show();
             m_positionSlider->show();
             m_timeLabel->show();
@@ -1075,14 +1105,20 @@ void FileManagerPane::updatePreviewForIndex(const QModelIndex &idx)
 
 void FileManagerPane::clearPreview()
 {
+    if (m_destroying) {
+        return;
+    }
+
     m_currentPreviewPath.clear();
     m_originalImage = QImage();
-    m_imageItem->setPixmap(QPixmap());
+    if (m_imageItem) {
+        m_imageItem->setPixmap(QPixmap());
+    }
     
     // Stop video playback
-    if (m_tlrenderPlayer) {
-        m_tlrenderPlayer->stop();
-        m_tlrenderPlayer->unloadMedia();
+    if (m_playerLabPlayer) {
+        m_playerLabPlayer->stop();
+        m_playerLabPlayer->unloadMedia();
     }
 
     // Stop sequence playback
@@ -1093,37 +1129,56 @@ void FileManagerPane::clearPreview()
     m_sequencePlaying = false;
 
     // Hide all preview widgets
-    m_imageView->hide();
-    m_videoWidget->hide();
-    m_textView->hide();
-    m_csvView->hide();
-    m_svgView->hide();
+    if (m_imageView) m_imageView->hide();
+    if (m_videoWidget) m_videoWidget->hide();
+    if (m_textView) m_textView->hide();
+    if (m_csvView) m_csvView->hide();
+    if (m_svgView) m_svgView->hide();
 #if defined(HAVE_QT_PDF_WIDGETS)
     if (m_pdfView) m_pdfView->hide();
 #endif
 
     // Hide media controls
-    m_prevFrameBtn->hide();
-    m_playPauseBtn->hide();
-    m_nextFrameBtn->hide();
-    m_positionSlider->hide();
-    m_timeLabel->hide();
-    m_volumeSlider->hide();
-    m_muteBtn->hide();
-    m_alphaCheck->hide();
-    m_pdfPrevBtn->hide();
-    m_pdfNextBtn->hide();
-    m_pdfPageLabel->hide();
+    if (m_prevFrameBtn) m_prevFrameBtn->hide();
+    if (m_playPauseBtn) m_playPauseBtn->hide();
+    if (m_nextFrameBtn) m_nextFrameBtn->hide();
+    if (m_positionSlider) m_positionSlider->hide();
+    if (m_timeLabel) m_timeLabel->hide();
+    if (m_volumeSlider) m_volumeSlider->hide();
+    if (m_muteBtn) m_muteBtn->hide();
+    if (m_alphaCheck) m_alphaCheck->hide();
+    if (m_pdfPrevBtn) m_pdfPrevBtn->hide();
+    if (m_pdfNextBtn) m_pdfNextBtn->hide();
+    if (m_pdfPageLabel) m_pdfPageLabel->hide();
 
     // Clear info panel
-    m_infoFileName->setText("No selection");
-    m_infoFilePath->clear();
-    m_infoFileSize->clear();
-    m_infoFileType->clear();
-    m_infoDimensions->clear();
-    m_infoCreated->clear();
-    m_infoModified->clear();
-    m_infoPermissions->clear();
+    if (m_infoFileName) m_infoFileName->setText("No selection");
+    if (m_infoFilePath) m_infoFilePath->clear();
+    if (m_infoFileSize) m_infoFileSize->clear();
+    if (m_infoFileType) m_infoFileType->clear();
+    if (m_infoDimensions) m_infoDimensions->clear();
+    if (m_infoCreated) m_infoCreated->clear();
+    if (m_infoModified) m_infoModified->clear();
+    if (m_infoPermissions) m_infoPermissions->clear();
+}
+
+void FileManagerPane::ensureVideoPreview()
+{
+    if (m_videoWidget || !m_previewContent) {
+        return;
+    }
+
+    auto *layout = qobject_cast<QVBoxLayout*>(m_previewContent->layout());
+    if (!layout) {
+        return;
+    }
+
+    m_videoWidget = new PlayerLabViewport(m_previewPanel);
+    m_videoWidget->setMinimumHeight(0);
+    m_videoWidget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    m_videoWidget->hide();
+    m_videoWidget->setPlayer(m_playerLabPlayer);
+    layout->insertWidget(1, m_videoWidget, 1);
 }
 
 void FileManagerPane::saveState(QSettings &settings, const QString &prefix)
@@ -1161,9 +1216,14 @@ void FileManagerPane::restoreState(QSettings &settings, const QString &prefix)
         setPreviewVisible(settings.value(prefix + "/PreviewVisible").toBool());
     }
     if (settings.contains(prefix + "/CurrentPath")) {
-        QString path = settings.value(prefix + "/CurrentPath").toString();
-        if (QFileInfo::exists(path)) {
-            navigateToPath(path, false);
+        const QString path = settings.value(prefix + "/CurrentPath").toString();
+        const FileUtils::PathAvailabilityResult result = FileUtils::checkPathAvailability(
+            path, FileUtils::PathAvailabilityMode::DirectoryOnly);
+        if (result.available) {
+            navigateToPath(result.normalizedPath, false);
+        } else {
+            settings.remove(prefix + "/CurrentPath");
+            qWarning() << result.message;
         }
     }
     
@@ -1193,12 +1253,113 @@ bool FileManagerPane::eventFilter(QObject *watched, QEvent *event)
     if (event->type() == QEvent::FocusIn || event->type() == QEvent::MouseButtonPress) {
         setActive(true);
     }
+
+    const bool viewViewport = (m_gridView && watched == m_gridView->viewport()) ||
+                              (m_listView && watched == m_listView->viewport());
+    if (viewViewport) {
+        auto destinationForEvent = [this, watched](const QPoint &pos) {
+            QAbstractItemView *view = (m_gridView && watched == m_gridView->viewport())
+                ? static_cast<QAbstractItemView*>(m_gridView)
+                : static_cast<QAbstractItemView*>(m_listView);
+            QModelIndex idx = view ? view->indexAt(pos) : QModelIndex();
+            QModelIndex srcIdx = idx;
+            if (idx.isValid() && m_proxyModel && idx.model() == m_proxyModel) {
+                srcIdx = m_proxyModel->mapToSource(idx);
+            }
+
+            if (idx.isValid() && m_dirModel && m_dirModel->isDir(srcIdx)) {
+                return m_dirModel->filePath(srcIdx);
+            }
+            return currentPath();
+        };
+
+        auto decodeDroppedSources = [](const QMimeData *mimeData) {
+            QStringList sources;
+            if (!mimeData) return sources;
+            if (mimeData->hasFormat("application/x-kasset-sequence-urls")) {
+                QByteArray enc = mimeData->data("application/x-kasset-sequence-urls");
+                QDataStream ds(&enc, QIODevice::ReadOnly);
+                ds >> sources;
+            } else if (mimeData->hasUrls()) {
+                for (const QUrl &url : mimeData->urls()) {
+                    if (url.isLocalFile()) sources << url.toLocalFile();
+                }
+            }
+            sources.removeDuplicates();
+            return sources;
+        };
+
+        auto sameFolderOnly = [](const QStringList &sources, const QString &destDir) {
+            if (sources.isEmpty() || destDir.isEmpty()) return false;
+            const QString normDest = QDir(QDir::cleanPath(destDir)).absolutePath().toLower();
+            return std::all_of(sources.cbegin(), sources.cend(), [&](const QString &source) {
+                QString parent = QFileInfo(source).absoluteDir().absolutePath();
+                parent = QDir::cleanPath(parent).toLower();
+                return parent == normDest;
+            });
+        };
+
+        if (event->type() == QEvent::DragEnter) {
+            auto *dragEvent = static_cast<QDragEnterEvent*>(event);
+            if (dragEvent->mimeData()->hasUrls() || dragEvent->mimeData()->hasFormat("application/x-kasset-sequence-urls")) {
+                const QString destDir = destinationForEvent(dragEvent->position().toPoint());
+                const QStringList sources = decodeDroppedSources(dragEvent->mimeData());
+                if (sameFolderOnly(sources, destDir)) {
+                    dragEvent->setDropAction(Qt::IgnoreAction);
+                    dragEvent->accept();
+                    return true;
+                }
+                const bool moveRequested = dragEvent->modifiers().testFlag(Qt::ShiftModifier);
+                dragEvent->setDropAction(moveRequested ? Qt::MoveAction : Qt::CopyAction);
+                dragEvent->accept();
+                return true;
+            }
+        } else if (event->type() == QEvent::DragMove) {
+            auto *dragEvent = static_cast<QDragMoveEvent*>(event);
+            if (dragEvent->mimeData()->hasUrls() || dragEvent->mimeData()->hasFormat("application/x-kasset-sequence-urls")) {
+                const QString destDir = destinationForEvent(dragEvent->position().toPoint());
+                const QStringList sources = decodeDroppedSources(dragEvent->mimeData());
+                if (sameFolderOnly(sources, destDir)) {
+                    dragEvent->setDropAction(Qt::IgnoreAction);
+                    dragEvent->accept();
+                    return true;
+                }
+                const bool moveRequested = dragEvent->modifiers().testFlag(Qt::ShiftModifier);
+                dragEvent->setDropAction(moveRequested ? Qt::MoveAction : Qt::CopyAction);
+                dragEvent->accept();
+                return true;
+            }
+        } else if (event->type() == QEvent::Drop) {
+            auto *dropEvent = static_cast<QDropEvent*>(event);
+            const QString destDir = destinationForEvent(dropEvent->position().toPoint());
+            const QStringList sources = decodeDroppedSources(dropEvent->mimeData());
+            if (destDir.isEmpty() || sources.isEmpty()) {
+                return false;
+            }
+            if (sameFolderOnly(sources, destDir)) {
+                dropEvent->setDropAction(Qt::IgnoreAction);
+                dropEvent->accept();
+                return true;
+            }
+            const bool moveRequested = dropEvent->modifiers().testFlag(Qt::ShiftModifier)
+                || dropEvent->dropAction() == Qt::MoveAction
+                || dropEvent->proposedAction() == Qt::MoveAction;
+            emit filesDropped(sources, destDir, moveRequested);
+            dropEvent->setDropAction(moveRequested ? Qt::MoveAction : Qt::CopyAction);
+            dropEvent->accept();
+            return true;
+        }
+    }
+
     return QWidget::eventFilter(watched, event);
 }
 
 void FileManagerPane::onItemDoubleClicked(const QModelIndex &index)
 {
     if (!index.isValid()) return;
+    if (m_destroying) {
+        return;
+    }
 
     QModelIndex srcIdx = index;
     if (m_proxyModel && index.model() == m_proxyModel) {
@@ -1214,6 +1375,10 @@ void FileManagerPane::onItemDoubleClicked(const QModelIndex &index)
 
 void FileManagerPane::onSelectionChanged()
 {
+    if (m_destroying) {
+        return;
+    }
+
     // Update preview for current selection
     QModelIndex idx = currentIndex();
     if (idx.isValid()) {

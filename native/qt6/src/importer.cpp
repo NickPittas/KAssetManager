@@ -2,11 +2,11 @@
 #include "db.h"
 #include "i_asset_database.h"
 #include "log_manager.h"
+#include "project_path_utils.h"
 #include <QFileInfo>
 #include <QDir>
 #include <QDirIterator>
 #include <QDebug>
-#include <QApplication>
 #include <QElapsedTimer>
 
 #include <QSet>
@@ -141,7 +141,6 @@ bool Importer::importFolder(const QString& dirPath, int parentFolderId){
     
     // Emit initial progress to show dialog is working
     emit progressChanged(0, totalFiles);
-    QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
     
     for (auto dirIt = filesByDir.begin(); dirIt != filesByDir.end(); ++dirIt) {
         QString folderPath = dirIt.key();
@@ -173,10 +172,6 @@ bool Importer::importFolder(const QString& dirPath, int parentFolderId){
                     emit progressChanged(currentFile, totalFiles);
                     
                     // Periodically update UI
-                    if (uiTimer.elapsed() >= UI_UPDATE_INTERVAL_MS) {
-                        QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
-                        uiTimer.restart();
-                    }
                 }
             }
         }
@@ -193,7 +188,6 @@ bool Importer::importFolder(const QString& dirPath, int parentFolderId){
             if (uiTimer.elapsed() >= UI_UPDATE_INTERVAL_MS) {
                 emit currentFileChanged(QFileInfo(fp).fileName());
                 emit progressChanged(currentFile, totalFiles);
-                QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
                 uiTimer.restart();
             }
         }
@@ -230,7 +224,7 @@ bool Importer::importFolderContents(const QString& dirPath, int targetFolderId) 
 
     // Helper to normalize paths for consistent comparison
     auto normalizePath = [](const QString& p) -> QString {
-        return QDir::cleanPath(p).toLower();
+        return ProjectPathUtils::keyForPath(p);
     };
 
     // Build subfolders directly under target folder (breadth-first)
@@ -285,7 +279,6 @@ bool Importer::importFolderContents(const QString& dirPath, int targetFolderId) 
     
     // Emit initial progress to show dialog is working
     emit progressChanged(0, totalFiles);
-    QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
     
     for (auto dirIt = filesByDir.begin(); dirIt != filesByDir.end(); ++dirIt) {
         QString folderPath = dirIt.key();
@@ -317,12 +310,6 @@ bool Importer::importFolderContents(const QString& dirPath, int targetFolderId) 
                     sequenceFiles.insert(framePath);
                     currentFile++;
                     emit progressChanged(currentFile, totalFiles);
-                    
-                    // Periodically update UI
-                    if (uiTimer.elapsed() >= UI_UPDATE_INTERVAL_MS) {
-                        QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
-                        uiTimer.restart();
-                    }
                 }
             }
         }
@@ -339,7 +326,6 @@ bool Importer::importFolderContents(const QString& dirPath, int targetFolderId) 
             if (uiTimer.elapsed() >= UI_UPDATE_INTERVAL_MS) {
                 emit currentFileChanged(QFileInfo(fp).fileName());
                 emit progressChanged(currentFile, totalFiles);
-                QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
                 uiTimer.restart();
             }
         }

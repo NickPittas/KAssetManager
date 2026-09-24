@@ -1,5 +1,6 @@
 #include "project_import_worker.h"
 #include "log_manager.h"
+#include "project_path_utils.h"
 
 #include <QDebug>
 #include <QUuid>
@@ -120,7 +121,7 @@ void ProjectImportWorker::doImport()
         
         // Helper to normalize paths
         auto normalizePath = [](const QString& p) -> QString {
-            return QDir::cleanPath(p).toLower();
+            return ProjectPathUtils::keyForPath(p);
         };
         
         // Phase 1: Build folder structure

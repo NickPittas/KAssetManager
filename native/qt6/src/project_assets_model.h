@@ -123,8 +123,11 @@ signals:
 
 private slots:
     void scheduleReload();
+    void scheduleFilterReset();
+    void performFilterReset();
 
 private:
+    void rebuildFilteredIndexes();
     void applyFilters();
     void detectVersionGroups();
 
@@ -142,4 +145,6 @@ private:
     QMap<int, int> m_assetIdToRow;                // assetId -> row index in m_allRows
 
     QTimer m_reloadTimer;
+    bool m_filterResetPending = false;
+    bool m_isResetting = false;
 };

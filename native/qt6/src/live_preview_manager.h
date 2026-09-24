@@ -63,7 +63,8 @@ public:
     FrameHandle cachedFrame(const QString& filePath, const QSize& targetSize, qreal position = 0.0);
 
     // Queue asynchronous decode for the requested asset/frame.
-    void requestFrame(const QString& filePath, const QSize& targetSize, qreal position = 0.0);
+    void requestFrame(const QString& filePath, const QSize& targetSize, qreal position = 0.0,
+                      bool bypassSuspension = false);
 
     // Remove cached entries for a specific asset (all sizes/positions).
     void invalidate(const QString& filePath);
@@ -108,13 +109,16 @@ private:
     void enqueueSequenceDecode(const Request& request, const QString& cacheKey);
     void startDecodeTask(const Request& request, const QString& cacheKey, bool fromSequenceQueue);
     static QImage loadImageFrame(const Request& request, QString& error);
-    QImage loadVideoFrame(const Request& request, QString& error);
+    QImage loadVideoFrame(const Request& request, QString& error, uint64_t cancellationToken);
     static QImage loadSequenceFrame(const Request& request, QString& error);
     bool isImageSequence(const QString& filePath) const;
     static QString sequenceHead(const QString& filePath);
     struct SequenceMeta;
     SequenceMeta sequenceMetaFor(const QString& filePath, QString& error);
     void pruneSequenceMetaCache();
+    bool shouldSuppressRecentFailure(const QString& filePath, const QString& cacheKey) const;
+    void rememberDecodeFailure(const QString& filePath, const QString& cacheKey, const QString& error);
+    void clearDecodeFailure(const QString& filePath, const QString& cacheKey);
 
     void storeFrame(const QString& key, const QPixmap& pixmap, qreal position, const QSize& size);
 
@@ -149,6 +153,7 @@ private:
     mutable QReadWriteLock m_cacheLock;  // Reader-writer lock for cache (faster reads during paint)
     QCache<QString, CachedEntry> m_cache;
     QSet<QString> m_inFlight;
+    QHash<QString, qint64> m_recentFailures;
     QList<SequenceTask> m_sequenceQueue;
     QCache<QString, SequenceMeta> m_sequenceMetaCache;
     int m_maxCacheEntries = 256;

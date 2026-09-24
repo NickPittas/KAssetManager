@@ -177,10 +177,11 @@ QRectF TextAnnotation::boundingRect() const
 QJsonObject TextAnnotation::toJson() const
 {
     QJsonObject json;
+    const QPointF scenePosition = pos();
     json["type"] = "text";
     json["text"] = m_text;
-    json["x"] = m_position.x();
-    json["y"] = m_position.y();
+    json["x"] = scenePosition.x();
+    json["y"] = scenePosition.y();
     json["color"] = m_color.name();
     json["penWidth"] = m_penWidth;
     json["scale"] = m_scale;
@@ -267,6 +268,7 @@ FreehandAnnotation::FreehandAnnotation(const QPainterPath& path, QGraphicsItem* 
 
 void FreehandAnnotation::addPoint(const QPointF& point)
 {
+    prepareGeometryChange();
     if (m_path.elementCount() == 0) {
         m_path.moveTo(point);
     } else {
@@ -306,6 +308,7 @@ QRectF FreehandAnnotation::boundingRect() const
 QJsonObject FreehandAnnotation::toJson() const
 {
     QJsonObject json;
+    const QPointF offset = pos();
     json["type"] = "freehand";
     json["color"] = m_color.name();
     json["penWidth"] = m_penWidth;
@@ -314,8 +317,8 @@ QJsonObject FreehandAnnotation::toJson() const
     for (int i = 0; i < m_path.elementCount(); ++i) {
         QPainterPath::Element elem = m_path.elementAt(i);
         QJsonObject pt;
-        pt["x"] = elem.x;
-        pt["y"] = elem.y;
+        pt["x"] = elem.x + offset.x();
+        pt["y"] = elem.y + offset.y();
         points.append(pt);
     }
     json["points"] = points;
@@ -365,11 +368,12 @@ QRectF RectangleAnnotation::boundingRect() const
 QJsonObject RectangleAnnotation::toJson() const
 {
     QJsonObject json;
+    const QRectF rect = m_rect.translated(pos());
     json["type"] = "rectangle";
-    json["x"] = m_rect.x();
-    json["y"] = m_rect.y();
-    json["width"] = m_rect.width();
-    json["height"] = m_rect.height();
+    json["x"] = rect.x();
+    json["y"] = rect.y();
+    json["width"] = rect.width();
+    json["height"] = rect.height();
     json["color"] = m_color.name();
     json["penWidth"] = m_penWidth;
     return json;
@@ -417,11 +421,12 @@ QRectF EllipseAnnotation::boundingRect() const
 QJsonObject EllipseAnnotation::toJson() const
 {
     QJsonObject json;
+    const QRectF rect = m_rect.translated(pos());
     json["type"] = "ellipse";
-    json["x"] = m_rect.x();
-    json["y"] = m_rect.y();
-    json["width"] = m_rect.width();
-    json["height"] = m_rect.height();
+    json["x"] = rect.x();
+    json["y"] = rect.y();
+    json["width"] = rect.width();
+    json["height"] = rect.height();
     json["color"] = m_color.name();
     json["penWidth"] = m_penWidth;
     return json;
@@ -507,11 +512,12 @@ QRectF ArrowAnnotation::boundingRect() const
 QJsonObject ArrowAnnotation::toJson() const
 {
     QJsonObject json;
+    const QPointF offset = pos();
     json["type"] = "arrow";
-    json["x1"] = m_line.x1();
-    json["y1"] = m_line.y1();
-    json["x2"] = m_line.x2();
-    json["y2"] = m_line.y2();
+    json["x1"] = m_line.x1() + offset.x();
+    json["y1"] = m_line.y1() + offset.y();
+    json["x2"] = m_line.x2() + offset.x();
+    json["y2"] = m_line.y2() + offset.y();
     json["color"] = m_color.name();
     json["penWidth"] = m_penWidth;
     json["arrowHeadSize"] = m_arrowHeadSize;

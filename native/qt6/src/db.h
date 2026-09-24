@@ -107,9 +107,6 @@ private:
     bool exec(const QString& sql);
     bool hasColumn(const QString& table, const QString& column) const;
 
-    // Prepared statement cache
-    QSqlQuery prepared(const QString& key, const QString& sql) const;
-
     // Schema versioning helpers (SQLite PRAGMA user_version)
     int schemaUserVersion() const;
     bool setSchemaUserVersion(int v);
@@ -139,8 +136,4 @@ private:
     int m_rootId = 0;
     QString m_dataDir; // directory that holds the DB; used for version storage
 
-    // Simple prepared statement cache keyed by a stable key name
-    mutable QHash<QString, QSqlQuery> m_stmtCache;
-    mutable QHash<QString, QString> m_stmtSql; // to detect SQL changes per key
 };
-

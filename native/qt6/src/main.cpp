@@ -1,4 +1,4 @@
-﻿#include <QApplication>
+#include <QApplication>
 #include <QGuiApplication>
 #include <QDebug>
 #include <QDir>
@@ -7,14 +7,18 @@
 #include <QDateTime>
 #include <QStandardPaths>
 #include <QFileInfo>
+#include <QByteArray>
+#include <clocale>
 #include <iostream>
 #include "mainwindow.h"
 #include "db.h"
 #include "log_manager.h"
 #include "progress_manager.h"
+#include "runtime_paths.h"
 #include "theme_manager.h"
+#include "platform_session.h"
 #ifdef HAVE_TLRENDER
-#include "media/tlrender_player.h"
+#include "media/player_lab_player.h"
 #endif
 
 #ifdef Q_OS_WIN
@@ -37,6 +41,8 @@ extern "C" {
 
 int main(int argc, char *argv[])
 {
+    setlocale(LC_NUMERIC, "C");
+
     // High DPI Configuration - MUST be set before QApplication is created
     // Qt 6 enables High DPI scaling by default, but we need to configure it properly
     // to prevent blurry rendering and ensure consistent UI across different DPI displays.
@@ -49,14 +55,27 @@ int main(int argc, char *argv[])
     // Enable OpenGL context sharing for multiple QOpenGLWidgets.
     QApplication::setAttribute(Qt::AA_ShareOpenGLContexts);
 
-    // Enable hardware-accelerated OpenGL rendering for smooth window resize/move
-    // This uses the system's native OpenGL driver for widget compositing
-    QApplication::setAttribute(Qt::AA_UseDesktopOpenGL);
+#if defined(Q_OS_LINUX)
+    if (PlatformSession::isWayland() && PlatformSession::shouldForceRasterWidgetsOnWayland()) {
+        QApplication::setAttribute(Qt::AA_ForceRasterWidgets);
+    }
+    if (PlatformSession::isWayland() && qEnvironmentVariableIsEmpty("QT_WIDGETS_RHI")) {
+        // Qt's widget RHI path is the codepath emitting
+        // "Failed to create QRhi for QBackingStoreRhiSupport" on Fedora Wayland
+        // when a tlRender QOpenGLWidget preview is created on demand.
+        qputenv("QT_WIDGETS_RHI", QByteArrayLiteral("0"));
+    }
+#endif
 
-#ifdef HAVE_TLRENDER
-    // Initialize tlRender before QApplication to ensure the default surface format
-    // is set correctly for QOpenGLWidget usage.
-    TLRenderPlayer::initialize();
+    // Use desktop OpenGL for widget-based playback surfaces.
+    // On Wayland we avoid forcing tlRender's global 4.1 default format, but still
+    // prefer the desktop GL backend so the tlRender QOpenGLWidget can create a context.
+#if !defined(Q_OS_LINUX)
+    QApplication::setAttribute(Qt::AA_UseDesktopOpenGL);
+#elif defined(Q_OS_LINUX)
+    if (PlatformSession::isWayland() && PlatformSession::shouldUseDesktopOpenGLOnWayland()) {
+        QApplication::setAttribute(Qt::AA_UseDesktopOpenGL);
+    }
 #endif
 
     // Suppress FFmpeg error messages to prevent console spam
@@ -75,17 +94,15 @@ int main(int argc, char *argv[])
     // Load and apply theme (palette + minimal stylesheet) before any widgets are created
     ThemeManager::instance().loadTheme();
 
-    // Install centralized message handler that logs via LogManager to app.log
+    // Install centralized message handler that logs via LogManager.
     QString appDir = QCoreApplication::applicationDirPath();
     qInstallMessageHandler(customMessageHandler);
 
 #ifdef Q_OS_WIN
     // Install a top-level SEH filter to capture crashes and write a minidump
     SetUnhandledExceptionFilter([](EXCEPTION_POINTERS* ep) -> LONG {
-        // Use persistent user data location for crash dumps
-        QString dataDir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-        QDir().mkpath(dataDir);
-        QString dumpPath = dataDir + "/crash.dmp";
+        const QString dataDir = RuntimePaths::writableDataRoot();
+        const QString dumpPath = RuntimePaths::dataPath("crash.dmp");
         HANDLE hFile = CreateFileW((LPCWSTR)dumpPath.utf16(), GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
         if (hFile != INVALID_HANDLE_VALUE) {
             MINIDUMP_EXCEPTION_INFORMATION mei;
@@ -119,63 +136,12 @@ int main(int argc, char *argv[])
     auto& progressManager = ProgressManager::instance();
     LogManager::instance().addLog("[MAIN] Before DB init");
 
-    // Use persistent user data location for database (survives app updates)
-    // On Windows: C:/Users/[Username]/AppData/Roaming/KAsset/KAsset Manager Qt/
-    const QString dataDir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-    QDir().mkpath(dataDir);
-    const QString dbPath = dataDir + "/kasset.db";
-
-    // Migration: Move database from old location (appDir/data) to new location (AppData)
-    const QString oldDataDir = appDir + "/data";
-    const QString oldDbPath = oldDataDir + "/kasset.db";
-    if (!QFile::exists(dbPath) && QFile::exists(oldDbPath)) {
-        LogManager::instance().addLog("[MAIN] Migrating database from old location to persistent location");
-        LogManager::instance().addLog("[MAIN] Old: " + oldDbPath);
-        LogManager::instance().addLog("[MAIN] New: " + dbPath);
-
-        // Copy database file
-        if (QFile::copy(oldDbPath, dbPath)) {
-            LogManager::instance().addLog("[MAIN] Database migrated successfully");
-
-            // Migrate versions directory if it exists
-            const QString oldVersionsDir = oldDataDir + "/versions";
-            const QString newVersionsDir = dataDir + "/versions";
-            if (QDir(oldVersionsDir).exists()) {
-                LogManager::instance().addLog("[MAIN] Migrating versions directory");
-                QDir().mkpath(newVersionsDir);
-
-                // Copy all version subdirectories
-                QDir oldDir(oldVersionsDir);
-                QStringList assetDirs = oldDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
-                for (const QString& assetDir : assetDirs) {
-                    QString srcPath = oldVersionsDir + "/" + assetDir;
-                    QString dstPath = newVersionsDir + "/" + assetDir;
-                    QDir().mkpath(dstPath);
-
-                    QDir srcDir(srcPath);
-                    QStringList files = srcDir.entryList(QDir::Files);
-                    for (const QString& file : files) {
-                        QFile::copy(srcPath + "/" + file, dstPath + "/" + file);
-                    }
-                }
-                LogManager::instance().addLog("[MAIN] Versions migrated successfully");
-            }
-
-            // Optionally remove old database (keep for safety - user can delete manually)
-            // QFile::remove(oldDbPath);
-            LogManager::instance().addLog("[MAIN] Old database preserved at: " + oldDbPath);
-        } else {
-            LogManager::instance().addLog("[MAIN] WARNING: Failed to migrate database, will use old location");
-            // Fall back to old location if migration fails
-            const QString fallbackDbPath = oldDbPath;
-            if (!DB::instance().init(fallbackDbPath)) {
-                qCritical() << "Failed to initialize database at" << fallbackDbPath;
-                return -1;
-            }
-            LogManager::instance().addLog("[MAIN] DB init ok (using old location)");
-            goto skip_new_init;
-        }
-    }
+    const QString dataDir = RuntimePaths::writableDataRoot();
+    RuntimePaths::migrateLegacyDataToWritableRoot();
+    const QString dbPath = RuntimePaths::dataPath("kasset.db");
+    LogManager::instance().addLog("[MAIN] Writable data root: " + dataDir);
+    LogManager::instance().addLog(QString("[MAIN] Data mode: %1")
+        .arg(RuntimePaths::usingPortableDataRoot() ? "portable" : "per-user"));
 
     if (!DB::instance().init(dbPath)) {
         qCritical() << "Failed to initialize database at" << dbPath;
@@ -183,14 +149,13 @@ int main(int argc, char *argv[])
     }
     LogManager::instance().addLog("[MAIN] DB init ok at: " + dbPath);
 
-skip_new_init:
-
     LogManager::instance().addLog("[MAIN] Creating MainWindow");
     // Create and show main window
     MainWindow mainWindow;
     LogManager::instance().addLog("[MAIN] MainWindow constructed");
     mainWindow.show();
     LogManager::instance().addLog("[MAIN] MainWindow shown");
+
     QObject::connect(&app, &QCoreApplication::aboutToQuit, []{ LogManager::instance().addLog("[MAIN] aboutToQuit"); });
     QTimer::singleShot(0, []{ LogManager::instance().addLog("[MAIN] Event loop entered"); });
 

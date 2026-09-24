@@ -5,6 +5,8 @@ node_modules/
 # Build outputs
 dist/
 build/
+build-*/
+cmake-build-*/
 out/
 installer/
 
@@ -42,6 +44,11 @@ coverage/
 # Temporary files
 tmp/
 temp/
+__pycache__/
+*.pyc
+*.pyo
+*.tmp
+*.bak
 
 # Media and binary artifacts
 *.mov
@@ -53,6 +60,31 @@ resources/ffmpeg/
 *.dll
 *.pdb
 *.exe
+/*.AppImage
+tools/appimage/
+
+# Compiler dependency files (generated during build)
+*.d
+
+# AppImage staging / unpacked squashfs
+squashfs-root/
+
+# Session / runtime logs
+*.log
+
+# Agent/session artifacts
+# Generated agent/analysis outputs
+scratch/
+graphify-out/
+rr-session-*.json
+rr-session-*.res.log
+
+# Generated validation captures
+validation_outputs/
+thumbnail*.png
+
+.octto/
+.pi/
 
 B165C015_241223_R0G5.mxf.txt
 .kilocode/mcp.json

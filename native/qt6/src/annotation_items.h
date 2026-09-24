@@ -39,7 +39,7 @@ public:
     // QGraphicsItem interface
     virtual void paint(QPainter* painter, const QStyleOptionGraphicsItem* option, QWidget* widget = nullptr) override = 0;
     virtual QRectF boundingRect() const override = 0;
-    int type() const override { return UserType + annotationType(); }
+    int type() const override { return UserType + static_cast<int>(annotationType()); }
 
     // Serialization
     virtual QJsonObject toJson() const = 0;
@@ -122,7 +122,7 @@ public:
 
     // Path operations
     QPainterPath path() const { return m_path; }
-    void setPath(const QPainterPath& path) { m_path = path; update(); }
+    void setPath(const QPainterPath& path) { prepareGeometryChange(); m_path = path; update(); }
     void addPoint(const QPointF& point);
     void finishPath();
 
@@ -146,7 +146,7 @@ public:
 
     // Rectangle properties
     QRectF rect() const { return m_rect; }
-    void setRect(const QRectF& rect) { m_rect = rect; update(); }
+    void setRect(const QRectF& rect) { prepareGeometryChange(); m_rect = rect; update(); }
 
 private:
     QRectF m_rect;
@@ -168,7 +168,7 @@ public:
 
     // Ellipse properties (bounding rect)
     QRectF rect() const { return m_rect; }
-    void setRect(const QRectF& rect) { m_rect = rect; update(); }
+    void setRect(const QRectF& rect) { prepareGeometryChange(); m_rect = rect; update(); }
 
 private:
     QRectF m_rect;
@@ -190,10 +190,10 @@ public:
 
     // Arrow properties
     QLineF line() const { return m_line; }
-    void setLine(const QLineF& line) { m_line = line; update(); }
+    void setLine(const QLineF& line) { prepareGeometryChange(); m_line = line; update(); }
     
     double arrowHeadSize() const { return m_arrowHeadSize; }
-    void setArrowHeadSize(double size) { m_arrowHeadSize = size; update(); }
+    void setArrowHeadSize(double size) { prepareGeometryChange(); m_arrowHeadSize = size; update(); }
 
 private:
     QLineF m_line;

@@ -50,6 +50,70 @@ inline bool pathExists(const QString& path)
 }
 
 /**
+ * Path availability checking mode.
+ */
+enum class PathAvailabilityMode {
+    DirectoryOnly,          ///< path must itself be an existing readable directory
+    FileOrContainingDirectory ///< if path points to a file, validate its parent directory
+};
+
+/**
+ * Reason a path failed availability checks.
+ */
+enum class PathAvailabilityFailure {
+    None,
+    EmptyPath,
+    Missing,
+    NotDirectory,
+    NotReadable,
+    NotSearchable,
+    StorageInvalid,
+    StorageNotReady,
+    StorageFingerprintMismatch
+};
+
+/**
+ * Result of a path availability check.
+ */
+struct PathAvailabilityResult {
+    bool available = false;
+    PathAvailabilityFailure failure = PathAvailabilityFailure::None;
+    QString normalizedPath;      ///< canonical directory used for navigation
+    QString directoryPath;       ///< same as normalizedPath (the directory being validated)
+    QString storageFingerprint;  ///< stable fingerprint of the backing storage
+    QString message;             ///< user/log suitable description of the result
+};
+
+/**
+ * Validate that a path is available for use as a navigation directory.
+ *
+ * For DirectoryOnly the path itself must be a readable directory.  For
+ * FileOrContainingDirectory a file path is accepted and its parent directory
+ * is validated.
+ *
+ * @param path Path to validate
+ * @param mode Availability mode
+ * @param expectedStorageFingerprint If non-empty, require the storage fingerprint to match
+ * @return Detailed availability result
+ */
+PathAvailabilityResult checkPathAvailability(
+    const QString& path,
+    PathAvailabilityMode mode = PathAvailabilityMode::DirectoryOnly,
+    const QString& expectedStorageFingerprint = QString());
+
+/**
+ * Return the first available directory from a list of candidates.
+ *
+ * Checks @p preferredPath first, then falls back through common writable
+ * locations (home, app data, temp).  Returns an empty string if no candidate
+ * is available.
+ *
+ * @param preferredPath Optional preferred directory to check first
+ * @return Canonical path of the first available directory, or empty string
+ */
+QString firstAvailableDirectory(const QString& preferredPath = QString());
+
+/**
  * Check if a file suffix represents a previewable image or video.
  *
  * @param suffix The file extension to check

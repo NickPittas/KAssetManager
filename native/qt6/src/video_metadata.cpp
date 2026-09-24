@@ -26,12 +26,75 @@ bool probeVideoFile(const QString& filePath, VideoMetadata& out, QString* errorM
     out.videoCodec.clear();
     out.videoProfile.clear();
     out.audioCodec.clear();
+    out.audioChannels = 0;
     out.width = 0;
     out.height = 0;
     out.fps = 0.0;
     out.bitrate = 0;
     out.hasTimecode = false;
     out.timecodeStart.clear();
+    out.cameraName.clear();
+    out.cameraModel.clear();
+    out.lens.clear();
+    out.reelName.clear();
+    out.scene.clear();
+    out.take.clear();
+
+    // Helper: search metadata dictionaries for camera/production tags.
+    auto extractMeta = [&](AVDictionary* dict) {
+        if (!dict) return;
+        AVDictionaryEntry* entry = nullptr;
+        static const char* kCameraKeys[] = {
+            "com.apple.proapps.cameraName", "camera", "device_name", "encoder",
+            "com.apple.proapps.image.description", "model", "com.apple.quicktime.model",
+            nullptr
+        };
+        static const char* kLensKeys[] = {
+            "com.apple.proapps.lens", "lens", "com.apple.proapps.image.lens",
+            nullptr
+        };
+        static const char* kReelKeys[] = {
+            "reel_name", "reel", "com.apple.proapps.reel", "album",
+            nullptr
+        };
+        static const char* kSceneKeys[] = {
+            "scene", "com.apple.proapps.scene", "chapter", nullptr
+        };
+        static const char* kTakeKeys[] = {
+            "take", "com.apple.proapps.take", "track", nullptr
+        };
+
+        for (int i = 0; kCameraKeys[i]; ++i) {
+            entry = av_dict_get(dict, kCameraKeys[i], nullptr, 0);
+            if (entry && entry->value && entry->value[0]) {
+                if (out.cameraName.isEmpty()) out.cameraName = QString::fromUtf8(entry->value);
+            }
+        }
+        for (int i = 0; kLensKeys[i]; ++i) {
+            entry = av_dict_get(dict, kLensKeys[i], nullptr, 0);
+            if (entry && entry->value && entry->value[0]) {
+                if (out.lens.isEmpty()) out.lens = QString::fromUtf8(entry->value);
+            }
+        }
+        for (int i = 0; kReelKeys[i]; ++i) {
+            entry = av_dict_get(dict, kReelKeys[i], nullptr, 0);
+            if (entry && entry->value && entry->value[0]) {
+                if (out.reelName.isEmpty()) out.reelName = QString::fromUtf8(entry->value);
+            }
+        }
+        for (int i = 0; kSceneKeys[i]; ++i) {
+            entry = av_dict_get(dict, kSceneKeys[i], nullptr, 0);
+            if (entry && entry->value && entry->value[0]) {
+                if (out.scene.isEmpty()) out.scene = QString::fromUtf8(entry->value);
+            }
+        }
+        for (int i = 0; kTakeKeys[i]; ++i) {
+            entry = av_dict_get(dict, kTakeKeys[i], nullptr, 0);
+            if (entry && entry->value && entry->value[0]) {
+                if (out.take.isEmpty()) out.take = QString::fromUtf8(entry->value);
+            }
+        }
+    };
 
     AVFormatContext* fmtCtx = nullptr;
     QByteArray localPath = QFile::encodeName(filePath);
@@ -167,8 +230,20 @@ bool probeVideoFile(const QString& filePath, VideoMetadata& out, QString* errorM
             if (out.bitrate <= 0 && vp->bit_rate > 0) {
                 out.bitrate = vp->bit_rate;
             }
+            extractMeta(vs->metadata);
+            // Prefer the dedicated model key for camera model if present
+            AVDictionaryEntry* modelEntry = av_dict_get(vs->metadata, "model", nullptr, 0);
+            if (!modelEntry) modelEntry = av_dict_get(fmtCtx->metadata, "model", nullptr, 0);
+            if (!modelEntry) modelEntry = av_dict_get(vs->metadata, "com.apple.quicktime.model", nullptr, 0);
+            if (!modelEntry) modelEntry = av_dict_get(fmtCtx->metadata, "com.apple.quicktime.model", nullptr, 0);
+            if (modelEntry && modelEntry->value && modelEntry->value[0]) {
+                out.cameraModel = QString::fromUtf8(modelEntry->value);
+            }
         }
     }
+
+    // Scan container-level metadata for camera/production tags
+    extractMeta(fmtCtx->metadata);
 
     if (aIdx >= 0) {
         AVStream* as = fmtCtx->streams[aIdx];
@@ -177,6 +252,11 @@ bool probeVideoFile(const QString& filePath, VideoMetadata& out, QString* errorM
             const AVCodec* acodec = avcodec_find_decoder(ap->codec_id);
             const char* aname = acodec && acodec->name ? acodec->name : avcodec_get_name(ap->codec_id);
             if (aname) out.audioCodec = QString::fromUtf8(aname);
+#if LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(59, 24, 100)
+            out.audioChannels = ap->ch_layout.nb_channels;
+#else
+            out.audioChannels = ap->channels;
+#endif
             if (out.bitrate <= 0 && ap->bit_rate > 0) {
                 out.bitrate = ap->bit_rate; // fallback to audio bitrate if only that is present
             }
