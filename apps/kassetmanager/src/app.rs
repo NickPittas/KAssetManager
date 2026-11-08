@@ -1803,11 +1803,7 @@ impl App {
                                     {
                                         self.select_in(index, entry.path.clone(), false);
                                     }
-                                    let menu_path = entry.path.clone();
-                                    response.context_menu(|ui| {
-                                        let _ = &menu_path;
-                                        self.entry_menu(ui, index);
-                                    });
+                                    response.context_menu(|ui| self.entry_menu(ui, index));
                                 },
                             );
                         }
