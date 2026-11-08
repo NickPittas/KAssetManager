@@ -3026,7 +3026,9 @@ impl App {
         // The grid is windowed the same way, by rows of cells: a cell row is `cell + 24` tall and the listing
         // reserves the height of the ones it does not draw.
         let cell_rows = cells.chunks(cols).count();
-        egui::ScrollArea::vertical()
+        // A cell is never shrunk to fit the pane: 256 px thumbnails in a 240 px pane scroll sideways instead, so
+        // what you set as the thumbnail edge is what you see.
+        egui::ScrollArea::both()
             .id_salt(format!("grid{index}"))
             .auto_shrink(false)
             .show_rows(ui, cell + 24.0, cell_rows, |ui, range| {
@@ -3285,12 +3287,24 @@ impl App {
             return;
         }
         let loaded = self.playing.clone().unwrap_or_default();
-        ui.label(
-            loaded
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default(),
-        );
+        let name = loaded
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        // The name is one line and scrolls if the panel is narrower than it; wrapping would make the panel taller,
+        // which is the panel sizing itself to its content.
+        let _ = egui::ScrollArea::horizontal()
+            .id_salt("preview_name")
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
+                // Extend, not wrap and not truncate: the text takes its own width so the scroll area's content is
+                // wider than the panel and the whole name is reachable by scrolling sideways.
+                ui.add(
+                    egui::Label::new(name)
+                        .selectable(false)
+                        .wrap_mode(egui::TextWrapMode::Extend),
+                );
+            });
         let mut toggle = false;
         let mut stop = false;
         if ui
@@ -3739,7 +3753,10 @@ impl App {
     pub fn browser_tree(&mut self, ui: &mut egui::Ui) {
         let favorites = self.settings.favorites.clone();
         let active_path = self.panes[self.active].path.clone();
-        egui::ScrollArea::vertical()
+        // A folder name wider than the panel scrolls sideways rather than being cut: the panel's width is a
+        // decision (150..420, draggable), never a consequence of the longest name in it.
+        egui::ScrollArea::both()
+            .id_salt("tree")
             .auto_shrink([false; 2])
             .show(ui, |ui| {
                 ui.strong("Favorites");
@@ -3899,7 +3916,13 @@ impl App {
             {
                 tree = true;
             }
-            self.path_bar(ui);
+            // Buttons keep their place; the path takes the rest of the row and scrolls if the path is longer.
+            let budget = ui.available_width();
+            let _ = egui::ScrollArea::horizontal()
+                .id_salt("app_path")
+                .max_width(budget)
+                .auto_shrink([false, true])
+                .show(ui, |ui| self.path_bar(ui));
         });
         if settings {
             self.settings_open = !self.settings_open;
