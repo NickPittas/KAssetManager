@@ -225,6 +225,17 @@ After verification, one `egui_kittest` test exists as the regression net for tha
 is `fn ui(&mut self, &mut egui::Ui, &mut Frame)` (not `update`), there is no `TopBottomPanel` — use
 `egui::Panel::bottom(...)`, and widget queries need `use egui_kittest::kittest::Queryable;`.
 
+**Slice 2 (verified):** browsing a real folder. Running `kassetmanager ~/Pictures` showed the breadcrumb
+(`up / home / npittas / Pictures`), a Folders panel with that folder's 9 subfolders, 14 media entries
+(including `.mov`, `.mp4`, `.heif`) and the status bar `/home/npittas/Pictures · 14 entries`, with empty
+stderr (`validation_outputs/m1-slice2.png`). Data comes from the forked engine: `scan_folder` +
+`sort_entries` + `list_subfolders` with `show_hidden=false, collapse_sequences=true, show_all_files=false`.
+The window also mapped fully on screen this time, so the earlier right-edge clipping was placement luck,
+not a sizing bug — still an M1 item to pin. After that verification one sandbox test was added (entries
+listed, folders offered, navigation re-scans).
+Still not there: subfolders are a flat list, not a lazy tree; selecting an entry does nothing yet (no
+preview/playback); no thumbnails; window size/HiDPI and OS drag/drop untouched.
+
 ## Non-goals
 
 No FFI/C ABI shim (full port makes it dead weight). No Qt UI changes beyond keeping it building. No

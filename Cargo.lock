@@ -2317,6 +2317,7 @@ dependencies = [
  "eframe",
  "egui",
  "egui_kittest",
+ "gallerybrowser-core",
 ]
 
 [[package]]
