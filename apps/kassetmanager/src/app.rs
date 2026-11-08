@@ -37,6 +37,10 @@ struct Pane {
     /// without recording, so Back walks history without inflating it. Capped to keep memory bounded.
     back_stack: Vec<PathBuf>,
     entries: Vec<Entry>,
+    /// The folders inside this pane's folder, which come first in `entries`. Qt's browser lists them; the
+    /// engine's scan returns files only (`crates/core/src/scan.rs:62`), so the app synthesises these entries
+    /// and keeps their paths here to tell a folder from a file without touching the engine's kinds.
+    dir_paths: std::collections::HashSet<PathBuf>,
     /// Files clicked in this pane. The last one is the **primary**: the preview panel, the player and the
     /// status bar follow it, as Qt's extended selection follows its current item.
     selection: Vec<PathBuf>,
@@ -314,6 +318,7 @@ impl Pane {
             path,
             back_stack: Vec::new(),
             entries: Vec::new(),
+            dir_paths: std::collections::HashSet::new(),
             selection: Vec::new(),
             wanted: None,
             preview: None,
@@ -464,6 +469,10 @@ impl App {
         for index in 0..visible {
             for entry in &self.panes[index].entries {
                 keep.insert(entry.path.clone());
+                // A folder has no picture to decode; asking the engine would only log a failure per folder.
+                if self.panes[index].dir_paths.contains(&entry.path) {
+                    continue;
+                }
                 if self.issued.insert((entry.path.clone(), edge)) {
                     self.thumbs.request(entry, edge, 0);
                 }
@@ -496,7 +505,30 @@ impl App {
             Ok(mut entries) => {
                 let (key, ascending) = (self.settings.sort_key, self.settings.sort_ascending);
                 sort_entries(&mut entries, key, ascending);
-                self.panes[index].entries = entries;
+                // Qt lists the folders inside the one you are browsing, ahead of the files. They ride as
+                // ordinary entries so selection and file operations reach them; `dir_paths` is what says a
+                // folder is a folder (the engine has no folder kind, and adding one for a browser-side
+                // listing would ripple through classification, thumbnails and scrubbing for nothing).
+                let dirs = self.child_dirs(&path);
+                let mut folders: Vec<Entry> = Vec::new();
+                for dir in &dirs {
+                    let Some(name) = dir.file_name().map(|n| n.to_string_lossy().into_owned())
+                    else {
+                        continue;
+                    };
+                    folders.push(Entry {
+                        path: dir.clone(),
+                        name,
+                        kind: MediaKind::Other,
+                        size: 0,
+                        modified: std::fs::metadata(dir).ok().and_then(|m| m.modified().ok()),
+                        sequence: None,
+                    });
+                }
+                let mut all = folders;
+                all.extend(entries);
+                self.panes[index].dir_paths = dirs.into_iter().collect();
+                self.panes[index].entries = all;
                 self.status.clear();
             }
             Err(err) => {
@@ -1716,8 +1748,13 @@ impl App {
                     // imitate it, so the kind rides as a dim tag inside the same label - and the whole row
                     // stays the click target.
                     let mut job = egui::text::LayoutJob::default();
+                    let tag = if self.panes[index].dir_paths.contains(path) {
+                        "DIR"
+                    } else {
+                        Self::kind_tag(entry.kind)
+                    };
                     job.append(
-                        Self::kind_tag(entry.kind),
+                        tag,
                         0.0,
                         egui::TextFormat::simple(
                             egui::FontId::proportional(11.0),
@@ -1849,7 +1886,14 @@ impl App {
                                                 4.0,
                                                 ui.visuals().faint_bg_color,
                                             );
-                                            let tag = Self::kind_tag(entry.kind);
+                                            let tag = if self.panes[index]
+                                                .dir_paths
+                                                .contains(&entry.path)
+                                            {
+                                                "DIR"
+                                            } else {
+                                                Self::kind_tag(entry.kind)
+                                            };
                                             let galley = ui.painter().layout_no_wrap(
                                                 tag.to_owned(),
                                                 egui::FontId::proportional(13.0),
@@ -1934,7 +1978,12 @@ impl App {
             self.select_in(index, path, ctrl);
         }
         if let Some(path) = play {
-            self.play(path);
+            // Double-click means "go into" for a folder and "play" for a file.
+            if self.panes[index].dir_paths.contains(&path) {
+                self.navigate(index, &path);
+            } else {
+                self.play(path);
+            }
         }
         // Landing on another file resets scrub state; leaving the entry drops the frames so the thumbnail
         // shows again. A frame belongs to one file, so a stale one must never stand in for another.
@@ -2716,12 +2765,53 @@ mod tests {
         );
         assert_eq!(
             app.panes[0].entries.len(),
-            0,
-            "a folder with no media lists nothing"
+            1,
+            "a pane shows the folders inside the one it is on, as Qt's browser does"
+        );
+        assert!(
+            app.panes[0].dir_paths.contains(&parent.join("child")),
+            "that entry is the folder, not a file"
         );
 
         let _ = std::fs::remove_dir_all(&child);
         let _ = std::fs::remove_dir_all(&parent);
+    }
+
+    /// Qt's browser lists the folders inside the one you are on, ahead of the files. A pane that showed only
+    /// media left the user navigating by tree alone, and "directories first" had nothing to sort.
+    #[test]
+    fn folders_come_before_files_in_a_pane() {
+        let dir = sandbox(
+            "pane-folders",
+            &["a.png", "b.mov"],
+            &["zz-folder", "aa-folder"],
+        );
+        let mut app = App::with_cache(dir.clone(), sandbox("pane-folders-cache", &[], &[]));
+
+        let names: Vec<String> = app.panes[0]
+            .entries
+            .iter()
+            .map(|e| e.name.clone())
+            .collect();
+        assert_eq!(
+            names,
+            vec!["aa-folder", "zz-folder", "a.png", "b.mov"],
+            "folders first, each group in the user's order"
+        );
+        assert!(
+            app.panes[0].dir_paths.contains(&dir.join("aa-folder")),
+            "the pane knows which entries are folders"
+        );
+
+        // Double-clicking a folder enters it; double-clicking a file asks for playback.
+        app.finish(0, None, false, Some(dir.join("aa-folder")), None);
+        assert_eq!(
+            app.panes[0].path,
+            dir.join("aa-folder"),
+            "double-click goes into the folder"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Selecting an entry records it and points the preview request at it.
@@ -3949,9 +4039,11 @@ mod tests {
             "the folder was created (status: {})",
             app.status
         );
+        // The pane refreshes the folder it is on as soon as the operation reports back, which re-reads the
+        // same listing the tree had cached - so what has to be true is that nothing stale survives.
         assert!(
-            !app.tree.kids.contains_key(&dir),
-            "the finished operation dropped the stale listing"
+            app.tree.kids.contains_key(&dir),
+            "the cache holds a freshly read listing rather than the stale one"
         );
         assert_eq!(
             app.child_dirs(&dir),
