@@ -1696,10 +1696,10 @@ impl App {
 
     /// List view of one pane. Click selects; double-click plays.
     fn pane_list(&mut self, index: usize, ui: &mut egui::Ui) {
-        let names: Vec<(String, PathBuf)> = self.panes[index]
+        let names: Vec<(Entry, PathBuf)> = self.panes[index]
             .entries
             .iter()
-            .map(|e| (e.name.clone(), e.path.clone()))
+            .map(|e| (e.clone(), e.path.clone()))
             .collect();
         let mut selected: Option<PathBuf> = None;
         let mut play: Option<PathBuf> = None;
@@ -1710,8 +1710,30 @@ impl App {
             .id_salt(format!("list{index}"))
             .auto_shrink(false)
             .show(ui, |ui| {
-                for (name, path) in &names {
-                    let response = ui.selectable_label(self.panes[index].is_selected(path), name);
+                for (entry, path) in &names {
+                    let chosen = self.panes[index].is_selected(path);
+                    // Qt's list view carries a per-type icon; egui's default font has no glyph coverage to
+                    // imitate it, so the kind rides as a dim tag inside the same label - and the whole row
+                    // stays the click target.
+                    let mut job = egui::text::LayoutJob::default();
+                    job.append(
+                        Self::kind_tag(entry.kind),
+                        0.0,
+                        egui::TextFormat::simple(
+                            egui::FontId::proportional(11.0),
+                            ui.visuals().weak_text_color(),
+                        ),
+                    );
+                    let label = format!("  {}", entry.name);
+                    job.append(
+                        &label,
+                        0.0,
+                        egui::TextFormat::simple(
+                            egui::FontId::proportional(14.0),
+                            ui.visuals().text_color(),
+                        ),
+                    );
+                    let response = ui.selectable_label(chosen, job);
                     if response.double_clicked() {
                         play = Some(path.clone());
                     }
@@ -1731,6 +1753,18 @@ impl App {
                 }
             });
         self.finish(index, selected, ctrl, play, hovered);
+    }
+
+    /// The short tag a cell or row shows when there is no picture for an entry. Plain text because egui's
+    /// default font has no icon glyphs to imitate Qt's per-type icons with.
+    fn kind_tag(kind: MediaKind) -> &'static str {
+        match kind {
+            MediaKind::Image => "IMG",
+            MediaKind::Video => "VID",
+            MediaKind::Sequence => "SEQ",
+            MediaKind::Audio => "AUD",
+            MediaKind::Other => "DOC",
+        }
     }
 
     /// Grid view of one pane: engine thumbnails in rows that fit the column; double-click plays.
@@ -1802,6 +1836,30 @@ impl App {
                                             });
                                         }
                                         None => {
+                                            // A cell with no picture still has to say what it is: an empty square
+                                            // reads as a broken app, which is how every non-media file and every
+                                            // not-yet-decoded thumbnail looked. Qt shows a per-type icon here.
+                                            let rect = egui::Rect::from_min_size(
+                                                ui.cursor().min,
+                                                egui::vec2(edge, edge),
+                                            );
+                                            let weak = ui.visuals().weak_text_color();
+                                            ui.painter().rect_filled(
+                                                rect,
+                                                4.0,
+                                                ui.visuals().faint_bg_color,
+                                            );
+                                            let tag = Self::kind_tag(entry.kind);
+                                            let galley = ui.painter().layout_no_wrap(
+                                                tag.to_owned(),
+                                                egui::FontId::proportional(13.0),
+                                                weak,
+                                            );
+                                            ui.painter().galley(
+                                                rect.center() - galley.size() / 2.0,
+                                                galley,
+                                                weak,
+                                            );
                                             ui.allocate_space(egui::vec2(edge, edge));
                                         }
                                     }
