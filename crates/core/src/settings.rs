@@ -437,6 +437,26 @@ mod tests {
     }
 
     #[test]
+    fn each_pane_s_view_size_and_folding_survive_the_settings_file() {
+        // Qt restores a workspace where the two panes were set up differently. The app copies its panes into these
+        // vectors, so a save and load has to bring back two distinct entries rather than one shared value.
+        let t = tempfile::tempdir().expect("tempdir");
+        let dirs = dirs_in(t.path());
+        let s = Settings {
+            view_mode: vec![ViewMode::List, ViewMode::Grid],
+            thumbnail_size: vec![64, 256],
+            collapse_sequences: vec![false, true],
+            ..Settings::default()
+        };
+        s.save(&dirs).expect("save");
+        let loaded = Settings::load(&dirs);
+        assert_eq!(loaded.view_mode, vec![ViewMode::List, ViewMode::Grid]);
+        assert_eq!(loaded.thumbnail_size, vec![64, 256]);
+        assert_eq!(loaded.collapse_sequences, vec![false, true]);
+        assert_eq!(loaded, s);
+    }
+
+    #[test]
     fn panel_widths_roundtrip_and_a_hand_edited_one_is_clamped() {
         // egui forgets a dragged panel width when the run ends, so these three are app settings like any other.
         let t = tempfile::tempdir().expect("tempdir");

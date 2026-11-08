@@ -355,7 +355,10 @@ pub struct App {
     settings: Settings,
     thumbs: Thumbnailer,
     /// Uploaded thumbnails by entry path (shared by both panes).
-    pictures: HashMap<PathBuf, egui::TextureHandle>,
+    /// Decoded thumbnails already uploaded to wgpu, keyed by the size they were asked for. Two panes can show the
+    /// same folder at 64 px and 256 px; one texture per path would let whichever decode finished last decide what
+    /// both panes draw, so a large pane would stretch a small picture.
+    pictures: HashMap<(PathBuf, u32), egui::TextureHandle>,
     /// Thumbnail requests still in flight (drives repainting until the engine answers).
     outstanding: usize,
     /// Video and audio playback of the double-clicked file.
@@ -1011,7 +1014,7 @@ impl App {
                 }
             }
         }
-        self.pictures.retain(|path, _| keep.contains(path));
+        self.pictures.retain(|(path, _), _| keep.contains(path));
         for index in 0..visible {
             let Some(wanted) = self.panes[index].wanted.clone() else {
                 continue;
@@ -1349,7 +1352,8 @@ impl App {
                     self.panes[index].preview = Some((result.path.clone(), texture));
                 }
                 (false, _) => {
-                    self.pictures.insert(result.path.clone(), texture);
+                    self.pictures
+                        .insert((result.path.clone(), result.max_edge), texture);
                 }
                 (true, None) => {}
             }
@@ -3213,9 +3217,13 @@ impl App {
                                         .as_ref()
                                         .filter(|(p, _, _)| p == &entry.path)
                                         .map(|(_, id, px)| (*id, *px))
+                                        // Only a picture of the size this pane asked for: stretching a 64 px
+                                        // thumbnail across a 256 px cell is blurry, and one pane's texture is not
+                                        // the other's to use.
                                         .or_else(|| {
+                                            let edge = self.panes[index].thumbnail_size;
                                             self.pictures
-                                                .get(&entry.path)
+                                                .get(&(entry.path.clone(), edge))
                                                 .map(|tex| (tex.id(), tex.size_vec2()))
                                         });
                                     // The scrub surface is the whole square GalleryBrowser reserves for it,
@@ -4139,8 +4147,10 @@ impl App {
                     for pane in &mut self.panes {
                         pane.collapse_sequences = fold_both;
                     }
+                    // Folding lives on the panes now: without this the dialog rescans the folders and leaves the
+                    // settings file saying what it said before, so the box comes back ticked after a restart.
+                    self.save_pane_views();
                     rescan = true;
-                    dirty = true;
                 }
                 if ui.button("Close").clicked() {
                     self.settings_open = false;
@@ -5091,12 +5101,15 @@ mod tests {
         app.panes[0].thumbnail_size = 256;
         app.panes[1].view_mode = ViewMode::Grid;
         app.panes[1].thumbnail_size = 64;
+        // Sequence folding changes what a folder scan returns, so it is per pane too - and it is the one that was
+        // left behind by the settings dialog until this test asked for it.
+        app.panes[0].collapse_sequences = false;
         app.save_pane_views();
 
-        let (v0, s0, _) = pane_setup(&app.settings, 0);
-        let (v1, s1, _) = pane_setup(&app.settings, 1);
-        assert_eq!((v0, s0), (ViewMode::List, 256));
-        assert_eq!((v1, s1), (ViewMode::Grid, 64));
+        let (v0, s0, f0) = pane_setup(&app.settings, 0);
+        let (v1, s1, f1) = pane_setup(&app.settings, 1);
+        assert_eq!((v0, s0, f0), (ViewMode::List, 256, false));
+        assert_eq!((v1, s1, f1), (ViewMode::Grid, 64, true));
     }
 
     #[test]
