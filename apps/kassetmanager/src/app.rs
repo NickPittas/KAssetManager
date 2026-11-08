@@ -366,16 +366,41 @@ impl App {
         }
     }
 
-    /// Load `path` in the player and start it (double-click).
+    /// Load `path` in the player and start it playing (double-click).
     pub fn play(&mut self, path: PathBuf) {
+        self.load(path, true);
+    }
+
+    /// Load `path` in the player. Private: a selection previews through `preview_selection`, which honours
+    /// the `video_preview` setting instead of always starting playback.
+    fn load(&mut self, path: PathBuf, autoplay: bool) {
         match open(&path) {
             Ok(source) => {
                 self.playing = Some(path);
                 self.frame = None;
-                self.player.load(source, true);
+                self.player.load(source, autoplay);
+                // The player starts at its own defaults; the volume and loop the user set apply now.
+                self.player.set_volume(self.settings.volume);
+                self.player.set_muted(self.settings.muted);
+                self.player.set_looping(self.settings.loop_playback);
                 self.status.clear();
             }
             Err(err) => self.status = format!("{err}"),
+        }
+    }
+
+    /// A selected clip belongs in the preview panel with its timeline and buttons, so load it - paused unless
+    /// `video_preview` says to play on selection (that setting's Qt meaning). Stills keep the panel as it was.
+    fn preview_selection(&mut self, path: &std::path::Path) {
+        let media = self.panes[self.active].entries.iter().any(|e| {
+            e.path == path
+                && matches!(
+                    e.kind,
+                    MediaKind::Video | MediaKind::Audio | MediaKind::Sequence
+                )
+        });
+        if media {
+            self.load(path.to_path_buf(), self.settings.video_preview);
         }
     }
 
@@ -409,8 +434,15 @@ impl App {
                             egui::TextureOptions::LINEAR,
                         );
                         let key = (result.path.clone(), scrub.slot, scrub.slots);
-                        self.panes[index].scrub_frames.insert(key, texture.clone());
-                        self.panes[index].scrub_shown = Some((result.path.clone(), texture));
+                        self.panes[index]
+                            .scrub_frames
+                            .insert(key.clone(), texture.clone());
+                        // Only the slot this pane is pointing at now may take the cell. A late answer for a
+                        // slot the pointer left behind - or for another slot count, from Ctrl - waits in the
+                        // cache until something asks for it.
+                        if self.panes[index].scrub_target.as_ref() == Some(&key) {
+                            self.panes[index].scrub_shown = Some((result.path.clone(), texture));
+                        }
                     }
                     (Some(_), Err(err)) => self.status = format!("hover frame: {err}"),
                     _ => {}
@@ -830,10 +862,14 @@ impl App {
             return;
         }
         if pane.scrub_wait_until.elapsed() >= SCRUB_WAIT {
-            return; // an undecodable frame: stop asking, as GalleryBrowser gives up after 5s
+            // An undecodable frame: stop asking (GalleryBrowser gives up after 5s) and show the thumbnail
+            // again rather than a frame from some other slot.
+            pane.scrub_shown = None;
+            return;
         }
         self.thumbs.request_scrub(entry, edge, slot, slots);
         // Show the nearest decoded frame meanwhile (GalleryBrowser searches SCRUB_NEAR neighbours).
+        let mut replaced = false;
         for near in 1..=SCRUB_NEAR {
             let below = slot.checked_sub(near);
             let above = slot.checked_add(near).filter(|s| *s < slots);
@@ -855,8 +891,13 @@ impl App {
                 pane.scrub_frames
                     .insert((entry.path.clone(), s, slots), texture.clone());
                 pane.scrub_shown = Some((entry.path.clone(), texture));
+                replaced = true;
                 break;
             }
+        }
+        // Nothing close enough to show: fall back to the thumbnail, never to a stale far-away frame.
+        if !replaced {
+            pane.scrub_shown = None;
         }
         ui.ctx()
             .request_repaint_after(std::time::Duration::from_millis(30));
@@ -1214,7 +1255,10 @@ impl App {
                                                 .get(&entry.path)
                                                 .map(|tex| (tex.id(), tex.size_vec2()))
                                         });
-                                    let mut thumb = egui::Rect::from_min_size(
+                                    // The scrub surface is the whole square GalleryBrowser reserves for it,
+                                    // not the aspect-fitted picture: a portrait clip must scrub across its
+                                    // full width and a landscape clip across its full height.
+                                    let thumb = egui::Rect::from_min_size(
                                         top + egui::vec2((cell - edge) / 2.0, 0.0),
                                         egui::vec2(edge, edge),
                                     );
@@ -1222,11 +1266,10 @@ impl App {
                                         Some((id, px)) => {
                                             let scale =
                                                 (edge / px.x.max(1.0)).min(edge / px.y.max(1.0));
-                                            let resp = ui.image(egui::load::SizedTexture {
+                                            ui.image(egui::load::SizedTexture {
                                                 id,
                                                 size: px * scale,
                                             });
-                                            thumb = resp.rect;
                                         }
                                         None => {
                                             ui.allocate_space(egui::vec2(edge, edge));
@@ -1283,7 +1326,12 @@ impl App {
         hovered: Option<PathBuf>,
     ) {
         if let Some(path) = selected {
-            self.select_in(index, path);
+            self.select_in(index, path.clone());
+            // Double-click already loads the file playing; anything else selecting it gets the transport
+            // paused, so the preview panel is a real preview of what you picked.
+            if play.is_none() {
+                self.preview_selection(&path);
+            }
         }
         if let Some(path) = play {
             self.play(path);
@@ -1360,6 +1408,24 @@ impl App {
         ui.separator();
         if ui.button("Stop").clicked() {
             stop = true;
+        }
+        // Volume, mute and loop are settings the player already honours, so they belong on the transport.
+        let mut volume = self.settings.volume;
+        let vol = ui.add(egui::Slider::new(&mut volume, 0.0..=1.0).text("vol"));
+        let mute = ui.checkbox(&mut self.settings.muted, "mute");
+        let looping = ui.checkbox(&mut self.settings.loop_playback, "loop");
+        if vol.changed() {
+            self.settings.volume = volume;
+            self.player.set_volume(volume);
+        }
+        if mute.changed() {
+            self.player.set_muted(self.settings.muted);
+        }
+        if looping.changed() {
+            self.player.set_looping(self.settings.loop_playback);
+        }
+        if vol.changed() || mute.changed() || looping.changed() {
+            self.save_settings();
         }
         let seconds = state.position.seconds().max(0.0);
         let total = state.duration.seconds().max(0.0);
