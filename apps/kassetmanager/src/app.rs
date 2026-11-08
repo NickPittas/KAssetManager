@@ -520,6 +520,15 @@ impl Pane {
     }
 }
 
+/// What a drag inside this app carries: the files being carried and the folder they came from. egui's built-in
+/// drag and drop keeps its payload in-process (`DragAndDrop` holds an `Arc<dyn Any>`; nothing goes through the
+/// operating system clipboard), so paths arrive whole instead of as text something else would have to parse.
+#[derive(Clone, Debug)]
+struct Dragged {
+    paths: Vec<PathBuf>,
+    from: PathBuf,
+}
+
 /// Which catalog list a modal is editing for the selected file.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum AnnotateKind {
@@ -1280,6 +1289,96 @@ impl App {
                 conflict: ConflictPolicy::KeepBoth,
             }
         });
+    }
+
+    /// What dragging from `path` in pane `index` would carry: the whole selection when that file is part of it,
+    /// otherwise just that file - so grabbing one of five selected files carries all five, as Qt does.
+    fn dragged_from(&self, index: usize, path: &Path) -> Dragged {
+        let pane = &self.panes[index];
+        let paths = if pane.is_selected(path) {
+            pane.selection.clone()
+        } else {
+            vec![path.to_path_buf()]
+        };
+        Dragged {
+            paths,
+            from: pane.path.clone(),
+        }
+    }
+
+    /// Files dropped from inside the app onto a folder: copied, or moved while Shift is held - Qt's rule for
+    /// drops between its panes. Dropping into the folder they are already in still copies (the engine gives
+    /// `name (1).ext`), which is what a copy aimed at its own folder means; that is not the no-op paste warns
+    /// about, because here you asked for a duplicate rather than for nothing to happen.
+    fn drop_files(&mut self, carried: Dragged, dest_dir: PathBuf, shift: bool) {
+        if carried.paths.is_empty() {
+            return;
+        }
+        if shift && dest_dir == carried.from {
+            // Moving files into the folder they are standing in is nothing to do - the engine would report every
+            // source as already there. Copying into that folder still makes `name (1).ext` duplicates below.
+            self.note("Already in this folder");
+            return;
+        }
+        let paths = carried.paths;
+        // Carrying `/a` into `/a/b` is how you get a copy that contains itself.
+        for path in &paths {
+            if dest_dir == *path || dest_dir.starts_with(path.as_path()) {
+                self.note("Cannot drop a folder into itself");
+                return;
+            }
+        }
+        self.ops.submit(if shift {
+            FileOp::Move {
+                sources: paths,
+                dest_dir,
+                conflict: ConflictPolicy::KeepBoth,
+            }
+        } else {
+            FileOp::Copy {
+                sources: paths,
+                dest_dir,
+                conflict: ConflictPolicy::KeepBoth,
+            }
+        });
+    }
+
+    /// Highlight the listing while a compatible drag is over it, and act on what was released there. Both
+    /// listings answer a drop through here so they behave alike.
+    fn accept_drop(&mut self, ui: &mut egui::Ui, rect: egui::Rect, index: usize) {
+        let (hovering, dropped) = Self::drop_check(ui, rect);
+        if hovering {
+            // A drop target that does not say it is one is a target you have to guess at.
+            let tint = ui.visuals().selection.bg_fill.linear_multiply(0.35);
+            ui.painter().rect_filled(rect.shrink(2.0), 4.0, tint);
+        }
+        if let Some(carried) = dropped {
+            let shift = ui.input(|i| i.modifiers.shift);
+            self.drop_files(carried, self.panes[index].path.clone(), shift);
+        }
+    }
+
+    /// The listing area as an in-app drop target: whether something droppable is over it right now, and what was
+    /// released on it this frame. The payload is read against the rect rather than through a widget laid over
+    /// it: egui hands hover focus to whatever sits on top, so a drop zone drawn over a listing would leave every
+    /// cell under it unhovered - and pointer position is what drives selection, hover scrubbing and previews here.
+    fn drop_check(ui: &egui::Ui, rect: egui::Rect) -> (bool, Option<Dragged>) {
+        if !egui::DragAndDrop::has_payload_of_type::<Dragged>(ui.ctx()) {
+            return (false, None);
+        }
+        let over = ui
+            .input(|i| i.pointer.hover_pos())
+            .is_some_and(|pos| rect.contains(pos));
+        if !over {
+            return (false, None);
+        }
+        let released = ui.input(|i| i.pointer.any_released());
+        let dropped = if released {
+            egui::DragAndDrop::take_payload::<Dragged>(ui.ctx()).map(|carried| (*carried).clone())
+        } else {
+            None
+        };
+        (true, dropped)
     }
 
     /// Delete key: send the selection to the OS trash (undoable).
@@ -2057,6 +2156,9 @@ impl App {
         let ctrl = ui.input(|i| i.modifiers.command);
 
         let table_width = widths.iter().sum::<f32>() + 8.0;
+        // The listing's region, taken before anything is laid out: this is what a drop from the other pane aims
+        // at, and answering it after the rows are drawn keeps it from stealing their clicks.
+        let body = ui.max_rect();
 
         // Qt keeps its column titles pinned while the rows scroll, and answers a pane narrower than the table
         // with a horizontal scrollbar. The header is drawn outside the scroll area to stay put, and slides by
@@ -2189,8 +2291,11 @@ impl App {
                     // anywhere on the row selects it. It spans the table's width, not just what fits.
                     let (rect, row) = ui.allocate_exact_size(
                         egui::vec2(table_width.max(ui.available_width()), ROW_H),
-                        egui::Sense::click(),
+                        // Rows sense drags too: a row is what you grab to carry files to the other pane. The drag
+                        // state belongs to the row, so releasing over another listing is what makes it an op.
+                        egui::Sense::click_and_drag(),
                     );
+                    row.dnd_set_drag_payload(self.dragged_from(index, &path));
                     if self.panes[index].scroll_target.as_deref() == Some(path.as_path()) {
                         // Keyboard movement has to keep its item on screen, and the row's own rect is where
                         // that becomes known.
@@ -2240,6 +2345,7 @@ impl App {
                 }
             });
         self.list_scroll_x[index] = out.state.offset.x;
+        self.accept_drop(ui, body, index);
         self.finish(index, selected, ctrl, play, hovered);
     }
 
@@ -2407,6 +2513,8 @@ impl App {
         let edge = (edge_px as f32).min((ui.available_width() - 12.0).max(48.0));
         let cell = edge + 12.0;
         let cells: Vec<Entry> = self.panes[index].entries.clone();
+        // The listing's region before layout, so a drop from the other pane has somewhere to land.
+        let body = ui.max_rect();
         let cols = ((ui.available_width() / cell).floor() as usize).max(1);
         self.panes[index].grid_cols = cols;
         // Ctrl on Linux and Windows, Command on macOS - the platform's "add to selection" key.
@@ -2519,7 +2627,10 @@ impl App {
                                     let response = ui.interact(
                                         cell_rect,
                                         ui.id().with(("cell", entry.path.clone())),
-                                        egui::Sense::click().union(egui::Sense::hover()),
+                                        egui::Sense::click_and_drag().union(egui::Sense::hover()),
+                                    );
+                                    response.dnd_set_drag_payload(
+                                        self.dragged_from(index, &entry.path),
                                     );
                                     if self.panes[index].scroll_target.as_deref()
                                         == Some(entry.path.as_path())
@@ -2562,6 +2673,7 @@ impl App {
                     });
                 }
             });
+        self.accept_drop(ui, body, index);
         self.finish(index, selected, ctrl, play, hovered);
         if let Some((entry, pos, thumb)) = scrub {
             self.scrub_at(ui, index, &entry, edge_px, pos, thumb, fine);
@@ -3980,6 +4092,66 @@ mod tests {
             stale.panes[0].path, root,
             "and the folder it started in stays listed, not blanked"
         );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A drop inside the app is a file operation with Qt's rules for its panes: copy by default, move while Shift
+    /// is held. This box cannot inject a mouse drag, so what this pins is what landing on a folder does - and
+    /// what refusing to land at all does; the pointer path itself is for hand verification.
+    #[test]
+    fn dropping_files_onto_a_folder_copies_and_shift_moves() {
+        let root = sandbox("drop", &["one.png", "two.png"], &["elsewhere"]);
+        let mut app = App::with_cache(root.clone(), sandbox("drop-cache", &[], &[]));
+        let dest = root.join("elsewhere");
+
+        app.drop_files(
+            Dragged {
+                paths: vec![root.join("one.png")],
+                from: root.clone(),
+            },
+            dest.clone(),
+            false,
+        );
+        assert!(
+            settle(&mut app, &dest, "one.png", true) && root.join("one.png").is_file(),
+            "a drop copies the file and leaves the original where it was"
+        );
+
+        app.drop_files(
+            Dragged {
+                paths: vec![root.join("two.png")],
+                from: root.clone(),
+            },
+            dest.clone(),
+            true,
+        );
+        assert!(
+            settle(&mut app, &dest, "two.png", true) && !root.join("two.png").exists(),
+            "Shift moves it instead of copying"
+        );
+
+        // Moving files into the folder they are standing in is nothing to do: it says so, with no op submitted.
+        app.drop_files(
+            Dragged {
+                paths: vec![dest.join("one.png")],
+                from: dest.clone(),
+            },
+            dest.clone(),
+            true,
+        );
+        assert_eq!(app.status, "Already in this folder");
+
+        // Carrying a folder into itself is how you get a copy that contains itself; the engine is not asked.
+        app.drop_files(
+            Dragged {
+                paths: vec![root.clone()],
+                from: root.clone(),
+            },
+            dest.clone(),
+            false,
+        );
+        assert_eq!(app.status, "Cannot drop a folder into itself");
 
         let _ = std::fs::remove_dir_all(&root);
     }
