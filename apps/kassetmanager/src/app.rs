@@ -97,6 +97,8 @@ struct Pane {
     wanted: Option<PathBuf>,
     /// Decoded picture, uploaded to wgpu: `(path, texture)`.
     preview: Option<(PathBuf, egui::TextureHandle)>,
+    /// Row or cell to bring into view the next time it draws, set when the keyboard moves the current item.
+    scroll_target: Option<PathBuf>,
     /// File the pointer is over right now; drives hover scrub and resets its state on change.
     hover: Option<PathBuf>,
     /// Slot the pointer's x picks, with its slot count: `(path, slot, slots)`.
@@ -142,6 +144,16 @@ fn pressed_within(rect: egui::Rect, pressed: bool, pos: Option<egui::Pos2>) -> b
     rect.is_positive() && pressed && pos.is_some_and(|point| rect.contains(point))
 }
 
+/// Where the arrow keys take the current item. Qt's views do this on their own (`QItemSelectionModel`), so
+/// there is no key handling in its sources to port - egui has no default, and the port has to say it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Step {
+    Prev,
+    Next,
+    First,
+    Last,
+}
+
 /// File-operation shortcuts, read once per frame and suppressed while a text field has focus.
 #[derive(Default)]
 struct FileKeys {
@@ -162,6 +174,10 @@ struct FileKeys {
     rename: bool,
     /// Digit 0-5 pressed to rate the selection.
     rating: Option<u8>,
+    /// Arrows / Home / End move the current item through the active pane's listing.
+    step: Option<Step>,
+    /// Enter activates the current item: enter a folder, play a file. Qt's views activate on Return.
+    activate: bool,
 }
 
 /// One `App` per window: two panes (the second only when `dual_pane` is on) plus the shared engine
@@ -337,6 +353,32 @@ pub struct App {
 }
 
 impl Pane {
+    /// Move the current item through this pane's listing and return it. Home and End jump to the ends, both
+    /// ends clamp instead of wrapping, and a multi-selection collapses onto the new current item - what Qt's
+    /// selection model does when you arrow after a rubber-band.
+    fn step(&mut self, step: Step) -> Option<PathBuf> {
+        let paths: Vec<PathBuf> = self.entries.iter().map(|e| e.path.clone()).collect();
+        if paths.is_empty() {
+            return None;
+        }
+        let last = paths.len() - 1;
+        let at = self
+            .primary()
+            .and_then(|p| paths.iter().position(|x| x == p));
+        let at = match (at, step) {
+            (None, Step::Prev | Step::Last) => last,
+            (None, Step::Next | Step::First) => 0,
+            (Some(i), Step::Next) => (i + 1).min(last),
+            (Some(i), Step::Prev) => i.saturating_sub(1),
+            (Some(_), Step::First) => 0,
+            (Some(_), Step::Last) => last,
+        };
+        let path = paths[at].clone();
+        self.selection = vec![path.clone()];
+        self.scroll_target = Some(path.clone());
+        Some(path)
+    }
+
     /// The file the preview panel, player and status bar follow: the last one clicked.
     fn primary(&self) -> Option<&Path> {
         self.selection.last().map(PathBuf::as_path)
@@ -379,6 +421,7 @@ impl Pane {
             selection: Vec::new(),
             wanted: None,
             preview: None,
+            scroll_target: None,
             hover: None,
             scrub_target: None,
             scrub_wait_until: std::time::Instant::now(),
@@ -1822,9 +1865,11 @@ impl App {
             let mut x = row_start - x_off;
             for (i, col) in columns.iter().copied().enumerate() {
                 let sorted = Self::sort_key_for(col) == self.settings.sort_key;
+                // egui's default font has no triangles (they arrive as tofu boxes), and the marker only has to
+                // say which way a column is sorted.
                 let arrow = match (sorted, self.settings.sort_ascending) {
-                    (true, true) => " \u{25B2}",
-                    (true, false) => " \u{25BC}",
+                    (true, true) => " ^",
+                    (true, false) => " v",
                     _ => "",
                 };
                 let cell = egui::Rect::from_min_size(
@@ -1910,6 +1955,12 @@ impl App {
                         egui::vec2(table_width.max(ui.available_width()), ROW_H),
                         egui::Sense::click(),
                     );
+                    if self.panes[index].scroll_target.as_deref() == Some(path.as_path()) {
+                        // Keyboard movement has to keep its item on screen, and the row's own rect is where
+                        // that becomes known.
+                        row.scroll_to_me(Some(egui::Align::Center));
+                        self.panes[index].scroll_target = None;
+                    }
                     if chosen {
                         ui.painter()
                             .rect_filled(rect, 0.0, ui.visuals().selection.bg_fill);
@@ -2225,6 +2276,12 @@ impl App {
                                         ui.id().with(("cell", entry.path.clone())),
                                         egui::Sense::click().union(egui::Sense::hover()),
                                     );
+                                    if self.panes[index].scroll_target.as_deref()
+                                        == Some(entry.path.as_path())
+                                    {
+                                        response.scroll_to_me(Some(egui::Align::Center));
+                                        self.panes[index].scroll_target = None;
+                                    }
                                     if response.double_clicked() {
                                         play = Some(entry.path.clone());
                                     }
@@ -2295,6 +2352,21 @@ impl App {
             self.panes[index].scrub_shown = None;
         }
         self.panes[index].hover = hovered;
+    }
+
+    /// Enter activates the current item: enter a folder, play a file. The same thing double-click does, from
+    /// the keyboard.
+    fn activate_target(&mut self) {
+        let index = self.active;
+        let Some(path) = self.panes[index].primary().map(Path::to_path_buf) else {
+            self.note("Nothing selected");
+            return;
+        };
+        if self.panes[index].dir_paths.contains(&path) {
+            self.navigate(index, &path);
+        } else {
+            self.play(path);
+        }
     }
 
     /// A decoded frame belongs to the clip it came from, so it may only stand in for the picture while that
@@ -2455,6 +2527,17 @@ impl App {
         }
         if keys.redo && self.ops.redo().is_none() {
             self.status = "nothing to redo".into();
+        }
+        if let Some(step) = keys.step {
+            if let Some(path) = self.panes[active].step(step) {
+                // Selection is the only way the preview and the player follow, so the move goes through it.
+                self.select_in(active, path, false);
+            } else {
+                self.note("Nothing to select in this folder");
+            }
+        }
+        if keys.activate {
+            self.activate_target();
         }
         if keys.rename {
             self.start_rename();
@@ -2953,6 +3036,19 @@ impl App {
             let copy_event = i.events.iter().any(|e| matches!(e, egui::Event::Copy));
             let cut_event = i.events.iter().any(|e| matches!(e, egui::Event::Cut));
             let paste_event = i.events.iter().any(|e| matches!(e, egui::Event::Paste(_)));
+            // Both pairs step the same listing: in a one-column list Left/Right would otherwise do nothing,
+            // and in a grid stepping the order never lands on an item the user did not mean.
+            let step = [
+                (egui::Key::ArrowDown, Step::Next),
+                (egui::Key::ArrowRight, Step::Next),
+                (egui::Key::ArrowUp, Step::Prev),
+                (egui::Key::ArrowLeft, Step::Prev),
+                (egui::Key::Home, Step::First),
+                (egui::Key::End, Step::Last),
+            ]
+            .into_iter()
+            .find(|(key, _)| i.key_pressed(*key))
+            .map(|(_, step)| step);
             FileKeys {
                 settings: i.key_pressed(egui::Key::S) && !m,
                 copy: copy_event || i.key_pressed(egui::Key::C) && m && !shift,
@@ -2977,6 +3073,8 @@ impl App {
                 .into_iter()
                 .find(|(key, _)| i.key_pressed(*key))
                 .map(|(_, value)| value),
+                step,
+                activate: i.key_pressed(egui::Key::Enter),
             }
         })
     }
@@ -3219,6 +3317,79 @@ mod tests {
             vec![Column::Name, Column::Modified, Column::Size, Column::Type],
             "duplicates drop and the missing columns come back"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Qt's item views move their current item on the arrows by themselves, so there was nothing to port and
+    /// egui has no default: the panes simply ignored them.
+    #[test]
+    fn arrows_step_the_listing_and_clamp_at_the_ends() {
+        let dir = sandbox("arrows", &["a.png", "b.mov"], &["aa-folder", "zz-folder"]);
+        let mut app = App::with_cache(dir.clone(), sandbox("arrows-cache", &[], &[]));
+        // Folders lead, each group in natural order: aa-folder, zz-folder, a.png, b.mov.
+        let steps: [(&str, Step); 9] = [
+            ("aa-folder", Step::Next), // nothing selected yet: Down picks the first item
+            ("zz-folder", Step::Next),
+            ("aa-folder", Step::Prev),
+            ("aa-folder", Step::Prev), // clamped, does not wrap
+            ("b.mov", Step::Last),
+            ("b.mov", Step::Next), // clamped at the end too
+            ("aa-folder", Step::First),
+            ("zz-folder", Step::Next),
+            ("aa-folder", Step::Prev),
+        ];
+        for (name, step) in steps {
+            let moved = app.panes[0].step(step);
+            assert_eq!(
+                moved.as_deref().and_then(|p| p.file_name()),
+                Some(std::ffi::OsStr::new(name)),
+                "{name:?} should be current after {step:?}"
+            );
+            assert_eq!(
+                app.panes[0].selection.len(),
+                1,
+                "the move leaves exactly one current item"
+            );
+            assert!(
+                app.panes[0].scroll_target.is_some(),
+                "the row that became current is the one to bring into view"
+            );
+        }
+
+        // Arrowing after a multi-selection collapses onto the new current item, as Qt's model does.
+        app.panes[0].selection = vec![dir.join("aa-folder"), dir.join("zz-folder")];
+        assert_eq!(
+            app.panes[0].step(Step::Next).as_deref(),
+            Some(dir.join("a.png").as_path()),
+            "the step runs from the last item clicked"
+        );
+        assert_eq!(app.panes[0].selection.len(), 1);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Enter does what double-click does: go into a folder, play a file.
+    #[test]
+    fn enter_opens_a_folder_and_plays_a_file() {
+        let dir = sandbox("enter", &[], &["aa-folder"]);
+        let mut app = App::with_cache(dir.clone(), sandbox("enter-cache", &[], &[]));
+
+        app.panes[0].selection = vec![dir.join("aa-folder")];
+        app.activate_target();
+        assert_eq!(
+            app.panes[0].path,
+            dir.join("aa-folder"),
+            "Enter goes into the folder that is current"
+        );
+
+        app.panes[0].selection.clear();
+        app.activate_target();
+        assert!(
+            app.status.contains("Nothing selected"),
+            "Enter with nothing current says so: {}",
+            app.status
+        );
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 
