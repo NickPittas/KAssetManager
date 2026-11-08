@@ -2890,8 +2890,14 @@ impl App {
         }
     }
 
-    /// Breadcrumb + up button for one pane; clicking anything makes that pane active.
+    /// Breadcrumb, up button and the two path actions of one pane; clicking anything makes that pane active. The
+    /// crumbs *are* this pane's path - there is no second copy of it in a window-wide bar (R7). Edit stands the text
+    /// field in for the crumbs of this pane only; Copy puts the folder's path on the clipboard.
     fn pane_path_bar(&mut self, index: usize, ui: &mut egui::Ui) {
+        if self.path_editing && index == self.active {
+            self.path_field(ui);
+            return;
+        }
         let mut ancestors: Vec<PathBuf> = self.panes[index]
             .path
             .ancestors()
@@ -2925,6 +2931,26 @@ impl App {
                         if position + 1 < segments.len() {
                             ui.label("/");
                         }
+                    }
+                    ui.separator();
+                    // The path is the crumbs, so its actions sit next to them rather than in a bar of their own.
+                    if ui
+                        .button("Edit")
+                        .on_hover_text("Type a path here (F6)")
+                        .clicked()
+                    {
+                        self.active = index;
+                        self.begin_path_edit();
+                    }
+                    if ui
+                        .button("Copy")
+                        .on_hover_text("Copy this folder's path")
+                        .clicked()
+                    {
+                        // egui's own route to the OS clipboard, the same one publishing file URIs uses.
+                        let shown = self.panes[index].path.display().to_string();
+                        ui.ctx().copy_text(shown);
+                        self.note("Path copied");
                     }
                 });
             });
@@ -3918,7 +3944,6 @@ impl App {
         }
     }
 
-    /// The global path bar: view toggle and settings button (panes carry their own breadcrumbs).
     /// The folders inside `dir`, sorted and cached per opened folder. Directories only, honouring the
     /// hidden-files setting; an unreadable directory has no children rather than being an error.
     fn child_dirs(&mut self, dir: &Path) -> Vec<PathBuf> {
@@ -4015,22 +4040,13 @@ impl App {
     }
 
     /// A tree row or favorite clicked: the active pane goes there.
-    /// The path bar in the top row: the active pane's folder as words you can click and type over. Enter goes
-    /// to a folder that exists; one that does not keeps the words up to be fixed, like Explorer's bar.
-    fn path_bar(&mut self, ui: &mut egui::Ui) {
-        if !self.path_editing {
-            let shown = self.panes[self.active].path.display().to_string();
-            let button = ui
-                .button(egui::RichText::new(shown).weak().small())
-                .on_hover_text("Click, or press F6, to type a path");
-            if button.clicked() {
-                self.begin_path_edit();
-            }
-            return;
-        }
+    /// The text field standing in for one pane's crumbs while its path is edited: type where to go, Enter lists it.
+    /// A folder that does not exist keeps the words up to be fixed, and an empty field gives up without moving.
+    fn path_field(&mut self, ui: &mut egui::Ui) {
+        let here = self.panes[self.active].path.display().to_string();
         let field = egui::TextEdit::singleline(&mut self.path_text)
-            .hint_text("Enter path...")
-            .desired_width(240.0);
+            .hint_text(here)
+            .desired_width(320.0);
         let resp = ui.add(field);
         if !self.path_armed {
             resp.request_focus();
@@ -4066,8 +4082,11 @@ impl App {
         }
     }
 
+    /// Editing starts on an empty field that shows where you are as its hint. Prefilling the words meant a typed
+    /// `/tmp` landed as `…/docs/tmp`, because egui 0.36 offers no public select-all for a text edit and appending
+    /// to a path nobody meant to append to is the trap; empty plus Enter means stay.
     fn begin_path_edit(&mut self) {
-        self.path_text = self.panes[self.active].path.display().to_string();
+        self.path_text = String::new();
         self.path_armed = false;
         self.path_editing = true;
     }
@@ -4341,8 +4360,8 @@ impl App {
     }
 
     pub fn app_bar(&mut self, ui: &mut egui::Ui) {
-        // Room for a text field: a top panel sized to its content measured one line of labels - 18 px - and
-        // clipped the path bar and these buttons away. Qt's toolbar has real height for the same reason.
+        // Real height for the buttons: a top panel sized to its content measured one line of labels - 18 px - and
+        // clipped them away. Qt's toolbar has real height for the same reason.
         ui.set_min_height(32.0);
         let mut settings = false;
         let mut tree = false;
@@ -4359,13 +4378,8 @@ impl App {
             {
                 tree = true;
             }
-            // Buttons keep their place; the path takes the rest of the row and scrolls if the path is longer.
-            let budget = ui.available_width();
-            let _ = egui::ScrollArea::horizontal()
-                .id_salt("app_path")
-                .max_width(budget)
-                .auto_shrink([false, true])
-                .show(ui, |ui| self.path_bar(ui));
+            // No path here: each pane shows its own crumbs, and a window-wide bar repeated whichever pane was
+            // active a second time. This row is only for the global surfaces.
         });
         if settings {
             self.settings_open = !self.settings_open;
