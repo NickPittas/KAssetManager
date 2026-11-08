@@ -563,6 +563,34 @@ fn wants_operations_window(bytes_total: u64, elapsed_secs: f64) -> bool {
     bytes_total > 0 || elapsed_secs > OPERATION_WINDOW_SECS
 }
 
+/// What the path bar does with this frame's keystrokes and focus. Kept apart from the widget because egui's
+/// single-line editor hands its focus back out on Enter (`egui-0.36.2/src/widgets/text_edit/builder.rs:1187`),
+/// so what happens to the words depends on who holds the keyboard when they are read.
+#[derive(PartialEq, Debug)]
+enum PathBarAction {
+    Commit,
+    Close,
+    /// Still open for fixing, but the field has to be told to take focus again.
+    Rearm,
+    Idle,
+}
+
+fn path_bar_action(enter: bool, escape: bool, has_focus: bool, lost_focus: bool) -> PathBarAction {
+    // Enter belongs to the field when it holds the keyboard - including the frame it gives it up, which is the
+    // frame Enter arrives in.
+    if enter && (has_focus || lost_focus) {
+        return PathBarAction::Commit;
+    }
+    if escape || lost_focus {
+        // Escape gives up, and so does a click elsewhere: an open bar nobody is typing in is a bar left behind.
+        return PathBarAction::Close;
+    }
+    if !has_focus {
+        return PathBarAction::Rearm;
+    }
+    PathBarAction::Idle
+}
+
 /// Which of these sources already have their name taken in `dest`. Anything else can proceed without asking.
 fn taken_names(paths: &[PathBuf], dest: &Path) -> Vec<String> {
     paths
@@ -1642,6 +1670,14 @@ impl App {
         if !egui::DragAndDrop::has_payload_of_type::<Dragged>(ui.ctx()) {
             return (false, None);
         }
+        // Only the visible part of a target is a target. A tree row can be wider than its panel, and rows
+        // scrolled out of view keep their rectangles; without clipping to what is shown, an invisible row that
+        // drew first could claim a release that was visibly inside the pane.
+        let visible = rect.intersect(ui.clip_rect());
+        if visible.area() <= 0.0 {
+            return (false, None);
+        }
+        let rect = visible;
         let over = ui
             .input(|i| i.pointer.hover_pos())
             .is_some_and(|pos| rect.contains(pos));
@@ -3512,18 +3548,32 @@ impl App {
             resp.request_focus();
             self.path_armed = true;
         }
-        // Typing in this field is not a keyboard shortcut, however briefly egui hands it focus mid-batch.
-        self.typing_in_field |= resp.has_focus();
+        // Typing in this field is not a keyboard shortcut - and while the bar is open for typing, its words own
+        // the keystrokes: egui hands focus out on Enter, and a gap of one frame was enough for Backspace to be
+        // read as "go to parent" while the user was still correcting a path.
+        self.typing_in_field |= self.path_editing || resp.has_focus();
         if resp.has_focus() {
             self.path_field_id = Some(resp.id);
         }
         let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
         let escape = ui.input(|i| i.key_pressed(egui::Key::Escape));
-        if enter {
-            self.commit_path_edit();
+        match path_bar_action(enter, escape, resp.has_focus(), resp.lost_focus()) {
+            PathBarAction::Commit => self.commit_path_edit(),
+            PathBarAction::Close => {
+                // The edit is over: a bar left open with stale words would answer Enter long after the user
+                // stopped using it, and its recorded id could hush the shortcuts.
+                self.path_editing = false;
+                self.path_field_id = None;
+            }
+            PathBarAction::Rearm => {
+                // The bar is still open and the words are meant to be fixed, so the keyboard comes back this
+                // frame - clearing a flag for next frame left a gap in which Backspace was read as "parent".
+                resp.request_focus();
+                self.path_armed = true;
+            }
+            PathBarAction::Idle => {}
         }
-        if escape || (enter && !self.path_editing) {
-            self.path_editing = false;
+        if !self.path_editing {
             ui.memory_mut(|m| m.surrender_focus(resp.id));
         }
     }
@@ -3795,6 +3845,9 @@ impl App {
     }
 
     pub fn app_bar(&mut self, ui: &mut egui::Ui) {
+        // Room for a text field: a top panel sized to its content measured one line of labels - 18 px - and
+        // clipped the path bar and these buttons away. Qt's toolbar has real height for the same reason.
+        ui.set_min_height(32.0);
         let mut settings = false;
         let mut tree = false;
         ui.horizontal(|ui| {
@@ -4782,6 +4835,45 @@ mod tests {
             app.panes[0].path,
             std::path::Path::new(&rel),
             "a typed absolute path is taken as written"
+        );
+    }
+
+    /// The path bar's focus states, which the widget itself cannot show: egui's single-line editor surrenders
+    /// focus on Enter, so a path that was not a folder has to have its keyboard handed back, and a bar that lost
+    /// focus to a click elsewhere is finished - leaving it open would make it answer Enter long afterwards.
+    #[test]
+    fn the_path_bar_keeps_the_keyboard_it_owns() {
+        // Enter arrives in the same frame the editor gives up focus.
+        assert_eq!(
+            path_bar_action(true, false, false, true),
+            PathBarAction::Commit,
+            "Enter commits what was typed"
+        );
+        assert_eq!(
+            path_bar_action(false, false, false, true),
+            PathBarAction::Close,
+            "a click elsewhere ends the edit"
+        );
+        assert_eq!(
+            path_bar_action(false, true, true, false),
+            PathBarAction::Close,
+            "Escape gives up"
+        );
+        assert_eq!(
+            path_bar_action(false, false, false, false),
+            PathBarAction::Rearm,
+            "a bar still open for fixing takes its focus back"
+        );
+        assert_eq!(
+            path_bar_action(false, false, true, false),
+            PathBarAction::Idle,
+            "typing is just typing"
+        );
+        // A keystroke that belongs to nothing does not commit stale words.
+        assert_eq!(
+            path_bar_action(true, false, false, false),
+            PathBarAction::Rearm,
+            "Enter elsewhere is not the bar's to answer"
         );
     }
 
