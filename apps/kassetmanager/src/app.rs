@@ -1,11 +1,13 @@
-//! The egui application shell. Slice 3 of M1: browse a real folder — breadcrumb, subfolder list, media
-//! entries from [`gallerybrowser_core::scan_folder`], and a preview panel fed by the engine's
-//! [`gallerybrowser_media::Thumbnailer`] (decode on its own threads, results polled into wgpu textures).
+//! The egui application shell. Slice 4 of M1: browse a real folder — breadcrumb, subfolder list, media
+//! entries from [`gallerybrowser_core::scan_folder`] shown as a grid of engine thumbnails or a list, and a
+//! preview panel; all pictures come from [`gallerybrowser_media::Thumbnailer`] (decode on its own threads,
+//! results polled into wgpu textures).
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use gallerybrowser_core::{
-    Entry, ScanOptions, SortKey, list_subfolders, scan_folder, sort_entries,
+    Entry, ScanOptions, Settings, SortKey, ViewMode, list_subfolders, scan_folder, sort_entries,
 };
 use gallerybrowser_media::{Thumbnailer, ThumbnailerConfig};
 
@@ -20,14 +22,20 @@ const SCAN: ScanOptions = ScanOptions {
     show_all_files: false,
 };
 
-/// One `App` per window: current folder, what it contains, the selection and its preview picture.
+/// One `App` per window: current folder, what it contains, the selection and its pictures.
 pub struct App {
     path: PathBuf,
     entries: Vec<Entry>,
     subfolders: Vec<PathBuf>,
     selected: Option<PathBuf>,
     status: String,
+    /// Engine settings; drives view mode and thumbnail size. Dialog to edit it is later M1 work.
+    settings: Settings,
     thumbs: Thumbnailer,
+    /// Uploaded thumbnails of the current folder, by entry path.
+    pictures: HashMap<PathBuf, egui::TextureHandle>,
+    /// Requests still in flight (drives repainting until the engine answers).
+    outstanding: usize,
     /// The entry whose preview we asked the engine for.
     wanted: Option<PathBuf>,
     /// Decoded picture, uploaded to wgpu: `(path, texture)`.
@@ -57,7 +65,12 @@ impl App {
             subfolders: Vec::new(),
             selected: None,
             status: String::new(),
+            // ponytail: engine defaults (Grid view, 128 px thumbnails); read `AppDirs::settings_file()`
+            // and let the settings dialog write it once that exists.
+            settings: Settings::default(),
             thumbs,
+            pictures: HashMap::new(),
+            outstanding: 0,
             wanted: None,
             preview: None,
         };
@@ -82,6 +95,14 @@ impl App {
         self.selected = None;
         self.wanted = None;
         self.preview = None;
+        // Ask the engine for a thumbnail of every entry: it caches, decodes on its own threads and
+        // drops work it cannot finish. ponytail: whole folder at once; virtualise to visible rows if a
+        // huge folder ever makes this feel slow.
+        self.thumbs.begin_batch();
+        self.outstanding = self.entries.len();
+        for entry in &self.entries {
+            self.thumbs.request(entry, self.settings.thumbnail_size, 0);
+        }
     }
 
     /// Select `path` and ask the engine for its preview picture (once per selection).
@@ -96,30 +117,43 @@ impl App {
         }
     }
 
-    /// Move finished previews from the engine into wgpu textures. Called every frame.
-    fn poll_previews(&mut self, ui: &mut egui::Ui) {
+    /// Move finished pictures from the engine into wgpu textures. Called every frame.
+    fn poll_pictures(&mut self, ui: &mut egui::Ui) {
         for result in self.thumbs.poll() {
-            if result.scrub.is_some() || Some(&result.path) != self.wanted.as_ref() {
+            if result.scrub.is_some() {
                 continue;
             }
-            if let Ok(image) = result.image {
-                let color = egui::ColorImage::from_rgba_unmultiplied(
-                    [image.width as usize, image.height as usize],
-                    image.pixels.as_ref(),
-                );
-                let texture = ui
-                    .ctx()
-                    .load_texture("preview", color, egui::TextureOptions::LINEAR);
+            let preview = result.max_edge >= PREVIEW_EDGE;
+            if !preview && result.max_edge < self.settings.thumbnail_size {
+                continue;
+            }
+            if preview && Some(&result.path) != self.wanted.as_ref() {
+                continue;
+            }
+            self.outstanding = self.outstanding.saturating_sub(1);
+            let Ok(image) = result.image else { continue };
+            let color = egui::ColorImage::from_rgba_unmultiplied(
+                [image.width as usize, image.height as usize],
+                image.pixels.as_ref(),
+            );
+            let texture = ui.ctx().load_texture(
+                format!("pic{}", result.max_edge),
+                color,
+                egui::TextureOptions::LINEAR,
+            );
+            if preview {
                 self.preview = Some((result.path.clone(), texture));
+            } else {
+                self.pictures.insert(result.path.clone(), texture);
             }
         }
-        // ponytail: repaint continuously while a preview is in flight; event-driven wakeups when the
+        // ponytail: repaint continuously while pictures are in flight; event-driven wakeups when the
         // engine can notify us instead of being polled.
-        let ready = self
+        let preview_ready = self
             .preview
             .as_ref()
             .is_some_and(|(path, _)| Some(path.as_path()) == self.wanted.as_deref());
-        if self.wanted.is_some() && !ready {
+        if self.outstanding > 0 || (self.wanted.is_some() && !preview_ready) {
             ui.ctx().request_repaint();
         }
     }
@@ -155,6 +189,7 @@ impl App {
             })
             .collect();
         let mut target: Option<PathBuf> = None;
+        let mut view: Option<ViewMode> = None;
         ui.horizontal(|ui| {
             if ui.button("\u{2b06} up").clicked() {
                 target = self.parent().map(Path::to_path_buf);
@@ -168,10 +203,23 @@ impl App {
                     ui.label("/");
                 }
             }
+            ui.separator();
+            let grid = self.settings.view_mode == ViewMode::Grid;
+            if ui.button(if grid { "List" } else { "Grid" }).clicked() {
+                view = Some(if grid { ViewMode::List } else { ViewMode::Grid });
+            }
         });
         if let Some(target) = target {
             self.navigate(&target);
         }
+        if let Some(mode) = view {
+            self.set_view_mode(mode);
+        }
+    }
+
+    /// Switch between the engine's grid and list view.
+    pub fn set_view_mode(&mut self, mode: ViewMode) {
+        self.settings.view_mode = mode;
     }
 
     /// Subfolder list: the cheap version of the folder tree, enough to move around.
@@ -254,6 +302,59 @@ impl App {
         }
     }
 
+    /// Grid view: engine thumbnails in rows that fit the panel; a click selects and previews.
+    pub fn entries_grid(&mut self, ui: &mut egui::Ui) {
+        let edge = self.settings.thumbnail_size.clamp(32, 512) as f32;
+        let cell = edge + 12.0;
+        let cells: Vec<(String, PathBuf)> = self
+            .entries
+            .iter()
+            .map(|e| (e.name.clone(), e.path.clone()))
+            .collect();
+        let cols = ((ui.available_width() / cell).floor() as usize).max(1);
+        let mut selected: Option<PathBuf> = None;
+        egui::ScrollArea::vertical()
+            .auto_shrink(false)
+            .show(ui, |ui| {
+                for row in cells.chunks(cols) {
+                    ui.horizontal(|ui| {
+                        for (name, path) in row {
+                            let chosen = self.selected.as_deref() == Some(path.as_path());
+                            ui.allocate_ui_with_layout(
+                                egui::vec2(cell, cell + 24.0),
+                                egui::Layout::top_down(egui::Align::Center),
+                                |ui| {
+                                    match self
+                                        .pictures
+                                        .get(path)
+                                        .map(|tex| (tex.id(), tex.size_vec2()))
+                                    {
+                                        Some((id, px)) => {
+                                            let scale =
+                                                (edge / px.x.max(1.0)).min(edge / px.y.max(1.0));
+                                            ui.image(egui::load::SizedTexture {
+                                                id,
+                                                size: px * scale,
+                                            });
+                                        }
+                                        None => {
+                                            ui.allocate_space(egui::vec2(edge, edge));
+                                        }
+                                    }
+                                    if ui.selectable_label(chosen, name).clicked() {
+                                        selected = Some(path.clone());
+                                    }
+                                },
+                            );
+                        }
+                    });
+                }
+            });
+        if let Some(selected) = selected {
+            self.select(selected);
+        }
+    }
+
     /// The bottom status bar: where we are, how much is there, and what is selected.
     pub fn status_bar(&mut self, ui: &mut egui::Ui) {
         ui.label(self.path.display().to_string());
@@ -279,7 +380,7 @@ impl App {
 impl eframe::App for App {
     /// egui 0.36 hands the app a root `Ui` (not a `Context`); panels are shown on it.
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        self.poll_previews(ui);
+        self.poll_pictures(ui);
         egui::Panel::top("path_bar").show(ui, |ui| {
             ui.horizontal(|ui| self.path_bar(ui));
         });
@@ -288,7 +389,10 @@ impl eframe::App for App {
         });
         egui::Panel::left("folders").show(ui, |ui| self.folders(ui));
         egui::Panel::right("preview").show(ui, |ui| self.preview(ui));
-        egui::CentralPanel::default().show(ui, |ui| self.entries_list(ui));
+        egui::CentralPanel::default().show(ui, |ui| match self.settings.view_mode {
+            ViewMode::Grid => self.entries_grid(ui),
+            ViewMode::List => self.entries_list(ui),
+        });
     }
 }
 
@@ -358,6 +462,34 @@ mod tests {
         app.select(video.clone());
         assert_eq!(app.selected.as_deref(), Some(video.as_path()));
         assert_eq!(app.wanted.as_deref(), Some(video.as_path()));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Net under the verified slice-4 behaviour: opening a folder asks the engine for exactly one
+    /// thumbnail per media entry, and the view mode is app state the path bar can change.
+    #[test]
+    fn opening_a_folder_asks_for_one_thumbnail_per_entry() {
+        let dir = sandbox("thumbs", &["a.png", "b.mov", "c.txt"], &[]);
+        let mut app = App::with_cache(dir.clone(), sandbox("thumbs-cache", &[], &[]));
+
+        assert_eq!(
+            app.entries.len(),
+            2,
+            "the text file is not media and is not listed"
+        );
+        assert_eq!(
+            app.outstanding,
+            app.entries.len(),
+            "one thumbnail request per entry should be outstanding"
+        );
+        assert!(
+            matches!(app.settings.view_mode, ViewMode::Grid),
+            "the engine default is the grid view"
+        );
+
+        app.set_view_mode(ViewMode::List);
+        assert!(matches!(app.settings.view_mode, ViewMode::List));
 
         let _ = std::fs::remove_dir_all(&dir);
     }

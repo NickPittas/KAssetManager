@@ -245,8 +245,19 @@ showed that file selected in the list, its decoded picture in the Preview panel,
 preview path was verified without GUI automation. Two state tests were added after that verification.
 egui/epaint 0.36 notes: `TextureHandle` has `size_vec2()`/`id()` (no `width()`/`height()`),
 `egui::Panel::right(id)` exists, and images are drawn with `ui.image(egui::load::SizedTexture { id, size })`.
-Still not there: no thumbnails in the list yet (the same thumbnailer drives them next), playback of video
-(no `gallerybrowser-player` in the app yet — a click on a `.mov` gives a first frame only), no scrubbing.
+Still not there: playback of video (no `gallerybrowser-player` in the app yet — a click on a `.mov` gives
+a first frame only), no scrubbing.
+
+**Slice 4 (verified):** grid view with engine thumbnails. Opening a folder batches one thumbnail request per
+media entry at the engine's `thumbnail_size` (128 px default) through the same `Thumbnailer`; results are
+polled into wgpu textures and drawn in rows that fit the panel, with the path bar offering a grid/list
+toggle (`Settings::view_mode`, Grid is the engine default). Evidence: running `kassetmanager ~/Pictures`
+showed real thumbnails for images **and** videos (`demo.mov`, `demo_small.mov`, an `.mp4`, and
+`sample1.heif` all decoded), names beneath each cell, `List` toggle in the path bar, status bar intact
+(`validation_outputs/m1-slice4.png`). Test net added afterwards: one request outstanding per entry, non-media
+files excluded, view mode is app state.
+Still not there: no lazy folder tree, no playback/scrub, no settings dialog (settings are engine defaults),
+window size/HiDPI and OS drag/drop untouched.
 
 ## Non-goals
 
