@@ -14,7 +14,8 @@ use gallerybrowser_core::{
 use gallerybrowser_fileops::{ConflictPolicy, FileOp, FileOpsWorker, OpEvent, OpOutcome};
 use gallerybrowser_library::Library;
 use gallerybrowser_media::{
-    MediaMetadata, MetadataWorker, Thumbnailer, ThumbnailerConfig, Tick, frame_to_rgba, open,
+    FrameRate, MediaMetadata, MetadataWorker, SharedSource, Thumbnailer, ThumbnailerConfig, Tick,
+    frame_to_rgba, open, open_sequence,
 };
 use gallerybrowser_player::Player;
 
@@ -255,6 +256,9 @@ struct FileKeys {
     /// Ctrl+- and Ctrl++ size the active pane's thumbnails, so the toolbar slider is not the only way to set it.
     thumb_smaller: bool,
     thumb_bigger: bool,
+    /// `,` and `.` step the loaded item one frame - the keys Qt's transport tooltips name.
+    frame_back: bool,
+    frame_forward: bool,
     /// Arrows / Home / End move the current item through the active pane's listing.
     step: Option<Step>,
     /// Enter activates the current item: enter a folder, play a file. Qt's views activate on Return.
@@ -1328,6 +1332,48 @@ impl App {
     }
 
     /// Load `path` in the player; `autoplay` false means the transport is there without sound starting.
+    /// The listing entry for `path`, if a visible pane is showing it. Opening has to know what the listing *means*:
+    /// a run of frames is one item here and many files on disk.
+    fn entry_at(&self, path: &Path) -> Option<Entry> {
+        (0..self.panes_visible()).find_map(|index| {
+            self.panes[index]
+                .entries
+                .iter()
+                .find(|e| e.path == path)
+                .cloned()
+        })
+    }
+
+    /// Whether the loaded item has frames a person could step through - video and runs of numbered files, not audio,
+    /// not a still. Qt shows Previous/Next frame with its playback controls (`preview_overlay.cpp:1468-1479`).
+    fn steppable(&self) -> bool {
+        self.playing
+            .as_deref()
+            .and_then(|path| self.entry_at(path))
+            .is_some_and(|entry| matches!(entry.kind, MediaKind::Video | MediaKind::Sequence))
+    }
+
+    /// Move the loaded item by `delta` frames. The player pauses and clamps at both ends itself (`step`), which is
+    /// what Qt's transport buttons do too.
+    fn step_frames(&mut self, delta: i64) {
+        if !self.steppable() {
+            return;
+        }
+        self.player.step(delta);
+    }
+
+    /// Open what a listing entry *means*. A folded run of numbered files is one item in the listing and many files
+    /// on disk, so its own frames decide how it plays; opening the entry's path would ask for the pattern file
+    /// (`shot.####.png`), which is not a file that exists. 24 fps is the rate the engine scrubs runs at
+    /// (`media/src/scrub.rs:23`) and Qt's fallback when it cannot detect a rate (`preview_overlay.cpp:1450-1456`).
+    /// ponytail: a run recorded at another rate should open at its own; read that from metadata when one shows up.
+    fn source_for(entry: Option<&Entry>, path: &Path) -> Result<SharedSource, String> {
+        match entry.and_then(|entry| entry.sequence.as_ref()) {
+            Some(seq) => open_sequence(seq, FrameRate::FPS_24).map_err(|err| format!("{err}")),
+            None => open(path).map_err(|err| format!("{err}")),
+        }
+    }
+
     fn load(&mut self, path: PathBuf, autoplay: bool) {
         // ponytail: opening here runs on the UI thread, so a damaged clip or slow storage can stall browsing;
         // upgrade path is an open worker that discards results superseded by a newer selection.
@@ -1340,7 +1386,9 @@ impl App {
             }
             return;
         }
-        match open(&path) {
+        let entry = self.entry_at(&path);
+        let opened = Self::source_for(entry.as_ref(), &path);
+        match opened {
             Ok(source) => {
                 self.playing = Some(path);
                 self.frame = None;
@@ -1357,7 +1405,7 @@ impl App {
                 self.player.unload();
                 self.playing = None;
                 self.frame = None;
-                self.status = format!("{err}");
+                self.status = err;
             }
         }
     }
@@ -3668,6 +3716,24 @@ impl App {
         if ui.button("Stop").clicked() {
             stop = true;
         }
+        // Qt's transport carries Previous frame / Next frame and its tooltips name the keys (`,` and `.`), so this
+        // does the same. ASCII arrows: the bundled font has no angle-glyph guarantee, same lesson as the kind tags.
+        if self.steppable() {
+            if ui
+                .button("< frame")
+                .on_hover_text("Previous frame (,)")
+                .clicked()
+            {
+                self.step_frames(-1);
+            }
+            if ui
+                .button("frame >")
+                .on_hover_text("Next frame (.)")
+                .clicked()
+            {
+                self.step_frames(1);
+            }
+        }
         // Volume, mute and loop are settings the player already honours, so they belong on the transport.
         let mut volume = self.settings.volume;
         // The slider's value display is an editable text field (click it and type), so while it holds the
@@ -3739,6 +3805,12 @@ impl App {
         }
         if keys.new_folder {
             self.new_folder();
+        }
+        if keys.frame_back {
+            self.step_frames(-1);
+        }
+        if keys.frame_forward {
+            self.step_frames(1);
         }
         if keys.thumb_smaller {
             self.step_thumbnails(self.active, -1);
@@ -4452,6 +4524,8 @@ impl App {
                 .into_iter()
                 .find(|(key, _)| i.key_pressed(*key))
                 .map(|(_, value)| value),
+                frame_back: i.key_pressed(egui::Key::Comma),
+                frame_forward: i.key_pressed(egui::Key::Period),
                 thumb_smaller: i.key_pressed(egui::Key::Minus) && m,
                 // Most layouts need Shift to type '+', and the unshifted key is '=', so both mean grow.
                 thumb_bigger: (i.key_pressed(egui::Key::Plus) || i.key_pressed(egui::Key::Equals))
@@ -7203,5 +7277,50 @@ mod tests {
             left,
             vec![(on_screen.clone(), 64), (on_screen.clone(), PREVIEW_EDGE)]
         );
+    }
+    /// A folded run is one item in the listing and many files on disk, so opening has to ask for the frames: the
+    /// entry's own path is the pattern (`shot.####.png`), which is not a file anybody wrote.
+    #[test]
+    fn a_folded_run_opens_its_frames_rather_than_the_pattern_path() {
+        use gallerybrowser_core::{Sequence, SequenceFrame};
+
+        let seq = Sequence {
+            dir: PathBuf::from("/nowhere"),
+            prefix: "shot.".into(),
+            suffix: ".png".into(),
+            padding: 4,
+            frames: vec![SequenceFrame {
+                number: 1,
+                path: PathBuf::from("/nowhere/shot.0001.png"),
+            }],
+        };
+        let run = Entry {
+            path: PathBuf::from("/nowhere/shot.####.png"),
+            name: "shot_[0001].png".into(),
+            kind: MediaKind::Sequence,
+            size: 4096,
+            modified: None,
+            sequence: Some(std::sync::Arc::new(seq)),
+        };
+        let err = App::source_for(Some(&run), &run.path)
+            .map(|_| ())
+            .expect_err("those frames are not on disk");
+        assert!(
+            err.contains("shot.0001.png"),
+            "opening should name a frame file, not the pattern: {err}"
+        );
+
+        // A plain file is still opened by its own path.
+        let plain = Entry {
+            path: PathBuf::from("/nowhere/plain.png"),
+            name: "plain.png".into(),
+            kind: MediaKind::Image,
+            sequence: None,
+            ..run
+        };
+        let err = App::source_for(Some(&plain), &plain.path)
+            .map(|_| ())
+            .expect_err("that file is not on disk");
+        assert!(err.contains("plain.png"), "{err}");
     }
 }

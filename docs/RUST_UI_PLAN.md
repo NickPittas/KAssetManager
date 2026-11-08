@@ -238,3 +238,37 @@ decoded frames, `open_sequence` never called, batch rename already in `fileops`,
 
 Residual unknowns recorded by the reviewers: runtime PDF/OIIO availability, Windows IPC and converter execution, and
 platform drag behaviour were read from source but not executed.
+
+## P2 slice notes — sequence playback and frame stepping
+
+Evidence read before implementing (not assumed):
+
+- Engine opens a sequence as one source: `gallerybrowser_media::open_sequence(&Sequence, FrameRate)`
+  (`crates/media/src/open.rs:191`). Path-only `open()` never sees a run, so the app must call it.
+- A folded listing entry already carries the run: `Entry::sequence: Option<Arc<Sequence>>`, plus
+  `member_paths()` / `representative_path()` (`crates/core/src/entry.rs:18,29,36`).
+- Player has the frame primitive Qt's transport needs: `step(delta)` pauses and moves by frames, clamped at both
+  ends (`crates/player/src/lib.rs:270-284`).
+- The engine's own scrub lane plays sequences at 24 fps (`crates/media/src/scrub.rs:23,134`).
+- Qt's preview transport has **Previous frame** / **Next frame** buttons whose tooltips name the keys `,` and `.`
+  (`native/qt6/src/preview_overlay.cpp:609-647`), and both are hidden when the current item has no frames to step
+  through (`:1473-1475`).
+
+Decisions for this slice:
+
+- Sequence entries load through `open_sequence` at 24 fps — the rate the engine already scrubs them at. A
+  per-sequence rate (from metadata, as Qt's converter projects do) is the upgrade path, not this slice.
+- `,` and `.` step frames while a sequence is loaded, matching Qt's tooltips. Left/Right stay asset navigation in
+  this app (the plan's correction that FM steps frames while overlay arrows navigate assets), so frame stepping does
+  not steal them.
+- The two transport buttons appear whenever the loaded item has frames to step (video or sequence). Qt keeps
+  Previous/Next frame inside `setPlaybackControlsVisible` (`preview_overlay.cpp:1468-1479`) and steps video at its
+  detected rate, defaulting to 24 fps when unknown (`frameDurationMs`, `:1450-1456`) - so stepping is not sequence-only.
+- A sequence that fails to open falls back to its representative still and says so in the status line — never a
+  silently wrong picture.
+
+Acceptance: selecting a folded sequence loads it as one multi-frame source (`frame n/of N` with N = frames); `,`
+and `.` change n by one and stop at both ends; the transport shows the two buttons whenever the loaded item
+has frames to step; a failed
+sequence open falls back to the still with a visible note.
+

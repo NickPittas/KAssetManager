@@ -199,3 +199,59 @@ pub(crate) fn open_frames(
         Ok(Guarded::wrap(Arc::new(src)))
     })
 }
+
+#[cfg(test)]
+mod tests {
+    // Test-only module: assertions may panic by design.
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+    use std::path::PathBuf;
+
+    use filmcraft_media::MediaSource;
+    use filmcraft_time::FrameRate;
+
+    use super::SequenceSource;
+
+    /// A real 1x1 PNG, written to disk and decoded back: the sequence source must open a run of ordinary image
+    /// files the way the app asks it to (a listing folds them into one item, so this is what selecting that item
+    /// opens). Written rather than generated here so the check does not depend on an encoder.
+    const PNG_1X1: &[u8] = &[
+        137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 2,
+        0, 0, 0, 144, 119, 83, 222, 0, 0, 0, 12, 73, 68, 65, 84, 120, 218, 99, 248, 32, 39, 7, 0,
+        3, 46, 1, 45, 0, 63, 131, 7, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
+    ];
+
+    fn fixture(dir: &std::path::Path, n: usize) -> Vec<PathBuf> {
+        (1..=n)
+            .map(|i| {
+                let path = dir.join(format!("walk.{i:04}.png"));
+                std::fs::write(&path, PNG_1X1).unwrap();
+                path
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_png_sequence_opens_as_a_source_at_the_requested_rate() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../build-rust-tmp/media-seq-open");
+        std::fs::create_dir_all(&dir).unwrap();
+        let frames = fixture(&dir, 3);
+
+        let src = SequenceSource::open("walk_[0001-0003].png", frames.clone(), FrameRate::FPS_24)
+            .expect("a PNG sequence should open");
+        let info = src.info();
+        assert_eq!(info.video.as_ref().unwrap().width, 1);
+        assert_eq!(info.video.as_ref().unwrap().frame_rate, FrameRate::FPS_24);
+        // Three frames at 24 fps is one eighth of a second - the run plays as one clip, not three stills.
+        assert!(
+            (info.duration.seconds() - 3.0 / 24.0).abs() < 1e-6,
+            "duration {} s",
+            info.duration.seconds()
+        );
+
+        for path in &frames {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
