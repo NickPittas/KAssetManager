@@ -1320,6 +1320,10 @@ impl App {
             }
             Err(err) => {
                 self.panes[index].entries.clear();
+                // The base a tree list rebuilds its rows from goes with the displayed rows. Left behind, switching
+                // into a tree list would resurrect files from a folder whose read just failed - rows for a listing
+                // that is empty and says so.
+                self.panes[index].flat_entries.clear();
                 self.status = format!("{err}");
             }
         }
@@ -1330,6 +1334,15 @@ impl App {
             .and_then(|meta| meta.modified().ok());
         self.remember_current_folders();
         self.reconcile_viewed(index);
+    }
+
+    /// Whether an operation inside one of a tree list's folders changes what that pane is showing. The case where
+    /// the pane's own folder was touched is handled before this, by rescanning it outright.
+    fn pane_needs_refresh(&self, index: usize, touched: &[PathBuf]) -> bool {
+        self.panes[index].view_mode == ViewMode::TreeList
+            && touched
+                .iter()
+                .any(|dir| dir.starts_with(&self.panes[index].path))
     }
 
     /// Drop selection that no longer has a row, and the preview that was following it. Clearing only when the
@@ -1431,12 +1444,16 @@ impl App {
             self.settings.view_mode[index] = self.panes[index].view_mode;
             self.settings.thumbnail_size[index] = self.panes[index].thumbnail_size;
             self.settings.collapse_sequences[index] = self.panes[index].collapse_sequences;
-            // Sorted so a saved file does not shuffle every time the same expansion is written back. Folders that no
-            // longer exist can never be met again, so they are dropped rather than carried across restarts forever.
+            // Sorted so a saved file does not shuffle every time the same expansion is written back. Only a folder we
+            // can see is gone is dropped: one on a drive that is not mounted right now, or a network share that did
+            // not answer, keeps its place and opens again when the mount comes back.
             let mut open: Vec<PathBuf> = self.panes[index]
                 .expanded
                 .iter()
-                .filter(|dir| dir.is_dir())
+                .filter(|dir| match std::fs::metadata(dir) {
+                    Ok(meta) => meta.is_dir(),
+                    Err(_) => true,
+                })
                 .cloned()
                 .collect();
             open.sort();
@@ -2396,15 +2413,14 @@ impl App {
             if touched.contains(&self.panes[index].path) {
                 self.open_quiet(index);
                 rescanned = true;
-            } else if self.panes[index].view_mode == ViewMode::TreeList
-                && touched
-                    .iter()
-                    .any(|dir| dir.starts_with(&self.panes[index].path))
-            {
+            } else if self.pane_needs_refresh(index, &touched) {
                 // A tree list shows rows from folders *inside* the pane's folder, so renaming or deleting a file two
                 // levels down changes what this listing is showing even though its own root never changed. Rebuilding
-                // the rows re-reads the opened folders, so the obsolete row goes away without a manual refresh.
+                // the rows re-reads the opened folders, so the obsolete row goes away without a manual refresh - and
+                // the selection and preview that named the old path are reconciled with it, because Delete acts on
+                // the selection and would otherwise act on a file that no longer exists.
                 self.apply_tree(index);
+                self.reconcile_viewed(index);
                 rescanned = true;
             }
         }
@@ -7863,8 +7879,35 @@ mod tests {
         );
     }
 
+    /// Which panes an operation inside a subfolder concerns: a tree list shows those folders, a plain listing of the
+    /// pane's own folder does not. This is what tells the completion handler to rebuild rows.
+    #[test]
+    fn an_operation_in_a_subfolder_concerns_the_tree_list_showing_it() {
+        let root = sandbox("treepane", &["top.png"], &["mid"]);
+        let mut app = App::with_cache(root.clone(), sandbox("treepanethumbs", &[], &[]));
+        let nested = vec![root.join("mid")];
+        let unrelated = vec![PathBuf::from("/some/other/place")];
+
+        app.set_pane_view(0, ViewMode::TreeList);
+        assert!(
+            app.pane_needs_refresh(0, &nested),
+            "a tree list showing mid"
+        );
+        assert!(
+            !app.pane_needs_refresh(0, &unrelated),
+            "nothing changed under it"
+        );
+
+        app.set_pane_view(0, ViewMode::List);
+        assert!(
+            !app.pane_needs_refresh(0, &nested),
+            "a plain listing shows only the pane's own folder"
+        );
+    }
+
     /// Rebuilding a tree list re-reads the folders it had opened, so an operation two levels down is not left behind
-    /// as an obsolete row until the next manual refresh.
+    /// as an obsolete row until the next manual refresh - and the selection and preview that named the old path go
+    /// with it, because Delete acts on the selection.
     #[test]
     fn rebuilding_a_tree_list_picks_up_what_happened_inside_it() {
         let names = |entries: &Vec<Entry>| -> Vec<String> {
@@ -7878,8 +7921,15 @@ mod tests {
         app.toggle_tree_node(0, &root.join("mid"));
         assert!(names(&app.panes[0].entries).contains(&"inner.png".to_string()));
 
-        std::fs::rename(root.join("mid/inner.png"), root.join("mid/renamed.png")).unwrap();
+        let stale = root.join("mid/inner.png");
+        app.select_in(0, stale.clone(), false);
+        app.panes[0].wanted = Some(stale.clone());
+
+        std::fs::rename(&stale, root.join("mid/renamed.png")).unwrap();
+        // What operation completion does to a tree pane it did not rescan outright.
         app.apply_tree(0);
+        app.reconcile_viewed(0);
+
         let after = names(&app.panes[0].entries);
         assert!(
             after.contains(&"renamed.png".to_string()),
@@ -7889,5 +7939,39 @@ mod tests {
             !after.contains(&"inner.png".to_string()),
             "the old row is gone"
         );
+        assert!(
+            app.panes[0].selection.is_empty(),
+            "Delete will not act on the vanished path"
+        );
+        assert_eq!(
+            app.panes[0].wanted, None,
+            "and the preview is not still asking for it"
+        );
+    }
+    /// A folder that cannot be read has no listing to rebuild rows from. Clearing the displayed rows but keeping the
+    /// base behind them let a tree list resurrect files the read said it could not see.
+    #[test]
+    #[cfg(unix)]
+    fn a_folder_that_cannot_be_read_leaves_no_rows_to_rebuild() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = sandbox("treread", &["top.png"], &[]);
+        let mut app = App::with_cache(root.clone(), sandbox("trereadthumbs", &[], &[]));
+        assert!(
+            app.panes[0].entries.iter().any(|e| e.name == "top.png"),
+            "the folder reads fine to begin with"
+        );
+
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o000)).unwrap();
+        app.open_quiet(0);
+        assert!(
+            app.panes[0].entries.is_empty(),
+            "the failed read cleared the listing"
+        );
+        app.set_pane_view(0, ViewMode::TreeList);
+        assert!(
+            app.panes[0].entries.is_empty(),
+            "a tree list does not invent rows for a folder it cannot read"
+        );
+        let _ = std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755));
     }
 }
