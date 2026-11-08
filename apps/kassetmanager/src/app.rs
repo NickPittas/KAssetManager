@@ -97,6 +97,9 @@ struct Pane {
     wanted: Option<PathBuf>,
     /// Decoded picture, uploaded to wgpu: `(path, texture)`.
     preview: Option<(PathBuf, egui::TextureHandle)>,
+    /// Cells per row as the grid last drew itself; 1 in list view. The arrows need it because Down means down a
+    /// row, and only the layout knows how wide a row is.
+    grid_cols: usize,
     /// Row or cell to bring into view the next time it draws, set when the keyboard moves the current item.
     scroll_target: Option<PathBuf>,
     /// File the pointer is over right now; drives hover scrub and resets its state on change.
@@ -146,10 +149,19 @@ fn pressed_within(rect: egui::Rect, pressed: bool, pos: Option<egui::Pos2>) -> b
 
 /// Where the arrow keys take the current item. Qt's views do this on their own (`QItemSelectionModel`), so
 /// there is no key handling in its sources to port - egui has no default, and the port has to say it.
+///
+/// The arrows are axes, not one flat order: Down means **down a row** in a grid (a whole row of cells) and one
+/// item in a list, which is what `Pane::grid_cols` tells `Pane::step` about the layout as it last drew itself.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Step {
-    Prev,
-    Next,
+    /// One item back - Left in both views.
+    ItemBack,
+    /// One item forward - Right.
+    ItemForward,
+    /// One row up - Up, which is one item where a row is one cell wide (list view).
+    RowBack,
+    /// One row down - Down.
+    RowForward,
     First,
     Last,
 }
@@ -353,25 +365,40 @@ pub struct App {
 }
 
 impl Pane {
-    /// Move the current item through this pane's listing and return it. Home and End jump to the ends, both
-    /// ends clamp instead of wrapping, and a multi-selection collapses onto the new current item - what Qt's
-    /// selection model does when you arrow after a rubber-band.
-    fn step(&mut self, step: Step) -> Option<PathBuf> {
+    /// Move the current item and return it. A row move travels `cols` items - one row of the grid as it is
+    /// laid out - and a list is one cell wide, so there Down is simply the next file. Home and End jump to the
+    /// ends; an arrow with nowhere to go stays put rather than wrapping or sliding into a neighbour column. A
+    /// multi-selection collapses onto the new current item, what Qt's model does when you arrow after one.
+    fn step(&mut self, step: Step, cols: usize) -> Option<PathBuf> {
         let paths: Vec<PathBuf> = self.entries.iter().map(|e| e.path.clone()).collect();
         if paths.is_empty() {
             return None;
         }
         let last = paths.len() - 1;
+        let cols = cols.max(1) as isize;
         let at = self
             .primary()
             .and_then(|p| paths.iter().position(|x| x == p));
         let at = match (at, step) {
-            (None, Step::Prev | Step::Last) => last,
-            (None, Step::Next | Step::First) => 0,
-            (Some(i), Step::Next) => (i + 1).min(last),
-            (Some(i), Step::Prev) => i.saturating_sub(1),
+            (None, Step::RowBack | Step::ItemBack | Step::Last) => last,
+            (None, Step::RowForward | Step::ItemForward | Step::First) => 0,
             (Some(_), Step::First) => 0,
             (Some(_), Step::Last) => last,
+            (Some(i), step) => {
+                let delta = match step {
+                    Step::ItemBack => -1,
+                    Step::ItemForward => 1,
+                    Step::RowBack => -cols,
+                    Step::RowForward => cols,
+                    _ => 0,
+                };
+                let next = i as isize + delta;
+                if next < 0 || next > last as isize {
+                    i
+                } else {
+                    next as usize
+                }
+            }
         };
         let path = paths[at].clone();
         self.selection = vec![path.clone()];
@@ -421,6 +448,7 @@ impl Pane {
             selection: Vec::new(),
             wanted: None,
             preview: None,
+            grid_cols: 1,
             scroll_target: None,
             hover: None,
             scrub_target: None,
@@ -1841,6 +1869,8 @@ impl App {
             .iter()
             .map(|e| (e.clone(), self.panes[index].dir_paths.contains(&e.path)))
             .collect();
+        // A list row is one cell wide, so Down is the next file.
+        self.panes[index].grid_cols = 1;
         let columns = self.list_columns();
         let widths: Vec<f32> = columns.iter().map(|c| self.column_width(*c)).collect();
         const ROW_H: f32 = 20.0;
@@ -2164,6 +2194,7 @@ impl App {
         let cell = edge + 12.0;
         let cells: Vec<Entry> = self.panes[index].entries.clone();
         let cols = ((ui.available_width() / cell).floor() as usize).max(1);
+        self.panes[index].grid_cols = cols;
         // Ctrl on Linux and Windows, Command on macOS - the platform's "add to selection" key.
         let ctrl = ui.input(|i| i.modifiers.command);
         // The pointer is known before layout runs, so this pass draws the frame `scrub_at` chose last pass.
@@ -2529,7 +2560,7 @@ impl App {
             self.status = "nothing to redo".into();
         }
         if let Some(step) = keys.step {
-            if let Some(path) = self.panes[active].step(step) {
+            if let Some(path) = self.panes[active].step(step, self.panes[active].grid_cols) {
                 // Selection is the only way the preview and the player follow, so the move goes through it.
                 self.select_in(active, path, false);
             } else {
@@ -3036,13 +3067,11 @@ impl App {
             let copy_event = i.events.iter().any(|e| matches!(e, egui::Event::Copy));
             let cut_event = i.events.iter().any(|e| matches!(e, egui::Event::Cut));
             let paste_event = i.events.iter().any(|e| matches!(e, egui::Event::Paste(_)));
-            // Both pairs step the same listing: in a one-column list Left/Right would otherwise do nothing,
-            // and in a grid stepping the order never lands on an item the user did not mean.
             let step = [
-                (egui::Key::ArrowDown, Step::Next),
-                (egui::Key::ArrowRight, Step::Next),
-                (egui::Key::ArrowUp, Step::Prev),
-                (egui::Key::ArrowLeft, Step::Prev),
+                (egui::Key::ArrowDown, Step::RowForward),
+                (egui::Key::ArrowUp, Step::RowBack),
+                (egui::Key::ArrowRight, Step::ItemForward),
+                (egui::Key::ArrowLeft, Step::ItemBack),
                 (egui::Key::Home, Step::First),
                 (egui::Key::End, Step::Last),
             ]
@@ -3326,20 +3355,21 @@ mod tests {
     fn arrows_step_the_listing_and_clamp_at_the_ends() {
         let dir = sandbox("arrows", &["a.png", "b.mov"], &["aa-folder", "zz-folder"]);
         let mut app = App::with_cache(dir.clone(), sandbox("arrows-cache", &[], &[]));
-        // Folders lead, each group in natural order: aa-folder, zz-folder, a.png, b.mov.
+        // Folders lead, each group in natural order: aa-folder, zz-folder, a.png, b.mov. One column wide, as a
+        // list view is, so Down is the next entry and Up the one above it.
         let steps: [(&str, Step); 9] = [
-            ("aa-folder", Step::Next), // nothing selected yet: Down picks the first item
-            ("zz-folder", Step::Next),
-            ("aa-folder", Step::Prev),
-            ("aa-folder", Step::Prev), // clamped, does not wrap
+            ("aa-folder", Step::RowForward), // nothing selected yet: Down picks the first item
+            ("zz-folder", Step::RowForward),
+            ("aa-folder", Step::RowBack),
+            ("aa-folder", Step::RowBack), // nowhere above: stays put, does not wrap
             ("b.mov", Step::Last),
-            ("b.mov", Step::Next), // clamped at the end too
+            ("b.mov", Step::RowForward), // nowhere below
             ("aa-folder", Step::First),
-            ("zz-folder", Step::Next),
-            ("aa-folder", Step::Prev),
+            ("zz-folder", Step::ItemForward),
+            ("aa-folder", Step::ItemBack),
         ];
         for (name, step) in steps {
-            let moved = app.panes[0].step(step);
+            let moved = app.panes[0].step(step, 1);
             assert_eq!(
                 moved.as_deref().and_then(|p| p.file_name()),
                 Some(std::ffi::OsStr::new(name)),
@@ -3359,7 +3389,7 @@ mod tests {
         // Arrowing after a multi-selection collapses onto the new current item, as Qt's model does.
         app.panes[0].selection = vec![dir.join("aa-folder"), dir.join("zz-folder")];
         assert_eq!(
-            app.panes[0].step(Step::Next).as_deref(),
+            app.panes[0].step(Step::RowForward, 1).as_deref(),
             Some(dir.join("a.png").as_path()),
             "the step runs from the last item clicked"
         );
@@ -3388,6 +3418,46 @@ mod tests {
             app.status.contains("Nothing selected"),
             "Enter with nothing current says so: {}",
             app.status
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Down is the cell below and Right the next cell - the grid's own geometry, not one flat order. Where
+    /// there is no row below, Down stays put instead of sliding into another column.
+    #[test]
+    fn in_a_grid_down_moves_a_row_and_right_one_cell() {
+        let dir = sandbox(
+            "arrows-grid",
+            &["a.png", "b.mov"],
+            &["aa-folder", "zz-folder"],
+        );
+        let mut app = App::with_cache(dir.clone(), sandbox("arrows-grid-cache", &[], &[]));
+        // Two cells to a row: aa-folder, zz-folder on the first row; a.png, b.mov on the second.
+        let grid = 2;
+        app.panes[0].selection = vec![dir.join("aa-folder")];
+        let moves: [(&str, Step); 6] = [
+            ("a.png", Step::RowForward),  // straight down one row
+            ("b.mov", Step::ItemForward), // and right is the next cell along
+            ("zz-folder", Step::RowBack), // up again
+            ("a.png", Step::ItemForward), // Qt's icon view steps to the previous row's last cell
+            ("a.png", Step::RowForward),  // no row below: stays put, does not slide left
+            ("zz-folder", Step::ItemBack),
+        ];
+        for (name, step) in moves {
+            assert_eq!(
+                app.panes[0]
+                    .step(step, grid)
+                    .as_deref()
+                    .and_then(|p| p.file_name()),
+                Some(std::ffi::OsStr::new(name)),
+                "{step:?} from a two-cell row should land on {name:?}"
+            );
+        }
+        // The layout is what says how wide a row is, so the pane records it as it draws.
+        assert_eq!(
+            app.panes[0].grid_cols, 1,
+            "a list is one cell wide until a grid draws itself"
         );
 
         let _ = std::fs::remove_dir_all(&dir);
