@@ -274,6 +274,10 @@ pub struct App {
     annotate_focus: bool,
     /// Which folders the tree has open, and its cached listings.
     tree: TreeState,
+    /// Last (active pane, folder it shows). The tree follows a change here, not every frame.
+    tree_revealed: Option<(usize, PathBuf)>,
+    /// Folder whose tree row should be scrolled into view on the next draw, then cleared.
+    tree_reveal: Option<PathBuf>,
     settings_open: bool,
     /// Theme last pushed to egui, so we only re-set visuals when it changes.
     theme_applied: Option<Theme>,
@@ -419,6 +423,8 @@ impl App {
             annotate_focus: false,
             dirs,
             tree: TreeState::default(),
+            tree_revealed: None,
+            tree_reveal: None,
             settings_open: false,
             theme_applied: None,
         };
@@ -2429,6 +2435,28 @@ impl App {
     /// active pane, and the tree's own context menu (Qt keeps it separate from the file view's menu,
     /// `mw.cpp:3307-3315, 3408-3413`). Each level takes its own child list before recursing, so no borrow
     /// of `self` is held across the recursion.
+    /// The tree follows the pane you are looking at: switch panes or navigate and the folder you are in is
+    /// opened to, with its ancestors expanded and its row scrolled into view. It is event-driven - a folder
+    /// you collapsed by hand stays collapsed until the next navigation or pane switch.
+    fn tree_follow_pane(&mut self) {
+        let target = (self.active, self.panes[self.active].path.clone());
+        if self.tree_revealed.as_ref() == Some(&target) {
+            return;
+        }
+        self.tree_revealed = Some(target.clone());
+        let (_, path) = target;
+        // `ancestors()` runs from the folder itself down to the filesystem root. Opening all of them is what
+        // makes a row reachable: a collapsed ancestor has no row to reveal. The Computer node is the wrapper
+        // the roots hang off, so it has to be open for any of this to be visible.
+        self.tree.computer_open = true;
+        for ancestor in path.ancestors() {
+            if ancestor.is_dir() {
+                self.tree.open.insert(ancestor.to_path_buf());
+            }
+        }
+        self.tree_reveal = Some(path);
+    }
+
     fn tree_node(&mut self, dir: &Path, ui: &mut egui::Ui, depth: usize) {
         let open = self.tree.open.contains(dir);
         let arrow = if open { "v" } else { ">" };
@@ -2447,6 +2475,12 @@ impl App {
                 self.toggle_tree_open(dir);
             }
             let row = ui.selectable_label(active_here, name);
+            if self.tree_reveal.as_deref() == Some(dir) {
+                // Asking the enclosing scroll area to bring this row in is egui's own path; doing it here (at
+                // the row's own draw) is the only moment its position is known.
+                row.scroll_to_me(Some(egui::Align::Center));
+                self.tree_reveal = None;
+            }
             if row.clicked() {
                 self.open_in_active(dir);
             }
@@ -2667,6 +2701,7 @@ impl eframe::App for App {
         if let Some(text) = self.clipboard_publish.take() {
             ui.ctx().copy_text(text);
         }
+        self.tree_follow_pane();
         let typing = self.begin_shortcut_frame();
         let keys = self.read_file_keys(ui, typing);
 
@@ -2774,6 +2809,58 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&child);
+        let _ = std::fs::remove_dir_all(&parent);
+    }
+
+    /// The tree used to sit collapsed until the user clicked a node, and stayed put when the active pane
+    /// changed. It has to follow the pane: open the ancestors of the folder being browsed and bring that row
+    /// into view - on navigation and on a pane switch, but not every frame (that would fight the user's own
+    /// scrolling).
+    #[test]
+    fn the_tree_follows_the_active_pane() {
+        let parent = sandbox("reveal", &[], &["aa-folder", "bb-folder"]);
+        let inside = parent.join("aa-folder");
+        let other = parent.join("bb-folder");
+        let mut app = App::with_cache(parent.clone(), sandbox("reveal-cache", &[], &[]));
+
+        app.tree_follow_pane();
+        assert!(
+            app.tree.open.contains(&parent),
+            "the folder being browsed is opened in the tree"
+        );
+
+        app.navigate(0, &inside);
+        app.tree_follow_pane();
+        assert!(
+            app.tree.open.contains(&inside),
+            "navigating into a folder opens it in the tree"
+        );
+        assert_eq!(
+            app.tree_reveal.as_deref(),
+            Some(inside.as_path()),
+            "that row is the one to scroll into view"
+        );
+
+        // Pane 2 with a different folder moves the tree on its own: no navigation happened.
+        app.settings.dual_pane = true;
+        app.navigate(1, &other);
+        app.active = 1;
+        app.tree_follow_pane();
+        assert_eq!(
+            app.tree_reveal.as_deref(),
+            Some(other.as_path()),
+            "switching the active pane moves the tree"
+        );
+
+        // Nothing changed, so nothing is re-queued: a reveal every frame would yank the scroll back under the
+        // user's own drag.
+        app.tree_reveal = None;
+        app.tree_follow_pane();
+        assert!(
+            app.tree_reveal.is_none(),
+            "an unchanged pane does not re-reveal"
+        );
+
         let _ = std::fs::remove_dir_all(&parent);
     }
 
