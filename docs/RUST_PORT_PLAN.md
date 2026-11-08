@@ -130,11 +130,11 @@ Two contract details that must not be discovered late:
 |---|---|
 | Trash undo | Decided: trashing on macOS becomes a **move to `~/.Trash`** so undo works, diverging deliberately from GalleryBrowser's `fileops` (`crates/fileops/src/worker.rs:336-345`, and the restore path at `:648-655`). Tests must cover: name already present in `~/.Trash` (a trash-*destination* collision, not a restore one), an occupied original path when restoring, and redo after undo. |
 | Symlinks on Windows | `fileops` handles symlink privilege and type differences on Windows (`crates/fileops/src/fsops.rs:86-101`). The C++ app's behavior here is unspecified — decide during M1 whether copy/move follows or preserves links, then test it. |
-| CI | Cargo jobs on ubuntu + macos + windows (mirror GalleryBrowser's matrix). **No Qt reference job on this branch** — decided local-only; today's CI configures `-DBUILD_APP=OFF` and triggers on `main` only (`.github/workflows/ci.yml:5,7,35,68`). Clippy/`fmt` gating on one runner only, as GB does. |
+| CI | **Linux only** (`ubuntu-latest`): build, test, strict clippy, `fmt`. Windows and macOS compile on their own hardware — Kamino-1 (Windows PC) and the MacBook — by pulling this branch over SSH (Tailscale IPs to come) and building there; a hosted 3-OS matrix duplicated that per push, cost three setups, and cancelled its own predecessors. **No Qt reference job on this branch** — decided local-only; today's CI configures `-DBUILD_APP=OFF` and triggers on `main` only (`.github/workflows/ci.yml:5,7,35,68`). |
 | Packaging | Linux: AppImage for a single Rust binary — no Qt payload, so `scripts/build-linux-appimage.sh` and the `qtpaths` plugin harvesting mostly disappear. Windows: portable zip or MSI; macOS: `.app` + dmg. |
 | Audio | cpal is already in the player crate and is cross-platform (WASAPI/CoreAudio/ALSA); M2's audio gate must be checked on all three, not just Linux. |
-| GPU surface | wgpu replaces Qt's raster/GL path; Wayland needs proof on Fedora 43 (the Qt build needed `AA_ForceRasterWidgets`, `main.cpp:59-77`) and Windows/macOS get their own first-run smoke check. |
-| Decoder supply chain | ArtCraft crates are pure Rust, so no FFmpeg DLLs to ship; verify the Windows MSVC and macOS builds of the pinned revs in CI at M0, not at M2. |
+| GPU surface | wgpu replaces Qt's raster/GL path; Wayland needs proof on Fedora 43 — **slice 1 has it** (window maps, status bar renders, empty stderr). Windows/macOS get their first-run smoke check on Kamino-1 and the MacBook, which is also where `eframe`/`winit` compiling there gets answered for the first time. |
+| Decoder supply chain | ArtCraft crates are pure Rust, so no FFmpeg DLLs to ship; the pinned revs' MSVC and macOS builds were already proven once in CI (run 42489707491, all three runners green). Later platform checks move to Kamino-1 and the MacBook. |
 
 ## Crash triage (why memory safety is a primary motivation)
 
