@@ -236,6 +236,8 @@ struct FileKeys {
     /// toolbar's Back button is the only way back through history.
     up_parent: bool,
     refresh: bool,
+    /// F6 types a path in the bar, Explorer-style.
+    edit_path: bool,
     new_folder: bool,
     rename: bool,
     /// Digit 0-5 pressed to rate the selection.
@@ -376,6 +378,13 @@ pub struct App {
     dragging: Option<Vec<PathBuf>>,
     /// A copy or move that found names already taken in the destination, waiting to be answered. Qt asks; silently
     /// renaming over someone's file is how work gets lost in a folder of clips with similar names.
+    /// Qt's editable path bar (`mainwindow.h:455`, "Editable path bar like Windows Explorer"), for the pane you
+    /// are looking at. Typing a path is how you reach a folder nowhere near the ones in the tree.
+    path_editing: bool,
+    path_text: String,
+    /// The field asks for keyboard once, when it appears - egui would otherwise be told to focus it every frame.
+    path_armed: bool,
+    path_field_id: Option<egui::Id>,
     conflict: Option<PendingConflict>,
     /// The answer the user said stands for everything after this: while it holds, nothing more is asked.
     conflict_choice: Option<ConflictChoice>,
@@ -782,6 +791,10 @@ impl App {
             op_bytes_total: 0,
             dragging: None,
             drag_start_pos: None,
+            path_editing: false,
+            path_text: String::new(),
+            path_armed: false,
+            path_field_id: None,
             conflict: None,
             conflict_choice: None,
             conflict_apply_all: true,
@@ -3300,6 +3313,9 @@ impl App {
         if keys.refresh {
             self.open(active);
         }
+        if keys.edit_path && !self.path_editing {
+            self.begin_path_edit();
+        }
         if keys.undo && self.ops.undo().is_none() {
             self.status = "nothing to undo".into();
         }
@@ -3475,6 +3491,67 @@ impl App {
     }
 
     /// A tree row or favorite clicked: the active pane goes there.
+    /// The path bar in the top row: the active pane's folder as words you can click and type over. Enter goes
+    /// to a folder that exists; one that does not keeps the words up to be fixed, like Explorer's bar.
+    fn path_bar(&mut self, ui: &mut egui::Ui) {
+        if !self.path_editing {
+            let shown = self.panes[self.active].path.display().to_string();
+            let button = ui
+                .button(egui::RichText::new(shown).weak().small())
+                .on_hover_text("Click, or press F6, to type a path");
+            if button.clicked() {
+                self.begin_path_edit();
+            }
+            return;
+        }
+        let field = egui::TextEdit::singleline(&mut self.path_text)
+            .hint_text("Enter path...")
+            .desired_width(240.0);
+        let resp = ui.add(field);
+        if !self.path_armed {
+            resp.request_focus();
+            self.path_armed = true;
+        }
+        // Typing in this field is not a keyboard shortcut, however briefly egui hands it focus mid-batch.
+        self.typing_in_field |= resp.has_focus();
+        if resp.has_focus() {
+            self.path_field_id = Some(resp.id);
+        }
+        let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
+        let escape = ui.input(|i| i.key_pressed(egui::Key::Escape));
+        if enter {
+            self.commit_path_edit();
+        }
+        if escape || (enter && !self.path_editing) {
+            self.path_editing = false;
+            ui.memory_mut(|m| m.surrender_focus(resp.id));
+        }
+    }
+
+    fn begin_path_edit(&mut self) {
+        self.path_text = self.panes[self.active].path.display().to_string();
+        self.path_armed = false;
+        self.path_editing = true;
+    }
+
+    /// Go to the folder typed into the path bar. A wrong path is said, and the words stay up so they can be
+    /// fixed - closing the bar on a typo would lose them.
+    fn commit_path_edit(&mut self) {
+        let typed = self.path_text.trim().to_string();
+        if typed.is_empty() {
+            self.path_editing = false;
+            return;
+        }
+        let candidate = absolute(Path::new(&typed));
+        if candidate.is_dir() {
+            self.path_editing = false;
+            let active = self.active;
+            self.navigate(active, &candidate);
+        } else {
+            self.note("Not a folder");
+        }
+    }
+
     fn open_in_active(&mut self, dir: &Path) {
         let active = self.active;
         self.navigate(active, dir);
@@ -3733,6 +3810,7 @@ impl App {
             {
                 tree = true;
             }
+            self.path_bar(ui);
         });
         if settings {
             self.settings_open = !self.settings_open;
@@ -3837,10 +3915,14 @@ impl App {
         // gives no handle on that child id - so its same-batch edge is a known ceiling.
         let focused_now = ui.ctx().memory(|m| m.focused());
         let on_our_field = focused_now.is_some()
-            && [self.rename_field_id, self.annotate_field_id]
-                .into_iter()
-                .flatten()
-                .any(|id| Some(id) == focused_now);
+            && [
+                self.rename_field_id,
+                self.annotate_field_id,
+                self.path_field_id,
+            ]
+            .into_iter()
+            .flatten()
+            .any(|id| Some(id) == focused_now);
         if typing || on_our_field {
             return FileKeys::default();
         }
@@ -3878,6 +3960,7 @@ impl App {
                 perm_delete: i.key_pressed(egui::Key::Delete) && shift,
                 up_parent: i.key_pressed(egui::Key::Backspace),
                 refresh: i.key_pressed(egui::Key::F5),
+                edit_path: i.key_pressed(egui::Key::F6),
                 new_folder: i.key_pressed(egui::Key::N) && m && shift,
                 rename: i.key_pressed(egui::Key::F2),
                 rating: [
@@ -4660,6 +4743,45 @@ mod tests {
         assert!(
             app.conflict.is_none(),
             "Apply to All means no further asking"
+        );
+    }
+
+    /// The path bar goes where you type it, when that is a folder. A wrong path keeps the words up to be fixed
+    /// rather than closing over them, and nothing moves.
+    #[test]
+    fn typing_a_path_takes_you_there() {
+        let start = sandbox("pathbar-start", &[], &[]);
+        let dest = sandbox("pathbar-dest", &["a.png"], &[]);
+        let mut app = App::with_cache(start, sandbox("pathbar-cache", &[], &[]));
+
+        app.begin_path_edit();
+        assert!(app.path_editing, "the bar is ready to type in");
+        app.path_text = dest.display().to_string();
+        app.commit_path_edit();
+        assert_eq!(app.panes[0].path, dest);
+        assert!(
+            !app.path_editing,
+            "a good path closes the bar, like Explorer's"
+        );
+
+        app.begin_path_edit();
+        app.path_text = "/definitely/not/a/folder".into();
+        app.commit_path_edit();
+        assert!(app.path_editing, "a wrong path stays up to be fixed");
+        assert_eq!(app.panes[0].path, dest, "and nothing moved");
+
+        // A relative path is read from the app's folder, not from some guess at a root.
+        let rel = std::path::Path::new(".")
+            .canonicalize()
+            .expect("cwd")
+            .display()
+            .to_string();
+        app.path_text = rel.clone();
+        app.commit_path_edit();
+        assert_eq!(
+            app.panes[0].path,
+            std::path::Path::new(&rel),
+            "a typed absolute path is taken as written"
         );
     }
 
