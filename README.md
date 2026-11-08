@@ -2,6 +2,17 @@
 
 **Professional asset management software for Windows** - Organize, tag, rate, and manage digital assets including images (PNG, JPG, TIF, EXR, IFF, PSD), videos (MOV, MP4, AVI), and audio (MP3) files.
 
+<!-- moeffect-demo:start -->
+## Demo
+
+Watch the landscape demonstration below.
+
+https://github.com/user-attachments/assets/dfa771ba-2e2e-4295-9e1e-399a1e11d07c
+
+[Watch on the website and read more about the tool](https://moeffect.gr/index.php/tools/kassetmanager/).
+
+<!-- moeffect-demo:end -->
+
 ## Overview
 
 KAsset Manager is a native Windows desktop application built with Qt 6 that provides a professional-grade solution for managing digital media assets. Whether you're a VFX artist, photographer, video editor, or content creator, KAsset Manager helps you organize, find, and preview your files efficiently.
