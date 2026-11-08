@@ -232,7 +232,9 @@ pub struct App {
     /// Readout of the op in flight, shown until it finishes.
     op_progress: String,
     /// A cut is spent once its move lands; this is what tells `poll_ops` to clear the clipboard.
-    cut_pending: bool,
+    /// The sources of a cut that is waiting to move. Each is consumed when an operation actually carries
+    /// it, so an unrelated move or undo cannot spend the clipboard, and failed sources stay available.
+    cut_pending: Option<Vec<PathBuf>>,
     /// Requests issued for the current thumbnail batch. The engine dedupes by path and size within a
     /// batch and answers a duplicate with nothing, so counting one here per *issued* request is the only
     /// way the counter can reach zero (otherwise we repaint every frame forever).
@@ -384,7 +386,7 @@ impl App {
             rename_buffer: String::new(),
             rename_focus: false,
             op_progress: String::new(),
-            cut_pending: false,
+            cut_pending: None,
             issued: std::collections::HashSet::new(),
             stall: std::time::Instant::now(),
             library,
@@ -484,10 +486,12 @@ impl App {
         }
         let show_hidden = self.settings.show_hidden;
         self.panes[index].subfolders = list_subfolders(&path, show_hidden).unwrap_or_default();
-        let before = self.panes[index].selection.len();
+        let before = self.panes[index].primary().map(Path::to_path_buf);
         self.panes[index].keep_existing();
-        if self.panes[index].selection.is_empty() && before > 0 {
-            // Nothing is selected any more, so the preview request and its picture go with it.
+        if self.panes[index].primary().map(Path::to_path_buf) != before {
+            // The file the preview panel follows is gone, or no longer primary: its request and its picture
+            // go with it. Clearing only when the selection emptied left the departed file on screen while
+            // the operations acted on the file that remained.
             self.panes[index].wanted = None;
             self.panes[index].preview = None;
         }
@@ -594,6 +598,11 @@ impl App {
             )
         {
             self.load(path.clone(), false);
+        } else if self.frame.is_some() {
+            // The primary is a still image or a folder, so the previous clip's decoded frame must not linger
+            // as the picture. The transport itself stays loaded and paused: selecting a still neither starts
+            // nor stops playback (verified earlier), which is why this clears the frame and not the player.
+            self.frame = None;
         }
         let pane = &mut self.panes[index];
         if pane.wanted.as_deref() == Some(path.as_path()) {
@@ -878,6 +887,8 @@ impl App {
             format!("{} files", paths.len())
         };
         self.clipboard = Some((paths, cut));
+        // A fresh copy or cut supersedes whatever was waiting to move.
+        self.cut_pending = None;
         self.status = format!("{}{what}", if cut { "cut: " } else { "copied: " });
     }
 
@@ -888,7 +899,8 @@ impl App {
             return;
         };
         let dest_dir = self.panes[self.active].path.clone();
-        self.cut_pending = cut;
+        // Only a cut has sources to spend; they are consumed one by one as each one actually moves.
+        self.cut_pending = cut.then(|| sources.clone());
         self.ops.submit(if cut {
             FileOp::Move {
                 sources,
@@ -1015,14 +1027,24 @@ impl App {
             self.annotate = None;
             errors.push("annotation cancelled: file changed".into());
         }
-        // A cut is spent once its move lands; a copy stays available for another paste.
-        if self.cut_pending
-            && finished
+        // A cut is spent as each of its own sources actually moves; a copy stays available for another
+        // paste. Matching on the source path is what keeps an unrelated clean move - a rename, an undo -
+        // from spending a clipboard it never touched, and leaves a source that failed to move behind.
+        if let Some(pending) = self.cut_pending.clone() {
+            let moved: Vec<PathBuf> = finished
                 .iter()
-                .any(|o| !o.moved.is_empty() && o.errors.is_empty())
-        {
-            self.clipboard = None;
-            self.cut_pending = false;
+                .flat_map(|outcome| outcome.moved.iter().map(|(from, _)| from.clone()))
+                .collect();
+            let left: Vec<PathBuf> = pending
+                .into_iter()
+                .filter(|path| !moved.contains(path))
+                .collect();
+            if left.is_empty() {
+                self.clipboard = None;
+                self.cut_pending = None;
+            } else {
+                self.cut_pending = Some(left);
+            }
         }
         // A cached tree listing is stale as soon as an operation changes that folder. This is the only
         // place that knows an operation landed: the toolbar's New Folder, a paste, and an undo never pass
@@ -1682,8 +1704,10 @@ impl App {
                     if response.hovered() {
                         hovered = Some(path.clone());
                     }
-                    if response.secondary_clicked() && !self.panes[index].is_selected(path) {
-                        // Qt selects the right-clicked file before showing its menu.
+                    if response.secondary_clicked()
+                        && (self.active != index || self.panes[index].primary() != Some(path))
+                    {
+                        // Qt makes the right-clicked file current before showing its menu.
                         self.select_in(index, path.clone(), false);
                     }
                     response.context_menu(|ui| self.entry_menu(ui, index));
@@ -1798,8 +1822,14 @@ impl App {
                                     // selection rides the secondary click itself: egui's `context_menu_opened`
                                     // only reports true once the popup has been registered by a previous
                                     // `context_menu` call, so it cannot gate this in the same frame.
+                                    // Qt makes the right-clicked file current - in that pane - even when it
+                                    // was already part of the selection; otherwise a right-click in the
+                                    // inactive pane switches the keyboard while playback and rename keep
+                                    // following the other pane's file.
                                     if response.secondary_clicked()
-                                        && !self.panes[index].is_selected(&entry.path)
+                                        && (self.active != index
+                                            || self.panes[index].primary()
+                                                != Some(entry.path.as_path()))
                                     {
                                         self.select_in(index, entry.path.clone(), false);
                                     }
@@ -1842,6 +1872,14 @@ impl App {
         self.panes[index].hover = hovered;
     }
 
+    /// A decoded frame belongs to the clip it came from, so it may only stand in for the picture while that
+    /// clip is what the active pane has selected. Selecting a still must show the still, even while an
+    /// earlier clip stays loaded and paused.
+    fn preview_shows_frame(&self) -> bool {
+        let primary = self.panes[self.active].primary();
+        self.frame.is_some() && self.playing.as_deref() == primary
+    }
+
     /// The preview panel: the playing frame if anything is loaded, else the active pane's **selection**.
     /// Hover scrub stays in the grid cell - a hovered clip must not restage the preview (user report).
     pub fn preview(&mut self, ui: &mut egui::Ui) {
@@ -1850,6 +1888,7 @@ impl App {
         let picture = self
             .frame
             .as_ref()
+            .filter(|_tex| self.preview_shows_frame())
             .map(|tex| (tex.id(), tex.size_vec2()))
             .or_else(|| {
                 let pane = &self.panes[self.active];
@@ -2881,6 +2920,101 @@ mod tests {
         assert!(
             shown,
             "the engine should deliver a hover frame for the hovered slot"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An unrelated operation must not spend a cut, and the paste that carries every source must.
+    #[test]
+    fn only_the_move_that_carries_a_source_spends_the_clipboard() {
+        let dir = sandbox("clip-unrelated", &["up.png"], &[]);
+        let other = sandbox("clip-destination", &[], &[]);
+        let mut app = App::with_cache(dir.clone(), sandbox("clip-cache", &[], &[]));
+
+        app.select(dir.join("up.png"));
+        app.copy_selection(true);
+        assert!(app.clipboard.is_some(), "the cut is on the clipboard");
+
+        // A clean operation that moves none of our sources: a new folder in the same pane.
+        app.new_folder();
+        let mut spun = 0;
+        while !dir.join("New Folder").is_dir() && spun < 250 {
+            app.poll_ops();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            spun += 1;
+        }
+        app.poll_ops();
+        assert!(
+            app.clipboard.is_some(),
+            "creating a folder did not spend the cut"
+        );
+
+        // Paste into another folder: the move carries the source, and only then is the clipboard spent.
+        app.navigate(0, &other);
+        app.paste();
+        let mut spun = 0;
+        while !other.join("up.png").is_file() && spun < 250 {
+            app.poll_ops();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            spun += 1;
+        }
+        app.poll_ops();
+        assert!(other.join("up.png").is_file(), "the cut file moved");
+        assert!(
+            app.clipboard.is_none() && app.cut_pending.is_none(),
+            "the paste that carried the source spent the cut (status: {})",
+            app.status
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&other);
+    }
+
+    /// Taking the primary away must not leave its picture or its player standing in for the file that
+    /// remains selected.
+    #[test]
+    fn ctrl_removing_the_primary_releases_its_player() {
+        let fixture =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/scrub.mp4");
+        let dir = sandbox("primary-gone", &["still.png"], &[]);
+        let clip = dir.join("clip.mp4");
+        std::fs::copy(&fixture, &clip).expect("the scrub fixture should be copyable");
+        let still = dir.join("still.png");
+        let mut app = App::with_cache(dir.clone(), sandbox("primary-cache", &[], &[]));
+
+        app.select(still.clone());
+        app.select_in(0, clip.clone(), true);
+        assert_eq!(
+            app.target().as_deref(),
+            Some(clip.as_path()),
+            "the last clicked file is primary"
+        );
+        assert_eq!(
+            app.playing.as_deref(),
+            Some(clip.as_path()),
+            "selecting a clip loads it in the player"
+        );
+
+        // Ctrl-click the clip away: the still is primary again and nothing of the clip may remain.
+        app.select_in(0, clip.clone(), true);
+        assert_eq!(
+            app.target().as_deref(),
+            Some(still.as_path()),
+            "the remaining file is primary"
+        );
+        assert!(
+            app.playing.is_some(),
+            "selecting a still neither starts nor stops playback"
+        );
+        assert!(
+            app.frame.is_none() && !app.preview_shows_frame(),
+            "the departed clip's frame no longer stands in for the selected file"
+        );
+        assert_ne!(
+            app.panes[0].wanted.as_deref(),
+            Some(clip.as_path()),
+            "no preview request for the file that left the selection"
         );
 
         let _ = std::fs::remove_dir_all(&dir);
