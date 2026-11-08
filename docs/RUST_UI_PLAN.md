@@ -96,22 +96,35 @@ Asset Manager page (library/tag/rating backed) and Project Manager page are stil
 | Scrubbable kinds: mp4/mov/avi/mkv/webm/m4v/mxf always; sequences only when grouping on | `grid_scrub.cpp:96-116` | Video/Sequence kinds | port rule (grouping gate) | P1 |
 | Frames drawn by the item delegate from a registry, not a widget | `scrub_frame_registry.cpp:9-30, 89-103` | `Pane::scrub_frames` + cell paint | replace | done |
 
-## Convert / providers / search / projects (pending inventory)
-
-Qt's convert dialog is a real feature surface, not a menu item: source list, persisted target folder, format combo
-filtered by selection, verify-sequence scan listing gaps, scaling with aspect lock, conflict policy
-(auto-rename/overwrite/skip), per-format panels (MP4 codec/bitrate/fps; MOV ProRes tiers; JPG/PNG/TIF sequence
-quality/compression/padding/start; single-image quality), overall + per-file progress with command log, ffmpeg /
-ImageMagick resolution line, Retry/Skip/Cancel All on failure, auto-close on success
-(`media_convert_dialog.cpp:82-317, 542-578`; worker `media_converter_worker.cpp:154-178, 342-460`).
+## Data, projects, import, search, bulk rename
 
 | Feature | Qt evidence | Rust today | Decision | Phase |
 | --- | --- | --- | --- | --- |
-| Convert to Format… dialog (all panels above) | `media_convert_dialog.cpp` (see above) | none | port (providers per plan M6) | P5 |
-| Office/PDF preview in panel and overlay | `office_preview.cpp`; `preview_overlay.cpp:2194, 2986` | none | port providers | P5 |
-| Disk search (Everything on Windows; equivalents elsewhere) | `everything_search.cpp`, `everything_search_dialog.cpp`; `mw.cpp:1675-1681` | none (plan M7: per-OS index + fuzzy rank) | replace with OS index | P5 |
-| Rating filter combo (All/5/4+/3+/Unrated) and tag filtering with AND/OR mode | `mw.cpp:964-972, 1009` | `Library::query/filter_entries(LibraryQuery)` exists, **unused** | replace with engine query | P4 |
-| Project DBs, project folders/virtual folders, import flow, bulk rename, database health, sequence grouping UI | inventory pending (`qt-data` agent) | partial: `Library` (tags/ratings/collections/relink/forget), `fileops`, sequence core | to be decided per row | P4 |
+| SQLite schema: `virtual_folders`, `assets`, `tags`, `asset_tags`, `project_folders`, `asset_versions`; FKs on; version PRAGMA | `db.cpp:52-184` | `Library` in rusqlite (`crates/library`) | replace (engine owns schema) | P4 |
+| Asset ops: rating, delete, path update, tag rename/delete/**merge**/assign, folder move, checksum jobs | `db.cpp:244-760, 871` | tags create/rename/delete/assign; ratings; relink/forget — **no merge, no checksums** | port the gaps | P4 |
+| Change notifications (assets/folders/tags/versions) driving open views | `db.cpp:473-477` | none (views refresh on rescan) | port (event → view refresh) | P4 |
+| Database opened and operated **off the main thread** with a job queue | `database_worker.cpp:10-210` | app calls `Library` synchronously from the UI thread | port worker (UI stall risk today) | P4 |
+| Health check: orphans, missing files, fragmentation, integrity, index check with progress | `database_health_agent.cpp:19-46` | none | port | P4 |
+| Stats: DB size, asset/folder/tag counts, page size | `database_health_agent.cpp:48-88` | none | port | P4 |
+| Maintenance: VACUUM, REINDEX, fix orphans, mark missing files | `database_health_agent.cpp:279-313, 354` | none | port | P4 |
+| "Database Health Check" dialog: stats group, results tree (Category/Status/Details), Run + progress, Optimize / Rebuild Indexes / Fix Orphaned Records / Check Missing Files | `database_health_dialog.cpp:24-120` | no DB surface at all | port | P4 |
+| Project DB per project: name + watch path, own virtual folders/assets (version group key, sequence columns) | `project_db.cpp:35-99` | none | port | P4 |
+| Create/rename/delete project, set watch path, resync folders | `project_db.cpp:289-412, 847` | none | port | P4 |
+| Project notifications: add / acknowledge / ack-all / unread count (watcher feeds it) | `project_db.cpp:521-602`; `project_manager_watcher.cpp:340-360` | none | port | P4 |
+| Projects list columns: name, watch path, created, asset count, unread | `projects_model.cpp:36-49` | none | port | P4 |
+| Project asset browser: subfolders + assets; sequence pattern/frames/gaps/version, version group/primary/list | `project_assets_model.cpp:47-135, 277-340` | none | port | P4 |
+| Filters there: search text, type filter Images/Videos/Project Files, show-all-versions toggle | `project_assets_model.cpp:177-191, 452-531` | `Library::query/filter_entries(LibraryQuery)` unused | replace with engine query | P4 |
+| Virtual folder tree: create/rename/delete/move, drag folders (`x-kasset-folder-ids`), move-vs-copy drop, full path | `virtual_folders.cpp:148-214` | none | port | P4 |
+| Watchers: recursive scan with 2 s debounce, new subdirs attached, spurious-change skip, new files → asset + notification, removals surfaced | `project_manager_watcher.cpp:14-23, 97-105, 259-363` | none | port (notify crate already in deps) | P4 |
+| Version detection: `_v001` / `_001` on `.aep/.aepx/.nk` → base name, version, group key | `project_version_detector.cpp:8-70` | none | port | P4 |
+| Import: media extension whitelist, folder walk in one transaction, sequence detection fast-path, plain-file metadata fast path | `importer.cpp:32-52, 53-130, 146-200, 213-346` | engine scan exists; no import flow | port flow | P4 |
+| Import into Asset Library **or** Project DB, threaded, cancellable, progress + current-file signals | `import_controller.cpp:236-286, 484-574`; `project_import_worker.cpp:41-207` | none | port | P4 |
+| "Importing Assets" dialog: title, current file, progress, Close | `import_progress_dialog.cpp:11-54` | none | port | P4 |
+| Search backend is voidtools **Everything64.dll IPC, Windows-only**; on other platforms the dialog disables search | `everything_search.cpp:146-149, 159-193`; `everything_search_dialog.cpp:29-36` | plan M7: per-OS index + fuzzy ranking | replace (per-OS index beats a Windows-only DLL) | P5 |
+| Search dialog: query field, mode (Asset Manager / File Manager), filter combo All/Images/Videos/Audio/Documents, Match Case, results Name/Directory/Size/Modified/Type + **Imported / Not Imported** status column, sort, double-click, Import Selected (skips imported), Open Location, Select Files, "Found N result(s)", cap 10 000 | `everything_search_dialog.cpp:20-36, 48-76, 80-117, 187-201, 244-246, 303-340` | none | port dialog shape over OS index | P5 |
+| Bulk rename: pattern with `{###}`/`{original}`/`{date}` tokens, start number + padding, **Update Database** and **Rename Files on Disk** toggles, preview table Original/New/Status with conflict detection, Apply/Cancel | `bulk_rename_dialog.cpp:48-164, 227-242, 374` | none (`fileops::rename` renames one) | port dialog; wire to fileops + Library relink | P5 |
+| Sequence grouping in views: frames hidden, display `base.[start-end].ext`, folders-first, toggleable, badges | `sequence_grouping_proxy_model.cpp:27-135`; asset/project variants `:96-149`, `:91-170` | engine groups sequences (`crates/core/src/sequence.rs`); display form + badges missing | replace with engine + port display/badges | P1/P4 |
+| Thumbnail generation dialog + worker (video scrub at 0/25/50/75/100 %) | `thumbnail_generator_dialog.cpp:22-185`; `thumbnail_generator_worker.cpp:11-60, 183-318` | engine caches on demand | **drop** (rule 2) | - |
 
 ## Settings dialog — Qt keeps very little in it
 
@@ -138,7 +151,7 @@ Each phase is verified by running the real app first, then adding the smallest f
 | **P1** Browser chrome + views | tabs shell, FM page toolbar, path bar, favorites list, folder tree with drive roots, grid/list toggle + thumb slider on toolbar, placeholder icons, multi-select, context menus, drag/drop internal | "I can go anywhere without typing: tree drives, favorites, Back/Up; I see what a file is before opening it; right-click does the operations; two clips selected and pasted moves both." |
 | **P2** Preview panel presentation | preview kind stack + metadata fields from engine + star/tags surfaces + prev/next asset | "The panel shows the thing, not words about it, and playing works from it." |
 | **P3** Fullscreen review overlay | Space overlay, shortcuts, zoom, loop/rate, annotations with undo and save | "Space to review a clip, annotate, save the marked frame." |
-| **P4** Library/project surfaces | tag+rating filtering (engine query), version history, project DBs/virtual folders/import/database health per qt-data inventory | "My library filters by tag and rating; projects open without me touching files." |
+| **P4** Library/project surfaces | tag+rating filtering (engine query), version history, project DBs, virtual folders, import flow, database health dialog | "My library filters by tag and rating; projects open without me touching files." |
 | **P5** Convert + providers + search + platform drag | convert dialog, Office/PDF preview, OS-index search, external drags per OS | "I convert a clip to ProRes and see its PDF; searching the disk is instant enough." |
 | **P6** Settings split + system surfaces | settings tabs (General/Cache & Database/View/Shortcuts/External Apps/About), theme roles, logs, user guide, data root | "Settings holds preferences, not buttons I use all day." |
 

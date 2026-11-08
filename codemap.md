@@ -30,6 +30,7 @@ This codemap is a current navigation snapshot for maintainers. It is not a subst
   drives hover scrub through the engine's own scrub lane (see `SCRUB_*` constants in `src/app.rs`). It is written fresh against the
   engine crates; GalleryBrowser's own `ui-egui` UI code was not copied.
 - The port plan, milestones, gates and open decisions live in `docs/RUST_PORT_PLAN.md`.
+- `docs/RUST_UI_PLAN.md` - UI-phase parity spec: every Qt KAssetManager feature with evidence, Rust status, and a port/replace/drop decision per row.
 - Rust CI (`.github/workflows/rust.yml`) is **Linux only** (build, test, strict clippy, fmt); Windows and
   macOS build on their own hardware — Kamino-1 and the MacBook — see `/home/npittas/Documents/ts_ssh.md`.
   Qt's `.github/workflows/ci.yml` is unchanged: main-only, `-DBUILD_APP=OFF`, so the C++ reference build is
