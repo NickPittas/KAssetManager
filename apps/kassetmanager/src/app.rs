@@ -371,6 +371,9 @@ pub struct App {
     op_total: u64,
     op_bytes_done: u64,
     op_bytes_total: u64,
+    /// What the pointer is carrying in an in-app drag, so the drag can say so near the cursor. egui keeps the
+    /// payload in its own pocket with no way to read it back, and draws nothing itself.
+    dragging: Option<Vec<PathBuf>>,
     /// A cut is spent once its move lands; this is what tells `poll_ops` to clear the clipboard.
     /// The sources of a cut that is waiting to move. Each is consumed when an operation actually carries
     /// it, so an unrelated move or undo cannot spend the clipboard, and failed sources stay available.
@@ -609,6 +612,19 @@ fn duration_label(secs: f64) -> String {
     }
 }
 
+/// What a drag in flight says it is carrying: one file by name, several by count - what you want to know while
+/// the mouse is down, and short enough not to follow the cursor around as a paragraph.
+fn carry_label(paths: &[PathBuf]) -> String {
+    match paths.len() {
+        0 => "nothing".to_string(),
+        1 => paths[0]
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "one file".to_string()),
+        n => format!("{n} files"),
+    }
+}
+
 /// Whether the pointer has travelled far enough since it was pressed to count as carrying files rather than
 /// clicking. egui decides a press is a drag after 0.8 s even if the mouse never moved, so motion - not time - is
 /// what separates "I am moving these" from "I rested on this file a moment too long".
@@ -706,6 +722,7 @@ impl App {
             op_total: 0,
             op_bytes_done: 0,
             op_bytes_total: 0,
+            dragging: None,
             clipboard_publish: None,
             rename_field_id: None,
             annotate_field_id: None,
@@ -1398,7 +1415,7 @@ impl App {
     /// that a press held past `max_click_duration` (0.8 s) is a drag even with no motion at all, so without this
     /// gate a long click on a file would release as a drop and quietly copy it onto itself as `name (1).ext`.
     /// Only the widget egui is dragging answers, so this costs one payload per frame however many cells are drawn.
-    fn publish_drag(&self, ui: &egui::Ui, resp: &egui::Response, index: usize, path: &Path) {
+    fn publish_drag(&mut self, ui: &egui::Ui, resp: &egui::Response, index: usize, path: &Path) {
         if !resp.dragged() {
             return;
         }
@@ -1407,7 +1424,9 @@ impl App {
             _ => false,
         };
         if moved {
-            egui::DragAndDrop::set_payload(ui.ctx(), self.dragged_from(index, path));
+            let carried = self.dragged_from(index, path);
+            self.dragging = Some(carried.paths.clone());
+            egui::DragAndDrop::set_payload(ui.ctx(), carried);
         }
     }
 
@@ -1743,6 +1762,34 @@ impl App {
                     if ui.button("Cancel All").clicked() {
                         self.ops.cancel_all();
                     }
+                });
+            });
+    }
+
+    /// While files are being carried inside the app, say what is being carried, next to the cursor. egui holds the
+    /// payload in its own pocket and paints nothing, so a drag used to look like the mouse was doing nothing.
+    fn drag_ghost(&mut self, ui: &mut egui::Ui) {
+        let button_down = ui.input(|i| i.pointer.any_down());
+        if self.dragging.is_some() && !button_down {
+            // The pointer is up: the drop zone took the payload, or nothing did. Either way the carry is over, and
+            // egui leaves an untaken payload sitting in its pocket.
+            self.dragging = None;
+            egui::DragAndDrop::clear_payload(ui.ctx());
+        }
+        let Some(carried) = self.dragging.clone() else {
+            return;
+        };
+        let Some(pointer) = ui.input(|i| i.pointer.hover_pos()) else {
+            return;
+        };
+        let label = carry_label(&carried);
+        egui::Area::new(egui::Id::new("drag_ghost"))
+            .fixed_pos(pointer + egui::vec2(16.0, 18.0))
+            .order(egui::Order::Foreground)
+            .show(ui.ctx(), |ui| {
+                // Framed so the words stay readable over a bright thumbnail or a dense list.
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.colored_label(ui.visuals().weak_text_color(), label);
                 });
             });
     }
@@ -3717,6 +3764,7 @@ impl eframe::App for App {
             self.annotate_window(ui);
         }
         self.operations_window(ui);
+        self.drag_ghost(ui);
         // Nothing in this app was watching the disk: a file copied in from a terminal stayed out of the listing
         // until you pressed Refresh. Poll on the interval Qt debounced its watcher to, and ask egui to wake at
         // that rate - it stays asleep between ticks, so idle cost is one metadata call per pane.
@@ -4349,6 +4397,21 @@ mod tests {
         assert_eq!(duration_label(45.0), "\u{00b7} 45 s left");
         assert_eq!(duration_label(210.0), "\u{00b7} 4 min left");
         assert_eq!(duration_label(7_500.0), "\u{00b7} 2 h left");
+    }
+
+    /// A drag in flight says what it carries, briefly: one file by name, several by count.
+    #[test]
+    fn a_drag_says_what_it_carries() {
+        assert_eq!(carry_label(&[]), "nothing");
+        assert_eq!(
+            carry_label(std::slice::from_ref(&PathBuf::from(
+                "/home/npittas/Videos/clip.mp4"
+            ))),
+            "clip.mp4",
+            "one file says which"
+        );
+        let many = vec![PathBuf::from("a"), PathBuf::from("b"), PathBuf::from("c")];
+        assert_eq!(carry_label(&many), "3 files", "several say how many");
     }
 
     /// A drop inside the app is a file operation with Qt's rules for its panes: copy by default, move while Shift
