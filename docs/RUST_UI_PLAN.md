@@ -26,10 +26,10 @@ The corrections that changed plan structure are marked **(review)** in the affec
 
 | Feature | Qt evidence | Rust today | Decision | Phase |
 | --- | --- | --- | --- | --- |
-| Tabbed pages: **File Manager**, **Asset Manager**, **Project Manager** | `mainTabs = QTabWidget`, `mw.cpp:1223/1226/1234` | one browser page | port (tabs) | P1 |
+| Tabbed pages: **File Manager**, **Asset Manager**, **Project Manager** | `mainTabs = QTabWidget`, `mw.cpp:1223/1226/1234` | one browser page | **deferred to P4, with the pages that fill them**: a strip today would be one live tab beside two stubs (user decision) | P4 |
 | Workspace restoration, not just last tab: splitters, per-pane view mode / thumbnail size / group sequences /
  hide folders / preview visibility / current path, plus column widths | `mw.cpp:1357, 2515-2559`;
- `file_manager_pane.cpp:1184-1234` | settings file only; panes reset | port (persist per-pane state) | P1 |
+ `file_manager_pane.cpp:1184-1234` | **done for view mode, thumbnail size and sequence folding** - per pane, in `settings.json`, each pane's toolbar acting on its own pane. Hidden files, show-all-files, preview visibility and column widths stay app-wide for now | done, gaps noted | P1 |
 | Page toolbars + grid/list stacks; **(review)** the secondary pane's own toolbar is hidden at creation and one
  shared File Manager toolbar retargets the active pane | `mw.cpp:798, 1327, 1735, 2466`;
  `3721-3722`, `syncFmToolbarFromActivePane` `3980-3998` | Grid/List toggle already in the global app bar
