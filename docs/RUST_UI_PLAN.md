@@ -67,14 +67,14 @@ Asset Manager page (library/tag/rating backed) and Project Manager page are stil
 
 | Feature | Qt evidence | Rust today | Decision | Phase |
 | --- | --- | --- | --- | --- |
-| Multi-select in the browser views (`ExtendedSelection`); **(review)** FM tree and version table are `SingleSelection` | `mw.cpp:814, 834, 1765, 1832, 640`; `1551`, `1167` | **single** selection (`selected: Option<PathBuf>`) | port (blocking for ops at scale) | P1 |
+| Multi-select in the browser views (`ExtendedSelection`); **(review)** FM tree and version table are `SingleSelection` | `mw.cpp:814, 834, 1765, 1832, 640`; `1551`, `1167` | **single** selection (`selected: Option<PathBuf>`) → now a list whose last entry is the **primary**; Ctrl-click adds or removes; copy/cut/trash/delete/rating follow the whole set. Shift-range and rubber-band still missing | done, gaps noted | P1 |
 | Grid icon mode differs per page: FM grid wraps names over two lines (no elide); **Asset** grid elides and uses a
  tighter name rect | `mw.cpp:1756-1789`; `fm_item_delegate.cpp:215-239`; `asset_item_delegate.cpp:66-93, 242-262` | one grid renderer, elided name; one interact target | port both delegate behaviours | P1 |
 | Details list view: sortable columns, 22 px rows, 18 px icons, sequence-grouping proxy | `mw.cpp:1823-1855` | list view unsortable, no columns | port columns | P1 |
 | Placeholder icon by suffix for non-previewable files (pdf/csv/doc(x)/xls(x)/txt/log/md/ai/eps/generic) + folder/drive/computer | `fm_item_delegate.cpp:198-213`; `icon_utils.cpp:212-357` | nothing rendered for non-media | port drawn placeholders | P1 |
 | Keyboard: Backspace=up, F2=rename, Shift+Del=permanent delete, Ctrl+C/V/Delete/NewFolder, Space=preview | `mw.cpp:2324-2374, 3190-3193` | C/X/V/Z/Y/S/F/Delete/Enter/Num **+ F2 rename**;
  no Backspace-up, Space preview, Shift+Del, Ctrl+Shift+N (`app.rs:1685-1738`) | port the missing shortcuts | P1 |
-| Context menu (FM): Refresh, Copy, Cut, Paste, Rename, Bulk Rename, Delete, Permanent Delete, Create Folder with Selected, Add Asset Library, Favorites, Open in Explorer, Properties, Open With, Convert Format | `mw.cpp:3172-3201` | **no context menus** | port (biggest discoverability gap) | P1 |
+| Context menu (FM): Refresh, Copy, Cut, Paste, Rename, Bulk Rename, Delete, Permanent Delete, Create Folder with Selected, Add Asset Library, Favorites, Open in Explorer, Properties, Open With, Convert Format | `mw.cpp:3172-3201` | **no context menus** → menu on grid cells and list rows: Refresh, Copy, Cut, Paste, Rename (one file), Move to Trash, Delete Permanently, Add/Remove Favorite, Open in File Manager; right-click selects the clicked file first. Bulk Rename, Properties, Open With, Convert Format and the project entries wait for their own features | done, subset on purpose | P1 |
 | **(review)** A separate **folder-tree** context menu: New Folder, Create Folder with Selected Files, Add Asset
  Library, **Import Project Manager**, Add Favorites, plus move/copy-on-drop | `mw.cpp:3307-3315, 3408-3413` | no tree at all | port with the tree | P1 |
 | Drag out of asset views (`DragOnly`, move default) | `mw.cpp:866-876` | none | port | P1 |

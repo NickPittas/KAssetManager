@@ -58,6 +58,32 @@ struct Pane {
     scrub_shown: Option<(PathBuf, egui::TextureHandle)>,
 }
 
+/// Reveal a folder in the platform's file manager (Qt's "Open in Explorer", `mw.cpp:3172-3201`). The child
+/// is not ours to wait for - a file manager outlives the app - so it is spawned and forgotten.
+#[cfg(target_os = "linux")]
+fn open_in_file_manager(path: &Path) -> std::io::Result<()> {
+    std::process::Command::new("xdg-open")
+        .arg(path)
+        .spawn()
+        .map(|_child| ())
+}
+
+#[cfg(target_os = "macos")]
+fn open_in_file_manager(path: &Path) -> std::io::Result<()> {
+    std::process::Command::new("open")
+        .arg(path)
+        .spawn()
+        .map(|_child| ())
+}
+
+#[cfg(target_os = "windows")]
+fn open_in_file_manager(path: &Path) -> std::io::Result<()> {
+    std::process::Command::new("explorer")
+        .arg(path)
+        .spawn()
+        .map(|_child| ())
+}
+
 /// True when the pointer was pressed inside `rect` this frame. Lets a click anywhere on a pane's
 /// toolbar - whitespace, the size label, a disabled button - name the pane it belongs to, without an
 /// interaction rect laid over the row and swallowing the buttons' own clicks.
@@ -1656,6 +1682,11 @@ impl App {
                     if response.hovered() {
                         hovered = Some(path.clone());
                     }
+                    if response.secondary_clicked() && !self.panes[index].is_selected(path) {
+                        // Qt selects the right-clicked file before showing its menu.
+                        self.select_in(index, path.clone(), false);
+                    }
+                    response.context_menu(|ui| self.entry_menu(ui, index));
                 }
             });
         self.finish(index, selected, ctrl, play, hovered);
@@ -1763,6 +1794,20 @@ impl App {
                                             scrub = Some((entry.clone(), pos, thumb));
                                         }
                                     }
+                                    // Qt selects the right-clicked file before showing its menu. The
+                                    // selection rides the secondary click itself: egui's `context_menu_opened`
+                                    // only reports true once the popup has been registered by a previous
+                                    // `context_menu` call, so it cannot gate this in the same frame.
+                                    if response.secondary_clicked()
+                                        && !self.panes[index].is_selected(&entry.path)
+                                    {
+                                        self.select_in(index, entry.path.clone(), false);
+                                    }
+                                    let menu_path = entry.path.clone();
+                                    response.context_menu(|ui| {
+                                        let _ = &menu_path;
+                                        self.entry_menu(ui, index);
+                                    });
                                 },
                             );
                         }
@@ -2073,6 +2118,96 @@ impl App {
     fn open_in_active(&mut self, dir: &Path) {
         let active = self.active;
         self.navigate(active, dir);
+    }
+
+    /// The file view's context menu. Qt keeps it separate from the folder tree's (`mw.cpp:3172-3201`), and
+    /// right-clicking an unselected file selects it first, so the operations act on what was clicked. Only
+    /// operations that exist today are offered: Bulk Rename, Properties, Open With, Convert Format and the
+    /// project entries join their own features instead of shipping as dead menu items.
+    fn entry_menu(&mut self, ui: &mut egui::Ui, index: usize) {
+        // The menu belongs to the pane under the cursor, and every action below works on that pane's
+        // selection (which right-click has just made the clicked file, unless it was already part of one).
+        self.active = index;
+        let selected = !self.panes[index].selection.is_empty();
+        let folder = self.panes[index].path.clone();
+        let is_favorite = self.is_favorite(&folder);
+        if ui.button("Refresh").clicked() {
+            self.open(index);
+            ui.close();
+        }
+        if ui
+            .add_enabled(selected, egui::Button::new("Copy"))
+            .on_hover_text("Ctrl+C")
+            .clicked()
+        {
+            self.copy_selection(false);
+            ui.close();
+        }
+        if ui
+            .add_enabled(selected, egui::Button::new("Cut"))
+            .on_hover_text("Ctrl+X")
+            .clicked()
+        {
+            self.copy_selection(true);
+            ui.close();
+        }
+        let paste_ready = self.clipboard.is_some();
+        if ui
+            .add_enabled(paste_ready, egui::Button::new("Paste"))
+            .on_hover_text("Ctrl+V")
+            .clicked()
+        {
+            self.paste();
+            ui.close();
+        }
+        let one_selected = self.panes[index].selection.len() == 1;
+        if ui
+            .add_enabled(one_selected, egui::Button::new("Rename"))
+            .on_hover_text("F2 - one file at a time")
+            .clicked()
+        {
+            self.start_rename();
+            ui.close();
+        }
+        if ui
+            .add_enabled(selected, egui::Button::new("Move to Trash"))
+            .on_hover_text("Delete - undoable")
+            .clicked()
+        {
+            self.trash_selection();
+            ui.close();
+        }
+        if ui
+            .add_enabled(selected, egui::Button::new("Delete Permanently"))
+            .on_hover_text("Shift+Delete - not undoable")
+            .clicked()
+        {
+            self.delete_permanently();
+            ui.close();
+        }
+        let action = if is_favorite {
+            "Remove from Favorites"
+        } else {
+            "Add to Favorites"
+        };
+        if ui.button(action).clicked() {
+            if is_favorite {
+                self.remove_favorite(&folder);
+            } else {
+                self.add_favorite(&folder);
+            }
+            ui.close();
+        }
+        if ui
+            .button("Open in File Manager")
+            .on_hover_text(folder.display().to_string())
+            .clicked()
+        {
+            if let Err(err) = open_in_file_manager(&folder) {
+                self.status = format!("file manager: {err}");
+            }
+            ui.close();
+        }
     }
 
     /// The left column: favorites above the folder tree, as Qt arranges them in one splitter
@@ -2814,6 +2949,57 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Qt selects the right-clicked file before opening its menu, so the operations act on what was clicked
+    /// rather than on whatever happened to be selected. That selection is the part this app can prove.
+    #[test]
+    fn right_clicking_an_unselected_cell_selects_it_first() {
+        use egui_kittest::Harness;
+
+        let dir = sandbox("menu-click", &["one.png", "two.png"], &[]);
+        let mut app = App::with_cache(dir.clone(), sandbox("menu-click-cache", &[], &[]));
+        app.settings.view_mode = ViewMode::Grid;
+        let two = dir.join("two.png");
+
+        let mut harness = Harness::new_ui_state(|ui, app| app.pane(0, ui), app);
+        harness.set_size(egui::vec2(900.0, 700.0));
+
+        // Select the first cell plainly, so the second is right-clicked while unselected.
+        let mut pos: Option<egui::Pos2> = None;
+        'find: for row in 0..8 {
+            for col in 0..16 {
+                let candidate = egui::pos2(120.0 + col as f32 * 45.0, 60.0 + row as f32 * 35.0);
+                harness.input_mut().events = vec![egui::Event::PointerMoved(candidate)];
+                harness.run_steps(2);
+                if harness.state().panes[0].hover.as_deref() == Some(two.as_path()) {
+                    pos = Some(candidate);
+                    break 'find;
+                }
+            }
+        }
+        let pos = pos.expect("resting on a thumbnail should hover that entry");
+
+        let button = |pressed: bool| {
+            vec![egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Secondary,
+                pressed,
+                modifiers: Default::default(),
+            }]
+        };
+        harness.input_mut().events = button(true);
+        harness.run_steps(1);
+        harness.input_mut().events = button(false);
+        harness.run_steps(1);
+
+        assert_eq!(
+            harness.state().panes[0].selection,
+            vec![two.clone()],
+            "right-click selects the clicked file before its menu can act on it"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// A Ctrl-click must extend the selection in the grid, and only a real click through egui's input
     /// pipeline can prove the cell answers to the modifier.
     #[test]
@@ -2893,10 +3079,9 @@ mod tests {
         // The pane reads the *held* modifier state, which egui only updates from a `ModifiersChanged`
         // event (what winit sends when a real Control goes down) - carrying it on the click alone is not
         // enough. So the test presses the modifier, clicks, and releases it.
-        let ctrl_mods = {
-            let mut modifiers = egui::Modifiers::default();
-            modifiers.command = true;
-            modifiers
+        let ctrl_mods = egui::Modifiers {
+            command: true,
+            ..Default::default()
         };
         harness.input_mut().events = vec![egui::Event::ModifiersChanged(ctrl_mods)];
         harness.run_steps(1);
