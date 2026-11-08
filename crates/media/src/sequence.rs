@@ -250,7 +250,21 @@ mod tests {
             info.duration.seconds()
         );
 
-        for path in &frames {
+        // The caller's rate is honoured, not a fixed one: three frames at 12 fps is a quarter of a second.
+        let frames2 = fixture(&dir, 3);
+        let slow = SequenceSource::open(
+            "walk_[0001-0003].png",
+            frames2.clone(),
+            FrameRate { num: 12, den: 1 },
+        )
+        .expect("the same run should open at another rate");
+        assert!(
+            (slow.info().duration.seconds() - 3.0 / 12.0).abs() < 1e-6,
+            "duration {} s",
+            slow.info().duration.seconds()
+        );
+
+        for path in frames.iter().chain(frames2.iter()) {
             let _ = std::fs::remove_file(path);
         }
     }

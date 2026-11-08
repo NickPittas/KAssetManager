@@ -384,6 +384,9 @@ pub struct App {
     player: Player,
     /// The file loaded in the player.
     playing: Option<PathBuf>,
+    /// Whether that loaded item has frames to step through. Decided when it loads, because the listing can move
+    /// on - navigate away, hide the pane - while the transport stays loaded and its buttons must keep working.
+    playing_frames: bool,
     /// File operations run on their own thread with undo/redo history (engine `fileops`).
     ops: FileOpsWorker,
     /// Path to paste into a pane, and whether the source should move (cut) rather than stay (copy).
@@ -983,6 +986,7 @@ impl App {
             outstanding: 0,
             player: Player::new(64 << 20),
             playing: None,
+            playing_frames: false,
             frame: None,
             ops: FileOpsWorker::new(),
             clipboard: None,
@@ -1344,13 +1348,16 @@ impl App {
         })
     }
 
-    /// Whether the loaded item has frames a person could step through - video and runs of numbered files, not audio,
-    /// not a still. Qt shows Previous/Next frame with its playback controls (`preview_overlay.cpp:1468-1479`).
+    /// Whether the loaded item has frames a person could step through. Decided at load time (`frames_to_step`):
+    /// navigating away or hiding the pane that listed the clip leaves it loaded, and Qt keeps Previous/Next frame up
+    /// with its playback controls (`preview_overlay.cpp:1468-1479`) rather than only while the file is in view.
     fn steppable(&self) -> bool {
-        self.playing
-            .as_deref()
-            .and_then(|path| self.entry_at(path))
-            .is_some_and(|entry| matches!(entry.kind, MediaKind::Video | MediaKind::Sequence))
+        self.playing.is_some() && self.playing_frames
+    }
+
+    /// Which kinds have frames to step: video and runs of numbered files. Audio has none, and neither does a still.
+    fn frames_to_step(entry: Option<&Entry>) -> bool {
+        entry.is_some_and(|entry| matches!(entry.kind, MediaKind::Video | MediaKind::Sequence))
     }
 
     /// Move the loaded item by `delta` frames. The player pauses and clamps at both ends itself (`step`), which is
@@ -1391,6 +1398,7 @@ impl App {
         match opened {
             Ok(source) => {
                 self.playing = Some(path);
+                self.playing_frames = Self::frames_to_step(entry.as_ref());
                 self.frame = None;
                 self.player.load(source, autoplay);
                 // The player starts at its own defaults; the volume and loop the user set apply now.
@@ -1404,6 +1412,7 @@ impl App {
                 // selection able to retry (the file may have arrived since).
                 self.player.unload();
                 self.playing = None;
+                self.playing_frames = false;
                 self.frame = None;
                 self.status = err;
             }
@@ -7322,5 +7331,23 @@ mod tests {
             .map(|_| ())
             .expect_err("that file is not on disk");
         assert!(err.contains("plain.png"), "{err}");
+    }
+    /// Frame stepping is decided when an item loads, not while it is on screen: navigating away leaves the clip in
+    /// the player, and its transport must keep working. This pins which kinds have frames at all.
+    #[test]
+    fn only_video_and_runs_have_frames_to_step() {
+        let entry = |kind: MediaKind| Entry {
+            path: PathBuf::from("/x/f.png"),
+            name: "f.png".into(),
+            kind,
+            size: 10,
+            modified: None,
+            sequence: None,
+        };
+        assert!(App::frames_to_step(Some(&entry(MediaKind::Video))));
+        assert!(App::frames_to_step(Some(&entry(MediaKind::Sequence))));
+        assert!(!App::frames_to_step(Some(&entry(MediaKind::Image))));
+        assert!(!App::frames_to_step(Some(&entry(MediaKind::Audio))));
+        assert!(!App::frames_to_step(None));
     }
 }
