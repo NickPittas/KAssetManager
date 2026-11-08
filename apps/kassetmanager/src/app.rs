@@ -1969,6 +1969,8 @@ impl App {
             ui.allocate_exact_size(egui::vec2(head_w, ROW_H), egui::Sense::hover());
         let row_start = head_rect.min.x;
         let mut drop_target: Option<usize> = None;
+        // Each column boundary and whether the pointer is on it; painted after the loop so nothing covers it.
+        let mut boundaries: Vec<(f32, bool)> = Vec::new();
         {
             let mut x = row_start - x_off;
             for (i, col) in columns.iter().copied().enumerate() {
@@ -2012,15 +2014,17 @@ impl App {
                 // any short name. It stays outside the label's rect so it cannot steal the click that sorts.
                 let boundary = x + widths[i];
                 let sep = egui::Rect::from_min_max(
-                    egui::pos2(boundary - 4.0, cell.top()),
-                    egui::pos2(boundary + 4.0, cell.bottom()),
+                    egui::pos2(boundary - 6.0, cell.top() - 3.0),
+                    egui::pos2(boundary + 6.0, cell.bottom() + 3.0),
                 );
                 let handle =
                     ui.interact(sep, ui.id().with(("col-resize", col)), egui::Sense::drag());
-                // An edge you cannot find is an edge you cannot resize: the pointer says what it will do
-                // there, the way a splitter does.
-                let handle = handle.on_hover_cursor(egui::CursorIcon::ResizeHorizontal);
+                // The cursor has to say "resize" while hovering *and* while dragging; a hover-only icon reverts
+                // to an arrow the moment you press, which reads as the handle letting go of you.
+                let hot = handle.hovered() || handle.dragged();
+                let handle = handle.on_hover_and_drag_cursor(egui::CursorIcon::ResizeHorizontal);
                 let handle = handle.on_hover_text("Drag to resize this column");
+                boundaries.push((boundary, hot));
                 if handle.dragged() {
                     let dx = ui.input(|i| i.pointer.delta().x);
                     self.set_column_width(col, self.column_width(col) + dx);
@@ -2049,6 +2053,20 @@ impl App {
                 }
                 x += widths[i];
             }
+        }
+        // An edge nobody can see is not a handle. Qt's headers show a separator between sections, so every
+        // boundary gets a faint line and the one under the pointer - or being dragged - lights up.
+        // The same stroke egui uses for separators and panel edges, so the lines belong to the theme.
+        let faint = ui.visuals().widgets.noninteractive.bg_stroke.color;
+        let lit = ui.visuals().selection.stroke.color;
+        for (edge, hot) in &boundaries {
+            ui.painter().line_segment(
+                [
+                    egui::pos2(*edge, head_rect.min.y - 2.0),
+                    egui::pos2(*edge, head_rect.max.y + 2.0),
+                ],
+                egui::Stroke::new(if *hot { 2.5 } else { 1.0 }, if *hot { lit } else { faint }),
+            );
         }
         if let (Some((owner, dragged)), Some(target)) = (self.column_drag, drop_target) {
             let _ = (owner, dragged);
