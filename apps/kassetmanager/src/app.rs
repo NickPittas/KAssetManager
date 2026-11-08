@@ -1299,7 +1299,8 @@ impl App {
         self.panes[index].hover = hovered;
     }
 
-    /// The preview panel: the playing frame if anything is loaded, else the active pane's selection.
+    /// The preview panel: the playing frame if anything is loaded, else the active pane's **selection**.
+    /// Hover scrub stays in the grid cell - a hovered clip must not restage the preview (user report).
     pub fn preview(&mut self, ui: &mut egui::Ui) {
         ui.heading("Preview");
         ui.separator();
@@ -1312,13 +1313,6 @@ impl App {
                 pane.preview
                     .as_ref()
                     .filter(|(path, _)| Some(path.as_path()) == pane.wanted.as_deref())
-                    .map(|(_, tex)| (tex.id(), tex.size_vec2()))
-            })
-            // A hover frame is the most current picture we have of the file under the pointer.
-            .or_else(|| {
-                let pane = &self.panes[self.active];
-                pane.scrub_shown
-                    .as_ref()
                     .map(|(_, tex)| (tex.id(), tex.size_vec2()))
             });
         match picture {

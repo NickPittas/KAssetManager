@@ -97,3 +97,6 @@ third_party/tlRender-build/
 
 # Rust build output
 /target/
+
+# Serena tool state
+.serena/
