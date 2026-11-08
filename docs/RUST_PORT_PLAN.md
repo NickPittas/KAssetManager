@@ -268,8 +268,24 @@ reading `Pause` (i.e. playing), and the readout at **3.3 / 5.6 s**; a second sho
 different transport crop, so the playhead advances (`validation_outputs/m1-slice5a.png`, `-b.png`). Audio is
 live (cpal backend via `Player::new`), which is why M2's audio-at-speed gate still has to be run.
 Test net added afterwards: an unopenable file reports an error and loads nothing; a real media file loads.
-Still not there: frame upload allocates a new texture per frame, no volume/mute UI, no lazy folder tree, no
-settings dialog, window size/HiDPI and OS drag/drop untouched.
+Still not there: frame upload allocates a new texture per frame, no volume/mute UI, no lazy folder tree,
+window size/HiDPI and OS drag/drop untouched.
+
+**Slice 6 (verified):** settings are real. The app loads `Settings` from `AppDirs::settings_file()` at startup
+(engine defaults when absent), the scan follows them (`show_hidden`, `show_all_files`, `collapse_sequences`,
+`sort_key`/`sort_ascending`) and thumbnail threads come from `thumbnail_threads`. A Settings window — opened
+by button or the `S` shortcut — edits theme, view mode, thumbnail size and the three filters; every change
+applies at once and is written back through `Settings::save`, failures surface in the status bar.
+Evidence: `kassetmanager --theme light ~/Pictures` rendered the whole UI light with empty stderr
+(`validation_outputs/m1-slice6-light.png`), and `wtype -k s` on the focused window opened the dialog showing
+`Theme: Dark|Light|System`, `View: Grid|List`, `Thumbnails: 64|128|256|512`, unchecked hidden/non-media and
+checked collapse, plus Close (`validation_outputs/m1-slice6-settings.png`). Test net added afterwards:
+filters come from settings (defaults hide hidden and non-media files; both on lists all three sandbox files).
+`System` theme is treated as dark — `ponytail:` until we can ask the OS. Keyboard handling now exists (one
+key), which is how the dialog got verified without a mouse daemon: ydotool is useless here (no `ydotoold`),
+`wtype` works.
+Still not there: theme/volume persistence beyond what `Settings` already stores, no volume/mute UI, no lazy
+folder tree, window size/HiDPI and OS drag/drop untouched.
 
 ## Non-goals
 

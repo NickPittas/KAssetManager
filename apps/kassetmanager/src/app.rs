@@ -8,7 +8,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use gallerybrowser_core::{
-    Entry, ScanOptions, Settings, SortKey, ViewMode, list_subfolders, scan_folder, sort_entries,
+    AppDirs, Entry, ScanOptions, Settings, Theme, ViewMode, list_subfolders, scan_folder,
+    sort_entries,
 };
 use gallerybrowser_media::{Thumbnailer, ThumbnailerConfig, Tick, frame_to_rgba, open};
 use gallerybrowser_player::Player;
@@ -16,13 +17,8 @@ use gallerybrowser_player::Player;
 /// Longest preview edge we ask the decoders for (they may scale down while decoding).
 const PREVIEW_EDGE: u32 = 1024;
 
-/// Folders we never offer to open, matching the Qt app's habit of not crawling system noise.
-const SCAN: ScanOptions = ScanOptions {
-    show_hidden: false,
-    collapse_sequences: true,
-    min_sequence_len: 2,
-    show_all_files: false,
-};
+/// A run of numbered frames must reach this length before it is worth folding into one entry.
+const MIN_SEQUENCE_LEN: usize = 2;
 
 /// One `App` per window: current folder, what it contains, the selection and its pictures.
 pub struct App {
@@ -48,24 +44,37 @@ pub struct App {
     playing: Option<PathBuf>,
     /// Latest decoded video frame, uploaded (only while something is loaded).
     frame: Option<egui::TextureHandle>,
+    /// Engine data directories; `None` in tests so nothing is written outside the project.
+    dirs: Option<AppDirs>,
+    settings_open: bool,
+    /// Theme last pushed to egui, so we only re-set visuals when it changes.
+    theme_applied: Option<Theme>,
 }
 
 impl App {
     pub fn new(path: PathBuf) -> Self {
-        let cache_dir = gallerybrowser_core::AppDirs::resolve()
+        let dirs = AppDirs::resolve().ok();
+        let settings = dirs.as_ref().map(Settings::load).unwrap_or_default();
+        let cache_dir = dirs
+            .as_ref()
             .map(|dirs| dirs.thumbnails_dir())
             .unwrap_or_default();
-        Self::with_cache(path, cache_dir)
+        Self::build(path, cache_dir, dirs, settings)
     }
 
-    /// `cache_dir` is injected so tests keep their artifacts inside the project temp dir.
+    /// Test constructor: engine defaults and a project-local thumbnail cache, no data directories.
+    #[cfg(test)]
     pub fn with_cache(path: PathBuf, cache_dir: PathBuf) -> Self {
+        Self::build(path, cache_dir, None, Settings::default())
+    }
+
+    fn build(path: PathBuf, cache_dir: PathBuf, dirs: Option<AppDirs>, settings: Settings) -> Self {
         let thumbs = Thumbnailer::new(ThumbnailerConfig {
             cache_dir,
             memory_bytes: 32 << 20,
-            // Engine defaults from `Settings`: 1000 MB disk cache, 2 decoder threads.
+            // Engine default from `Settings`: 1000 MB disk cache; decoder threads come from settings.
             disk_bytes: 1_000 << 20,
-            threads: 2,
+            threads: settings.thumbnail_threads.clamp(1, 16),
         });
         let mut app = Self {
             path,
@@ -73,9 +82,7 @@ impl App {
             subfolders: Vec::new(),
             selected: None,
             status: String::new(),
-            // ponytail: engine defaults (Grid view, 128 px thumbnails); read `AppDirs::settings_file()`
-            // and let the settings dialog write it once that exists.
-            settings: Settings::default(),
+            settings,
             thumbs,
             pictures: HashMap::new(),
             outstanding: 0,
@@ -85,16 +92,59 @@ impl App {
             player: Player::new(64 << 20),
             playing: None,
             frame: None,
+            dirs,
+            settings_open: false,
+            theme_applied: None,
         };
         app.open();
         app
     }
 
+    /// How the engine should read this folder, from the current settings.
+    fn scan_options(&self) -> ScanOptions {
+        ScanOptions {
+            show_hidden: self.settings.show_hidden,
+            collapse_sequences: self.settings.collapse_sequences,
+            min_sequence_len: MIN_SEQUENCE_LEN,
+            show_all_files: self.settings.show_all_files,
+        }
+    }
+
+    /// Push the theme to egui; `System` is treated as dark until we can ask the OS.
+    fn apply_theme(&mut self, ctx: &egui::Context) {
+        if self.theme_applied.as_ref() == Some(&self.settings.theme) {
+            return;
+        }
+        let dark = matches!(self.settings.theme, Theme::Dark | Theme::System);
+        ctx.set_visuals(if dark {
+            egui::Visuals::dark()
+        } else {
+            egui::Visuals::light()
+        });
+        self.theme_applied = Some(self.settings.theme);
+    }
+
+    /// Write settings where they came from; report failure in the status bar.
+    fn save_settings(&mut self) {
+        if let Some(dirs) = &self.dirs
+            && let Err(err) = self.settings.save(dirs)
+        {
+            self.status = format!("{err}");
+        }
+    }
+
+    /// Command-line or script override; not persisted.
+    pub fn set_theme(&mut self, theme: Theme) {
+        self.settings.theme = theme;
+    }
+
     /// Re-read the current folder. Called on every navigation so the view is always what the engine sees.
     fn open(&mut self) {
-        match scan_folder(&self.path, &SCAN) {
+        let opts = self.scan_options();
+        match scan_folder(&self.path, &opts) {
             Ok(mut entries) => {
-                sort_entries(&mut entries, SortKey::Name, true);
+                let (key, ascending) = (self.settings.sort_key, self.settings.sort_ascending);
+                sort_entries(&mut entries, key, ascending);
                 self.entries = entries;
                 self.status.clear();
             }
@@ -103,7 +153,8 @@ impl App {
                 self.status = format!("{err}");
             }
         }
-        self.subfolders = list_subfolders(&self.path, SCAN.show_hidden).unwrap_or_default();
+        self.subfolders =
+            list_subfolders(&self.path, self.settings.show_hidden).unwrap_or_default();
         self.selected = None;
         self.wanted = None;
         self.preview = None;
@@ -250,6 +301,7 @@ impl App {
             .collect();
         let mut target: Option<PathBuf> = None;
         let mut view: Option<ViewMode> = None;
+        let mut settings = false;
         ui.horizontal(|ui| {
             if ui.button("\u{2b06} up").clicked() {
                 target = self.parent().map(Path::to_path_buf);
@@ -268,6 +320,10 @@ impl App {
             if ui.button(if grid { "List" } else { "Grid" }).clicked() {
                 view = Some(if grid { ViewMode::List } else { ViewMode::Grid });
             }
+            ui.separator();
+            if ui.button("Settings").clicked() {
+                settings = true;
+            }
         });
         if let Some(target) = target {
             self.navigate(&target);
@@ -275,11 +331,106 @@ impl App {
         if let Some(mode) = view {
             self.set_view_mode(mode);
         }
+        if settings {
+            self.settings_open = !self.settings_open;
+        }
+    }
+
+    /// Theme name for the radio buttons.
+    fn theme_label(theme: Theme) -> &'static str {
+        match theme {
+            Theme::Dark => "Dark",
+            Theme::Light => "Light",
+            Theme::System => "System",
+        }
     }
 
     /// Switch between the engine's grid and list view.
     pub fn set_view_mode(&mut self, mode: ViewMode) {
         self.settings.view_mode = mode;
+    }
+
+    /// The settings window: theme, view, thumbnail size and the folder filters. Changes apply at once
+    /// and are written to `AppDirs::settings_file()`.
+    pub fn settings_window(&mut self, ui: &mut egui::Ui) {
+        let mut rescan = false;
+        let mut dirty = false;
+        egui::Window::new("Settings")
+            .collapsible(false)
+            .resizable(false)
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Theme:");
+                    for theme in [Theme::Dark, Theme::Light, Theme::System] {
+                        if ui
+                            .selectable_label(
+                                self.settings.theme == theme,
+                                Self::theme_label(theme),
+                            )
+                            .clicked()
+                        {
+                            self.settings.theme = theme;
+                            dirty = true;
+                        }
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label("View:");
+                    let grid = self.settings.view_mode == ViewMode::Grid;
+                    if ui.selectable_label(grid, "Grid").clicked() {
+                        self.set_view_mode(ViewMode::Grid);
+                    }
+                    if ui.selectable_label(!grid, "List").clicked() {
+                        self.set_view_mode(ViewMode::List);
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Thumbnails:");
+                    let current = self.settings.thumbnail_size;
+                    for size in [64, 128, 256, 512] {
+                        if ui
+                            .selectable_label(current == size, size.to_string())
+                            .clicked()
+                        {
+                            self.settings.thumbnail_size = size;
+                            dirty = true;
+                        }
+                    }
+                });
+                if ui
+                    .checkbox(&mut self.settings.show_hidden, "Show hidden files")
+                    .changed()
+                {
+                    rescan = true;
+                    dirty = true;
+                }
+                if ui
+                    .checkbox(&mut self.settings.show_all_files, "Show non-media files")
+                    .changed()
+                {
+                    rescan = true;
+                    dirty = true;
+                }
+                if ui
+                    .checkbox(
+                        &mut self.settings.collapse_sequences,
+                        "Collapse image sequences",
+                    )
+                    .changed()
+                {
+                    rescan = true;
+                    dirty = true;
+                }
+                if ui.button("Close").clicked() {
+                    self.settings_open = false;
+                }
+            });
+        if dirty {
+            self.save_settings();
+        }
+        if rescan {
+            self.open();
+        }
     }
 
     /// Subfolder list: the cheap version of the folder tree, enough to move around.
@@ -513,6 +664,11 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.poll_pictures(ui);
         self.pump_player(ui);
+        self.apply_theme(ui.ctx());
+        // ponytail: plain letter shortcuts; ignore them while a text field has focus once there is one.
+        if ui.input(|i| i.key_pressed(egui::Key::S)) {
+            self.settings_open = !self.settings_open;
+        }
         egui::Panel::top("path_bar").show(ui, |ui| {
             ui.horizontal(|ui| self.path_bar(ui));
         });
@@ -525,6 +681,9 @@ impl eframe::App for App {
             ViewMode::Grid => self.entries_grid(ui),
             ViewMode::List => self.entries_list(ui),
         });
+        if self.settings_open {
+            self.settings_window(ui);
+        }
     }
 }
 
@@ -651,6 +810,30 @@ mod tests {
             Some(real.as_path()),
             "a real media file should load (status: {})",
             app.status
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Net under the verified slice-6 behaviour: the folder filters come from settings, so the settings
+    /// window's checkboxes change what a scan reports.
+    #[test]
+    fn folder_filters_follow_settings() {
+        let dir = sandbox("filters", &["a.png", ".hidden.png", "notes.txt"], &[]);
+        let mut app = App::with_cache(dir.clone(), sandbox("filters-cache", &[], &[]));
+        assert_eq!(
+            app.entries.len(),
+            1,
+            "engine defaults hide hidden files and non-media files"
+        );
+
+        app.settings.show_hidden = true;
+        app.settings.show_all_files = true;
+        app.open();
+        assert_eq!(
+            app.entries.len(),
+            3,
+            "turning both filters on lists the hidden image and the text file too"
         );
 
         let _ = std::fs::remove_dir_all(&dir);
