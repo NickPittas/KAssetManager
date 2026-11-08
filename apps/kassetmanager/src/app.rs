@@ -475,13 +475,14 @@ pub struct App {
 }
 
 /// The lines under a preview: what kind of file it is, how big, when it changed, and how much of it there is.
-/// A sequence says how many frames stand in for its files; a single picture says its real pixel size, because the
-/// panel scales that to fit and what you see is not what the file is.
+/// A sequence says how many frames stand in for its files; a single picture says the size it was shown at, because
+/// the panel scales to fit and decodes at the preview edge - the file's own dimensions are metadata's to give.
 fn preview_fact_lines(
     entry: &Entry,
     kind: &str,
     shown: Option<egui::Vec2>,
     state: &gallerybrowser_player::PlayerState,
+    frame_is_this: bool,
 ) -> Vec<String> {
     let mut facts = vec![format!("{kind} - {}", format_size(entry.size))];
     if entry.modified.is_some() {
@@ -498,7 +499,7 @@ fn preview_fact_lines(
             }
         }
     }
-    if state.loaded && state.frame_count > 0 {
+    if frame_is_this && state.loaded && state.frame_count > 0 {
         facts.push(format!(
             "frame {}/{}",
             state.frame_index + 1,
@@ -3450,25 +3451,37 @@ impl App {
                     .filter(|(path, _)| Some(path.as_path()) == pane.wanted.as_deref())
                     .map(|(_, tex)| (tex.id(), tex.size_vec2()))
             });
-        match picture {
-            Some((id, pixels)) => {
-                let avail = ui.available_size();
-                let scale = (avail.x / pixels.x.max(1.0))
-                    .min(avail.y / pixels.y.max(1.0))
-                    .min(1.0);
-                ui.image(egui::load::SizedTexture {
-                    id,
-                    size: pixels * scale,
-                });
-            }
-            None => {
-                ui.label("Select a file to preview, double-click to play it.");
-            }
-        }
-        self.preview_facts(ui, picture.map(|(_, pixels)| pixels));
-        self.annotations_ui(ui);
-        ui.separator();
-        self.transport(ui);
+        // A tall portrait used to take every pixel of height and leave the lines below it - facts, stars, transport
+        // - clipped with no way to reach them. The panel keeps its width, so what does not fit scrolls: the picture
+        // scales against the room at the top of the panel, not against unbounded scroll height.
+        // The picture gets the top two-thirds of the panel at most: the facts, stars and transport below it are part
+        // of the preview too, and a portrait that fills the panel puts them out of sight. What still does not fit is
+        // reached by scrolling, so nothing is cut off - only the vertical axis may scroll here.
+        let room = ui.available_size();
+        let _ = egui::ScrollArea::vertical()
+            .id_salt("preview")
+            .auto_shrink([true, false])
+            .show(ui, |ui| {
+                match picture {
+                    Some((id, pixels)) => {
+                        let allowed_y = room.y * 0.67;
+                        let scale = (room.x / pixels.x.max(1.0))
+                            .min(allowed_y / pixels.y.max(1.0))
+                            .min(1.0);
+                        ui.image(egui::load::SizedTexture {
+                            id,
+                            size: pixels * scale,
+                        });
+                    }
+                    None => {
+                        ui.label("Select a file to preview, double-click to play it.");
+                    }
+                }
+                self.preview_facts(ui, picture.map(|(_, pixels)| pixels));
+                self.annotations_ui(ui);
+                ui.separator();
+                self.transport(ui);
+            });
     }
 
     /// What the selected file is, said in the panel that already shows it. Qt's preview names type, size, date and
@@ -3485,9 +3498,27 @@ impl App {
             pane.dir_paths.contains(&entry.path),
             &entry.path,
         );
-        for fact in preview_fact_lines(entry, &kind, shown, &self.player.state()) {
-            ui.label(fact);
-        }
+        // A paused clip stays loaded when you select a still beside it, so the player's frame position only
+        // describes this selection while the file the player holds is the selected one.
+        let frame_is_this = self.playing.as_deref() == Some(path.as_path());
+        let facts = preview_fact_lines(entry, &kind, shown, &self.player.state(), frame_is_this);
+        // A long name or date does not wrap into a second line here: you scroll to the end of a fact.
+        // Only the sideways axis may expand here: a scroll area that will not shrink vertically takes every pixel
+        // of height it is given, and the lines under the picture vanish below the fold.
+        let _ = egui::ScrollArea::horizontal()
+            .id_salt("preview facts")
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
+                ui.vertical(|ui| {
+                    for fact in &facts {
+                        ui.add(
+                            egui::Label::new(fact)
+                                .selectable(false)
+                                .wrap_mode(egui::TextWrapMode::Extend),
+                        );
+                    }
+                });
+            });
     }
 
     /// Transport for the loaded file: play/pause, stop, position readout and a seek slider.
@@ -5172,10 +5203,37 @@ mod tests {
             buffered: 0.0,
             error: None,
         };
-        let lines = preview_fact_lines(&entry, "Video", Some(egui::vec2(640.0, 360.0)), &state);
-        assert_eq!(lines[0], "Video - 2.0 KB");
-        assert_eq!(lines[1], "shown 640 x 360 px");
-        assert_eq!(lines[2], "frame 4/120");
+        let lines = preview_fact_lines(
+            &entry,
+            "Video",
+            Some(egui::vec2(640.0, 360.0)),
+            &state,
+            true,
+        );
+        assert_eq!(
+            lines,
+            vec![
+                String::from("Video - 2.0 KB"),
+                String::from("shown 640 x 360 px"),
+                String::from("frame 4/120"),
+            ]
+        );
+
+        // Selecting a still leaves the earlier clip loaded and paused; its frame position is not that file's fact.
+        let lines = preview_fact_lines(
+            &entry,
+            "Image",
+            Some(egui::vec2(640.0, 360.0)),
+            &state,
+            false,
+        );
+        assert_eq!(
+            lines,
+            vec![
+                String::from("Image - 2.0 KB"),
+                String::from("shown 640 x 360 px")
+            ]
+        );
 
         state.loaded = false;
         use gallerybrowser_core::{Sequence, SequenceFrame};
@@ -5203,8 +5261,15 @@ mod tests {
             sequence: Some(std::sync::Arc::new(seq)),
             ..entry
         };
-        let lines = preview_fact_lines(&entry, "Sequence", Some(egui::vec2(640.0, 360.0)), &state);
+        let lines = preview_fact_lines(
+            &entry,
+            "Sequence",
+            Some(egui::vec2(640.0, 360.0)),
+            &state,
+            true,
+        );
         assert_eq!(lines.last().map(String::as_str), Some("3 frames"));
+        assert!(!lines.iter().any(|l| l.contains("px")), "{lines:?}");
     }
 
     #[test]
