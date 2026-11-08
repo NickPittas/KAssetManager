@@ -26,9 +26,6 @@ const PREVIEW_EDGE: u32 = 1024;
 const SCRUB_SLOTS: u32 = 24;
 const SCRUB_SLOTS_FINE: u32 = 200;
 const SCRUB_NEAR: u32 = 12;
-/// A flyover must not start decodes that outlive the pointer, so a newly hovered clip is only asked about
-/// once the pointer has rested on it. Sweeping a grid of uncached clips used to queue one lane job each.
-const SCRUB_DWELL: std::time::Duration = std::time::Duration::from_millis(400);
 const SCRUB_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// A run of numbered frames must reach this length before it is worth folding into one entry.
@@ -823,8 +820,8 @@ impl App {
 
     /// GalleryBrowser's hover scrub (crates/ui-egui/src/file_pane.rs:933): the pointer's x across the
     /// thumbnail square picks a slot out of 24, or 200 with Ctrl held. The exact frame is used if we have it;
-    /// otherwise the engine is asked and a decoded neighbour shows while it is made. The chosen frame draws
-    /// next pass, because egui knows the pointer position before this pass lays anything out.
+    /// otherwise the engine is asked and a decoded neighbour shows while it is made. Hovering never touches the
+    /// preview panel - that is for the selection - and playback keeps running independently of it.
     fn scrub_at(
         &mut self,
         ui: &mut egui::Ui,
@@ -842,53 +839,57 @@ impl App {
         let frac = ((pos.x - thumb.min.x) / thumb.width().max(1.0)).clamp(0.0, 1.0);
         let slot = ((frac * slots as f32) as u32).min(slots - 1);
         let pane = &mut self.panes[index];
+        // The clock is per target: landing on another clip, slot or division starts a fresh wait, so scrubbing
+        // stays alive while the pointer keeps asking for something new. A settle delay invented here starved
+        // scrub whenever the pointer kept moving - the engine already coalesces requests (a lane's queued frame
+        // is replaced by the newest), and that is what bounds a sweep across a grid.
         let target = (entry.path.clone(), slot, slots);
         if pane.scrub_target.as_ref() != Some(&target) {
             pane.scrub_target = Some(target.clone());
             pane.scrub_wait_until = std::time::Instant::now();
         }
+
+        // A frame already in hand is shown now and asked to be drawn next pass: egui is input-driven, so a
+        // frame chosen during a pass must schedule its own redraw or it surfaces late.
         let key = (entry.path.clone(), slot, slots);
-        if let Some(tex) = pane.scrub_frames.get(&key) {
-            pane.scrub_shown = Some((entry.path.clone(), tex.clone()));
+        if let Some(tex) = pane.scrub_frames.get(&key).cloned() {
+            pane.scrub_shown = Some((entry.path.clone(), tex));
+            ui.ctx().request_repaint();
             return;
         }
         if let Some(image) = self.thumbs.cached_scrub(entry, edge, slot, slots) {
-            let color = egui::ColorImage::from_rgba_unmultiplied(
-                [image.width as usize, image.height as usize],
-                image.pixels.as_ref(),
-            );
-            let texture = ui.ctx().load_texture(
-                format!("scrub{slot}of{slots}"),
-                color,
-                egui::TextureOptions::LINEAR,
-            );
-            pane.scrub_frames.insert(key, texture.clone());
+            let texture = Self::upload_scrub(ui, image.as_ref(), slot, slots);
+            pane.scrub_frames.insert(key.clone(), texture.clone());
             pane.scrub_shown = Some((entry.path.clone(), texture));
+            ui.ctx().request_repaint();
             return;
         }
-        let age = pane.scrub_wait_until.elapsed();
-        if age < SCRUB_DWELL {
-            return; // still flying over: frames already in cache were shown above, ask nothing yet
-        }
-        if age >= SCRUB_DWELL + SCRUB_WAIT {
-            // An undecodable frame: stop asking (GalleryBrowser gives up after 5s) and show the thumbnail
-            // again rather than a frame from some other slot.
+
+        // Nothing decoded for this slot yet: ask the engine, then show the nearest frame we do have
+        // (GalleryBrowser searches SCRUB_NEAR of them). Stop asking a frame after SCRUB_WAIT - it is undecodable.
+        if pane.scrub_wait_until.elapsed() >= SCRUB_WAIT {
             pane.scrub_shown = None;
             return;
         }
         self.thumbs.request_scrub(entry, edge, slot, slots);
-        // Show a neighbour while the exact frame is being made (GalleryBrowser searches SCRUB_NEAR of them).
-        // An already-uploaded neighbour is reused: re-converting one every pass costs ~30 uploads a second.
         let mut replaced = false;
         for near in 1..=SCRUB_NEAR {
             let below = slot.checked_sub(near);
             let above = slot.checked_add(near).filter(|s| *s < slots);
             for s in below.into_iter().chain(above) {
-                if let Some(tex) = pane
+                // Reuse an uploaded neighbour before converting another (otherwise ~30 uploads a second).
+                let found = pane
                     .scrub_frames
                     .get(&(entry.path.clone(), s, slots))
                     .cloned()
-                {
+                    .or_else(|| {
+                        self.thumbs
+                            .cached_scrub(entry, edge, s, slots)
+                            .map(|image| Self::upload_scrub(ui, image.as_ref(), s, slots))
+                    });
+                if let Some(tex) = found {
+                    pane.scrub_frames
+                        .insert((entry.path.clone(), s, slots), tex.clone());
                     pane.scrub_shown = Some((entry.path.clone(), tex));
                     replaced = true;
                     break;
@@ -898,38 +899,30 @@ impl App {
                 break;
             }
         }
-        // Otherwise decode one from the engine's cache and upload it once, so the next pass takes the path above.
-        for near in 1..=SCRUB_NEAR {
-            let below = slot.checked_sub(near);
-            let above = slot.checked_add(near).filter(|s| *s < slots);
-            let neighbour = below.into_iter().chain(above).find_map(|s| {
-                self.thumbs
-                    .cached_scrub(entry, edge, s, slots)
-                    .map(|image| (s, image))
-            });
-            if let Some((s, image)) = neighbour {
-                let color = egui::ColorImage::from_rgba_unmultiplied(
-                    [image.width as usize, image.height as usize],
-                    image.pixels.as_ref(),
-                );
-                let texture = ui.ctx().load_texture(
-                    format!("scrub{s}of{slots}"),
-                    color,
-                    egui::TextureOptions::LINEAR,
-                );
-                pane.scrub_frames
-                    .insert((entry.path.clone(), s, slots), texture.clone());
-                pane.scrub_shown = Some((entry.path.clone(), texture));
-                replaced = true;
-                break;
-            }
-        }
-        // Nothing close enough to show: fall back to the thumbnail, never to a stale far-away frame.
         if !replaced {
-            pane.scrub_shown = None;
+            pane.scrub_shown = None; // nothing close enough: show the thumbnail, not a far-away frame
         }
+        // Keep passes coming while a frame is wanted; answers arrive from the engine's own threads.
         ui.ctx()
             .request_repaint_after(std::time::Duration::from_millis(30));
+    }
+
+    /// Turn a decoded scrub frame into a wgpu texture for this pass.
+    fn upload_scrub(
+        ui: &mut egui::Ui,
+        image: &gallerybrowser_media::RgbaImage,
+        slot: u32,
+        slots: u32,
+    ) -> egui::TextureHandle {
+        let color = egui::ColorImage::from_rgba_unmultiplied(
+            [image.width as usize, image.height as usize],
+            image.pixels.as_ref(),
+        );
+        ui.ctx().load_texture(
+            format!("scrub{slot}of{slots}"),
+            color,
+            egui::TextureOptions::LINEAR,
+        )
     }
 
     /// Star the selected file 0-5. The catalog is keyed by path, so a rename follows the rating.
