@@ -78,7 +78,7 @@ fn main() {
         viewport: egui::ViewportBuilder::default()
             .with_title("KAsset Manager")
             .with_app_id("io.github.nickpittas.KAssetManager")
-            .with_min_inner_size([1200.0, 800.0])
+            .with_min_inner_size([640.0, 480.0])
             .with_inner_size([1400.0, 900.0]),
         renderer: eframe::Renderer::Wgpu,
         ..Default::default()

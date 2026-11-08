@@ -75,6 +75,15 @@ pub struct App {
     rename_focus: bool,
     /// Readout of the op in flight, shown until it finishes.
     op_progress: String,
+    /// A cut is spent once its move lands; this is what tells `poll_ops` to clear the clipboard.
+    cut_pending: bool,
+    /// Requests issued for the current thumbnail batch. The engine dedupes by path and size within a
+    /// batch and answers a duplicate with nothing, so counting one here per *issued* request is the only
+    /// way the counter can reach zero (otherwise we repaint every frame forever).
+    issued: std::collections::HashSet<(PathBuf, u32)>,
+    /// When the last engine answer arrived; lets a silent engine end the repaint drive instead of
+    /// spinning on a request that will never be answered.
+    stall: std::time::Instant,
     /// Latest decoded video frame, uploaded (only while something is loaded).
     frame: Option<egui::TextureHandle>,
     /// Engine data directories; `None` in tests so nothing is written outside the project.
@@ -140,6 +149,9 @@ impl App {
             rename_buffer: String::new(),
             rename_focus: false,
             op_progress: String::new(),
+            cut_pending: false,
+            issued: std::collections::HashSet::new(),
+            stall: std::time::Instant::now(),
             dirs,
             settings_open: false,
             theme_applied: None,
@@ -161,8 +173,59 @@ impl App {
         }
     }
 
-    /// Re-read pane `index`. Called on every navigation so the view is what the engine sees.
+    /// Re-read pane `index` and re-batch its thumbnails. Called on every navigation.
     fn open(&mut self, index: usize) {
+        self.open_quiet(index);
+        self.refresh_thumbs();
+    }
+
+    /// How many panes are on screen (the second only when dual pane is on).
+    fn panes_visible(&self) -> usize {
+        usize::from(self.settings.dual_pane) + 1
+    }
+
+    /// Ask the engine for thumbnails of everything visible, as **one** batch. `begin_batch` invalidates
+    /// the previous generation's queued work and drops decoded-but-unpolled results, so it must not run
+    /// once per pane. Only requests the engine will actually run are counted (it dedupes by path and size
+    /// within a batch); otherwise the counter never reaches zero and we repaint every frame forever.
+    fn refresh_thumbs(&mut self) {
+        self.thumbs.begin_batch();
+        self.issued.clear();
+        let edge = self.settings.thumbnail_size;
+        let visible = self.panes_visible();
+        // Textures for files that left the screen are dropped: the texture manager never dedupes, so
+        // without this every thumbnail ever viewed stays allocated for the session.
+        let mut keep: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+        // ponytail: whole folder at once; virtualise to visible rows if a huge folder feels slow.
+        for index in 0..visible {
+            for entry in &self.panes[index].entries {
+                keep.insert(entry.path.clone());
+                if self.issued.insert((entry.path.clone(), edge)) {
+                    self.thumbs.request(entry, edge, 0);
+                }
+            }
+        }
+        self.pictures.retain(|path, _| keep.contains(path));
+        for index in 0..visible {
+            let Some(wanted) = self.panes[index].wanted.clone() else {
+                continue;
+            };
+            if !keep.contains(&wanted) || !self.issued.insert((wanted.clone(), PREVIEW_EDGE)) {
+                continue;
+            }
+            let Some(entry) = self.panes[index].entries.iter().find(|e| e.path == wanted) else {
+                continue;
+            };
+            self.thumbs.request(entry, PREVIEW_EDGE, 0);
+        }
+        // Count what the engine will actually run, not what we would like it to have run.
+        self.outstanding = self.issued.len();
+        self.stall = std::time::Instant::now();
+    }
+
+    /// Re-read pane `index` without touching the thumbnail batch, so a multi-pane rescan batches once.
+    /// A selection survives when its file is still in the folder, and its preview request survives with it.
+    fn open_quiet(&mut self, index: usize) {
         let opts = self.scan_options();
         let path = self.panes[index].path.clone();
         match scan_folder(&path, &opts) {
@@ -179,20 +242,17 @@ impl App {
         }
         let show_hidden = self.settings.show_hidden;
         self.panes[index].subfolders = list_subfolders(&path, show_hidden).unwrap_or_default();
-        self.panes[index].selected = None;
-        self.panes[index].wanted = None;
-        self.panes[index].preview = None;
-        // Ask the engine for a thumbnail of every entry: it caches, decodes on its own threads and
-        // drops work it cannot finish. ponytail: whole folder at once; virtualise to visible rows if a
-        // huge folder ever makes this feel slow.
-        self.thumbs.begin_batch();
-        for entry in &self.panes[index].entries {
-            self.thumbs.request(entry, self.settings.thumbnail_size, 0);
+        let still_there = self.panes[index].selected.as_ref().is_some_and(|selected| {
+            self.panes[index]
+                .entries
+                .iter()
+                .any(|e| e.path == *selected)
+        });
+        if !still_there {
+            self.panes[index].selected = None;
+            self.panes[index].wanted = None;
+            self.panes[index].preview = None;
         }
-        self.outstanding = self.panes[0]
-            .entries
-            .len()
-            .saturating_add(self.panes[1].entries.len());
     }
 
     /// Enter `dir` in pane `index`, and make it the active pane.
@@ -219,10 +279,19 @@ impl App {
         if pane.wanted.as_deref() == Some(path.as_path()) {
             return;
         }
+        let Some(entry) = pane.entries.iter().find(|e| e.path == path).cloned() else {
+            // The file is filtered out of the listing, so there is nothing to decode: don't wait forever.
+            pane.wanted = None;
+            return;
+        };
         pane.wanted = Some(path.clone());
-        if let Some(entry) = pane.entries.iter().find(|e| e.path == path) {
-            self.thumbs.request(entry, PREVIEW_EDGE, 0);
+        // Preview requests ride the current batch; they don't invalidate the grid's thumbnails. The
+        // engine answers a request for an already-queued (path, size) with nothing, so only a *new*
+        // request may raise the counter.
+        if self.issued.insert((path.clone(), PREVIEW_EDGE)) {
+            self.thumbs.request(&entry, PREVIEW_EDGE, 0);
             self.outstanding += 1;
+            self.stall = std::time::Instant::now();
         }
     }
 
@@ -250,21 +319,26 @@ impl App {
     fn poll_pictures(&mut self, ui: &mut egui::Ui) {
         for result in self.thumbs.poll() {
             if result.scrub.is_some() {
-                continue;
+                continue; // scrub frames are not something we asked for
             }
             let preview = result.max_edge >= PREVIEW_EDGE;
-            if !preview && result.max_edge < self.settings.thumbnail_size {
-                continue;
-            }
             let owner = self
                 .panes
                 .iter()
                 .position(|pane| pane.wanted.as_deref() == Some(result.path.as_path()));
-            if preview && owner.is_none() {
-                continue;
-            }
+            // Every result we asked for is consumed here, used or not: an uncounted drop would keep the
+            // counter above zero and repaint every frame forever.
             self.outstanding = self.outstanding.saturating_sub(1);
-            let Ok(image) = result.image else { continue };
+            self.stall = std::time::Instant::now();
+            if preview && owner.is_none() {
+                continue; // the pane moved on to another file
+            }
+            let Ok(image) = result.image else {
+                if let Some(index) = owner {
+                    self.panes[index].wanted = None; // decode failed: stop waiting for this preview
+                }
+                continue;
+            };
             let color = egui::ColorImage::from_rgba_unmultiplied(
                 [image.width as usize, image.height as usize],
                 image.pixels.as_ref(),
@@ -274,12 +348,14 @@ impl App {
                 color,
                 egui::TextureOptions::LINEAR,
             );
-            if preview {
-                if let Some(index) = owner {
+            match (preview, owner) {
+                (true, Some(index)) => {
                     self.panes[index].preview = Some((result.path.clone(), texture));
                 }
-            } else {
-                self.pictures.insert(result.path.clone(), texture);
+                (false, _) => {
+                    self.pictures.insert(result.path.clone(), texture);
+                }
+                (true, None) => {}
             }
         }
         // ponytail: repaint continuously while pictures are in flight; event-driven wakeups when the
@@ -292,7 +368,22 @@ impl App {
                     .is_none_or(|(path, _)| Some(path.as_path()) != pane.wanted.as_deref())
         });
         if self.outstanding > 0 || pending {
-            ui.ctx().request_repaint();
+            if self.stall.elapsed() > std::time::Duration::from_secs(3) {
+                // The engine went silent about something we asked for: stop waiting instead of repainting
+                // every frame forever.
+                self.outstanding = 0;
+                for pane in &mut self.panes {
+                    if pane
+                        .preview
+                        .as_ref()
+                        .is_none_or(|(path, _)| Some(path.as_path()) != pane.wanted.as_deref())
+                    {
+                        pane.wanted = None;
+                    }
+                }
+            } else {
+                ui.ctx().request_repaint();
+            }
         }
     }
 
@@ -363,6 +454,10 @@ impl App {
         self.settings.dual_pane = dual;
         if dual && !was {
             self.open(1);
+        } else if !dual && was {
+            // The hidden pane must not stay active, or the shortcuts would act on an invisible selection.
+            self.active = 0;
+            self.refresh_thumbs();
         }
     }
 
@@ -400,6 +495,7 @@ impl App {
             return;
         };
         let dest_dir = self.panes[self.active].path.clone();
+        self.cut_pending = cut;
         self.ops.submit(if cut {
             FileOp::Move {
                 sources: vec![source],
@@ -449,7 +545,7 @@ impl App {
     /// Move finished file operations into view: rescan the panes and report what went wrong. Called every
     /// frame.
     fn poll_ops(&mut self) {
-        let mut finished: Option<OpOutcome> = None;
+        let mut finished: Vec<OpOutcome> = Vec::new();
         for event in self.ops.poll() {
             match event {
                 OpEvent::Progress {
@@ -465,32 +561,66 @@ impl App {
                         .unwrap_or_default();
                     self.op_progress = format!("{done}/{total} {name}");
                 }
-                OpEvent::Finished(outcome) => finished = Some(outcome),
+                OpEvent::Finished(outcome) => finished.push(outcome),
             }
         }
-        let Some(outcome) = finished else { return };
+        if finished.is_empty() {
+            return;
+        }
         self.op_progress.clear();
-        if outcome
-            .moved
-            .iter()
-            .any(|(from, _)| Some(from.as_path()) == self.playing.as_deref())
-            || outcome
-                .removed
+        let mut errors: Vec<String> = Vec::new();
+        let mut touched: Vec<PathBuf> = Vec::new();
+        for outcome in &finished {
+            if outcome
+                .moved
                 .iter()
-                .any(|p| Some(p) == self.playing.as_ref())
+                .any(|(from, _)| Some(from.as_path()) == self.playing.as_deref())
+                || outcome
+                    .removed
+                    .iter()
+                    .any(|p| Some(p) == self.playing.as_ref())
+            {
+                self.stop_playback();
+            }
+            for (from, to) in &outcome.moved {
+                if let Some(dir) = from.parent() {
+                    touched.push(dir.to_path_buf());
+                }
+                if let Some(dir) = to.parent() {
+                    touched.push(dir.to_path_buf());
+                }
+            }
+            for path in outcome.created.iter().chain(outcome.removed.iter()) {
+                if let Some(dir) = path.parent() {
+                    touched.push(dir.to_path_buf());
+                }
+            }
+            errors.extend(outcome.errors.iter().map(|e| e.to_string()));
+        }
+        // A cut is spent once its move lands; a copy stays available for another paste.
+        if self.cut_pending
+            && finished
+                .iter()
+                .any(|o| !o.moved.is_empty() && o.errors.is_empty())
         {
-            self.stop_playback();
+            self.clipboard = None;
+            self.cut_pending = false;
         }
-        let errors = outcome
-            .errors
-            .iter()
-            .map(|e| e.to_string())
-            .collect::<Vec<_>>()
-            .join("; ");
+        // Only folders the op touched are re-read, and all of them share one thumbnail batch. Selections
+        // survive because `open_quiet` keeps a selection whose file is still there.
+        let mut rescanned = false;
         for index in 0..2 {
-            self.open(index);
+            if touched.contains(&self.panes[index].path) {
+                self.open_quiet(index);
+                rescanned = true;
+            }
         }
-        self.status = errors;
+        if rescanned {
+            self.refresh_thumbs();
+        }
+        if !errors.is_empty() {
+            self.status = errors.join("; ");
+        }
     }
 
     /// The rename box for the active pane's selection: Enter or the button applies it.
@@ -522,6 +652,10 @@ impl App {
                 if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                     apply = true;
                 }
+                if response.lost_focus() {
+                    // Focus went elsewhere (a click): don't leave a box the user cannot type into on screen.
+                    self.renaming = false;
+                }
             });
         if apply {
             self.apply_rename();
@@ -551,14 +685,16 @@ impl App {
                 let height = ui.available_height();
                 // ponytail: folders width is a fraction with floors; make it draggable if users want it.
                 ui.horizontal(|ui| {
-                    let folders_width = (ui.available_width() * 0.32).clamp(80.0, 150.0);
+                    let folders_width = (ui.available_width() * 0.32)
+                        .clamp(70.0, 150.0)
+                        .min(ui.available_width());
                     ui.allocate_ui_with_layout(
                         egui::vec2(folders_width, height),
                         egui::Layout::top_down(egui::Align::LEFT),
                         |ui| self.pane_folders(index, ui),
                     );
                     ui.separator();
-                    let entries_width = (ui.available_width() - 8.0).max(120.0);
+                    let entries_width = (ui.available_width() - 8.0).max(0.0);
                     ui.allocate_ui_with_layout(
                         egui::vec2(entries_width, height),
                         egui::Layout::top_down(egui::Align::LEFT),
@@ -674,7 +810,9 @@ impl App {
 
     /// Grid view of one pane: engine thumbnails in rows that fit the column; double-click plays.
     fn pane_grid(&mut self, index: usize, ui: &mut egui::Ui) {
-        let edge = self.settings.thumbnail_size.clamp(32, 512) as f32;
+        // A cell wider than its column overflows the scroll area and cuts thumbnails mid-image.
+        let edge = (self.settings.thumbnail_size.clamp(32, 512) as f32)
+            .min((ui.available_width() - 12.0).max(48.0));
         let cell = edge + 12.0;
         let cells: Vec<(String, PathBuf)> = self.panes[index]
             .entries
@@ -986,8 +1124,9 @@ impl App {
         }
         if rescan {
             for index in 0..2 {
-                self.open(index);
+                self.open_quiet(index);
             }
+            self.refresh_thumbs();
         }
     }
 }
@@ -1003,8 +1142,9 @@ impl eframe::App for App {
             ui.ctx().request_repaint();
         }
         self.apply_theme(ui.ctx());
-        // Shortcuts are off only while the rename box is open and its field holds the keyboard.
-        let keys = if self.renaming {
+        // Shortcuts are off while a text field holds the keyboard; egui gives that focus up on a click,
+        // which also closes the rename box (see `rename_window`).
+        let keys = if ui.ctx().memory(|m| m.focused().is_some()) {
             FileKeys::default()
         } else {
             ui.input(|i| {
@@ -1038,11 +1178,11 @@ impl eframe::App for App {
         if keys.trash {
             self.trash_selection();
         }
-        if keys.undo {
-            self.ops.undo();
+        if keys.undo && self.ops.undo().is_none() {
+            self.status = "nothing to undo".into();
         }
-        if keys.redo {
-            self.ops.redo();
+        if keys.redo && self.ops.redo().is_none() {
+            self.status = "nothing to redo".into();
         }
         if keys.rename {
             self.start_rename();
@@ -1064,6 +1204,8 @@ impl eframe::App for App {
                 egui::Panel::right("pane2")
                     .resizable(true)
                     .min_size(240.0)
+                    // Without a ceiling the docked pane can take everything and collapse pane 1 to nothing.
+                    .max_size((available - 240.0).max(240.0))
                     .default_size((available / 2.0).clamp(240.0, (available - 300.0).max(240.0)))
                     .show(ui, |ui| self.pane(1, ui));
                 egui::CentralPanel::default().show(ui, |ui| self.pane(0, ui));

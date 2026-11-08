@@ -64,6 +64,13 @@ Order of work per feature (repository rule): implement → **run the real applic
 behavior** → only then add the smallest test that would fail if the behavior regressed. A test is a net
 under already-verified functionality, never the first artifact written for a feature.
 
+Review gate (repository rule): once a feature is verified and its regression net exists, pass the change
+through a review agent before calling it done; findings are fixed or explicitly dismissed with evidence.
+
+UI/UX gate (repository rule): keep finishing backend/engine-facing surfaces while the UI is still
+bare-minimum "just works". Before any UI-side work starts, write a plan for how the UI should be shown —
+layout, density, affordances, command discoverability — and treat that plan as the spec for the UI phase.
+
 ## M0 order of operations (no further decisions needed)
 
 1. Record the GalleryBrowser source SHA, then copy the five crates and their manifests into `crates/`.
@@ -329,6 +336,24 @@ modifier combos arrive fine (`-M ctrl -k z -m ctrl`). Tests added after verifica
 `trash_undo_and_rename_are_reversible`.
 Still not there: multi-select (ops act on one selected entry), OS drag/drop, context menus / toolbar buttons
 for these commands, volume/mute UI, lazy folder tree.
+
+**Review pass on slices 7–8 (both reviewers said FIX-FIRST; fixes verified):** the logic reviewer caught that
+`open()` called `begin_batch()` **per pane**, and `begin_batch` invalidates the previous generation's queued
+work *and* drops decoded-but-unpolled results — so the second pane wiped the first pane's thumbnails.
+Thumbnails are now requested in one batch for the visible panes (`refresh_thumbs`), which also evicts textures
+for files that left the screen (the texture manager never dedupes). `outstanding` now counts only requests
+the engine will actually run — it dedupes by path+size within a batch and answers a duplicate with nothing —
+and a 3 s silence guard ends the repaint drive instead of spinning forever. Selecting a file that has no
+decodable preview (filtered out, decode error) no longer waits forever; a finished op rescans only the
+folders it touched, keeps a selection whose file still exists, spends a cut, and reports "nothing to undo".
+Turning dual pane off returns the active pane to the visible one. The layout reviewer found the same starvation
+class from the other side: the docked pane had no ceiling and the in-pane columns had floors bigger than the
+space, so `pane2` gets a `max_size` and the column floors go to zero; grid cells are clamped to their column;
+shortcuts are gated on real keyboard focus (and the rename box closes when it loses focus); the window minimum
+dropped to 640×480 logical, which at 2x is a sane physical floor a tiling compositor can still ignore.
+Evidence after the fixes: same 929 px tiled window renders both panes fully with elided names and no
+duplicate-id warnings (`validation_outputs/m1-slice8-reviewfix.png`), **idle CPU after thumbnails settle is 0%
+of one core** (was a per-frame repaint), stderr empty, 8 tests + strict clippy + fmt green.
 
 ## Non-goals
 
