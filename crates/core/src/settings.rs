@@ -50,6 +50,8 @@ pub struct Settings {
     pub sort_key: SortKey,
     pub sort_ascending: bool,
     pub show_preview: bool,
+    /// The left column: the folder tree rooted at the drives, and the favorites list.
+    pub show_tree: bool,
     pub theme: Theme,
     pub volume: f32,
     pub muted: bool,
@@ -83,6 +85,7 @@ impl Default for Settings {
             sort_key: SortKey::Name,
             sort_ascending: true,
             show_preview: true,
+            show_tree: true,
             theme: Theme::Dark,
             volume: 1.0,
             muted: false,

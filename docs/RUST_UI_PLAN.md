@@ -59,8 +59,8 @@ Asset Manager page (library/tag/rating backed) and Project Manager page are stil
  created but hidden, controls are shared and target the active pane) | `mw.cpp:1693-1698, 3682-3760`;
  `file_manager_pane.cpp:144`; `3721-3722` | second pane shares app chrome; flag in Settings | move toggle to toolbar; per-pane preview + state | P1 |
 | Sync-navigation toggle (only when dual-pane) | `mw.cpp:1702-1708` | none | port | P1 |
-| Favorites list, double-click opens, add/remove via context menu, persisted | `mw.cpp:1504-1526, 3073-3127, 3314` | `Settings::favorites` field exists, **no UI** | port list UI | P1 |
-| Folder tree with real roots: "Computer" → `QDir::drives()`, lazy async expansion, drive icons | `everything_folder_model.cpp:46-50, 573-620, 297-300`; `mw.cpp:1408, 1530-1568` | subfolders of current dir only; no roots | port tree (roots + lazy) | P1 |
+| Favorites list, double-click opens, add/remove via context menu, persisted | `mw.cpp:1504-1526, 3073-3127, 3314` | list in the left column, click navigates, add/remove via the tree menu, persisted | done | P1 |
+| Folder tree with real roots: "Computer" → `QDir::drives()`, lazy async expansion, drive icons | `everything_folder_model.cpp:46-50, 573-620, 297-300`; `mw.cpp:1408, 1530-1568` | "Computer" -> drive roots (`/proc/mounts` / `/Volumes` / drive letters), a folder reads its subfolders on first open and caches them, own context menu | done | P1 |
 | Refresh (F5) + context-menu Refresh | `mw.cpp:2374, 3184` | **(review)** rescan on navigate; **no F5 binding** in the shortcut dispatcher (`app.rs:1685-1738`) | add F5 + menu item | P1 |
 
 ## Views, icons, selection

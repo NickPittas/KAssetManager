@@ -87,6 +87,80 @@ struct FileKeys {
 
 /// One `App` per window: two panes (the second only when `dual_pane` is on) plus the shared engine
 /// plumbing.
+/// The left browser column's view state: which folders are open, and the subfolder listing cached per
+/// opened folder. Qt fetches children lazily and asynchronously (`everything_folder_model.cpp:573-620`);
+/// here a folder is read once when it first opens, because a directory of subfolders is small enough to
+/// list inline and a failed read (a drive we cannot stat) simply has no children.
+struct TreeState {
+    computer_open: bool,
+    open: Vec<PathBuf>,
+    kids: HashMap<PathBuf, Vec<PathBuf>>,
+}
+
+impl Default for TreeState {
+    fn default() -> Self {
+        // Drives are listed from the start: the point of the tree is to get somewhere without typing.
+        Self {
+            computer_open: true,
+            open: Vec::new(),
+            kids: HashMap::new(),
+        }
+    }
+}
+
+/// The tree's roots under "Computer" - Qt uses `QDir::drives()` (`mw.cpp:1408`).
+#[cfg(target_os = "linux")]
+fn drive_roots() -> Vec<PathBuf> {
+    // Mount points whose source is itself a path (a real device, not sysfs/proc/tmpfs), deduplicated.
+    let mut roots: Vec<PathBuf> = std::fs::read_to_string("/proc/mounts")
+        .unwrap_or_default()
+        .split('\n')
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            let device = fields.next()?;
+            let point = PathBuf::from(fields.next()?);
+            device.starts_with('/').then_some(point)
+        })
+        .collect();
+    roots.sort();
+    roots.dedup();
+    if roots.is_empty() {
+        // A single-device install (btrfs subvolume, container) still needs a root to browse.
+        roots.push(PathBuf::from("/"));
+    }
+    roots
+}
+
+#[cfg(target_os = "macos")]
+fn drive_roots() -> Vec<PathBuf> {
+    let mut roots = vec![PathBuf::from("/")];
+    if let Ok(entries) = std::fs::read_dir("/Volumes") {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                roots.push(path);
+            }
+        }
+    }
+    roots
+}
+
+#[cfg(target_os = "windows")]
+fn drive_roots() -> Vec<PathBuf> {
+    // No std API for drive letters; probing A:\..Z:\ is cheap and needs no platform crate.
+    ('A'..='Z')
+        .filter_map(|letter| {
+            let root = PathBuf::from(format!("{letter}:\\"));
+            root.is_dir().then_some(root)
+        })
+        .collect()
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+fn drive_roots() -> Vec<PathBuf> {
+    vec![PathBuf::from("/")]
+}
+
 pub struct App {
     panes: [Pane; 2],
     /// Pane that keyboard and status-bar affordances act on.
@@ -133,6 +207,8 @@ pub struct App {
     /// Annotation list a modal is editing, with its text buffer.
     annotate: Option<Annotate>,
     annotate_focus: bool,
+    /// Which folders the tree has open, and its cached listings.
+    tree: TreeState,
     settings_open: bool,
     /// Theme last pushed to egui, so we only re-set visuals when it changes.
     theme_applied: Option<Theme>,
@@ -239,6 +315,7 @@ impl App {
             annotate: None,
             annotate_focus: false,
             dirs,
+            tree: TreeState::default(),
             settings_open: false,
             theme_applied: None,
         };
@@ -380,6 +457,12 @@ impl App {
     /// New Folder on the toolbar or Ctrl+Shift+N. The worker creates it, so undo removes it again.
     fn new_folder(&mut self) {
         let parent = self.panes[self.active].path.clone();
+        self.new_folder_in(&parent);
+    }
+
+    /// A folder created under `parent` (the active pane, or a node clicked in the tree).
+    fn new_folder_in(&mut self, parent: &Path) {
+        let parent = parent.to_path_buf();
         let mut name = "New Folder".to_string();
         let mut candidate = 2;
         while parent.join(&name).exists() {
@@ -1840,17 +1923,209 @@ impl App {
     }
 
     /// The global path bar: view toggle and settings button (panes carry their own breadcrumbs).
+    /// The folders inside `dir`, sorted and cached per opened folder. Directories only, honouring the
+    /// hidden-files setting; an unreadable directory has no children rather than being an error.
+    fn child_dirs(&mut self, dir: &Path) -> Vec<PathBuf> {
+        if let Some(cached) = self.tree.kids.get(dir) {
+            return cached.clone();
+        }
+        let mut kids: Vec<PathBuf> = std::fs::read_dir(dir)
+            .map(|entries| {
+                entries
+                    .flatten()
+                    .map(|entry| entry.path())
+                    .filter(|path| path.is_dir())
+                    .filter(|path| {
+                        self.settings.show_hidden
+                            || !path
+                                .file_name()
+                                .is_some_and(|name| name.to_string_lossy().starts_with('.'))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        kids.sort();
+        self.tree.kids.insert(dir.to_path_buf(), kids.clone());
+        kids
+    }
+
+    /// Drop a folder's cached listing so a new subfolder appears without reopening the tree.
+    fn refresh_tree(&mut self, dir: &Path) {
+        self.tree.kids.remove(dir);
+    }
+
+    fn toggle_tree_open(&mut self, dir: &Path) {
+        if let Some(at) = self.tree.open.iter().position(|path| path == dir) {
+            self.tree.open.remove(at);
+        } else {
+            self.tree.open.push(dir.to_path_buf());
+            self.child_dirs(dir);
+        }
+    }
+
+    fn is_favorite(&self, dir: &Path) -> bool {
+        self.settings.favorites.iter().any(|fav| fav == dir)
+    }
+
+    fn add_favorite(&mut self, dir: &Path) {
+        if !self.is_favorite(dir) {
+            self.settings.favorites.push(dir.to_path_buf());
+            self.save_settings();
+        }
+    }
+
+    fn remove_favorite(&mut self, dir: &Path) {
+        let before = self.settings.favorites.len();
+        self.settings.favorites.retain(|fav| fav != dir);
+        if self.settings.favorites.len() != before {
+            self.save_settings();
+        }
+    }
+
+    /// A tree row or favorite clicked: the active pane goes there.
+    fn open_in_active(&mut self, dir: &Path) {
+        let active = self.active;
+        self.navigate(active, dir);
+    }
+
+    /// The left column: favorites above the folder tree, as Qt arranges them in one splitter
+    /// (`mw.cpp:1500-1535`). Qt's other tree-menu entries (Create Folder with Selected Files, Add Asset
+    /// Library, Import Project Manager) need the project surfaces and land with P4.
+    pub fn browser_tree(&mut self, ui: &mut egui::Ui) {
+        let favorites = self.settings.favorites.clone();
+        let active_path = self.panes[self.active].path.clone();
+        egui::ScrollArea::vertical()
+            .auto_shrink([false; 2])
+            .show(ui, |ui| {
+                ui.strong("Favorites");
+                if favorites.is_empty() {
+                    ui.label("right-click a folder in the tree to add one");
+                }
+                for favorite in favorites {
+                    let label = favorite
+                        .file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| favorite.display().to_string());
+                    let row = ui.selectable_label(active_path == favorite, format!("* {label}"));
+                    if row.clicked() {
+                        self.open_in_active(&favorite);
+                    }
+                    row.context_menu(|ui| {
+                        if ui.button("Open").clicked() {
+                            self.open_in_active(&favorite);
+                            ui.close();
+                        }
+                        if ui.button("Remove Favorite").clicked() {
+                            self.remove_favorite(&favorite);
+                            ui.close();
+                        }
+                    });
+                }
+                ui.separator();
+                let arrow = if self.tree.computer_open { "v" } else { ">" };
+                ui.horizontal(|ui| {
+                    if ui
+                        .button(arrow)
+                        .on_hover_text("Show or hide drives")
+                        .clicked()
+                    {
+                        self.tree.computer_open = !self.tree.computer_open;
+                    }
+                    ui.label("Computer");
+                });
+                if self.tree.computer_open {
+                    for root in drive_roots() {
+                        self.tree_node(&root, ui, 0);
+                    }
+                }
+            });
+    }
+
+    /// One folder row in the tree: an arrow that loads children on first open, a label that navigates the
+    /// active pane, and the tree's own context menu (Qt keeps it separate from the file view's menu,
+    /// `mw.cpp:3307-3315, 3408-3413`). Each level takes its own child list before recursing, so no borrow
+    /// of `self` is held across the recursion.
+    fn tree_node(&mut self, dir: &Path, ui: &mut egui::Ui, depth: usize) {
+        let open = self.tree.open.iter().any(|path| path == dir);
+        let arrow = if open { "v" } else { ">" };
+        let name = dir
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| dir.display().to_string());
+        let active_here = self.panes[self.active].path == dir;
+        ui.horizontal(|ui| {
+            ui.add_space(depth as f32 * 10.0);
+            if ui
+                .button(arrow)
+                .on_hover_text("Show or hide subfolders")
+                .clicked()
+            {
+                self.toggle_tree_open(dir);
+            }
+            let row = ui.selectable_label(active_here, name);
+            if row.clicked() {
+                self.open_in_active(dir);
+            }
+            let menu_dir = dir.to_path_buf();
+            row.context_menu(|ui| {
+                if ui.button("New Folder").clicked() {
+                    self.new_folder_in(&menu_dir);
+                    self.refresh_tree(&menu_dir);
+                    ui.close();
+                }
+                let favorite = self.is_favorite(&menu_dir);
+                let action = if favorite {
+                    "Remove from Favorites"
+                } else {
+                    "Add to Favorites"
+                };
+                if ui.button(action).clicked() {
+                    if favorite {
+                        self.remove_favorite(&menu_dir);
+                    } else {
+                        self.add_favorite(&menu_dir);
+                    }
+                    ui.close();
+                }
+                if ui.button("Refresh").clicked() {
+                    self.refresh_tree(&menu_dir);
+                    if !self.tree.open.iter().any(|path| path == &menu_dir) {
+                        self.tree.open.push(menu_dir.clone());
+                    }
+                    ui.close();
+                }
+            });
+        });
+        if open {
+            for kid in self.child_dirs(dir) {
+                self.tree_node(&kid, ui, depth + 1);
+            }
+        }
+    }
+
     pub fn app_bar(&mut self, ui: &mut egui::Ui) {
         let mut settings = false;
+        let mut tree = false;
         ui.horizontal(|ui| {
             // View mode, thumbnail size, dual pane and the file operations live on each pane's toolbar,
             // as they do in Qt; this bar is only for the global surfaces.
             if ui.button("Settings").clicked() {
                 settings = true;
             }
+            if ui
+                .button("Folders")
+                .on_hover_text("Show or hide the folder tree and favorites")
+                .clicked()
+            {
+                tree = true;
+            }
         });
         if settings {
             self.settings_open = !self.settings_open;
+        }
+        if tree {
+            self.settings.show_tree = !self.settings.show_tree;
+            self.save_settings();
         }
     }
 
@@ -1972,6 +2247,13 @@ impl eframe::App for App {
         egui::Panel::bottom("status_bar").show(ui, |ui| {
             ui.horizontal(|ui| self.status_bar(ui));
         });
+        if self.settings.show_tree {
+            egui::Panel::left("browser_tree")
+                .resizable(true)
+                .size_range(150.0..=420.0)
+                .default_size(210.0)
+                .show(ui, |ui| self.browser_tree(ui));
+        }
         if self.settings.show_preview {
             egui::Panel::right("preview")
                 .resizable(true)
@@ -2589,6 +2871,92 @@ mod tests {
             ),
             "an empty rect claims no press"
         );
+    }
+
+    /// The tree cannot be rooted at anything the platform does not have.
+    #[test]
+    fn drive_roots_are_real_folders() {
+        let roots = drive_roots();
+        assert!(!roots.is_empty(), "there is at least one folder to browse");
+        for root in &roots {
+            assert!(root.is_dir(), "{} is a folder", root.display());
+        }
+    }
+
+    /// The tree shows folders, sorted, and never files - hidden ones follow the setting.
+    #[test]
+    fn tree_children_are_sorted_folders_only() {
+        let dir = sandbox(
+            "tree-kids",
+            &["a.png", "b.mov"],
+            &["zz-dir", "aa-dir", ".hidden"],
+        );
+        let mut app = App::with_cache(dir.clone(), sandbox("tree-cache", &[], &[]));
+
+        let kids = app.child_dirs(&dir);
+        assert_eq!(
+            kids,
+            vec![dir.join("aa-dir"), dir.join("zz-dir")],
+            "folders only, sorted, and the hidden one left out while the setting is off"
+        );
+
+        // The listing is cached, so a folder created afterwards stays invisible until it is refreshed.
+        std::fs::create_dir_all(dir.join("later")).expect("create a folder after the listing");
+        assert!(
+            !app.child_dirs(&dir).contains(&dir.join("later")),
+            "the cached listing is reused"
+        );
+        app.refresh_tree(&dir);
+        assert!(
+            app.child_dirs(&dir).contains(&dir.join("later")),
+            "a refresh re-reads the folder"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A favorite is added once and can be taken away again.
+    #[test]
+    fn favorites_are_added_once_and_removed() {
+        let dir = sandbox("favs", &[], &["keep"]);
+        let mut app = App::with_cache(dir.clone(), sandbox("favs-cache", &[], &[]));
+
+        app.add_favorite(&dir.join("keep"));
+        app.add_favorite(&dir.join("keep"));
+        assert_eq!(
+            app.settings.favorites,
+            vec![dir.join("keep")],
+            "the same folder is not listed twice"
+        );
+        assert!(app.is_favorite(&dir.join("keep")));
+
+        app.remove_favorite(&dir.join("keep"));
+        assert!(app.settings.favorites.is_empty(), "it can be taken away");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Clicking a favorite moves the pane that has the keyboard, not both panes.
+    #[test]
+    fn opening_a_favorite_moves_the_active_pane() {
+        let dir = sandbox("fav-nav", &[], &["here", "there"]);
+        let mut app = App::with_cache(dir.join("here"), sandbox("fav-nav-cache", &[], &[]));
+        app.settings.dual_pane = true;
+        app.open(1);
+
+        app.open_in_active(&dir.join("there"));
+        assert_eq!(
+            app.panes[0].path,
+            dir.join("there"),
+            "the active pane went there"
+        );
+        assert_eq!(
+            app.panes[1].path,
+            dir.join("here"),
+            "the other pane stayed put"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The pane toolbars must act on the pane that owns them, not on whichever pane happened to open first.
