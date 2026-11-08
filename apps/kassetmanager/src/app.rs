@@ -112,6 +112,10 @@ const PREVIEW_EDGE: u32 = 1024;
 /// Qt watched each pane's folder and debounced its refresh 1200 ms after a change signal
 /// (`mainwindow.cpp:355-361`); this is the same interval, paid for by waking once per tick instead of carrying a
 /// watcher dependency. Slower than a signal, cheap enough that nobody notices.
+/// How far the pointer has to travel before a press counts as carrying files. egui's own click tolerance is 6
+/// points (`InputOptions::max_click_dist`); below that it is still deciding whether this was a click.
+const DRAG_MIN_POINTS: f32 = 6.0;
+
 const LIGHT_REFRESH_SECS: f64 = 1.2;
 
 const SCRUB_SLOTS: u32 = 24;
@@ -518,6 +522,13 @@ impl Pane {
             scrub_shown: None,
         }
     }
+}
+
+/// Whether the pointer has travelled far enough since it was pressed to count as carrying files rather than
+/// clicking. egui decides a press is a drag after 0.8 s even if the mouse never moved, so motion - not time - is
+/// what separates "I am moving these" from "I rested on this file a moment too long".
+fn carried_by_drag(start: egui::Pos2, now: egui::Pos2) -> bool {
+    start.distance(now) > DRAG_MIN_POINTS
 }
 
 /// What a drag inside this app carries: the files being carried and the folder they came from. egui's built-in
@@ -1289,6 +1300,25 @@ impl App {
                 conflict: ConflictPolicy::KeepBoth,
             }
         });
+    }
+
+    /// What dragging from `path` in pane `index` would carry: the whole selection when that file is part of it,
+    /// otherwise just that file - so grabbing one of five selected files carries all five, as Qt does.
+    /// Publish what this row or cell is carrying - but only once the pointer has actually moved. egui decides
+    /// that a press held past `max_click_duration` (0.8 s) is a drag even with no motion at all, so without this
+    /// gate a long click on a file would release as a drop and quietly copy it onto itself as `name (1).ext`.
+    /// Only the widget egui is dragging answers, so this costs one payload per frame however many cells are drawn.
+    fn publish_drag(&self, ui: &egui::Ui, resp: &egui::Response, index: usize, path: &Path) {
+        if !resp.dragged() {
+            return;
+        }
+        let moved = match (resp.interact_pointer_pos(), ui.ctx().pointer_interact_pos()) {
+            (Some(start), Some(now)) => carried_by_drag(start, now),
+            _ => false,
+        };
+        if moved {
+            egui::DragAndDrop::set_payload(ui.ctx(), self.dragged_from(index, path));
+        }
     }
 
     /// What dragging from `path` in pane `index` would carry: the whole selection when that file is part of it,
@@ -2156,9 +2186,6 @@ impl App {
         let ctrl = ui.input(|i| i.modifiers.command);
 
         let table_width = widths.iter().sum::<f32>() + 8.0;
-        // The listing's region, taken before anything is laid out: this is what a drop from the other pane aims
-        // at, and answering it after the rows are drawn keeps it from stealing their clicks.
-        let body = ui.max_rect();
 
         // Qt keeps its column titles pinned while the rows scroll, and answers a pane narrower than the table
         // with a horizontal scrollbar. The header is drawn outside the scroll area to stay put, and slides by
@@ -2280,6 +2307,10 @@ impl App {
             let _ = dragged;
         }
 
+        // The listing's region is what a drop from the other pane aims at - taken here, after the breadcrumb and
+        // toolbar have been drawn, because `max_rect` would still include them and releasing over a toolbar
+        // button is not dropping files into the folder.
+        let body = ui.available_rect_before_wrap();
         let out = egui::ScrollArea::both()
             .id_salt(format!("list{index}"))
             .auto_shrink([false, false])
@@ -2295,7 +2326,7 @@ impl App {
                         // state belongs to the row, so releasing over another listing is what makes it an op.
                         egui::Sense::click_and_drag(),
                     );
-                    row.dnd_set_drag_payload(self.dragged_from(index, &path));
+                    self.publish_drag(ui, &row, index, &path);
                     if self.panes[index].scroll_target.as_deref() == Some(path.as_path()) {
                         // Keyboard movement has to keep its item on screen, and the row's own rect is where
                         // that becomes known.
@@ -2513,8 +2544,6 @@ impl App {
         let edge = (edge_px as f32).min((ui.available_width() - 12.0).max(48.0));
         let cell = edge + 12.0;
         let cells: Vec<Entry> = self.panes[index].entries.clone();
-        // The listing's region before layout, so a drop from the other pane has somewhere to land.
-        let body = ui.max_rect();
         let cols = ((ui.available_width() / cell).floor() as usize).max(1);
         self.panes[index].grid_cols = cols;
         // Ctrl on Linux and Windows, Command on macOS - the platform's "add to selection" key.
@@ -2529,6 +2558,8 @@ impl App {
         let mut play: Option<PathBuf> = None;
         let mut hovered: Option<PathBuf> = None;
         let mut scrub: Option<(Entry, egui::Pos2, egui::Rect)> = None;
+        // As in the list view: only the region below the breadcrumb and toolbar accepts a drop.
+        let body = ui.available_rect_before_wrap();
         egui::ScrollArea::vertical()
             .id_salt(format!("grid{index}"))
             .auto_shrink(false)
@@ -2629,9 +2660,7 @@ impl App {
                                         ui.id().with(("cell", entry.path.clone())),
                                         egui::Sense::click_and_drag().union(egui::Sense::hover()),
                                     );
-                                    response.dnd_set_drag_payload(
-                                        self.dragged_from(index, &entry.path),
-                                    );
+                                    self.publish_drag(ui, &response, index, &entry.path);
                                     if self.panes[index].scroll_target.as_deref()
                                         == Some(entry.path.as_path())
                                     {
@@ -4094,6 +4123,25 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A press that never moved is a click, not a carry: releasing it over the same listing must not copy files
+    /// onto themselves. This is the rule that keeps egui's 0.8-second hold from turning a long click into a drop.
+    #[test]
+    fn only_real_motion_makes_a_press_into_a_carry() {
+        let pressed = egui::pos2(100.0, 50.0);
+        assert!(
+            !carried_by_drag(pressed, pressed),
+            "a hold in place is still a click when released"
+        );
+        assert!(
+            !carried_by_drag(pressed, egui::pos2(104.0, 50.0)),
+            "a few points of drift is still deciding, not carrying"
+        );
+        assert!(
+            carried_by_drag(pressed, egui::pos2(140.0, 60.0)),
+            "travelling past the click tolerance means carrying"
+        );
     }
 
     /// A drop inside the app is a file operation with Qt's rules for its panes: copy by default, move while Shift
