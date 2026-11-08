@@ -7,7 +7,8 @@ This codemap is a current navigation snapshot for maintainers. It is not a subst
 - `README.md` — current product overview, build/package quickstart, cleanup policy.
 - `AGENTS.md` — repository workflow rules for agent-assisted work.
 - `CMakeLists.txt` / `native/qt6/CMakeLists.txt` — native Qt build entry points.
-- `Cargo.toml` / `Cargo.lock` — Rust workspace for the `rust-refactor` branch (members `crates/*`; engine crates forked from GalleryBrowser, ArtCraft decoders pinned as git dependencies).
+- `Cargo.toml` / `Cargo.lock` — Rust workspace for the `rust-refactor` branch (members `crates/*` and
+  `apps/*`; engine crates forked from GalleryBrowser, ArtCraft decoders pinned as git dependencies).
 - `scripts/` — packaging/build automation.
 - `docs/` — user, install, architecture, dependency, and AppImage documentation.
 - `third_party/` — checked-in third-party payloads used by local builds. Some package config files are intentionally relocatable so this checkout does not depend on old absolute worktree paths.
@@ -21,9 +22,16 @@ This codemap is a current navigation snapshot for maintainers. It is not a subst
   `crates/player` is the UI-free playback engine (RAM-budgeted cache, audio master clock, `tick(now)`);
   `crates/fileops` runs background copy/move/trash/rename with undo; `crates/library` is the tags,
   collections and ratings catalog.
+- `apps/kassetmanager` is the egui port itself: `src/main.rs` parses the command line
+  (`--theme`, `--dual-pane`, folder or file) and opens the wgpu window; `src/app.rs` holds the app state —
+  two `Pane`s (breadcrumb, subfolder list, grid/list of engine thumbnails, selection, preview), the shared
+  `Thumbnailer`, one `Player`, settings load/save and the settings window. It is written fresh against the
+  engine crates; GalleryBrowser's own `ui-egui` UI code was not copied.
 - The port plan, milestones, gates and open decisions live in `docs/RUST_PORT_PLAN.md`.
-- Rust CI is `.github/workflows/rust.yml` (ubuntu + macOS + Windows). Qt's `.github/workflows/ci.yml` is
-  unchanged: main-only, `-DBUILD_APP=OFF`, so the C++ reference build is verified locally on this branch.
+- Rust CI (`.github/workflows/rust.yml`) is **Linux only** (build, test, strict clippy, fmt); Windows and
+  macOS build on their own hardware — Kamino-1 and the MacBook — see `/home/npittas/Documents/ts_ssh.md`.
+  Qt's `.github/workflows/ci.yml` is unchanged: main-only, `-DBUILD_APP=OFF`, so the C++ reference build is
+  verified locally on this branch.
 
 ## Application source: `native/qt6/src/`
 

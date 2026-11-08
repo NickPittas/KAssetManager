@@ -284,8 +284,24 @@ filters come from settings (defaults hide hidden and non-media files; both on li
 `System` theme is treated as dark — `ponytail:` until we can ask the OS. Keyboard handling now exists (one
 key), which is how the dialog got verified without a mouse daemon: ydotool is useless here (no `ydotoold`),
 `wtype` works.
-Still not there: theme/volume persistence beyond what `Settings` already stores, no volume/mute UI, no lazy
-folder tree, window size/HiDPI and OS drag/drop untouched.
+Still not there: no volume/mute UI, no lazy folder tree, window size/HiDPI and OS drag/drop untouched.
+
+**Slice 7 (verified):** the dual-pane browser. State moved into a `Pane` struct (path, entries, subfolders,
+selection, preview) held twice by the app; the second pane docks right with a draggable splitter
+(`egui::Panel::right("pane2").resizable(true)`) and is shown only when `Settings::dual_pane` says so. Each
+pane owns its breadcrumb (horizontally scrollable so narrow panes cannot clip it), subfolder list and
+grid/list of engine thumbnails; clicking anything makes that pane active, and the status bar reports the
+active pane. Thumbnails, preview textures, the player and settings stay app-global — one decode pipeline,
+one playback at a time. Evidence: `kassetmanager --dual-pane ~/Pictures` rendered two independent panes with
+their own breadcrumbs, folder lists and thumbnail grids, one-line status bar
+`/home/npittas/Pictures · 14 entries · pane 1`, empty stderr
+(`validation_outputs/m1-slice7-dual-fixed.png`; the first shot `m1-slice7-dual.png` showed the two layout
+defects that were then fixed). Test net added afterwards: `panes_are_independent` (navigating pane 2 leaves
+pane 1 alone and makes pane 2 active); existing tests retargeted to pane state.
+egui 0.36 note: there is no `SidePanel`/`TopBottomPanel` — one `egui::Panel` with `left/right/top/bottom`
+ctors, `exact_size`/`default_size`/`resizable`, and `show_inside` is deprecated in favour of `show`.
+Still not there: moving/copying files between panes (double-click plays; drag/drop and the move commands are
+the next step), volume/mute UI, lazy folder tree, window size/HiDPI.
 
 ## Non-goals
 
