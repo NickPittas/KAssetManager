@@ -4,7 +4,7 @@
 //! app owns the shared parts: the engine [`gallerybrowser_media::Thumbnailer`], one
 //! [`gallerybrowser_player::Player`], settings, and the wgpu textures.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use gallerybrowser_core::{
@@ -93,7 +93,8 @@ struct FileKeys {
 /// list inline and a failed read (a drive we cannot stat) simply has no children.
 struct TreeState {
     computer_open: bool,
-    open: Vec<PathBuf>,
+    /// Every rendered row asks "am I open?", so this is a set rather than a scanned list.
+    open: HashSet<PathBuf>,
     kids: HashMap<PathBuf, Vec<PathBuf>>,
 }
 
@@ -102,32 +103,45 @@ impl Default for TreeState {
         // Drives are listed from the start: the point of the tree is to get somewhere without typing.
         Self {
             computer_open: true,
-            open: Vec::new(),
+            open: HashSet::new(),
             kids: HashMap::new(),
         }
     }
 }
 
 /// The tree's roots under "Computer" - Qt uses `QDir::drives()` (`mw.cpp:1408`).
+/// `/proc/mounts` escapes whitespace in a mount point as an octal code, so a drive called "My Drive" is
+/// written `/mnt/My\040Drive`. Only the four escapes the kernel emits for whitespace and a literal
+/// backslash appear there; the backslash is decoded last so a decoded character is never re-read.
+#[cfg(target_os = "linux")]
+fn unmount_escape(field: &str) -> String {
+    field
+        .replace("\\040", " ")
+        .replace("\\011", "\t")
+        .replace("\\012", "\n")
+        .replace("\\134", "\\")
+}
+
 #[cfg(target_os = "linux")]
 fn drive_roots() -> Vec<PathBuf> {
-    // Mount points whose source is itself a path (a real device, not sysfs/proc/tmpfs), deduplicated.
+    // Mount points whose source is itself a path (a real device, not sysfs/proc/tmpfs).
     let mut roots: Vec<PathBuf> = std::fs::read_to_string("/proc/mounts")
         .unwrap_or_default()
         .split('\n')
         .filter_map(|line| {
             let mut fields = line.split_whitespace();
             let device = fields.next()?;
-            let point = PathBuf::from(fields.next()?);
+            let point = PathBuf::from(unmount_escape(fields.next()?));
             device.starts_with('/').then_some(point)
         })
         .collect();
+    // Qt's roots come from `QDir::drives()`, which always carries the filesystem root - a ZFS or overlay
+    // install lists `/` against a non-path source and would otherwise show no root at all. A bind mount can
+    // also name a file (`/etc/hosts`), which is not a folder anyone wants to browse.
+    roots.push(PathBuf::from("/"));
+    roots.retain(|point| point.is_dir());
     roots.sort();
     roots.dedup();
-    if roots.is_empty() {
-        // A single-device install (btrfs subvolume, container) still needs a root to browse.
-        roots.push(PathBuf::from("/"));
-    }
     roots
 }
 
@@ -936,6 +950,15 @@ impl App {
         {
             self.clipboard = None;
             self.cut_pending = false;
+        }
+        // A cached tree listing is stale as soon as an operation changes that folder. This is the only
+        // place that knows an operation landed: the toolbar's New Folder, a paste, and an undo never pass
+        // through the tree menu, and invalidating when the menu was clicked would re-cache the old listing
+        // before the worker had created anything.
+        touched.sort();
+        touched.dedup();
+        for dir in &touched {
+            self.tree.kids.remove(dir);
         }
         // Only folders the op touched are re-read, and all of them share one thumbnail batch. Selections
         // survive because `open_quiet` keeps a selection whose file is still there.
@@ -1955,10 +1978,10 @@ impl App {
     }
 
     fn toggle_tree_open(&mut self, dir: &Path) {
-        if let Some(at) = self.tree.open.iter().position(|path| path == dir) {
-            self.tree.open.remove(at);
+        if self.tree.open.remove(dir) {
+            // Closing a folder leaves its children in `kids`; reopening must not re-read the disk.
         } else {
-            self.tree.open.push(dir.to_path_buf());
+            self.tree.open.insert(dir.to_path_buf());
             self.child_dirs(dir);
         }
     }
@@ -2046,7 +2069,7 @@ impl App {
     /// `mw.cpp:3307-3315, 3408-3413`). Each level takes its own child list before recursing, so no borrow
     /// of `self` is held across the recursion.
     fn tree_node(&mut self, dir: &Path, ui: &mut egui::Ui, depth: usize) {
-        let open = self.tree.open.iter().any(|path| path == dir);
+        let open = self.tree.open.contains(dir);
         let arrow = if open { "v" } else { ">" };
         let name = dir
             .file_name()
@@ -2069,8 +2092,8 @@ impl App {
             let menu_dir = dir.to_path_buf();
             row.context_menu(|ui| {
                 if ui.button("New Folder").clicked() {
+                    // The listing is dropped when the operation reports back, not here.
                     self.new_folder_in(&menu_dir);
-                    self.refresh_tree(&menu_dir);
                     ui.close();
                 }
                 let favorite = self.is_favorite(&menu_dir);
@@ -2089,9 +2112,7 @@ impl App {
                 }
                 if ui.button("Refresh").clicked() {
                     self.refresh_tree(&menu_dir);
-                    if !self.tree.open.iter().any(|path| path == &menu_dir) {
-                        self.tree.open.push(menu_dir.clone());
-                    }
+                    self.tree.open.insert(menu_dir.clone());
                     ui.close();
                 }
             });
@@ -2161,6 +2182,9 @@ impl App {
                 {
                     rescan = true;
                     dirty = true;
+                    // The tree cached its listings under the old filter, so hidden folders are either
+                    // missing or lingering.
+                    self.tree.kids.clear();
                 }
                 if ui
                     .checkbox(&mut self.settings.show_all_files, "Show non-media files")
@@ -2881,6 +2905,52 @@ mod tests {
         for root in &roots {
             assert!(root.is_dir(), "{} is a folder", root.display());
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn mount_point_escapes_are_decoded() {
+        assert_eq!(unmount_escape("/mnt/My\\040Drive"), "/mnt/My Drive");
+        assert_eq!(unmount_escape("/data/share\\011two"), "/data/share\ttwo");
+        assert_eq!(unmount_escape("/plain/path"), "/plain/path");
+    }
+
+    /// The cached tree listing must not outlive an operation that changed the folder. The toolbar's New
+    /// Folder never passes through the tree menu, so the operation itself has to be what invalidates it.
+    #[test]
+    fn operations_invalidate_the_cached_tree_listing() {
+        let dir = sandbox("tree-stale", &[], &[]);
+        let mut app = App::with_cache(dir.clone(), sandbox("tree-stale-cache", &[], &[]));
+
+        assert!(
+            app.child_dirs(&dir).is_empty() && app.tree.kids.contains_key(&dir),
+            "the empty listing is read and held"
+        );
+
+        app.new_folder();
+        // Drive the frame's own path rather than `settle`'s raw worker poll: the tree is invalidated when
+        // the operation reports back to the app, and that report is what the test is about.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while app.tree.kids.contains_key(&dir) && std::time::Instant::now() < deadline {
+            app.poll_ops();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(
+            dir.join("New Folder").is_dir(),
+            "the folder was created (status: {})",
+            app.status
+        );
+        assert!(
+            !app.tree.kids.contains_key(&dir),
+            "the finished operation dropped the stale listing"
+        );
+        assert_eq!(
+            app.child_dirs(&dir),
+            vec![dir.join("New Folder")],
+            "the tree now sees the new folder"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The tree shows folders, sorted, and never files - hidden ones follow the setting.
