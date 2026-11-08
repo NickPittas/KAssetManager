@@ -629,20 +629,18 @@ fn row_top(first_drawn_top: f32, row: usize, drawn_first: usize, pitch: f32) -> 
     first_drawn_top + (row as f32 - drawn_first as f32) * pitch
 }
 
-/// Bring a row into view when it is not drawn. A long listing does not build every row each frame, so a jump -
-/// Home, End, or one step past the bottom edge - tells the view where to go by the row's position, since the
-/// response that would normally scroll to it does not exist this frame.
+/// Bring a row into view. A long listing does not build every row each frame, so a jump - Home, End, or one step
+/// past the bottom edge - tells the view where to go by the row's position: the response that would normally scroll
+/// to it only exists when that row happens to be drawn, and it is wider than the pane, so scrolling to it would
+/// also recenter the table sideways.
 fn scroll_to_row_index(
     ui: &egui::Ui,
     row: usize,
-    drawn: std::ops::Range<usize>,
+    first_drawn: usize,
     pitch: f32,
     visible_x: egui::Rangef,
 ) {
-    if drawn.contains(&row) {
-        return;
-    }
-    let top = row_top(ui.cursor().top(), row, drawn.start, pitch);
+    let top = row_top(ui.cursor().top(), row, first_drawn, pitch);
     // `scroll_to_rect` sets both axes from one rectangle and there is no axis-specific variant in egui 0.36, so the
     // x-range handed over is the part of the listing you can currently see: re-submitting the visible range leaves
     // the sideways position exactly where it was instead of pulling a wide table back to its start.
@@ -2827,7 +2825,10 @@ impl App {
                 if let Some(target) = self.panes[index].scroll_target.as_ref()
                     && let Some(row) = rows.iter().position(|(entry, _)| entry.path == *target)
                 {
-                    scroll_to_row_index(ui, row, range.clone(), pitch, body.x_range());
+                    // `ui.clip_rect()`, not the region allocated above the scroll area: the header reserves the
+                    // table's full width, so an allocation range can be wider than the pane and recentering on it
+                    // slides the listing by half the difference.
+                    scroll_to_row_index(ui, row, range.start, pitch, ui.clip_rect().x_range());
                 }
                 for (entry, is_dir) in rows[range.clone()].iter() {
                     let path = entry.path.clone();
@@ -2846,9 +2847,8 @@ impl App {
                     let row = ui.interact(rect, ui.id().with(&path), egui::Sense::click_and_drag());
                     self.publish_drag(ui, &row, index, &path);
                     if self.panes[index].scroll_target.as_deref() == Some(path.as_path()) {
-                        // Keyboard movement has to keep its item on screen, and the row's own rect is where
-                        // that becomes known.
-                        row.scroll_to_me(Some(egui::Align::Center));
+                        // The row's place was already submitted above, whether or not it was drawn; once the
+                        // keyboard's item is on screen the request is spent.
                         self.panes[index].scroll_target = None;
                     }
                     if chosen {
@@ -3101,9 +3101,9 @@ impl App {
                     scroll_to_row_index(
                         ui,
                         cell_row / cols.max(1),
-                        range.clone(),
+                        range.start,
                         pitch,
-                        body.x_range(),
+                        ui.clip_rect().x_range(),
                     );
                 }
                 for row in cells
