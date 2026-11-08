@@ -8,8 +8,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use gallerybrowser_core::{
-    AppDirs, Entry, MediaKind, ScanOptions, Settings, Theme, ViewMode, list_subfolders,
-    scan_folder, sort_entries,
+    AppDirs, Entry, MediaKind, ScanOptions, Settings, Theme, ViewMode, scan_folder, sort_entries,
 };
 use gallerybrowser_fileops::{ConflictPolicy, FileOp, FileOpsWorker, OpEvent, OpOutcome};
 use gallerybrowser_library::Library;
@@ -38,7 +37,6 @@ struct Pane {
     /// without recording, so Back walks history without inflating it. Capped to keep memory bounded.
     back_stack: Vec<PathBuf>,
     entries: Vec<Entry>,
-    subfolders: Vec<PathBuf>,
     /// Files clicked in this pane. The last one is the **primary**: the preview panel, the player and the
     /// status bar follow it, as Qt's extended selection follows its current item.
     selection: Vec<PathBuf>,
@@ -234,6 +232,10 @@ pub struct App {
     /// A cut is spent once its move lands; this is what tells `poll_ops` to clear the clipboard.
     /// The sources of a cut that is waiting to move. Each is consumed when an operation actually carries
     /// it, so an unrelated move or undo cannot spend the clipboard, and failed sources stay available.
+    /// True while one of our own text fields (rename box, annotation name, path edit) holds the keyboard, so
+    /// it can swallow letters without the browser's shortcuts firing too. Recomputed each frame from focus.
+    typing_in_field: bool,
+
     cut_pending: Option<Vec<PathBuf>>,
     /// Requests issued for the current thumbnail batch. The engine dedupes by path and size within a
     /// batch and answers a duplicate with nothing, so counting one here per *issued* request is the only
@@ -298,7 +300,6 @@ impl Pane {
             path,
             back_stack: Vec::new(),
             entries: Vec::new(),
-            subfolders: Vec::new(),
             selection: Vec::new(),
             wanted: None,
             preview: None,
@@ -386,6 +387,7 @@ impl App {
             rename_buffer: String::new(),
             rename_focus: false,
             op_progress: String::new(),
+            typing_in_field: false,
             cut_pending: None,
             issued: std::collections::HashSet::new(),
             stall: std::time::Instant::now(),
@@ -484,8 +486,6 @@ impl App {
                 self.status = format!("{err}");
             }
         }
-        let show_hidden = self.settings.show_hidden;
-        self.panes[index].subfolders = list_subfolders(&path, show_hidden).unwrap_or_default();
         let before = self.panes[index].primary().map(Path::to_path_buf);
         self.panes[index].keep_existing();
         if self.panes[index].primary().map(Path::to_path_buf) != before {
@@ -899,6 +899,18 @@ impl App {
             return;
         };
         let dest_dir = self.panes[self.active].path.clone();
+        if cut
+            && !sources.is_empty()
+            && sources
+                .iter()
+                .all(|src| src.parent().map(Path::to_path_buf) == Some(dest_dir.clone()))
+        {
+            // Cutting and pasting back into the folder it came from is nothing to do. The engine reports
+            // every source as "already in the destination", which read as a paste that had failed; single
+            // pane users hit this on the first try. The clipboard stays, so pasting elsewhere still works.
+            self.status = "Already in this folder".into();
+            return;
+        }
         // Only a cut has sources to spend; they are consumed one by one as each one actually moves.
         self.cut_pending = cut.then(|| sources.clone());
         self.ops.submit(if cut {
@@ -1090,6 +1102,7 @@ impl App {
                     response.request_focus();
                     self.rename_focus = false;
                 }
+                self.typing_in_field |= response.has_focus();
                 ui.horizontal(|ui| {
                     if ui.button("Rename").clicked() {
                         apply = true;
@@ -1366,6 +1379,7 @@ impl App {
                     response.request_focus();
                     self.annotate_focus = false;
                 }
+                self.typing_in_field |= response.has_focus();
                 ui.horizontal(|ui| {
                     if ui.button("Add").clicked() {
                         apply = true;
@@ -1412,28 +1426,13 @@ impl App {
             ui.vertical(|ui| {
                 self.pane_toolbar(index, ui);
                 self.pane_path_bar(index, ui);
-                let height = ui.available_height();
-                // ponytail: folders width is a fraction with floors; make it draggable if users want it.
-                ui.horizontal(|ui| {
-                    let folders_width = (ui.available_width() * 0.32)
-                        .clamp(70.0, 150.0)
-                        .min(ui.available_width());
-                    ui.allocate_ui_with_layout(
-                        egui::vec2(folders_width, height),
-                        egui::Layout::top_down(egui::Align::LEFT),
-                        |ui| self.pane_folders(index, ui),
-                    );
-                    ui.separator();
-                    let entries_width = (ui.available_width() - 8.0).max(0.0);
-                    ui.allocate_ui_with_layout(
-                        egui::vec2(entries_width, height),
-                        egui::Layout::top_down(egui::Align::LEFT),
-                        |ui| match self.settings.view_mode {
-                            ViewMode::Grid => self.pane_grid(index, ui),
-                            ViewMode::List => self.pane_list(index, ui),
-                        },
-                    );
-                });
+                // A pane shows files only. The folder tree belongs to the left browser column, once, and
+                // drives whichever pane is active; a per-pane subfolder list read as a second tree inside
+                // every pane. The path bar above says which folder this pane is working on.
+                match self.settings.view_mode {
+                    ViewMode::Grid => self.pane_grid(index, ui),
+                    ViewMode::List => self.pane_list(index, ui),
+                }
             });
         });
     }
@@ -1642,35 +1641,6 @@ impl App {
                         }
                     }
                 });
-            });
-        if let Some(target) = target {
-            self.navigate(index, &target);
-        }
-    }
-
-    /// Subfolder list of one pane: the cheap version of a folder tree, enough to move around.
-    fn pane_folders(&mut self, index: usize, ui: &mut egui::Ui) {
-        let folders: Vec<(String, PathBuf)> = self.panes[index]
-            .subfolders
-            .iter()
-            .map(|f| {
-                (
-                    f.file_name()
-                        .map(|n| n.to_string_lossy().into_owned())
-                        .unwrap_or_default(),
-                    f.clone(),
-                )
-            })
-            .collect();
-        let mut target: Option<PathBuf> = None;
-        egui::ScrollArea::vertical()
-            .id_salt(format!("folders{index}"))
-            .show(ui, |ui| {
-                for (name, path) in &folders {
-                    if ui.selectable_label(false, name).clicked() {
-                        target = Some(path.clone());
-                    }
-                }
             });
         if let Some(target) = target {
             self.navigate(index, &target);
@@ -2453,6 +2423,60 @@ impl App {
     }
 }
 
+impl App {
+    /// Last frame's text focus decides this frame's shortcut gate, and the flag is re-armed so our text
+    /// widgets can claim the keyboard again as they render. Read-and-rearm in one place: clearing it inside
+    /// the reader made the gate last exactly one frame, so a field that stayed focused had to re-arm on every
+    /// pass just to keep the browser silent.
+    fn begin_shortcut_frame(&mut self) -> bool {
+        let typing = self.typing_in_field;
+        self.typing_in_field = false;
+        typing
+    }
+
+    /// Keyboard shortcuts, read once per frame before the panels render. Kept out of `eframe::App::ui` so a
+    /// test can drive them alongside real clicks.
+    ///
+    /// They are off only while one of *our* text fields holds the keyboard. Gating on egui's focus alone
+    /// switched every shortcut off whenever any widget held focus - and egui takes focus for the widgets it
+    /// has, so a click on a toolbar button or a selectable row silenced Ctrl+C/X/V until the pointer moved
+    /// again. Live report: buttons and menu items worked, keyboard copy/cut/paste did not.
+    fn read_file_keys(&mut self, ui: &egui::Ui, typing: bool) -> FileKeys {
+        if typing {
+            return FileKeys::default();
+        }
+        ui.input(|i| {
+            let m = i.modifiers.command;
+            let shift = i.modifiers.shift;
+            FileKeys {
+                settings: i.key_pressed(egui::Key::S) && !m,
+                copy: i.key_pressed(egui::Key::C) && m && !shift,
+                cut: i.key_pressed(egui::Key::X) && m,
+                paste: i.key_pressed(egui::Key::V) && m,
+                undo: i.key_pressed(egui::Key::Z) && m && !shift,
+                redo: i.key_pressed(egui::Key::Y) && m || i.key_pressed(egui::Key::Z) && m && shift,
+                trash: i.key_pressed(egui::Key::Delete) && !shift,
+                perm_delete: i.key_pressed(egui::Key::Delete) && shift,
+                up_parent: i.key_pressed(egui::Key::Backspace),
+                refresh: i.key_pressed(egui::Key::F5),
+                new_folder: i.key_pressed(egui::Key::N) && m && shift,
+                rename: i.key_pressed(egui::Key::F2),
+                rating: [
+                    (egui::Key::Num0, 0),
+                    (egui::Key::Num1, 1),
+                    (egui::Key::Num2, 2),
+                    (egui::Key::Num3, 3),
+                    (egui::Key::Num4, 4),
+                    (egui::Key::Num5, 5),
+                ]
+                .into_iter()
+                .find(|(key, _)| i.key_pressed(*key))
+                .map(|(_, value)| value),
+            }
+        })
+    }
+}
+
 impl eframe::App for App {
     /// egui 0.36 hands the app a root `Ui` (not a `Context`); panels are shown on it.
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -2464,42 +2488,8 @@ impl eframe::App for App {
             ui.ctx().request_repaint();
         }
         self.apply_theme(ui.ctx());
-        // Shortcuts are off while a text field holds the keyboard; egui gives that focus up on a click,
-        // which also closes the rename box (see `rename_window`).
-        let keys = if ui.ctx().memory(|m| m.focused().is_some()) {
-            FileKeys::default()
-        } else {
-            ui.input(|i| {
-                let m = i.modifiers.command;
-                let shift = i.modifiers.shift;
-                FileKeys {
-                    settings: i.key_pressed(egui::Key::S) && !m,
-                    copy: i.key_pressed(egui::Key::C) && m && !shift,
-                    cut: i.key_pressed(egui::Key::X) && m,
-                    paste: i.key_pressed(egui::Key::V) && m,
-                    undo: i.key_pressed(egui::Key::Z) && m && !shift,
-                    redo: i.key_pressed(egui::Key::Y) && m
-                        || i.key_pressed(egui::Key::Z) && m && shift,
-                    trash: i.key_pressed(egui::Key::Delete) && !shift,
-                    perm_delete: i.key_pressed(egui::Key::Delete) && shift,
-                    up_parent: i.key_pressed(egui::Key::Backspace),
-                    refresh: i.key_pressed(egui::Key::F5),
-                    new_folder: i.key_pressed(egui::Key::N) && m && shift,
-                    rename: i.key_pressed(egui::Key::F2),
-                    rating: [
-                        (egui::Key::Num0, 0),
-                        (egui::Key::Num1, 1),
-                        (egui::Key::Num2, 2),
-                        (egui::Key::Num3, 3),
-                        (egui::Key::Num4, 4),
-                        (egui::Key::Num5, 5),
-                    ]
-                    .into_iter()
-                    .find(|(key, _)| i.key_pressed(*key))
-                    .map(|(_, value)| value),
-                }
-            })
-        };
+        let typing = self.begin_shortcut_frame();
+        let keys = self.read_file_keys(ui, typing);
         self.apply_file_keys(&keys);
         egui::Panel::top("app_bar").show(ui, |ui| self.app_bar(ui));
         egui::Panel::bottom("status_bar").show(ui, |ui| {
@@ -2587,10 +2577,11 @@ mod tests {
 
         app.navigate(0, &parent);
         assert_eq!(app.panes[0].path, parent);
+        // A pane lists files; the left tree is what offers folders.
         assert_eq!(
-            app.panes[0].subfolders.len(),
-            1,
-            "the child folder should be offered"
+            app.child_dirs(&parent),
+            vec![parent.join("child")],
+            "the left tree can offer the folder inside the one being browsed"
         );
         assert_eq!(
             app.panes[0].entries.len(),
@@ -2923,6 +2914,201 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A shortcut must survive a click on a file. egui hands keyboard focus to any widget the user clicks,
+    /// and the shortcuts were switched off whenever *any* widget held focus - so clicking a thumbnail turned
+    /// Ctrl+C, Ctrl+X and Ctrl+V off until the pointer did something else. Live report: copy, cut and paste
+    /// "did not work" while every button and menu item did.
+    #[test]
+    fn ctrl_c_after_clicking_a_cell_copies_it() {
+        use egui_kittest::Harness;
+
+        let dir = sandbox("copy-focus", &["one.png"], &[]);
+        let mut app = App::with_cache(dir.clone(), sandbox("copy-focus-cache", &[], &[]));
+        app.settings.view_mode = ViewMode::Grid;
+        let one = dir.join("one.png");
+
+        // The shortcut read and the pane render must share a frame, as they do in `App::ui`.
+        let mut harness = Harness::new_ui_state(
+            |ui, app| {
+                let typing = app.begin_shortcut_frame();
+                let keys = app.read_file_keys(ui, typing);
+                app.pane(0, ui);
+                app.apply_file_keys(&keys);
+            },
+            app,
+        );
+        harness.set_size(egui::vec2(900.0, 700.0));
+
+        let mut cell: Option<egui::Pos2> = None;
+        'find: for row in 0..8 {
+            for col in 0..16 {
+                let pos = egui::pos2(120.0 + col as f32 * 45.0, 60.0 + row as f32 * 35.0);
+                harness.input_mut().events = vec![egui::Event::PointerMoved(pos)];
+                harness.run_steps(2);
+                if harness.state().panes[0].hover.as_deref() == Some(one.as_path()) {
+                    cell = Some(pos);
+                    break 'find;
+                }
+            }
+        }
+        let pos = cell.unwrap_or_else(|| panic!("the only thumbnail should be hoverable"));
+
+        let click = |pressed: bool| {
+            vec![egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::default(),
+            }]
+        };
+        harness.input_mut().events = click(true);
+        harness.run_steps(1);
+        harness.input_mut().events = click(false);
+        harness.run_steps(2);
+        assert_eq!(
+            harness.state().panes[0].selection,
+            vec![one.clone()],
+            "clicking the cell selects it"
+        );
+
+        // Ctrl+C with the real modifier state, as winit reports it on Linux.
+        harness.input_mut().events = vec![egui::Event::ModifiersChanged(egui::Modifiers {
+            command: true,
+            ctrl: true,
+            ..Default::default()
+        })];
+        harness.run_steps(1);
+        harness.input_mut().events = vec![egui::Event::Key {
+            key: egui::Key::C,
+            physical_key: Some(egui::Key::C),
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers {
+                command: true,
+                ctrl: true,
+                ..Default::default()
+            },
+        }];
+        harness.run_steps(2);
+        let state = harness.state();
+        assert!(
+            state.clipboard.is_some(),
+            "Ctrl+C after clicking a file should copy it (status: {}, focused: {:?})",
+            state.status,
+            state.panes[0].selection
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Shortcuts belong to the browser, not to whichever widget egui happens to have focused: egui takes
+    /// focus for its own widgets, so clicking a button or a row used to silence Ctrl+C/X/V. Only our text
+    /// fields may switch them off - and while one holds the keyboard, letters must reach the field alone.
+    #[test]
+    fn only_our_text_fields_switch_the_shortcuts_off() {
+        use egui_kittest::Harness;
+
+        let dir = sandbox("keys-focus", &["one.png"], &[]);
+        let mut app = App::with_cache(dir.clone(), sandbox("keys-focus-cache", &[], &[]));
+        app.settings.view_mode = ViewMode::Grid;
+        let one = dir.join("one.png");
+
+        let mut harness = Harness::new_ui_state(
+            |ui, app| {
+                let typing = app.begin_shortcut_frame();
+                let keys = app.read_file_keys(ui, typing);
+                app.pane(0, ui);
+                app.rename_window(ui);
+                app.apply_file_keys(&keys);
+            },
+            app,
+        );
+        harness.set_size(egui::vec2(900.0, 700.0));
+        harness.state_mut().select(one.clone());
+
+        let ctrl = egui::Modifiers {
+            command: true,
+            ctrl: true,
+            ..Default::default()
+        };
+        let cut_key = vec![egui::Event::Key {
+            key: egui::Key::X,
+            physical_key: Some(egui::Key::X),
+            pressed: true,
+            repeat: false,
+            modifiers: ctrl,
+        }];
+
+        // A widget that is not ours holds the keyboard: the shortcut must still fire.
+        harness
+            .ctx
+            .memory_mut(|m| m.request_focus(egui::Id::new("a-toolbar-button")));
+        harness.input_mut().events = vec![egui::Event::ModifiersChanged(ctrl)];
+        harness.run_steps(1);
+        harness.input_mut().events = cut_key.clone();
+        harness.run_steps(2);
+        assert_eq!(
+            harness.state().clipboard.as_ref().map(|c| c.1),
+            Some(true),
+            "Ctrl+X cuts with an unrelated widget focused (status: {})",
+            harness.state().status
+        );
+
+        // One of ours holds it: the rename box's text field keeps the keystroke to itself. The gate is armed
+        // by that field's own focus, frame after frame - which is the wiring this phase pins (a flag set once
+        // by hand would not survive a frame, and that is exactly what the old one-frame gate did).
+        harness.state_mut().clipboard = None;
+        harness.state_mut().start_rename();
+        harness.run_steps(3);
+        assert!(
+            harness.state().typing_in_field,
+            "the rename box's text field claims the keyboard while it holds focus"
+        );
+        harness.input_mut().events = cut_key;
+        harness.run_steps(2);
+        assert!(
+            harness.state().clipboard.is_none(),
+            "Ctrl+X while typing belongs to the field, not the browser"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Cutting and pasting back into the folder the file came from is nothing to do - and must not read as a
+    /// failed paste.
+    #[test]
+    fn cutting_pasting_into_the_same_folder_says_so() {
+        let dir = sandbox("paste-home", &["one.png"], &[]);
+        let mut app = App::with_cache(dir.clone(), sandbox("paste-home-cache", &[], &[]));
+
+        app.select(dir.join("one.png"));
+        app.copy_selection(true);
+        app.paste();
+        assert!(
+            app.status.contains("Already in this folder"),
+            "the no-op is named, not reported as an error: {}",
+            app.status
+        );
+        assert!(
+            app.clipboard.is_some(),
+            "the cut stays available for pasting somewhere else"
+        );
+        assert!(
+            dir.join("one.png").is_file() && !dir.join("one (1).png").exists(),
+            "nothing was copied or moved"
+        );
+
+        // Pasting into a different folder still moves it.
+        let other = sandbox("paste-abroad", &[], &[]);
+        app.navigate(0, &other);
+        app.paste();
+        settle(&mut app, &other, "the pasted file", true);
+        assert!(other.join("one.png").is_file(), "the cut moved abroad");
+
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&other);
     }
 
     /// An unrelated operation must not spend a cut, and the paste that carries every source must.
