@@ -116,6 +116,10 @@ const PREVIEW_EDGE: u32 = 1024;
 /// points (`InputOptions::max_click_dist`); below that it is still deciding whether this was a click.
 const DRAG_MIN_POINTS: f32 = 6.0;
 
+/// How long an operation with nothing to measure has to run before it earns its own window. Below that a rename
+/// or a new folder is over before the window could be read, and flashing one would be worse than the status line.
+const OPERATION_WINDOW_SECS: f64 = 0.5;
+
 const LIGHT_REFRESH_SECS: f64 = 1.2;
 
 const SCRUB_SLOTS: u32 = 24;
@@ -360,6 +364,13 @@ pub struct App {
     rename_focus: bool,
     /// Readout of the op in flight, shown until it finishes.
     op_progress: String,
+    /// Where a running operation started and how far its weight has got, so the status bar can say how fast it is
+    /// going and roughly when it will be done. Bytes come from the engine, which accounts them per source.
+    op_started: Option<std::time::Instant>,
+    op_done: u64,
+    op_total: u64,
+    op_bytes_done: u64,
+    op_bytes_total: u64,
     /// A cut is spent once its move lands; this is what tells `poll_ops` to clear the clipboard.
     /// The sources of a cut that is waiting to move. Each is consumed when an operation actually carries
     /// it, so an unrelated move or undo cannot spend the clipboard, and failed sources stay available.
@@ -524,6 +535,80 @@ impl Pane {
     }
 }
 
+/// Whether a running operation has earned its own window: weight worth measuring, or long enough that you would
+/// have noticed it. A rename finishes before a window could be read.
+fn wants_operations_window(bytes_total: u64, elapsed_secs: f64) -> bool {
+    bytes_total > 0 || elapsed_secs > OPERATION_WINDOW_SECS
+}
+
+/// What a running operation says in the status bar: how far along it is, how fast, and roughly when it will be
+/// done. Bytes are what people judge a large copy by, so they lead when the engine has them; counts and the current
+/// name carry the line when it does not (a rename has no weight to report). The engine accounts bytes per source,
+/// so one huge file reports its weight when it lands rather than crawling through it.
+fn progress_line(
+    done: u64,
+    total: u64,
+    bytes_done: u64,
+    bytes_total: u64,
+    name: &str,
+    elapsed_secs: f64,
+) -> String {
+    // Bytes say more about a large copy than a file count does; the count leads when there is nothing to weigh, or
+    // when several things are going and you want to know which of them this is.
+    let mut line = String::new();
+    if bytes_total == 0 || total > 1 {
+        line.push_str(&format!("{} of {}", done.min(total), total));
+    }
+    if bytes_total > 0 {
+        line.push_str(&format!(
+            " \u{00b7} {} of {}",
+            format_size(bytes_done),
+            format_size(bytes_total)
+        ));
+        // A rate needs some distance travelled and some time taken; the first instants of a copy would otherwise
+        // advertise a speed made of rounding error.
+        if bytes_done > 0 && elapsed_secs > 0.5 {
+            let rate = bytes_done as f64 / elapsed_secs;
+            line.push_str(&format!(
+                " \u{00b7} {} per second",
+                format_size(rate as u64)
+            ));
+            line.push_str(&format!(
+                " {}",
+                if bytes_done < bytes_total {
+                    duration_label((bytes_total - bytes_done) as f64 / rate)
+                } else {
+                    "\u{00b7} almost done".to_string()
+                }
+            ));
+        }
+    }
+    if !name.is_empty() {
+        if !line.is_empty() {
+            line.push_str(" \u{00b7}");
+        }
+        line.push_str(&format!(" {name}"));
+    }
+    line
+}
+
+/// Seconds remaining, said the way a file manager says it: seconds inside a minute, minutes inside an hour.
+fn duration_label(secs: f64) -> String {
+    if secs < 60.0 {
+        format!("\u{00b7} {} s left", secs.max(0.0).round() as i64)
+    } else if secs < 3600.0 {
+        format!(
+            "\u{00b7} {} min left",
+            (secs / 60.0).max(0.0).round() as i64
+        )
+    } else {
+        format!(
+            "\u{00b7} {} h left",
+            (secs / 3600.0).max(0.0).round() as i64
+        )
+    }
+}
+
 /// Whether the pointer has travelled far enough since it was pressed to count as carrying files rather than
 /// clicking. egui decides a press is a drag after 0.8 s even if the mouse never moved, so motion - not time - is
 /// what separates "I am moving these" from "I rested on this file a moment too long".
@@ -616,6 +701,11 @@ impl App {
             rename_buffer: String::new(),
             rename_focus: false,
             op_progress: String::new(),
+            op_started: None,
+            op_done: 0,
+            op_total: 0,
+            op_bytes_done: 0,
+            op_bytes_total: 0,
             clipboard_publish: None,
             rename_field_id: None,
             annotate_field_id: None,
@@ -1454,6 +1544,8 @@ impl App {
                     done,
                     total,
                     current,
+                    bytes_done,
+                    bytes_total,
                     ..
                 } => {
                     let name = current
@@ -1461,7 +1553,15 @@ impl App {
                         .and_then(|p| p.file_name())
                         .map(|n| n.to_string_lossy().into_owned())
                         .unwrap_or_default();
-                    self.op_progress = format!("{done}/{total} {name}");
+                    // The clock starts with the first word from the worker; a copy is already under way by then.
+                    let started = self.op_started.get_or_insert_with(std::time::Instant::now);
+                    let elapsed = started.elapsed().as_secs_f64();
+                    self.op_done = done;
+                    self.op_total = total;
+                    self.op_bytes_done = bytes_done;
+                    self.op_bytes_total = bytes_total;
+                    self.op_progress =
+                        progress_line(done, total, bytes_done, bytes_total, &name, elapsed);
                 }
                 OpEvent::Finished(outcome) => finished.push(outcome),
             }
@@ -1470,6 +1570,11 @@ impl App {
             return;
         }
         self.op_progress.clear();
+        self.op_started = None;
+        self.op_done = 0;
+        self.op_total = 0;
+        self.op_bytes_done = 0;
+        self.op_bytes_total = 0;
         let mut errors: Vec<String> = Vec::new();
         let mut touched: Vec<PathBuf> = Vec::new();
         for outcome in &finished {
@@ -1592,6 +1697,54 @@ impl App {
             self.op_error_shown = true;
             self.status = errors.join("; ");
         }
+    }
+
+    /// What a running file operation says while it runs - how far along it is, how fast, roughly when it will be
+    /// done, and the two stops Qt's operations dialog offers. A copy of a large clip is long enough to want its own
+    /// window; a rename is finished before you could read one, so small work keeps the status line alone.
+    fn operations_window(&mut self, ui: &mut egui::Ui) {
+        let Some(started) = self.op_started else {
+            return;
+        };
+        let elapsed = started.elapsed().as_secs_f64();
+        if !wants_operations_window(self.op_bytes_total, elapsed) {
+            return;
+        }
+        // Bytes are the honest fraction for a copy; an operation with no weight to report counts items instead.
+        let fraction = if self.op_bytes_total > 0 {
+            self.op_bytes_done as f32 / self.op_bytes_total as f32
+        } else if self.op_total > 0 {
+            self.op_done as f32 / self.op_total as f32
+        } else {
+            0.0
+        };
+        let bar = egui::ProgressBar::new(fraction.clamp(0.0, 1.0)).show_percentage();
+        let info = self.op_progress.clone();
+        egui::Window::new("File operations")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ui, |ui| {
+                // Qt's dialog puts the words under the bar; inside it they get clipped by the percentage.
+                ui.vertical_centered_justified(|ui| ui.add(bar));
+                ui.set_min_width(320.0);
+                ui.label(info);
+                ui.horizontal(|ui| {
+                    let running = self.ops.is_running();
+                    if ui
+                        .add_enabled(running, egui::Button::new("Cancel Current"))
+                        .on_disabled_hover_text(
+                            "Nothing is running now; Cancel All skips what is still queued",
+                        )
+                        .clicked()
+                    {
+                        self.ops.cancel_current();
+                    }
+                    if ui.button("Cancel All").clicked() {
+                        self.ops.cancel_all();
+                    }
+                });
+            });
     }
 
     /// The rename box for the active pane's selection: Enter or the button applies it.
@@ -3563,6 +3716,7 @@ impl eframe::App for App {
         if self.annotate.is_some() {
             self.annotate_window(ui);
         }
+        self.operations_window(ui);
         // Nothing in this app was watching the disk: a file copied in from a terminal stayed out of the listing
         // until you pressed Refresh. Poll on the interval Qt debounced its watcher to, and ask egui to wake at
         // that rate - it stays asleep between ticks, so idle cost is one metadata call per pane.
@@ -4142,6 +4296,59 @@ mod tests {
             carried_by_drag(pressed, egui::pos2(140.0, 60.0)),
             "travelling past the click tolerance means carrying"
         );
+    }
+
+    /// A copy gets a window with a bar and two stops, the way Qt's operations dialog does; a rename finishes
+    /// before one could be read, so it keeps the status line instead of flashing a dialog.
+    #[test]
+    fn only_work_worth_a_window_gets_one() {
+        assert!(
+            wants_operations_window(2 << 30, 0.0),
+            "a copy is worth watching"
+        );
+        assert!(
+            wants_operations_window(0, 3.0),
+            "slow work with nothing to measure still says so"
+        );
+        assert!(!wants_operations_window(0, 0.1), "a rename is over already");
+    }
+
+    /// A large copy has to say what it is doing - how much of the weight is across, how fast, and roughly when it
+    /// will be done - not just a file count out of nowhere.
+    #[test]
+    fn a_running_copy_says_size_speed_and_time_left() {
+        let line = progress_line(3, 12, 1_500_000_000, 4_600_000_000, "clip.mov", 20.0);
+        assert!(line.contains("3 of 12"), "{line}");
+        assert!(
+            line.contains("per second"),
+            "no speed without a rate: {line}"
+        );
+        assert!(
+            line.contains("left"),
+            "no estimate without time left: {line}"
+        );
+        assert!(
+            line.contains("clip.mov"),
+            "the file it is on, so it does not look stuck: {line}"
+        );
+
+        // An operation with no weight to report (a rename) still says where it is, without inventing a speed.
+        let plain = progress_line(1, 1, 0, 0, "notes.txt", 3.0);
+        assert_eq!(plain, "1 of 1 \u{00b7} notes.txt", "{plain}");
+
+        // No rate out of the first instants: one file crossed in a tenth of a second would otherwise advertise a
+        // speed made of rounding error.
+        let early = progress_line(1, 40, 50_000_000, 900_000_000, "a.bin", 0.1);
+        assert!(!early.contains("per second"), "{early}");
+        assert!(
+            early.contains("of"),
+            "the weight still reads while there is no rate: {early}"
+        );
+
+        // Time left is said the way a file manager says it.
+        assert_eq!(duration_label(45.0), "\u{00b7} 45 s left");
+        assert_eq!(duration_label(210.0), "\u{00b7} 4 min left");
+        assert_eq!(duration_label(7_500.0), "\u{00b7} 2 h left");
     }
 
     /// A drop inside the app is a file operation with Qt's rules for its panes: copy by default, move while Shift

@@ -4,7 +4,7 @@
 use std::collections::HashSet;
 use std::ffi::OsString;
 use std::fs;
-use std::io;
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
 use crate::ConflictPolicy;
@@ -104,10 +104,27 @@ fn symlink(src: &Path, target: &Path, dst: &Path) -> io::Result<()> {
 /// Copy a file, directory tree or symlink to `dst` (which must not exist). On failure everything this
 /// call created is removed again.
 pub(crate) fn copy_node(src: &Path, dst: &Path) -> Result<(), FsError> {
-    copy_depth(src, dst, 0)
+    copy_node_reported(src, dst, &mut |_| true)
 }
 
-fn copy_depth(src: &Path, dst: &Path, depth: usize) -> Result<(), FsError> {
+/// The same copy, reporting each chunk of bytes as it lands so a large copy can show movement inside one file
+/// rather than only when it finishes. `report` receives the delta just copied and answers whether the copy should
+/// keep going - that is how a cancel reaches the middle of a 2 GB file instead of waiting for its end. A stopped
+/// copy removes the partial file it made, as with any failed copy.
+pub(crate) fn copy_node_reported(
+    src: &Path,
+    dst: &Path,
+    report: &mut dyn FnMut(u64) -> bool,
+) -> Result<(), FsError> {
+    copy_depth(src, dst, 0, report)
+}
+
+fn copy_depth(
+    src: &Path,
+    dst: &Path,
+    depth: usize,
+    report: &mut dyn FnMut(u64) -> bool,
+) -> Result<(), FsError> {
     if depth > MAX_DEPTH {
         return Err(FsError::Io(io::Error::other("directory tree too deep")));
     }
@@ -119,7 +136,7 @@ fn copy_depth(src: &Path, dst: &Path, depth: usize) -> Result<(), FsError> {
     }
     if ft.is_dir() {
         fs::create_dir(dst).map_err(map_exists)?;
-        let result = copy_children(src, dst, depth);
+        let result = copy_children(src, dst, depth, report);
         match result {
             Ok(()) => {
                 let _ = fs::set_permissions(dst, meta.permissions());
@@ -142,7 +159,7 @@ fn copy_depth(src: &Path, dst: &Path, depth: usize) -> Result<(), FsError> {
             .create_new(true)
             .open(dst)
             .map_err(map_exists)?;
-        if let Err(e) = io::copy(&mut input, &mut output) {
+        if let Err(e) = copy_file_reported(&mut input, &mut output, report) {
             drop(output);
             let _ = fs::remove_file(dst);
             return Err(FsError::Io(e));
@@ -157,11 +174,52 @@ fn copy_depth(src: &Path, dst: &Path, depth: usize) -> Result<(), FsError> {
     }
 }
 
-fn copy_children(src: &Path, dst: &Path, depth: usize) -> Result<(), FsError> {
+/// Copy the entries of a directory, passing the byte report down so a tree reports as its files land.
+fn copy_children(
+    src: &Path,
+    dst: &Path,
+    depth: usize,
+    report: &mut dyn FnMut(u64) -> bool,
+) -> Result<(), FsError> {
     for entry in fs::read_dir(src)? {
+        // A folder tree asks between its files whether the copy is still wanted.
+        if !report(0) {
+            return Err(FsError::Io(io::Error::other("cancelled")));
+        }
         let entry = entry?;
-        copy_depth(&entry.path(), &dst.join(entry.file_name()), depth + 1)?;
+        copy_depth(
+            &entry.path(),
+            &dst.join(entry.file_name()),
+            depth + 1,
+            report,
+        )?;
     }
+    Ok(())
+}
+
+/// Copy a file's contents in 1 MiB chunks, reporting each chunk as it lands. That is what lets a copy of one
+/// large video show movement instead of sitting at zero and jumping to done; the chunk is also big enough to keep
+/// the syscall count low, which is where `io::copy` got its throughput.
+fn copy_file_reported(
+    input: &mut fs::File,
+    output: &mut fs::File,
+    report: &mut dyn FnMut(u64) -> bool,
+) -> io::Result<()> {
+    let mut buffer = vec![0u8; 1 << 20];
+    loop {
+        let read = input.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        let mut written = 0usize;
+        while written < read {
+            written += output.write(&buffer[written..read])?;
+        }
+        if !report(read as u64) {
+            return Err(io::Error::other("cancelled"));
+        }
+    }
+    output.flush()?;
     Ok(())
 }
 

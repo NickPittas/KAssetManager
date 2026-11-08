@@ -1,7 +1,7 @@
 use std::ffi::OsStr;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use crossbeam_channel::{Receiver, Sender, unbounded};
@@ -29,9 +29,18 @@ pub enum OpEvent {
         done: u64,
         total: u64,
         current: Option<PathBuf>,
+        /// Bytes accounted per source: what the sources weighed before anything moved, and how much of that has
+        /// landed. A single large file reports its size when it finishes - copying inside one file is not chunked,
+        /// so there is nothing to report in between. Ops with no weight worth reporting send `0 / 0`.
+        bytes_done: u64,
+        bytes_total: u64,
     },
     Finished(OpOutcome),
 }
+
+/// How much has to land between two words about a large copy. The copy itself reports every chunk; this decides
+/// how often that is worth an event and a status-line update.
+const PROGRESS_REPORT_BYTES: u64 = 8 << 20;
 
 /// Maximum number of remembered undoable operations.
 const HISTORY_LIMIT: usize = 100;
@@ -99,9 +108,38 @@ impl Effect {
     }
 }
 
+/// A request to stop work: the operation running now, and everything still queued behind it - the two buttons
+/// Qt's operations dialog offers. The worker reads the same flags before each queued job, between sources, and
+/// inside a large copy, so cancelling a 2 GB file stops within a chunk of it rather than after all of it.
+#[derive(Clone, Default)]
+struct Cancel {
+    current: Arc<AtomicBool>,
+    all: Arc<AtomicBool>,
+}
+
+impl Cancel {
+    fn requested(&self) -> bool {
+        self.current.load(Ordering::SeqCst) || self.all.load(Ordering::SeqCst)
+    }
+
+    /// Called as each queued operation starts: a cancel aimed at the previous one does not hold back this one.
+    fn begin_job(&self) {
+        self.current.store(false, Ordering::SeqCst);
+    }
+
+    /// Forget both requests once nothing is queued; the next operation starts clean.
+    fn reset(&self) {
+        self.current.store(false, Ordering::SeqCst);
+        self.all.store(false, Ordering::SeqCst);
+    }
+}
+
 struct Ctx<'a> {
     id: u64,
     events: &'a Sender<OpEvent>,
+    bytes_total: u64,
+    bytes_done: std::cell::Cell<u64>,
+    cancel: Cancel,
 }
 
 impl Ctx<'_> {
@@ -111,7 +149,43 @@ impl Ctx<'_> {
             done: done as u64,
             total: total as u64,
             current: current.map(Path::to_path_buf),
+            bytes_done: self.bytes_done.get(),
+            bytes_total: self.bytes_total,
         });
+    }
+
+    /// Account a source that has just landed, so the progress line can say how much of the weight is across.
+    fn add_bytes(&self, n: u64) {
+        self.bytes_done.set(self.bytes_done.get() + n);
+    }
+}
+
+/// Bytes a source is worth to the progress line: its size, or the sum of a tree's files. Best effort - a file that
+/// disappears while being measured counts as nothing rather than failing the operation.
+fn tree_bytes(path: &Path) -> u64 {
+    let Ok(meta) = std::fs::symlink_metadata(path) else {
+        return 0;
+    };
+    if !meta.file_type().is_dir() {
+        return meta.len();
+    }
+    let mut total = meta.len();
+    if let Ok(entries) = std::fs::read_dir(path) {
+        for entry in entries.flatten() {
+            total += tree_bytes(&entry.path());
+        }
+    }
+    total
+}
+
+/// What the sources of an operation weigh before anything moves. Only copies and moves carry weight worth
+/// reporting; a rename is instant, and history steps do not re-weigh what they replay.
+fn op_bytes(op: &FileOp) -> u64 {
+    match op {
+        FileOp::Copy { sources, .. } | FileOp::Move { sources, .. } => {
+            sources.iter().map(|src| tree_bytes(src)).sum()
+        }
+        _ => 0,
     }
 }
 
@@ -123,6 +197,9 @@ pub struct FileOpsWorker {
     history: Arc<Mutex<History>>,
     pending: Arc<AtomicUsize>,
     next_id: AtomicU64,
+    /// The operation the worker thread is inside now, and the two cancel requests.
+    running: Arc<Mutex<Option<u64>>>,
+    cancel: Cancel,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -138,6 +215,10 @@ impl FileOpsWorker {
         let worker_events = events_tx.clone();
         let worker_history = Arc::clone(&history);
         let worker_pending = Arc::clone(&pending);
+        let running: Arc<Mutex<Option<u64>>> = Arc::new(Mutex::new(None));
+        let cancel = Cancel::default();
+        let worker_running = Arc::clone(&running);
+        let worker_cancel = cancel.clone();
         let spawned = std::thread::Builder::new()
             .name("fileops".into())
             .spawn(move || {
@@ -145,18 +226,38 @@ impl FileOpsWorker {
                     let id = match &job {
                         Job::Op { id, .. } | Job::Undo { id } | Job::Redo { id } => *id,
                     };
-                    let result = catch_unwind(AssertUnwindSafe(|| {
-                        run_job(job, &worker_history, &worker_events)
-                    }));
-                    if result.is_err() {
+                    *lock(&worker_running) = Some(id);
+                    worker_cancel.begin_job();
+                    // An operation the user cancelled before its turn does no work at all.
+                    let skipped = worker_cancel.requested();
+                    if skipped {
                         let _ = worker_events.send(OpEvent::Finished(OpOutcome {
                             id,
                             label: "File operation".into(),
-                            errors: vec![OpError::Other(
-                                "internal error while running the file operation".into(),
-                            )],
+                            errors: vec![OpError::Other("cancelled".into())],
                             ..Default::default()
                         }));
+                        drop(job);
+                    } else {
+                        let cancel_for_job = worker_cancel.clone();
+                        let result = catch_unwind(AssertUnwindSafe(|| {
+                            run_job(job, &worker_history, &worker_events, cancel_for_job)
+                        }));
+                        if result.is_err() {
+                            let _ = worker_events.send(OpEvent::Finished(OpOutcome {
+                                id,
+                                label: "File operation".into(),
+                                errors: vec![OpError::Other(
+                                    "internal error while running file operation".into(),
+                                )],
+                                ..Default::default()
+                            }));
+                        }
+                    }
+                    *lock(&worker_running) = None;
+                    // Once nothing is left queued, the cancel requests have spent themselves.
+                    if job_rx.is_empty() {
+                        worker_cancel.reset();
                     }
                     worker_pending.fetch_sub(1, Ordering::SeqCst);
                 }
@@ -171,6 +272,8 @@ impl FileOpsWorker {
             history,
             pending,
             next_id: AtomicU64::new(1),
+            running,
+            cancel,
         }
     }
 
@@ -189,6 +292,26 @@ impl FileOpsWorker {
             }));
         }
         id
+    }
+
+    /// Stop the operation that is running now. What has already been copied stays on disk - the operation stops,
+    /// it does not roll back. Qt's operations dialog calls this "Cancel Current". False when nothing is running.
+    pub fn cancel_current(&self) -> bool {
+        let running = lock(&self.running).is_some();
+        if running {
+            self.cancel.current.store(true, Ordering::SeqCst);
+        }
+        running
+    }
+
+    /// Also skip every operation still queued, until the queue drains. Qt's "Cancel All".
+    pub fn cancel_all(&self) {
+        self.cancel.all.store(true, Ordering::SeqCst);
+    }
+
+    /// Whether an operation is running now; what decides if Cancel Current can be used.
+    pub fn is_running(&self) -> bool {
+        lock(&self.running).is_some()
     }
 
     /// Queue an operation; returns its id immediately.
@@ -238,10 +361,18 @@ impl Default for FileOpsWorker {
 // Job execution (worker thread)
 // ---------------------------------------------------------------------------------------------
 
-fn run_job(job: Job, history: &Mutex<History>, events: &Sender<OpEvent>) {
+fn run_job(job: Job, history: &Mutex<History>, events: &Sender<OpEvent>, cancel: Cancel) {
     match job {
         Job::Op { id, op } => {
-            let ctx = Ctx { id, events };
+            // Weighed before the work starts: once the sources have moved there is nothing left to measure.
+            let bytes_total = op_bytes(&op);
+            let ctx = Ctx {
+                id,
+                events,
+                bytes_total,
+                bytes_done: std::cell::Cell::new(0),
+                cancel,
+            };
             let (label, effect, entry) = run_op(&ctx, op);
             if let Some(entry) = entry {
                 let mut h = lock(history);
@@ -253,8 +384,8 @@ fn run_job(job: Job, history: &Mutex<History>, events: &Sender<OpEvent>) {
             }
             finish(events, id, label, effect);
         }
-        Job::Undo { id } => run_history(id, history, events, true),
-        Job::Redo { id } => run_history(id, history, events, false),
+        Job::Undo { id } => run_history(id, history, events, cancel, true),
+        Job::Redo { id } => run_history(id, history, events, cancel, false),
     }
 }
 
@@ -269,7 +400,13 @@ fn finish(events: &Sender<OpEvent>, id: u64, label: String, effect: Effect) {
     }));
 }
 
-fn run_history(id: u64, history: &Mutex<History>, events: &Sender<OpEvent>, undo: bool) {
+fn run_history(
+    id: u64,
+    history: &Mutex<History>,
+    events: &Sender<OpEvent>,
+    cancel: Cancel,
+    undo: bool,
+) {
     let verb = if undo { "Undo" } else { "Redo" };
     let entry = {
         let mut h = lock(history);
@@ -281,7 +418,14 @@ fn run_history(id: u64, history: &Mutex<History>, events: &Sender<OpEvent>, undo
         finish(events, id, verb.to_string(), effect);
         return;
     };
-    let ctx = Ctx { id, events };
+    // History replays a remembered action, so its weight is not re-derived here; the counts still arrive.
+    let ctx = Ctx {
+        id,
+        events,
+        bytes_total: 0,
+        bytes_done: std::cell::Cell::new(0),
+        cancel,
+    };
     let action = if undo { &entry.undo } else { &entry.redo };
     let effect = run_action(&ctx, action, id);
     {
@@ -443,6 +587,12 @@ fn copy_sources(
     let mut effect = Effect::default();
     let mut pairs = Vec::new();
     for (i, src) in sources.iter().enumerate() {
+        if ctx.cancel.requested() {
+            effect.err(src, "cancelled");
+            break;
+        }
+        // Measured before the copy: this is what the progress line counts down from.
+        let src_bytes = tree_bytes(src);
         ctx.progress(i, sources.len(), Some(src));
         let Some(name) = source_name(src) else {
             effect.err(src, "no file name");
@@ -455,8 +605,26 @@ fn copy_sources(
             effect.err(src, "cannot copy a folder into itself");
             continue;
         }
-        match fsops::claim_dest(dest_dir, name, policy, |cand| fsops::copy_node(src, cand)) {
+        // Bytes are reported as they land, so the progress line moves through one large file instead of sitting at
+        // zero and jumping to done. `base` carries the running total across sources; the throttle keeps a 2 GB
+        // copy to a few hundred events rather than one per megabyte.
+        let base = ctx.bytes_done.get();
+        let mut within: u64 = 0;
+        let mut emitted: u64 = 0;
+        match fsops::claim_dest(dest_dir, name, policy, |cand| {
+            fsops::copy_node_reported(src, cand, &mut |delta| {
+                within += delta;
+                if within.saturating_sub(emitted) >= PROGRESS_REPORT_BYTES {
+                    emitted = within;
+                    ctx.bytes_done.set(base + within);
+                    ctx.progress(i, sources.len(), Some(src));
+                }
+                // The copy asks here every chunk, so a cancel reaches the middle of a large file.
+                !ctx.cancel.requested()
+            })
+        }) {
             Ok(Some(dst)) => {
+                ctx.add_bytes(src_bytes);
                 effect.created.push(dst.clone());
                 pairs.push((src.clone(), dst));
             }
@@ -479,6 +647,12 @@ fn move_sources(
 ) -> Effect {
     let mut effect = Effect::default();
     for (i, src) in sources.iter().enumerate() {
+        if ctx.cancel.requested() {
+            effect.err(src, "cancelled");
+            break;
+        }
+        // Measured before the move: after it, the source is gone and there is nothing left to weigh.
+        let src_bytes = tree_bytes(src);
         ctx.progress(i, sources.len(), Some(src));
         let Some(name) = source_name(src) else {
             effect.err(src, "no file name");
@@ -496,7 +670,10 @@ fn move_sources(
             continue;
         }
         match fsops::claim_dest(dest_dir, name, policy, |cand| fsops::move_exact(src, cand)) {
-            Ok(Some(dst)) => effect.moved.push((src.clone(), dst)),
+            Ok(Some(dst)) => {
+                ctx.add_bytes(src_bytes);
+                effect.moved.push((src.clone(), dst));
+            }
             Ok(None) => effect.err(
                 src,
                 "skipped: a file with this name already exists in the destination",
@@ -1072,5 +1249,109 @@ mod tests {
         }
         assert!(done);
         assert!(progress >= 1);
+    }
+
+    /// A large copy has to be stoppable while it is inside the file. That is what Qt's dialog calls Cancel
+    /// Current, and what makes a 2 GB mistake recoverable instead of something you watch finish.
+    #[test]
+    fn cancel_current_stops_a_large_copy() {
+        let d = tempfile::tempdir().expect("tmp");
+        let src = d.path().join("huge.bin");
+        fs::write(&src, vec![3u8; 240 << 20]).expect("huge file");
+        let dst = d.path().join("out");
+        fs::create_dir(&dst).expect("dst");
+
+        let w = FileOpsWorker::new();
+        let id = w.submit(FileOp::Copy {
+            sources: vec![src.clone()],
+            dest_dir: dst.clone(),
+            conflict: ConflictPolicy::KeepBoth,
+        });
+        // Wait until the copy is demonstrably inside the file, then ask it to stop.
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let mut started = false;
+        while !started && Instant::now() < deadline {
+            for ev in w.poll() {
+                if let OpEvent::Progress {
+                    id: pid,
+                    bytes_done,
+                    ..
+                } = ev
+                {
+                    started |= pid == id && bytes_done > 0;
+                }
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert!(started, "the copy was under way");
+        assert!(w.cancel_current(), "an operation is running to stop");
+
+        let o = wait_finished(&w, id);
+        assert!(
+            o.errors.iter().any(|e| e.to_string().contains("cancelled")),
+            "{:?}",
+            o.errors
+        );
+        // A copy that stopped does not leave half a file where a whole one was expected.
+        assert!(
+            !dst.join("huge.bin").exists(),
+            "the partial copy was removed"
+        );
+    }
+
+    /// A large copy has to report bytes while it is still inside one file. The app reads these events to say how
+    /// much of the weight is across and how fast it is going; a copy that only spoke at the end would show nothing
+    /// for the whole time it took to move a 24 MB clip, let alone a 2 GB one.
+    #[test]
+    fn copy_reports_bytes_as_they_land() {
+        let d = tempfile::tempdir().expect("tmp");
+        let src = d.path().join("big.bin");
+        // Big enough to cross the report throttle more than once.
+        fs::write(&src, vec![7u8; 24 << 20]).expect("big file");
+        let dst = d.path().join("out");
+        fs::create_dir(&dst).expect("dst");
+
+        let w = FileOpsWorker::new();
+        let id = w.submit(FileOp::Copy {
+            sources: vec![src.clone()],
+            dest_dir: dst.clone(),
+            conflict: ConflictPolicy::KeepBoth,
+        });
+        let mut partial = false;
+        let mut total_seen = 0u64;
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while Instant::now() < deadline {
+            let mut finished = false;
+            for ev in w.poll() {
+                match ev {
+                    OpEvent::Progress {
+                        id: pid,
+                        bytes_done,
+                        bytes_total,
+                        ..
+                    } if pid == id => {
+                        total_seen = total_seen.max(bytes_total);
+                        partial |= bytes_done > 0 && bytes_done < bytes_total;
+                    }
+                    OpEvent::Finished(_) => finished = true,
+                    // Another operation's progress, which this test is not watching.
+                    _ => {}
+                }
+            }
+            if finished {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+
+        assert_eq!(
+            total_seen,
+            24 << 20,
+            "the copy knows what the file weighs before it starts"
+        );
+        assert!(
+            partial,
+            "bytes arrive while the copy is still inside the file"
+        );
     }
 }
