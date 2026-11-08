@@ -233,8 +233,20 @@ stderr (`validation_outputs/m1-slice2.png`). Data comes from the forked engine: 
 The window also mapped fully on screen this time, so the earlier right-edge clipping was placement luck,
 not a sizing bug — still an M1 item to pin. After that verification one sandbox test was added (entries
 listed, folders offered, navigation re-scans).
-Still not there: subfolders are a flat list, not a lazy tree; selecting an entry does nothing yet (no
-preview/playback); no thumbnails; window size/HiDPI and OS drag/drop untouched.
+Still not there: subfolders are a flat list, not a lazy tree; no thumbnails; window size/HiDPI and OS
+drag/drop untouched.
+
+**Slice 3 (verified):** preview panel fed by the engine. `gallerybrowser_media::Thumbnailer` (2 decoder
+threads, 1 GB disk cache per `Settings` defaults) renders the selected entry at a 1024 px max edge; results
+are polled each frame and uploaded as a wgpu texture. Evidence: running `kassetmanager ~/Pictures/Apps.jpg`
+showed that file selected in the list, its decoded picture in the Preview panel, status bar
+`/home/npittas/Pictures · 14 entries · selected: Apps.jpg`, empty stderr
+(`validation_outputs/m1-slice3.png`). The CLI now accepts a file and selects it on start, which is how the
+preview path was verified without GUI automation. Two state tests were added after that verification.
+egui/epaint 0.36 notes: `TextureHandle` has `size_vec2()`/`id()` (no `width()`/`height()`),
+`egui::Panel::right(id)` exists, and images are drawn with `ui.image(egui::load::SizedTexture { id, size })`.
+Still not there: no thumbnails in the list yet (the same thumbnailer drives them next), playback of video
+(no `gallerybrowser-player` in the app yet — a click on a `.mov` gives a first frame only), no scrubbing.
 
 ## Non-goals
 
