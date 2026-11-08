@@ -56,6 +56,13 @@ struct Pane {
     scrub_shown: Option<(PathBuf, egui::TextureHandle)>,
 }
 
+/// True when the pointer was pressed inside `rect` this frame. Lets a click anywhere on a pane's
+/// toolbar - whitespace, the size label, a disabled button - name the pane it belongs to, without an
+/// interaction rect laid over the row and swallowing the buttons' own clicks.
+fn pressed_within(rect: egui::Rect, pressed: bool, pos: Option<egui::Pos2>) -> bool {
+    rect.is_positive() && pressed && pos.is_some_and(|point| rect.contains(point))
+}
+
 /// File-operation shortcuts, read once per frame and suppressed while a text field has focus.
 #[derive(Default)]
 struct FileKeys {
@@ -68,7 +75,9 @@ struct FileKeys {
     trash: bool,
     /// Shift+Delete: permanent delete, which is not undoable.
     perm_delete: bool,
-    back: bool,
+    /// Backspace goes to the parent folder (Qt's own shortcut table calls it "Back to Parent"); the
+    /// toolbar's Back button is the only way back through history.
+    up_parent: bool,
     refresh: bool,
     new_folder: bool,
     rename: bool,
@@ -356,10 +365,15 @@ impl App {
 
     /// The toolbar's Back: this pane walks its own recorded folders. Going back is not a new visit.
     fn go_back(&mut self, index: usize) {
-        if let Some(dir) = self.panes[index].back_stack.pop() {
-            self.panes[index].path = dir;
-            self.active = index;
-            self.open(index);
+        // A visited folder can be deleted or moved by an undo, so Back must not walk into a path that
+        // stopped being a folder. Dead entries are dropped as they are found.
+        while let Some(dir) = self.panes[index].back_stack.pop() {
+            if dir.is_dir() {
+                self.panes[index].path = dir;
+                self.active = index;
+                self.open(index);
+                return;
+            }
         }
     }
 
@@ -1229,6 +1243,9 @@ impl App {
         let preview = self.settings.show_preview;
         let size = self.settings.thumbnail_size;
         let paste_ready = self.clipboard.is_some();
+        // Read the pointer press through the context instead of laying an interaction rect over the row:
+        // that would sit on top of the buttons and swallow their clicks.
+        let press = ui.input(|i| (i.pointer.any_pressed(), i.pointer.interact_pos()));
         let mut back = false;
         let mut up = false;
         let mut new_folder = false;
@@ -1326,7 +1343,7 @@ impl App {
             || refresh
             || toggle_dual
             || toggle_preview
-            || row.response.clicked();
+            || pressed_within(row.response.rect, press.0, press.1);
         if acted {
             self.active = index;
         }
@@ -1728,6 +1745,54 @@ impl App {
         ui.label(format!("{seconds:.1} / {total:.1}s"));
     }
 
+    /// The file-operation shortcuts, applied in one place so their wiring is testable without
+    /// input plumbing. `keys` comes from the frame's input; nothing here reads the pointer.
+    fn apply_file_keys(&mut self, keys: &FileKeys) {
+        if keys.settings {
+            self.settings_open = !self.settings_open;
+        }
+        if keys.copy {
+            self.copy_selection(false);
+        }
+        if keys.cut {
+            self.copy_selection(true);
+        }
+        if keys.paste {
+            self.paste();
+        }
+        if let Some(rating) = keys.rating {
+            self.set_rating(rating);
+        }
+        if keys.trash {
+            self.trash_selection();
+        }
+        if keys.perm_delete {
+            self.delete_permanently();
+        }
+        if keys.new_folder {
+            self.new_folder();
+        }
+        let active = self.active;
+        if keys.up_parent {
+            let parent = self.panes[active].path.parent().map(Path::to_path_buf);
+            if let Some(parent) = parent {
+                self.navigate(active, &parent);
+            }
+        }
+        if keys.refresh {
+            self.open(active);
+        }
+        if keys.undo && self.ops.undo().is_none() {
+            self.status = "nothing to undo".into();
+        }
+        if keys.redo && self.ops.redo().is_none() {
+            self.status = "nothing to redo".into();
+        }
+        if keys.rename {
+            self.start_rename();
+        }
+    }
+
     /// The bottom status bar: the active pane's folder, how much is there, and what is selected.
     pub fn status_bar(&mut self, ui: &mut egui::Ui) {
         let pane = &self.panes[self.active];
@@ -1884,7 +1949,7 @@ impl eframe::App for App {
                         || i.key_pressed(egui::Key::Z) && m && shift,
                     trash: i.key_pressed(egui::Key::Delete) && !shift,
                     perm_delete: i.key_pressed(egui::Key::Delete) && shift,
-                    back: i.key_pressed(egui::Key::Backspace),
+                    up_parent: i.key_pressed(egui::Key::Backspace),
                     refresh: i.key_pressed(egui::Key::F5),
                     new_folder: i.key_pressed(egui::Key::N) && m && shift,
                     rename: i.key_pressed(egui::Key::F2),
@@ -1902,46 +1967,7 @@ impl eframe::App for App {
                 }
             })
         };
-        if keys.settings {
-            self.settings_open = !self.settings_open;
-        }
-        if keys.copy {
-            self.copy_selection(false);
-        }
-        if keys.cut {
-            self.copy_selection(true);
-        }
-        if keys.paste {
-            self.paste();
-        }
-        if let Some(rating) = keys.rating {
-            self.set_rating(rating);
-        }
-        if keys.trash {
-            self.trash_selection();
-        }
-        if keys.perm_delete {
-            self.delete_permanently();
-        }
-        if keys.new_folder {
-            self.new_folder();
-        }
-        let active = self.active;
-        if keys.back {
-            self.go_back(active);
-        }
-        if keys.refresh {
-            self.open(active);
-        }
-        if keys.undo && self.ops.undo().is_none() {
-            self.status = "nothing to undo".into();
-        }
-        if keys.redo && self.ops.redo().is_none() {
-            self.status = "nothing to redo".into();
-        }
-        if keys.rename {
-            self.start_rename();
-        }
+        self.apply_file_keys(&keys);
         egui::Panel::top("app_bar").show(ui, |ui| self.app_bar(ui));
         egui::Panel::bottom("status_bar").show(ui, |ui| {
             ui.horizontal(|ui| self.status_bar(ui));
@@ -2492,6 +2518,77 @@ mod tests {
         assert!(!dir.join("gone.png").exists(), "the old name is gone");
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Back must not walk into a folder that an undo, a delete or a move has since removed.
+    #[test]
+    fn back_skips_folders_that_no_longer_exist() {
+        let dir = sandbox("back-dead", &[], &["sub"]);
+        let mut app = App::with_cache(dir.join("sub"), sandbox("back-cache", &[], &[]));
+
+        app.navigate(0, &dir);
+        assert_eq!(
+            app.panes[0].back_stack.last(),
+            Some(&dir.join("sub")),
+            "the folder we left is on the history"
+        );
+        std::fs::remove_dir_all(dir.join("sub")).expect("remove the visited folder");
+
+        app.go_back(0);
+        assert!(
+            app.panes[0].back_stack.is_empty(),
+            "the dead entry was dropped rather than followed"
+        );
+        assert_eq!(
+            app.panes[0].path, dir,
+            "Back stayed put instead of opening a folder that is gone"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Backspace is "Back to Parent" (Qt's shortcut table), and it belongs to the active pane only.
+    #[test]
+    fn backspace_goes_to_the_parent_of_the_active_pane() {
+        let dir = sandbox("keys-up", &[], &["sub"]);
+        let mut app = App::with_cache(dir.join("sub"), sandbox("keys-cache", &[], &[]));
+
+        app.apply_file_keys(&FileKeys {
+            up_parent: true,
+            ..FileKeys::default()
+        });
+        assert_eq!(
+            app.panes[0].path, dir,
+            "Backspace went to the parent folder"
+        );
+        assert_eq!(
+            app.panes[1].path,
+            dir.join("sub"),
+            "the other pane did not move"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn pressed_within_needs_a_real_rect_and_a_press() {
+        let rect = egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(10.0, 10.0));
+        assert!(pressed_within(rect, true, Some(egui::pos2(4.0, 4.0))));
+        assert!(
+            !pressed_within(rect, false, Some(egui::pos2(4.0, 4.0))),
+            "a hover is not a press"
+        );
+        assert!(
+            !pressed_within(rect, true, None),
+            "a pointer outside the window presses nothing"
+        );
+        assert!(
+            !pressed_within(
+                egui::Rect::from_min_max(egui::Pos2::ZERO, egui::Pos2::ZERO),
+                true,
+                Some(egui::Pos2::ZERO)
+            ),
+            "an empty rect claims no press"
+        );
     }
 
     /// The pane toolbars must act on the pane that owns them, not on whichever pane happened to open first.
