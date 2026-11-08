@@ -381,29 +381,38 @@ Evidence after the fixes: same 929 px tiled window renders both panes fully with
 duplicate-id warnings (`validation_outputs/m1-slice8-reviewfix.png`), **idle CPU after thumbnails settle is 0%
 of one core** (was a per-frame repaint), stderr empty, 8 tests + strict clippy + fmt green.
 
-### Declared before hover scrub (the engine-facing half of M2), frozen in a test only after verification
+### Hover scrub is GalleryBrowser's, ported (the engine-facing half of M2)
 
-`SCRUB_SLOTS = 6` equal spans of a clip, the animation starts `400 ms` after the pointer settles on an entry,
-and advances one slot every `150 ms`. Nothing else about scrub is numeric: frames come from the engine's own
-scrub cache and lane (`Thumbnailer::request_scrub(entry, edge, slot, slots)`, answered through the same
-`poll()` with `ThumbResult::scrub` set), so how many decodes run at once is the engine's call, not the app's.
+The first attempt was a timed playback loop of my own invention; the user rejected it ("this is not a hover
+scrub, it's a hover play") and asked why the existing scrub code was not being used. The vendored engine already
+had the API (`Thumbnailer::request_scrub` / `cached_scrub`, answered through `poll()` with `ThumbResult::scrub`)
+and GalleryBrowser's UI had the interaction (`crates/ui-egui/src/file_pane.rs:933`), so the app drives that
+semantics now instead of a timer:
 
-Verified: `hovering_a_video_makes_the_engine_answer_scrub_frames` copies the committed 2.9 KB fixture
-`tests/fixtures/scrub.mp4` into a sandbox, points the pane's hover at it, drives `scrub_tick` until the settle
-delay passes and asserts the engine answers with our slot count, for the hovered path, with a decoded frame
-(0.45 s). A grid cell shows the hover frame over its thumbnail and the preview panel falls back to it; leaving
-the entry drops it again. Pointer injection on this Hyprland box is unreliable (`ydotool` absolute warps do not
-move the cursor), so the hover rectangle itself is verified by construction plus a real-app run that stayed
-stable with empty stderr — a real mouse should be watched once.
+| Rule (from `file_pane.rs:42-50, 933-976`) | Value | Meaning |
+| --- | --- | --- |
+| `SCRUB_SLOTS` | 24 | the pointer's x across the thumbnail square picks slot `frac * 24` |
+| `SCRUB_SLOTS_FINE` | 200 | Ctrl held is "real-time" scrubbing |
+| `SCRUB_NEAR` | 12 | a decoded neighbour shows while the exact frame is being made |
+| `SCRUB_WAIT` | 5 s | a frame still missing after this long stops being asked for (undecodable) |
 
-Measured on this machine (pointer warped with `ydotool`, verified against `hyprctl cursorpos`): idle once
-thumbnails settle is **0 % of one core** (the earlier per-frame repaint pin is gone); hovering the 64×64 1 s
-clip costs about **25 % of one core** at 150 ms per slot; hovering a 200 MB camera clip in `~/Pictures` costs
-several cores while hovered. The cost is decoding, bounded by the engine's own scrub lane and by asking for one
-slot per step (`scrub_want` dedupes a stationary pointer). `SCRUB_STEP` is the knob; a user-facing hover-scrub
-toggle is UI-phase work — `Settings::video_preview` already means *autoplay on selection in the preview pane*,
-not this, so it is not the gate. Hovering a **still** does not drive frames at all: the repaint condition asks
-whether the hovered entry is a video or sequence before asking for frames.
+Only the thumbnail square scrubs, not the whole card; only video and sequences; not while a button is down. The
+pane keeps decoded frames per `(path, slot, slots)` and drops them when the pointer leaves the entry. The chosen
+frame draws on the **next** pass, because egui knows the pointer position before it lays out the current one.
+
+Verified: `hovering_a_clip_scrubs_by_pointer_position` copies the committed 2.9 KB fixture
+`tests/fixtures/scrub.mp4` into a sandbox and drives the real pane through egui's input pipeline
+(`egui_kittest::Harness`): sweep the pointer until a thumbnail square claims a slot, then assert the target is
+that clip with the coarse 24-slot division, that the slot lies inside it, and that the engine delivers a frame
+the pane can show. `resting_and_clicking_on_a_cell_targets_the_entry` covers the other half of the user's
+report — the whole cell, picture included, selects on click and answers to hover; the name label alone used to
+be the only clickable thing, which is why clicking a thumbnail did nothing.
+
+Cost, measured here with the pointer warped by `ydotool`: idle once thumbnails settle is **0 % of one core** (the
+earlier per-frame repaint pin is gone). Hover scrub costs only what decoding costs: the engine serialises a
+lane's decodes on its open source, lets the newest request replace a queued older one, and ignores non-scrubbable
+entries — so resting on a still asks for nothing. A user-facing scrub toggle is UI-phase work;
+`Settings::video_preview` already means *autoplay on selection in the preview pane*, not this.
 
 ## Non-goals
 

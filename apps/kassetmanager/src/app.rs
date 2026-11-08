@@ -19,11 +19,14 @@ use gallerybrowser_player::Player;
 /// Longest preview edge we ask the decoders for (they may scale down while decoding).
 const PREVIEW_EDGE: u32 = 1024;
 
-/// Hover scrub: how many equal spans of a clip we ask for, when the animation starts after the pointer
-/// settles, and how fast it advances. Declared in docs/RUST_PORT_PLAN.md before implementing.
-const SCRUB_SLOTS: u32 = 6;
-const SCRUB_DELAY: std::time::Duration = std::time::Duration::from_millis(400);
-const SCRUB_STEP: std::time::Duration = std::time::Duration::from_millis(150);
+/// Hover scrub, with GalleryBrowser's numbers (crates/ui-egui/src/file_pane.rs:42-50): the pointer's x
+/// across a clip's thumbnail picks a slot out of `SCRUB_SLOTS`, or out of `SCRUB_SLOTS_FINE` with Ctrl held
+/// ("real-time" scrubbing); a decoded neighbour is shown while the exact frame is made; a frame still missing
+/// after `SCRUB_WAIT` gives up. Declared before porting, frozen in tests after verification.
+const SCRUB_SLOTS: u32 = 24;
+const SCRUB_SLOTS_FINE: u32 = 200;
+const SCRUB_NEAR: u32 = 12;
+const SCRUB_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// A run of numbered frames must reach this length before it is worth folding into one entry.
 const MIN_SEQUENCE_LEN: usize = 2;
@@ -38,14 +41,16 @@ struct Pane {
     wanted: Option<PathBuf>,
     /// Decoded picture, uploaded to wgpu: `(path, texture)`.
     preview: Option<(PathBuf, egui::TextureHandle)>,
-    /// File the pointer is over right now, which drives hover scrub.
+    /// File the pointer is over right now; drives hover scrub and resets its state on change.
     hover: Option<PathBuf>,
-    /// When the pointer settled on `hover`; the animation starts after `SCRUB_DELAY`.
-    scrub_at: std::time::Instant,
-    /// Last scrub slot asked for, so a stationary pointer asks once per slot.
-    scrub_slot: u32,
-    /// Newest hover frame, uploaded to wgpu: `(path, texture)`.
-    scrub_frame: Option<(PathBuf, egui::TextureHandle)>,
+    /// Slot the pointer's x picks, with its slot count: `(path, slot, slots)`.
+    scrub_target: Option<(PathBuf, u32, u32)>,
+    /// When the current target began; after `SCRUB_WAIT` stop asking for it (undecodable frame).
+    scrub_wait_until: std::time::Instant,
+    /// Decoded scrub frames for the hovered entry, by `(path, slot, slots)`.
+    scrub_frames: std::collections::HashMap<(PathBuf, u32, u32), egui::TextureHandle>,
+    /// The frame to draw, and the file it belongs to.
+    scrub_shown: Option<(PathBuf, egui::TextureHandle)>,
 }
 
 /// File-operation shortcuts, read once per frame and suppressed while a text field has focus.
@@ -126,9 +131,10 @@ impl Pane {
             wanted: None,
             preview: None,
             hover: None,
-            scrub_at: std::time::Instant::now(),
-            scrub_slot: u32::MAX,
-            scrub_frame: None,
+            scrub_target: None,
+            scrub_wait_until: std::time::Instant::now(),
+            scrub_frames: std::collections::HashMap::new(),
+            scrub_shown: None,
         }
     }
 }
@@ -384,23 +390,30 @@ impl App {
     fn poll_pictures(&mut self, ui: &mut egui::Ui) {
         for result in self.thumbs.poll() {
             if let Some(scrub) = result.scrub {
-                // A hover frame belongs to whichever pane is pointing at that file. These requests do not
-                // ride the thumbnail batch, so they neither count nor uncount `outstanding`.
-                let owner = self
-                    .panes
-                    .iter()
-                    .position(|pane| pane.hover.as_deref() == Some(result.path.as_path()));
-                if let (Some(index), Ok(image)) = (owner, result.image) {
-                    let color = egui::ColorImage::from_rgba_unmultiplied(
-                        [image.width as usize, image.height as usize],
-                        image.pixels.as_ref(),
-                    );
-                    let texture = ui.ctx().load_texture(
-                        format!("scrub{}", scrub.slot),
-                        color,
-                        egui::TextureOptions::LINEAR,
-                    );
-                    self.panes[index].scrub_frame = Some((result.path.clone(), texture));
+                // A hover frame belongs to the pane asking for that file. These requests do not ride the
+                // thumbnail batch, so they neither count nor uncount `outstanding`.
+                let owner = self.panes.iter().position(|pane| {
+                    pane.scrub_target
+                        .as_ref()
+                        .is_some_and(|(path, _, _)| path == &result.path)
+                });
+                match (owner, result.image) {
+                    (Some(index), Ok(image)) => {
+                        let color = egui::ColorImage::from_rgba_unmultiplied(
+                            [image.width as usize, image.height as usize],
+                            image.pixels.as_ref(),
+                        );
+                        let texture = ui.ctx().load_texture(
+                            format!("scrub{}of{}", scrub.slot, scrub.slots),
+                            color,
+                            egui::TextureOptions::LINEAR,
+                        );
+                        let key = (result.path.clone(), scrub.slot, scrub.slots);
+                        self.panes[index].scrub_frames.insert(key, texture.clone());
+                        self.panes[index].scrub_shown = Some((result.path.clone(), texture));
+                    }
+                    (Some(_), Err(err)) => self.status = format!("hover frame: {err}"),
+                    _ => {}
                 }
                 continue;
             }
@@ -450,16 +463,9 @@ impl App {
                     .as_ref()
                     .is_none_or(|(path, _)| Some(path.as_path()) != pane.wanted.as_deref())
         });
-        // Hovering animates only for clips; a still under the pointer must not drive frames forever.
-        let hovering = self.panes.iter().any(|pane| {
-            pane.hover.as_ref().is_some_and(|path| {
-                pane.entries.iter().any(|entry| {
-                    entry.path == *path
-                        && matches!(entry.kind, MediaKind::Video | MediaKind::Sequence)
-                })
-            })
-        });
-        if self.outstanding > 0 || pending || hovering {
+        // Hover frames schedule their own repaints (`scrub_at` asks every 30 ms while one is wanted), so
+        // this guard is only about the thumbnail and preview batch.
+        if self.outstanding > 0 || pending {
             if self.stall.elapsed() > std::time::Duration::from_secs(3) {
                 // The engine went silent about something we asked for: stop waiting instead of repainting
                 // every frame forever.
@@ -778,36 +784,82 @@ impl App {
         }
     }
 
-    /// Ask the engine for the scrub slot the pointer has reached while resting on an entry. Frames come
-    /// back through `poll_pictures`; nothing here blocks and a stationary pointer asks once per slot.
-    fn scrub_tick(&mut self) {
-        let now = std::time::Instant::now();
-        for index in 0..2 {
-            let Some(path) = self.panes[index].hover.clone() else {
-                continue;
-            };
-            if now.saturating_duration_since(self.panes[index].scrub_at) < SCRUB_DELAY {
-                continue;
-            }
-            let elapsed = now.saturating_duration_since(self.panes[index].scrub_at) - SCRUB_DELAY;
-            let slot = ((elapsed.as_millis() as u64 / SCRUB_STEP.as_millis() as u64)
-                % SCRUB_SLOTS as u64) as u32;
-            if self.panes[index].scrub_slot == slot {
-                continue;
-            }
-            let Some(entry) = self.panes[index]
-                .entries
-                .iter()
-                .find(|e| e.path == path)
-                .cloned()
-            else {
-                continue;
-            };
-            self.panes[index].scrub_slot = slot;
-            // The engine ignores non-scrubbable entries, so stills cost nothing to ask about.
-            let edge = self.settings.thumbnail_size.clamp(32, 512);
-            self.thumbs.request_scrub(&entry, edge, slot, SCRUB_SLOTS);
+    /// GalleryBrowser's hover scrub (crates/ui-egui/src/file_pane.rs:933): the pointer's x across the
+    /// thumbnail square picks a slot out of 24, or 200 with Ctrl held. The exact frame is used if we have it;
+    /// otherwise the engine is asked and a decoded neighbour shows while it is made. The chosen frame draws
+    /// next pass, because egui knows the pointer position before this pass lays anything out.
+    fn scrub_at(
+        &mut self,
+        ui: &mut egui::Ui,
+        index: usize,
+        entry: &Entry,
+        edge: u32,
+        pos: egui::Pos2,
+        thumb: egui::Rect,
+        fine: bool,
+    ) {
+        if !thumb.contains(pos) || !matches!(entry.kind, MediaKind::Video | MediaKind::Sequence) {
+            return;
         }
+        let slots = if fine { SCRUB_SLOTS_FINE } else { SCRUB_SLOTS };
+        let frac = ((pos.x - thumb.min.x) / thumb.width().max(1.0)).clamp(0.0, 1.0);
+        let slot = ((frac * slots as f32) as u32).min(slots - 1);
+        let pane = &mut self.panes[index];
+        let target = (entry.path.clone(), slot, slots);
+        if pane.scrub_target.as_ref() != Some(&target) {
+            pane.scrub_target = Some(target.clone());
+            pane.scrub_wait_until = std::time::Instant::now();
+        }
+        let key = (entry.path.clone(), slot, slots);
+        if let Some(tex) = pane.scrub_frames.get(&key) {
+            pane.scrub_shown = Some((entry.path.clone(), tex.clone()));
+            return;
+        }
+        if let Some(image) = self.thumbs.cached_scrub(entry, edge, slot, slots) {
+            let color = egui::ColorImage::from_rgba_unmultiplied(
+                [image.width as usize, image.height as usize],
+                image.pixels.as_ref(),
+            );
+            let texture = ui.ctx().load_texture(
+                format!("scrub{slot}of{slots}"),
+                color,
+                egui::TextureOptions::LINEAR,
+            );
+            pane.scrub_frames.insert(key, texture.clone());
+            pane.scrub_shown = Some((entry.path.clone(), texture));
+            return;
+        }
+        if pane.scrub_wait_until.elapsed() >= SCRUB_WAIT {
+            return; // an undecodable frame: stop asking, as GalleryBrowser gives up after 5s
+        }
+        self.thumbs.request_scrub(entry, edge, slot, slots);
+        // Show the nearest decoded frame meanwhile (GalleryBrowser searches SCRUB_NEAR neighbours).
+        for near in 1..=SCRUB_NEAR {
+            let below = slot.checked_sub(near);
+            let above = slot.checked_add(near).filter(|s| *s < slots);
+            let neighbour = below.into_iter().chain(above).find_map(|s| {
+                self.thumbs
+                    .cached_scrub(entry, edge, s, slots)
+                    .map(|image| (s, image))
+            });
+            if let Some((s, image)) = neighbour {
+                let color = egui::ColorImage::from_rgba_unmultiplied(
+                    [image.width as usize, image.height as usize],
+                    image.pixels.as_ref(),
+                );
+                let texture = ui.ctx().load_texture(
+                    format!("scrub{s}of{slots}"),
+                    color,
+                    egui::TextureOptions::LINEAR,
+                );
+                pane.scrub_frames
+                    .insert((entry.path.clone(), s, slots), texture.clone());
+                pane.scrub_shown = Some((entry.path.clone(), texture));
+                break;
+            }
+        }
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_millis(30));
     }
 
     /// Star the selected file 0-5. The catalog is keyed by path, so a rename follows the rating.
@@ -1114,44 +1166,67 @@ impl App {
     /// Grid view of one pane: engine thumbnails in rows that fit the column; double-click plays.
     fn pane_grid(&mut self, index: usize, ui: &mut egui::Ui) {
         // A cell wider than its column overflows the scroll area and cuts thumbnails mid-image.
-        let edge = (self.settings.thumbnail_size.clamp(32, 512) as f32)
-            .min((ui.available_width() - 12.0).max(48.0));
+        let edge_px = self.settings.thumbnail_size.clamp(32, 512);
+        let edge = (edge_px as f32).min((ui.available_width() - 12.0).max(48.0));
         let cell = edge + 12.0;
-        let cells: Vec<(String, PathBuf)> = self.panes[index]
-            .entries
-            .iter()
-            .map(|e| (e.name.clone(), e.path.clone()))
-            .collect();
+        let cells: Vec<Entry> = self.panes[index].entries.clone();
         let cols = ((ui.available_width() / cell).floor() as usize).max(1);
         let selected_now = self.panes[index].selected.clone();
+        // The pointer is known before layout runs, so this pass draws the frame `scrub_at` chose last pass.
+        let shown = self.panes[index]
+            .scrub_shown
+            .as_ref()
+            .map(|(path, tex)| (path.clone(), tex.id(), tex.size_vec2()));
+        let fine = ui.input(|i| i.modifiers.ctrl);
         let mut selected: Option<PathBuf> = None;
         let mut play: Option<PathBuf> = None;
         let mut hovered: Option<PathBuf> = None;
+        let mut scrub: Option<(Entry, egui::Pos2, egui::Rect)> = None;
         egui::ScrollArea::vertical()
             .id_salt(format!("grid{index}"))
             .auto_shrink(false)
             .show(ui, |ui| {
                 for row in cells.chunks(cols) {
                     ui.horizontal(|ui| {
-                        for (name, path) in row {
-                            let chosen = selected_now.as_deref() == Some(path.as_path());
+                        for entry in row {
+                            let chosen = selected_now.as_deref() == Some(entry.path.as_path());
                             ui.allocate_ui_with_layout(
                                 egui::vec2(cell, cell + 24.0),
                                 egui::Layout::top_down(egui::Align::Center),
                                 |ui| {
                                     let top = ui.cursor().min;
-                                    match self
-                                        .pictures
-                                        .get(path)
-                                        .map(|tex| (tex.id(), tex.size_vec2()))
-                                    {
+                                    // The cell's own rectangle: the allocation above is (cell, cell + 24).
+                                    let cell_rect = egui::Rect::from_min_size(
+                                        top,
+                                        egui::vec2(cell, cell + 24.0),
+                                    );
+                                    if chosen {
+                                        let tint = ui.visuals().selection.bg_fill;
+                                        ui.painter().rect_filled(cell_rect, 2.0, tint);
+                                    }
+                                    // A hover frame wins over the still thumbnail for this entry.
+                                    let picture = shown
+                                        .as_ref()
+                                        .filter(|(p, _, _)| p == &entry.path)
+                                        .map(|(_, id, px)| (*id, *px))
+                                        .or_else(|| {
+                                            self.pictures
+                                                .get(&entry.path)
+                                                .map(|tex| (tex.id(), tex.size_vec2()))
+                                        });
+                                    let mut thumb = egui::Rect::from_min_size(
+                                        top + egui::vec2((cell - edge) / 2.0, 0.0),
+                                        egui::vec2(edge, edge),
+                                    );
+                                    match picture {
                                         Some((id, px)) => {
                                             let scale =
                                                 (edge / px.x.max(1.0)).min(edge / px.y.max(1.0));
-                                            ui.image(egui::load::SizedTexture {
+                                            let resp = ui.image(egui::load::SizedTexture {
                                                 id,
                                                 size: px * scale,
                                             });
+                                            thumb = resp.rect;
                                         }
                                         None => {
                                             ui.allocate_space(egui::vec2(edge, edge));
@@ -1159,30 +1234,33 @@ impl App {
                                     }
                                     // Long names clip in a narrow pane, so elide them to the cell width.
                                     let budget = (cell / 7.0) as usize;
-                                    let head: String = name.chars().take(budget).collect();
-                                    let shown = if head.chars().count() < name.chars().count() {
+                                    let head: String = entry.name.chars().take(budget).collect();
+                                    let label = if head.chars().count() < entry.name.chars().count()
+                                    {
                                         format!("{head}\u{2026}")
                                     } else {
                                         head
                                     };
-                                    let response = ui.selectable_label(chosen, shown);
+                                    ui.label(label);
+                                    // One target for the whole cell: picture, name and the space between
+                                    // them select, play and hover.
+                                    let response = ui.interact(
+                                        cell_rect,
+                                        ui.id().with(("cell", entry.path.clone())),
+                                        egui::Sense::click().union(egui::Sense::hover()),
+                                    );
                                     if response.double_clicked() {
-                                        play = Some(path.clone());
+                                        play = Some(entry.path.clone());
                                     }
                                     if response.clicked() {
-                                        selected = Some(path.clone());
+                                        selected = Some(entry.path.clone());
                                     }
-                                    // The whole cell answers to hover, not just the name label.
-                                    let cell_rect = egui::Rect::from_two_pos(top, ui.cursor().min);
-                                    if ui
-                                        .interact(
-                                            cell_rect,
-                                            ui.id().with(("cell", path.clone())),
-                                            egui::Sense::hover(),
-                                        )
-                                        .hovered()
-                                    {
-                                        hovered = Some(path.clone());
+                                    if let Some(pos) = response.hover_pos() {
+                                        hovered = Some(entry.path.clone());
+                                        // Only the thumbnail square scrubs, as GalleryBrowser does.
+                                        if thumb.contains(pos) {
+                                            scrub = Some((entry.clone(), pos, thumb));
+                                        }
                                     }
                                 },
                             );
@@ -1191,6 +1269,9 @@ impl App {
                 }
             });
         self.finish(index, selected, play, hovered);
+        if let Some((entry, pos, thumb)) = scrub {
+            self.scrub_at(ui, index, &entry, edge_px, pos, thumb, fine);
+        }
     }
 
     /// Apply what a pane's rows reported: make it active, select, and play on double-click.
@@ -1207,14 +1288,13 @@ impl App {
         if let Some(path) = play {
             self.play(path);
         }
-        // Hover scrub restarts when the pointer lands on another file.
-        if hovered.is_some() && hovered != self.panes[index].hover {
-            self.panes[index].scrub_at = std::time::Instant::now();
-            self.panes[index].scrub_slot = u32::MAX;
-        }
-        // Leaving the grid drops the frame so the thumbnail shows again.
-        if hovered.is_none() {
-            self.panes[index].scrub_frame = None;
+        // Landing on another file resets scrub state; leaving the entry drops the frames so the thumbnail
+        // shows again. A frame belongs to one file, so a stale one must never stand in for another.
+        if hovered != self.panes[index].hover {
+            self.panes[index].scrub_target = None;
+            self.panes[index].scrub_wait_until = std::time::Instant::now();
+            self.panes[index].scrub_frames.clear();
+            self.panes[index].scrub_shown = None;
         }
         self.panes[index].hover = hovered;
     }
@@ -1232,6 +1312,13 @@ impl App {
                 pane.preview
                     .as_ref()
                     .filter(|(path, _)| Some(path.as_path()) == pane.wanted.as_deref())
+                    .map(|(_, tex)| (tex.id(), tex.size_vec2()))
+            })
+            // A hover frame is the most current picture we have of the file under the pointer.
+            .or_else(|| {
+                let pane = &self.panes[self.active];
+                pane.scrub_shown
+                    .as_ref()
                     .map(|(_, tex)| (tex.id(), tex.size_vec2()))
             });
         match picture {
@@ -1561,7 +1648,6 @@ impl eframe::App for App {
                 self.pane(0, ui);
             }
         });
-        self.scrub_tick();
         if self.settings_open {
             self.settings_window(ui);
         }
@@ -1575,6 +1661,7 @@ impl eframe::App for App {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
 
@@ -1824,44 +1911,133 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// Hovering a clip drives hover scrub: once the pointer has settled the app asks the engine for one
-    /// slot at a time, and the answer comes back tagged with that slot for the hovered file.
+    /// Hover scrub is GalleryBrowser's, not a playback loop: the pointer's x across a clip's thumbnail picks
+    /// the slot, and a decoded frame reaches the pane through the engine. Driven through egui's own input
+    /// pipeline because this layout maths has been wrong twice already.
     #[test]
-    fn hovering_a_video_makes_the_engine_answer_scrub_frames() {
+    fn hovering_a_clip_scrubs_by_pointer_position() {
+        use egui_kittest::Harness;
+
         let fixture =
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/scrub.mp4");
         assert!(fixture.is_file(), "the scrub fixture should be committed");
 
-        let dir = sandbox("hover", &[], &[]);
-        let target = dir.join("scrub.mp4");
-        let _ = std::fs::copy(&fixture, &target);
-        let mut app = App::with_cache(dir.clone(), sandbox("hover-cache", &[], &[]));
+        let dir = sandbox("scrub", &[], &[]);
+        let clip = dir.join("clip.mp4");
+        let _ = std::fs::copy(&fixture, &clip);
+
+        let mut app = App::with_cache(dir.clone(), sandbox("scrub-cache", &[], &[]));
+        app.settings.view_mode = ViewMode::Grid;
         app.navigate(0, &dir);
         assert_eq!(app.panes[0].entries.len(), 1, "the clip should be listed");
 
-        app.panes[0].hover = Some(target.clone());
-        let mut decoded = None;
-        for _ in 0..40 {
-            app.scrub_tick();
-            for result in app.thumbs.poll() {
-                if let Some(scrub) = result.scrub {
-                    assert_eq!(
-                        scrub.slots, SCRUB_SLOTS,
-                        "the answer names the slot count we asked for"
-                    );
-                    assert_eq!(result.path, target, "the answer is for the hovered file");
-                    decoded = Some(result.image.is_ok());
+        let mut harness = Harness::new_ui_state(
+            |ui, app| {
+                app.poll_pictures(ui);
+                app.pane(0, ui);
+            },
+            app,
+        );
+        harness.set_size(egui::vec2(900.0, 700.0));
+
+        // Sweep the pointer until some thumbnail square claims a scrub slot.
+        let mut pos: Option<egui::Pos2> = None;
+        'sweep: for row in 0..8 {
+            for col in 0..16 {
+                let p = egui::pos2(120.0 + col as f32 * 45.0, 60.0 + row as f32 * 35.0);
+                harness.input_mut().events = vec![egui::Event::PointerMoved(p)];
+                harness.run_steps(2);
+                if harness.state().panes[0].scrub_target.is_some() {
+                    pos = Some(p);
+                    break 'sweep;
                 }
             }
-            if decoded.is_some() {
+        }
+        let pos = pos.expect("pointing at the clip's thumbnail should choose a scrub slot");
+
+        // The engine decodes on its own threads, so keep making passes until a frame arrives.
+        let mut shown = false;
+        for _ in 0..60 {
+            harness.input_mut().events = vec![egui::Event::PointerMoved(pos)];
+            harness.run_steps(1);
+            if harness.state().panes[0].scrub_shown.is_some() {
+                shown = true;
                 break;
             }
-            std::thread::sleep(std::time::Duration::from_millis(50));
+            std::thread::sleep(std::time::Duration::from_millis(30));
         }
+
+        let target = harness.state().panes[0]
+            .scrub_target
+            .clone()
+            .expect("a scrub slot should still be chosen");
+        assert_eq!(target.0, clip, "the hovered clip owns the scrub target");
         assert_eq!(
-            decoded,
-            Some(true),
-            "the engine should decode a hover frame"
+            target.2, SCRUB_SLOTS,
+            "no Ctrl held means the coarse 24-slot division"
+        );
+        assert!(target.1 < target.2, "the slot is inside the division");
+        assert!(
+            shown,
+            "the engine should deliver a hover frame for the hovered slot"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The cell, not just its label, must answer to the pointer: resting on the thumbnail hovers the entry
+    /// (that is what drives hover scrub) and clicking it selects. This layout maths has been wrong twice, so
+    /// the test drives the real pane through egui's own input pipeline instead of trusting the arithmetic.
+    #[test]
+    fn resting_and_clicking_on_a_cell_targets_the_entry() {
+        use egui_kittest::Harness;
+
+        let dir = sandbox("cell", &["clip.mov"], &[]);
+        let mut app = App::with_cache(dir.clone(), sandbox("cell-cache", &[], &[]));
+        app.settings.view_mode = ViewMode::Grid;
+        let clip = dir.join("clip.mov");
+
+        let mut harness = Harness::new_ui_state(|ui, app| app.pane(0, ui), app);
+        harness.set_size(egui::vec2(900.0, 700.0));
+
+        // Sweep the pointer until something is hovered; scanning top-down means the first hit is in the
+        // picture band, not under the name label.
+        let mut hit: Option<egui::Pos2> = None;
+        'sweep: for row in 0..8 {
+            for col in 0..16 {
+                let pos = egui::pos2(120.0 + col as f32 * 45.0, 60.0 + row as f32 * 35.0);
+                harness.input_mut().events = vec![egui::Event::PointerMoved(pos)];
+                harness.run_steps(2);
+                if harness.state().panes[0].hover.as_deref() == Some(clip.as_path()) {
+                    hit = Some(pos);
+                    break 'sweep;
+                }
+            }
+        }
+        let pos = hit.unwrap_or_else(|| {
+            panic!(
+                "resting the pointer on the thumbnail should hover the entry, selected: {:?}",
+                harness.state().panes[0].selected
+            )
+        });
+
+        let press = |pressed: bool| {
+            vec![egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: Default::default(),
+            }]
+        };
+        harness.input_mut().events = press(true);
+        harness.run_steps(1);
+        harness.input_mut().events = press(false);
+        harness.run_steps(1);
+
+        assert_eq!(
+            harness.state().panes[0].selected.as_deref(),
+            Some(clip.as_path()),
+            "clicking the thumbnail should select the entry"
         );
 
         let _ = std::fs::remove_dir_all(&dir);
