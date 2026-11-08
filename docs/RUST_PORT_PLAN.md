@@ -300,8 +300,35 @@ defects that were then fixed). Test net added afterwards: `panes_are_independent
 pane 1 alone and makes pane 2 active); existing tests retargeted to pane state.
 egui 0.36 note: there is no `SidePanel`/`TopBottomPanel` — one `egui::Panel` with `left/right/top/bottom`
 ctors, `exact_size`/`default_size`/`resizable`, and `show_inside` is deprecated in favour of `show`.
-Still not there: moving/copying files between panes (double-click plays; drag/drop and the move commands are
-the next step), volume/mute UI, lazy folder tree, window size/HiDPI.
+Still not there: volume/mute UI, lazy folder tree.
+
+**Slice 8 (verified):** file operations through `gallerybrowser-fileops`, plus the layout work dual pane
+needed on a real half-screen tile. The app owns a `FileOpsWorker`; Ctrl+C/Ctrl+X stage the active pane's
+selection, Ctrl+V copies or moves it into that pane's folder with `ConflictPolicy::KeepBoth` (a numbered
+copy, never an overwrite), Delete sends it to the OS trash, F2 renames in place, Ctrl+Z / Ctrl+Y (or
+Shift+Ctrl+Z) undo and redo. Ops run on the engine's thread; finished ops rescan both panes, stop playback if
+the played file moved away, and report errors in the status bar, which also shows the clipboard and what
+`undo:` would give back. `--folder-secondary DIR` starts the second pane at its own folder (Qt's
+`last_folder_secondary`).
+
+Layout, because a tiled Hyprland window here is ~930 logical px wide on a 2x display: a nested
+`CentralPanel` inside a docked panel claims the whole parent rect, which starved pane 1 to **55 px** (probe
+readout `P1 w=55 h=960 e=14` vs `P2 w=525`) while screenshots at wide sizes looked fine. Pane columns are now
+allocated (`allocate_ui_with_layout`) rather than nested panels, the outer splitter keeps a draggable
+`Panel::right("pane2")` with its default capped so pane 1 keeps ~300 px, and each pane is an id scope with
+salted scroll areas (egui's `First/Second use of widget ID` warnings are gone). Long grid names elide to the
+cell width.
+
+Evidence, one short window at a time on this machine: rename via F2 + typed name + Enter produced exactly
+`renamed.png`, Ctrl+Z restored `up.png`; Delete moved the file to trash and Ctrl+Z brought it back; both
+panes render folders and engine thumbnails in a 929 px tiled window with no duplicate-id warnings
+(`validation_outputs/m1-slice8-narrow-fixed.png`, `m1-slice8-ids-fixed2.png`); stderr empty throughout.
+Tooling notes: `wtype -k Delete` delivers nothing for that key here — `wtype -P Delete -p Delete` does;
+modifier combos arrive fine (`-M ctrl -k z -m ctrl`). Tests added after verification drive the real worker:
+`copy_paste_and_undo_run_through_the_worker` (paste makes `up (1).png`, undo removes it) and
+`trash_undo_and_rename_are_reversible`.
+Still not there: multi-select (ops act on one selected entry), OS drag/drop, context menus / toolbar buttons
+for these commands, volume/mute UI, lazy folder tree.
 
 ## Non-goals
 

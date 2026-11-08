@@ -1,6 +1,6 @@
-//! Entry point. `kassetmanager [--theme dark|light|system] [--dual-pane] [folder|file]`: a file is
-//! selected in its parent folder **and played** (so `kassetmanager clip.mov` does what it looks like).
-//! With no path the app opens `~/Pictures`, then `$HOME`.
+//! Entry point. `kassetmanager [--theme dark|light|system] [--dual-pane] [--folder-secondary DIR]
+//! [folder|file]`: a file is selected in its parent folder **and played** (so `kassetmanager clip.mov`
+//! does what it looks like). With no path the app opens `~/Pictures`, then `$HOME`.
 
 mod app;
 
@@ -19,15 +19,23 @@ fn parse_theme(value: &str) -> Option<Theme> {
 }
 
 /// Where to start browsing, which file to select there, and any command-line overrides.
-fn start_point() -> (Option<Theme>, bool, PathBuf, Option<PathBuf>) {
+fn start_point() -> (
+    Option<Theme>,
+    bool,
+    Option<PathBuf>,
+    PathBuf,
+    Option<PathBuf>,
+) {
     let mut theme = None;
     let mut dual_pane = false;
+    let mut secondary = None;
     let mut positional: Vec<String> = Vec::new();
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--theme" => theme = args.next().as_deref().and_then(parse_theme),
             "--dual-pane" => dual_pane = true,
+            "--folder-secondary" => secondary = args.next().map(PathBuf::from),
             _ => {
                 if !arg.starts_with('-') {
                     positional.push(arg);
@@ -62,7 +70,7 @@ fn start_point() -> (Option<Theme>, bool, PathBuf, Option<PathBuf>) {
             file = Some(path);
         }
     }
-    (theme, dual_pane, folder, file)
+    (theme, dual_pane, secondary, folder, file)
 }
 
 fn main() {
@@ -80,11 +88,14 @@ fn main() {
         "KAsset Manager",
         native_options,
         Box::new(|_cc| {
-            let (theme, dual_pane, folder, file) = start_point();
+            let (theme, dual_pane, secondary, folder, file) = start_point();
             let mut app = app::App::new(folder);
             if let Some(file) = file {
                 app.select(file.clone());
                 app.play(file);
+            }
+            if let Some(dir) = secondary {
+                app.set_secondary(dir);
             }
             if dual_pane {
                 app.set_dual_pane(true);

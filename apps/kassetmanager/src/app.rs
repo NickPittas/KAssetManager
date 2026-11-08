@@ -1,6 +1,7 @@
-//! The egui application shell. Slice 7 of M1: the dual-pane browser — each pane is an independent folder
-//! view (breadcrumb, subfolder list, grid/list of engine thumbnails, selection and preview), and the app
-//! owns the shared parts: the engine [`gallerybrowser_media::Thumbnailer`], one
+//! The egui application shell. Slice 8 of M1: the dual-pane browser with file operations — each pane is
+//! an independent folder view (breadcrumb, subfolder list, grid/list of engine thumbnails, selection and
+//! preview), copy/cut/paste/trash/rename run through the engine's [`FileOpsWorker`] with undo/redo, and the
+//! app owns the shared parts: the engine [`gallerybrowser_media::Thumbnailer`], one
 //! [`gallerybrowser_player::Player`], settings, and the wgpu textures.
 
 use std::collections::HashMap;
@@ -10,6 +11,7 @@ use gallerybrowser_core::{
     AppDirs, Entry, ScanOptions, Settings, Theme, ViewMode, list_subfolders, scan_folder,
     sort_entries,
 };
+use gallerybrowser_fileops::{ConflictPolicy, FileOp, FileOpsWorker, OpEvent, OpOutcome};
 use gallerybrowser_media::{Thumbnailer, ThumbnailerConfig, Tick, frame_to_rgba, open};
 use gallerybrowser_player::Player;
 
@@ -31,6 +33,19 @@ struct Pane {
     preview: Option<(PathBuf, egui::TextureHandle)>,
 }
 
+/// File-operation shortcuts, read once per frame and suppressed while a text field has focus.
+#[derive(Default)]
+struct FileKeys {
+    settings: bool,
+    copy: bool,
+    cut: bool,
+    paste: bool,
+    undo: bool,
+    redo: bool,
+    trash: bool,
+    rename: bool,
+}
+
 /// One `App` per window: two panes (the second only when `dual_pane` is on) plus the shared engine
 /// plumbing.
 pub struct App {
@@ -49,6 +64,17 @@ pub struct App {
     player: Player,
     /// The file loaded in the player.
     playing: Option<PathBuf>,
+    /// File operations run on their own thread with undo/redo history (engine `fileops`).
+    ops: FileOpsWorker,
+    /// Path to paste into a pane, and whether the source should move (cut) rather than stay (copy).
+    clipboard: Option<(PathBuf, bool)>,
+    /// Rename box state for the active pane's selection.
+    renaming: bool,
+    rename_buffer: String,
+    /// Set once when the rename box opens, so its text field takes the keyboard.
+    rename_focus: bool,
+    /// Readout of the op in flight, shown until it finishes.
+    op_progress: String,
     /// Latest decoded video frame, uploaded (only while something is loaded).
     frame: Option<egui::TextureHandle>,
     /// Engine data directories; `None` in tests so nothing is written outside the project.
@@ -108,6 +134,12 @@ impl App {
             player: Player::new(64 << 20),
             playing: None,
             frame: None,
+            ops: FileOpsWorker::new(),
+            clipboard: None,
+            renaming: false,
+            rename_buffer: String::new(),
+            rename_focus: false,
+            op_progress: String::new(),
             dirs,
             settings_open: false,
             theme_applied: None,
@@ -334,6 +366,168 @@ impl App {
         }
     }
 
+    /// Put the second pane at `dir` (Qt restores `Settings::last_folder_secondary`).
+    pub fn set_secondary(&mut self, dir: PathBuf) {
+        self.panes[1].path = dir;
+        if self.settings.dual_pane {
+            self.open(1);
+        }
+    }
+
+    // --- File operations: the engine runs them on its own thread and remembers them for undo. ------
+
+    /// The active pane's selection — what copy, cut, delete and rename act on.
+    fn target(&self) -> Option<PathBuf> {
+        self.panes[self.active].selected.clone()
+    }
+
+    /// Ctrl+C / Ctrl+X: remember the selection as a copy or a cut.
+    pub fn copy_selection(&mut self, cut: bool) {
+        if let Some(path) = self.target() {
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            self.clipboard = Some((path, cut));
+            self.status = format!("{}{name}", if cut { "cut: " } else { "copied: " });
+        }
+    }
+
+    /// Ctrl+V: copy or move the clipboard path into the active pane's folder. Collisions get a numbered
+    /// name (`KeepBoth`), never an overwrite.
+    pub fn paste(&mut self) {
+        let Some((source, cut)) = self.clipboard.clone() else {
+            return;
+        };
+        let dest_dir = self.panes[self.active].path.clone();
+        self.ops.submit(if cut {
+            FileOp::Move {
+                sources: vec![source],
+                dest_dir,
+                conflict: ConflictPolicy::KeepBoth,
+            }
+        } else {
+            FileOp::Copy {
+                sources: vec![source],
+                dest_dir,
+                conflict: ConflictPolicy::KeepBoth,
+            }
+        });
+    }
+
+    /// Delete key: send the selection to the OS trash (undoable).
+    pub fn trash_selection(&mut self) {
+        if let Some(path) = self.target() {
+            self.ops.submit(FileOp::Trash { paths: vec![path] });
+        }
+    }
+
+    /// F2: open the rename box for the selection. It starts empty — the current name is shown above the
+    /// field, so typing gives the new name without editing the old one.
+    pub fn start_rename(&mut self) {
+        if self.target().is_some() {
+            self.rename_buffer = String::new();
+            self.renaming = true;
+            self.rename_focus = true;
+        }
+    }
+
+    /// Apply the rename: same folder, new name. The engine refuses to overwrite an existing target.
+    pub fn apply_rename(&mut self) {
+        let Some(from) = self.target() else {
+            self.renaming = false;
+            return;
+        };
+        let to = self.panes[self.active].path.join(self.rename_buffer.trim());
+        self.renaming = false;
+        if to == from || self.rename_buffer.trim().is_empty() {
+            return;
+        }
+        self.ops.submit(FileOp::Rename { from, to });
+    }
+
+    /// Move finished file operations into view: rescan the panes and report what went wrong. Called every
+    /// frame.
+    fn poll_ops(&mut self) {
+        let mut finished: Option<OpOutcome> = None;
+        for event in self.ops.poll() {
+            match event {
+                OpEvent::Progress {
+                    done,
+                    total,
+                    current,
+                    ..
+                } => {
+                    let name = current
+                        .as_ref()
+                        .and_then(|p| p.file_name())
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    self.op_progress = format!("{done}/{total} {name}");
+                }
+                OpEvent::Finished(outcome) => finished = Some(outcome),
+            }
+        }
+        let Some(outcome) = finished else { return };
+        self.op_progress.clear();
+        if outcome
+            .moved
+            .iter()
+            .any(|(from, _)| Some(from.as_path()) == self.playing.as_deref())
+            || outcome
+                .removed
+                .iter()
+                .any(|p| Some(p) == self.playing.as_ref())
+        {
+            self.stop_playback();
+        }
+        let errors = outcome
+            .errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join("; ");
+        for index in 0..2 {
+            self.open(index);
+        }
+        self.status = errors;
+    }
+
+    /// The rename box for the active pane's selection: Enter or the button applies it.
+    pub fn rename_window(&mut self, ui: &mut egui::Ui) {
+        let mut apply = false;
+        let current = self
+            .target()
+            .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+            .unwrap_or_default();
+        egui::Window::new("Rename")
+            .collapsible(false)
+            .resizable(false)
+            .show(ui, |ui| {
+                ui.label(current);
+                let response = ui
+                    .add(egui::TextEdit::singleline(&mut self.rename_buffer).desired_width(240.0));
+                if self.rename_focus {
+                    response.request_focus();
+                    self.rename_focus = false;
+                }
+                ui.horizontal(|ui| {
+                    if ui.button("Rename").clicked() {
+                        apply = true;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        self.renaming = false;
+                    }
+                });
+                if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    apply = true;
+                }
+            });
+        if apply {
+            self.apply_rename();
+        }
+    }
+
     /// Theme name for the settings controls.
     fn theme_label(theme: Theme) -> &'static str {
         match theme {
@@ -344,15 +538,36 @@ impl App {
     }
 
     /// One pane column: breadcrumb, then its subfolder list beside its entries.
+    /// One pane column: breadcrumb, then its subfolder list beside its entries.
+    ///
+    /// Columns are laid out by allocation, not nested panels: a `CentralPanel` inside a docked panel
+    /// claims the whole parent rect and starved the first pane to ~55px on a half-screen HiDPI tile.
     fn pane(&mut self, index: usize, ui: &mut egui::Ui) {
-        ui.vertical(|ui| {
-            self.pane_path_bar(index, ui);
-            egui::Panel::left(format!("folders{index}"))
-                .exact_size(150.0)
-                .show(ui, |ui| self.pane_folders(index, ui));
-            egui::CentralPanel::default().show(ui, |ui| match self.settings.view_mode {
-                ViewMode::Grid => self.pane_grid(index, ui),
-                ViewMode::List => self.pane_list(index, ui),
+        // Each pane is its own id scope, or the two panes' scroll areas and rows share ids and egui
+        // complains about duplicate widget use (and clicks cross panes).
+        ui.push_id(index, |ui| {
+            ui.vertical(|ui| {
+                self.pane_path_bar(index, ui);
+                let height = ui.available_height();
+                // ponytail: folders width is a fraction with floors; make it draggable if users want it.
+                ui.horizontal(|ui| {
+                    let folders_width = (ui.available_width() * 0.32).clamp(80.0, 150.0);
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(folders_width, height),
+                        egui::Layout::top_down(egui::Align::LEFT),
+                        |ui| self.pane_folders(index, ui),
+                    );
+                    ui.separator();
+                    let entries_width = (ui.available_width() - 8.0).max(120.0);
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(entries_width, height),
+                        egui::Layout::top_down(egui::Align::LEFT),
+                        |ui| match self.settings.view_mode {
+                            ViewMode::Grid => self.pane_grid(index, ui),
+                            ViewMode::List => self.pane_list(index, ui),
+                        },
+                    );
+                });
             });
         });
     }
@@ -377,22 +592,24 @@ impl App {
             .collect();
         let mut target: Option<PathBuf> = None;
         // Breadcrumbs outlive narrow panes, so let them scroll instead of clipping.
-        egui::ScrollArea::horizontal().show(ui, |ui| {
-            ui.horizontal(|ui| {
-                if ui.button("\u{2b06} up").clicked() {
-                    target = self.panes[index].path.parent().map(Path::to_path_buf);
-                }
-                ui.separator();
-                for (position, (name, path)) in segments.iter().enumerate() {
-                    if ui.button(name).clicked() {
-                        target = Some(path.clone());
+        egui::ScrollArea::horizontal()
+            .id_salt(format!("path{index}"))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    if ui.button("\u{2b06} up").clicked() {
+                        target = self.panes[index].path.parent().map(Path::to_path_buf);
                     }
-                    if position + 1 < segments.len() {
-                        ui.label("/");
+                    ui.separator();
+                    for (position, (name, path)) in segments.iter().enumerate() {
+                        if ui.button(name).clicked() {
+                            target = Some(path.clone());
+                        }
+                        if position + 1 < segments.len() {
+                            ui.label("/");
+                        }
                     }
-                }
+                });
             });
-        });
         if let Some(target) = target {
             self.navigate(index, &target);
         }
@@ -413,13 +630,15 @@ impl App {
             })
             .collect();
         let mut target: Option<PathBuf> = None;
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            for (name, path) in &folders {
-                if ui.selectable_label(false, name).clicked() {
-                    target = Some(path.clone());
+        egui::ScrollArea::vertical()
+            .id_salt(format!("folders{index}"))
+            .show(ui, |ui| {
+                for (name, path) in &folders {
+                    if ui.selectable_label(false, name).clicked() {
+                        target = Some(path.clone());
+                    }
                 }
-            }
-        });
+            });
         if let Some(target) = target {
             self.navigate(index, &target);
         }
@@ -436,6 +655,7 @@ impl App {
         let mut selected: Option<PathBuf> = None;
         let mut play: Option<PathBuf> = None;
         egui::ScrollArea::vertical()
+            .id_salt(format!("list{index}"))
             .auto_shrink(false)
             .show(ui, |ui| {
                 for (name, path) in &names {
@@ -466,6 +686,7 @@ impl App {
         let mut selected: Option<PathBuf> = None;
         let mut play: Option<PathBuf> = None;
         egui::ScrollArea::vertical()
+            .id_salt(format!("grid{index}"))
             .auto_shrink(false)
             .show(ui, |ui| {
                 for row in cells.chunks(cols) {
@@ -493,7 +714,15 @@ impl App {
                                             ui.allocate_space(egui::vec2(edge, edge));
                                         }
                                     }
-                                    let response = ui.selectable_label(chosen, name);
+                                    // Long names clip in a narrow pane, so elide them to the cell width.
+                                    let budget = (cell / 7.0) as usize;
+                                    let head: String = name.chars().take(budget).collect();
+                                    let shown = if head.chars().count() < name.chars().count() {
+                                        format!("{head}\u{2026}")
+                                    } else {
+                                        head
+                                    };
+                                    let response = ui.selectable_label(chosen, shown);
                                     if response.double_clicked() {
                                         play = Some(path.clone());
                                     }
@@ -619,6 +848,27 @@ impl App {
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_default(),
             );
+        }
+        if let Some((path, cut)) = &self.clipboard {
+            ui.separator();
+            ui.label(format!(
+                "{}{}",
+                if *cut { "cut: " } else { "copied: " },
+                path.file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default()
+            ));
+        }
+        if !self.op_progress.is_empty() {
+            ui.separator();
+            ui.label(self.op_progress.clone());
+        } else if self.ops.can_undo() {
+            // The user should see what Ctrl+Z gives back before pressing it.
+            ui.separator();
+            ui.label(format!(
+                "undo: {}",
+                self.ops.undo_label().unwrap_or_default()
+            ));
         }
         if !self.status.is_empty() {
             ui.separator();
@@ -747,23 +997,74 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.poll_pictures(ui);
         self.pump_player(ui);
+        self.poll_ops();
+        if self.ops.busy() {
+            // ponytail: poll while an op runs; event-driven wakeups when the engine can notify us.
+            ui.ctx().request_repaint();
+        }
         self.apply_theme(ui.ctx());
-        // ponytail: plain letter shortcuts; ignore them while a text field has focus once there is one.
-        if ui.input(|i| i.key_pressed(egui::Key::S)) {
+        // Shortcuts are off only while the rename box is open and its field holds the keyboard.
+        let keys = if self.renaming {
+            FileKeys::default()
+        } else {
+            ui.input(|i| {
+                let m = i.modifiers.command;
+                let shift = i.modifiers.shift;
+                FileKeys {
+                    settings: i.key_pressed(egui::Key::S) && !m,
+                    copy: i.key_pressed(egui::Key::C) && m && !shift,
+                    cut: i.key_pressed(egui::Key::X) && m,
+                    paste: i.key_pressed(egui::Key::V) && m,
+                    undo: i.key_pressed(egui::Key::Z) && m && !shift,
+                    redo: i.key_pressed(egui::Key::Y) && m
+                        || i.key_pressed(egui::Key::Z) && m && shift,
+                    trash: i.key_pressed(egui::Key::Delete),
+                    rename: i.key_pressed(egui::Key::F2),
+                }
+            })
+        };
+        if keys.settings {
             self.settings_open = !self.settings_open;
+        }
+        if keys.copy {
+            self.copy_selection(false);
+        }
+        if keys.cut {
+            self.copy_selection(true);
+        }
+        if keys.paste {
+            self.paste();
+        }
+        if keys.trash {
+            self.trash_selection();
+        }
+        if keys.undo {
+            self.ops.undo();
+        }
+        if keys.redo {
+            self.ops.redo();
+        }
+        if keys.rename {
+            self.start_rename();
         }
         egui::Panel::top("app_bar").show(ui, |ui| self.app_bar(ui));
         egui::Panel::bottom("status_bar").show(ui, |ui| {
             ui.horizontal(|ui| self.status_bar(ui));
         });
-        egui::Panel::right("preview").show(ui, |ui| self.preview(ui));
+        egui::Panel::right("preview")
+            .resizable(true)
+            .size_range(180.0..=460.0)
+            .default_size(300.0)
+            .show(ui, |ui| self.preview(ui));
         let panes = self.settings.dual_pane;
         egui::CentralPanel::default().show(ui, |ui| {
             if panes {
                 // The second pane docks to the right of the first with a draggable splitter, like Qt.
+                let available = ui.available_width();
                 egui::Panel::right("pane2")
                     .resizable(true)
-                    .default_size((ui.available_width() / 2.0).max(320.0))
+                    .min_size(240.0)
+                    .default_size((available / 2.0).clamp(240.0, (available - 300.0).max(240.0)))
                     .show(ui, |ui| self.pane(1, ui));
                 egui::CentralPanel::default().show(ui, |ui| self.pane(0, ui));
             } else {
@@ -772,6 +1073,9 @@ impl eframe::App for App {
         });
         if self.settings_open {
             self.settings_window(ui);
+        }
+        if self.renaming {
+            self.rename_window(ui);
         }
     }
 }
@@ -932,6 +1236,85 @@ mod tests {
             3,
             "both filters on lists all three files"
         );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Wait (bounded) for the engine worker to report a finished op; then check whether `name` is in
+    /// `dir` as expected. False if the worker never answers.
+    fn settle(app: &mut App, dir: &Path, name: &str, present: bool) -> bool {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            for event in app.ops.poll() {
+                if let OpEvent::Finished(_) = event {
+                    return dir.join(name).exists() == present;
+                }
+            }
+            if std::time::Instant::now() > deadline {
+                return false;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+
+    /// Copy, paste and undo go through the engine worker: a paste makes a numbered copy (never an
+    /// overwrite) and undo removes it again.
+    #[test]
+    fn copy_paste_and_undo_run_through_the_worker() {
+        let dir = sandbox("ops-copy", &["up.png"], &[]);
+        let mut app = App::with_cache(dir.clone(), sandbox("ops-copy-cache", &[], &[]));
+
+        app.select(dir.join("up.png"));
+        assert_eq!(app.target().as_deref(), Some(dir.join("up.png").as_path()));
+        app.copy_selection(false);
+        assert_eq!(
+            app.clipboard.as_ref().map(|(p, cut)| (p.clone(), *cut)),
+            Some((dir.join("up.png"), false)),
+            "the selection is remembered as a copy"
+        );
+
+        app.paste();
+        assert!(
+            settle(&mut app, &dir, "up (1).png", true),
+            "paste made a numbered copy (status: {})",
+            app.status
+        );
+        app.ops.undo();
+        assert!(
+            settle(&mut app, &dir, "up (1).png", false),
+            "undo removed the copy"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Delete sends the selection to the OS trash and undo restores it; rename moves the file in place.
+    #[test]
+    fn trash_undo_and_rename_are_reversible() {
+        let dir = sandbox("ops-trash", &["gone.png"], &[]);
+        let mut app = App::with_cache(dir.clone(), sandbox("ops-trash-cache", &[], &[]));
+
+        app.select(dir.join("gone.png"));
+        app.trash_selection();
+        assert!(
+            settle(&mut app, &dir, "gone.png", false),
+            "the file left the folder (status: {})",
+            app.status
+        );
+        app.ops.undo();
+        assert!(
+            settle(&mut app, &dir, "gone.png", true),
+            "undo restored it from trash"
+        );
+
+        app.rename_buffer = "renamed.png".into();
+        app.apply_rename();
+        assert!(
+            settle(&mut app, &dir, "renamed.png", true),
+            "the file was renamed in place (status: {})",
+            app.status
+        );
+        assert!(!dir.join("gone.png").exists(), "the old name is gone");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
