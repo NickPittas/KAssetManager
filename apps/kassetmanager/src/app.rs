@@ -13,7 +13,9 @@ use gallerybrowser_core::{
 };
 use gallerybrowser_fileops::{ConflictPolicy, FileOp, FileOpsWorker, OpEvent, OpOutcome};
 use gallerybrowser_library::Library;
-use gallerybrowser_media::{Thumbnailer, ThumbnailerConfig, Tick, frame_to_rgba, open};
+use gallerybrowser_media::{
+    MediaMetadata, MetadataWorker, Thumbnailer, ThumbnailerConfig, Tick, frame_to_rgba, open,
+};
 use gallerybrowser_player::Player;
 
 /// A path written as a `file:` URI, the shape a file manager expects off the clipboard. Only the characters
@@ -354,6 +356,16 @@ pub struct App {
     /// Engine settings; drives view mode, thumbnail size, filters and theme.
     settings: Settings,
     thumbs: Thumbnailer,
+    /// Header facts about the selected file, probed off the UI thread. One probe serves the active pane's selection,
+    /// because that is the only file a preview describes; the engine drops a stale answer when a newer one is asked
+    /// for, so switching panes cannot leave the previous pane's numbers on screen.
+    meta: MetadataWorker,
+    /// What was last asked for, so a stable selection does not re-probe every frame.
+    meta_for: Option<PathBuf>,
+    /// The answer, and which file it belongs to. Until it arrives the facts say what was *shown* rather than what
+    /// the file is, because a preview decode is capped at `PREVIEW_EDGE`.
+    metadata: Option<MediaMetadata>,
+    meta_path: Option<PathBuf>,
     /// Uploaded thumbnails by entry path (shared by both panes).
     /// Decoded thumbnails already uploaded to wgpu, keyed by the size they were asked for. Two panes can show the
     /// same folder at 64 px and 256 px; one texture per path would let whichever decode finished last decide what
@@ -475,28 +487,40 @@ pub struct App {
 }
 
 /// The lines under a preview: what kind of file it is, how big, when it changed, and how much of it there is.
-/// A sequence says how many frames stand in for its files; a single picture says the size it was shown at, because
-/// the panel scales to fit and decodes at the preview edge - the file's own dimensions are metadata's to give.
+/// A sequence says how many frames stand in for its files. Sizes come from the engine's probe of the file itself;
+/// until that answers, the line says "shown" and reports the preview decode, which is capped at `PREVIEW_EDGE`.
 fn preview_fact_lines(
     entry: &Entry,
     kind: &str,
     shown: Option<egui::Vec2>,
     state: &gallerybrowser_player::PlayerState,
     frame_is_this: bool,
+    meta: Option<&MediaMetadata>,
 ) -> Vec<String> {
     let mut facts = vec![format!("{kind} - {}", format_size(entry.size))];
     if entry.modified.is_some() {
         facts.push(format!("Modified {}", date_label(entry.modified)));
     }
-    match &entry.sequence {
-        Some(seq) => facts.push(format!("{} frames", seq.frames.len())),
-        // The picture on screen is a decode at the preview edge, not the file: a 4000 px photo arrives as an image
-        // of at most `PREVIEW_EDGE` across, so this says what was shown. True dimensions come with the engine's own
-        // metadata probe (`crates/media/src/metadata.rs`), which is the next thing to wire in.
+    if let Some(seq) = &entry.sequence {
+        facts.push(format!("{} frames", seq.frames.len()));
+    }
+    // The file's own numbers when the probe has them - a sequence of frames has a frame size too. A preview decode
+    // is capped at `PREVIEW_EDGE`, so until the probe answers the line says what was *shown*, and a sequence has no
+    // single picture to have been shown.
+    match meta.and_then(|m| m.width.zip(m.height)) {
+        Some((w, h)) => facts.push(format!("{w} x {h} px")),
         None => {
-            if let Some(px) = shown {
+            if let (Some(px), None) = (shown, &entry.sequence) {
                 facts.push(format!("shown {} x {} px", px.x as i64, px.y as i64));
             }
+        }
+    }
+    // How long the file is, from its header: length and rate do not change with where you happen to be watching.
+    if let Some(m) = meta {
+        if let (Some(secs), Some(fps)) = (m.duration_secs, m.frame_rate) {
+            facts.push(format!("{secs:.1}s @ {fps:.0} fps"));
+        } else if let Some(secs) = m.duration_secs {
+            facts.push(format!("{secs:.1}s"));
         }
     }
     if frame_is_this && state.loaded && state.frame_count > 0 {
@@ -944,6 +968,10 @@ impl App {
             status: String::new(),
             settings,
             thumbs,
+            meta: MetadataWorker::new(),
+            meta_for: None,
+            metadata: None,
+            meta_path: None,
             pictures: HashMap::new(),
             outstanding: 0,
             player: Player::new(64 << 20),
@@ -1315,6 +1343,34 @@ impl App {
     pub fn stop_playback(&mut self) {
         self.player.seek(Tick::from_seconds_f64(0.0));
         self.player.pause();
+    }
+
+    /// Ask for and collect the selected file's own metadata. The engine probes one entry at a time and answers only
+    /// the newest request, so this fires once per selection change - not per frame - and a fast click through four
+    /// files cannot end up showing the first file's numbers.
+    fn poll_metadata(&mut self, ui: &mut egui::Ui) {
+        let index = self.active;
+        let selected = self.panes[index].primary().map(Path::to_path_buf);
+        let wanted = selected
+            .as_deref()
+            .filter(|path| !self.panes[index].dir_paths.contains(*path));
+        if self.meta_for.as_deref() != wanted {
+            self.meta_for = wanted.map(Path::to_path_buf);
+            self.metadata = None;
+            self.meta_path = None;
+            let Some(entry) =
+                wanted.and_then(|path| self.panes[index].entries.iter().find(|e| e.path == path))
+            else {
+                return;
+            };
+            self.meta.request(entry);
+        }
+        if let Some(meta) = self.meta.poll() {
+            // The answer names the file it probed, and a preview only ever states facts about that file.
+            self.meta_path = Some(meta.path.clone());
+            self.metadata = Some(meta);
+            ui.ctx().request_repaint();
+        }
     }
 
     /// Move finished pictures from the engine into wgpu textures. Called every frame.
@@ -3501,7 +3557,18 @@ impl App {
         // A paused clip stays loaded when you select a still beside it, so the player's frame position only
         // describes this selection while the file the player holds is the selected one.
         let frame_is_this = self.playing.as_deref() == Some(path.as_path());
-        let facts = preview_fact_lines(entry, &kind, shown, &self.player.state(), frame_is_this);
+        let meta = match self.meta_path.as_deref() {
+            Some(p) if p == path => self.metadata.as_ref(),
+            _ => None,
+        };
+        let facts = preview_fact_lines(
+            entry,
+            &kind,
+            shown,
+            &self.player.state(),
+            frame_is_this,
+            meta,
+        );
         // A long name or date does not wrap into a second line here: you scroll to the end of a fact.
         // Only the sideways axis may expand here: a scroll area that will not shrink vertically takes every pixel
         // of height it is given, and the lines under the picture vanish below the fold.
@@ -4348,6 +4415,7 @@ impl eframe::App for App {
     /// egui 0.36 hands the app a root `Ui` (not a `Context`); panels are shown on it.
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.poll_pictures(ui);
+        self.poll_metadata(ui);
         self.pump_player(ui);
         self.poll_ops();
         if self.ops.busy() {
@@ -5209,6 +5277,7 @@ mod tests {
             Some(egui::vec2(640.0, 360.0)),
             &state,
             true,
+            None,
         );
         assert_eq!(
             lines,
@@ -5226,6 +5295,7 @@ mod tests {
             Some(egui::vec2(640.0, 360.0)),
             &state,
             false,
+            None,
         );
         assert_eq!(
             lines,
@@ -5267,9 +5337,31 @@ mod tests {
             Some(egui::vec2(640.0, 360.0)),
             &state,
             true,
+            None,
         );
         assert_eq!(lines.last().map(String::as_str), Some("3 frames"));
         assert!(!lines.iter().any(|l| l.contains("px")), "{lines:?}");
+
+        // Once the probe answers, the file's own dimensions replace the stand-in and its length is stated too.
+        let meta = MediaMetadata {
+            path: entry.path.clone(),
+            width: Some(400),
+            height: Some(1400),
+            duration_secs: Some(5.5),
+            frame_rate: Some(24.0),
+            ..Default::default()
+        };
+        let lines = preview_fact_lines(
+            &entry,
+            "Sequence",
+            Some(egui::vec2(640.0, 360.0)),
+            &state,
+            true,
+            Some(&meta),
+        );
+        assert!(lines.contains(&String::from("400 x 1400 px")), "{lines:?}");
+        assert!(!lines.iter().any(|l| l.starts_with("shown")), "{lines:?}");
+        assert_eq!(lines.last().map(String::as_str), Some("5.5s @ 24 fps"));
     }
 
     #[test]
