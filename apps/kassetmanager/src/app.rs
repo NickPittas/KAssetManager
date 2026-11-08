@@ -591,16 +591,44 @@ fn path_bar_action(enter: bool, escape: bool, has_focus: bool, lost_focus: bool)
     PathBarAction::Idle
 }
 
+/// How a grid shares its pane: columns counted from the thumbnail size you asked for, then each cell takes its
+/// share of the width and no more. Counting and sizing are one function because they have to agree - if the count
+/// allows five columns but the cells are floored at six times their width, the rightmost column is drawn past the
+/// pane's edge with nothing to scroll sideways to. A pane too narrow for the requested size still shows two
+/// columns rather than one tile the width of the pane.
+fn grid_layout(avail_w: f32, spacing_x: f32, edge_px: u32) -> (usize, f32) {
+    let wanted = (edge_px as f32) + 12.0;
+    let mut cols = (((avail_w + spacing_x) / (wanted + spacing_x)).floor() as usize).max(1);
+    if cols == 1 && avail_w >= 96.0 {
+        cols = 2;
+    }
+    let cell = ((avail_w - (cols as f32 - 1.0) * spacing_x) / cols as f32)
+        .min(wanted)
+        .max(40.0);
+    (cols, cell)
+}
+
+/// Where a row sits vertically when only part of a long listing is drawn: the top of the first drawn row plus its
+/// share of the pitch egui's `show_rows` reserves, which is the row height **plus** item spacing - 23 px for a
+/// 20 px row in the default style, not 20. Screen coordinates, because that is what `Ui::scroll_to_rect` reads;
+/// content-relative y would be off by the listing's own position on screen.
+fn row_top(first_drawn_top: f32, row: usize, drawn_first: usize, pitch: f32) -> f32 {
+    first_drawn_top + (row as f32 - drawn_first as f32) * pitch
+}
+
 /// Bring a row into view when it is not drawn. A long listing does not build every row each frame, so a jump -
-/// Home, End, or one step past the bottom edge - tells the view where to go by the row's virtual position, since
-/// the response that would normally scroll to it does not exist this frame.
-fn scroll_to_row_index(ui: &egui::Ui, row: usize, row_h: f32, drawn: std::ops::Range<usize>) {
+/// Home, End, or one step past the bottom edge - tells the view where to go by the row's position, since the
+/// response that would normally scroll to it does not exist this frame.
+fn scroll_to_row_index(ui: &egui::Ui, row: usize, drawn: std::ops::Range<usize>, pitch: f32) {
     if drawn.contains(&row) {
         return;
     }
-    let y = row as f32 * row_h;
+    let top = row_top(ui.cursor().top(), row, drawn.start, pitch);
+    // Horizontal position is left alone: x is where the listing already is, so a vertical jump does not also drag
+    // a wide table sideways.
+    let x = ui.cursor().left();
     ui.scroll_to_rect(
-        egui::Rect::from_min_size(egui::pos2(0.0, y), egui::vec2(1.0, row_h.max(1.0))),
+        egui::Rect::from_min_size(egui::pos2(x, top), egui::vec2(1.0, pitch.max(1.0))),
         Some(egui::Align::Center),
     );
 }
@@ -2773,22 +2801,27 @@ impl App {
             .id_salt(format!("list{index}"))
             .auto_shrink([false, false])
             .show_rows(ui, ROW_H, rows.len(), |ui, range| {
+                let pitch = ROW_H + ui.spacing().item_spacing.y;
                 if let Some(target) = self.panes[index].scroll_target.as_ref()
                     && let Some(row) = rows.iter().position(|(entry, _)| entry.path == *target)
                 {
-                    scroll_to_row_index(ui, row, ROW_H, range.clone());
+                    scroll_to_row_index(ui, row, range.clone(), pitch);
                 }
                 for (entry, is_dir) in rows[range.clone()].iter() {
                     let path = entry.path.clone();
                     let chosen = self.panes[index].is_selected(&path);
                     // One rect per row is the click target for the whole row - cells included, so a click
                     // anywhere on the row selects it. It spans the table's width, not just what fits.
-                    let (rect, row) = ui.allocate_exact_size(
+                    let rect = egui::Rect::from_min_size(
+                        ui.cursor().min,
                         egui::vec2(table_width.max(ui.available_width()), ROW_H),
-                        // Rows sense drags too: a row is what you grab to carry files to the other pane. The drag
-                        // state belongs to the row, so releasing over another listing is what makes it an op.
-                        egui::Sense::click_and_drag(),
                     );
+                    // Rows sense drags too: a row is what you grab to carry files to the other pane. The drag
+                    // state belongs to the row, so releasing over another listing is what makes it an op.
+                    // The id rides the path rather than egui's auto-increment counter: only part of a long listing
+                    // is drawn, so a counter would move every row's identity as the window slides and drop an open
+                    // context menu mid-click.
+                    let row = ui.interact(rect, ui.id().with(&path), egui::Sense::click_and_drag());
                     self.publish_drag(ui, &row, index, &path);
                     if self.panes[index].scroll_target.as_deref() == Some(path.as_path()) {
                         // Keyboard movement has to keep its item on screen, and the row's own rect is where
@@ -2836,6 +2869,9 @@ impl App {
                         self.select_in(index, path.clone(), false);
                     }
                     row.context_menu(|ui| self.entry_menu(ui, index));
+                    // Reserved last on purpose: each cell's nested ui advances this cursor by however tall its own
+                    // content happened to be, and the row windowing assumes a fixed pitch. This makes it true.
+                    let _ = ui.advance_cursor_after_rect(rect);
                 }
             });
         self.list_scroll_x[index] = out.state.offset.x;
@@ -3009,13 +3045,9 @@ impl App {
         // instead of a sideways scrollbar or a thumbnail cut mid-image. One tile the width of the pane would be a
         // slideshow rather than a grid, so a pane that cannot fit the requested size still shows two columns.
         let avail_w = ui.available_width();
-        let preferred = (edge_px as f32) + 12.0;
-        let mut cols = ((avail_w / preferred).floor() as usize).max(1);
-        if cols == 1 && avail_w >= 96.0 {
-            cols = 2;
-        }
-        let cell = (avail_w / cols as f32).min(preferred).max(60.0);
-        let edge = (cell - 12.0).max(48.0);
+        let spacing_x = ui.spacing().item_spacing.x;
+        let (cols, cell) = grid_layout(avail_w, spacing_x, edge_px);
+        let edge = (cell - 12.0).max(28.0);
         let cells: Vec<Entry> = self.panes[index].entries.clone();
         self.panes[index].grid_cols = cols;
         // Ctrl on Linux and Windows, Command on macOS - the platform's "add to selection" key.
@@ -3040,10 +3072,11 @@ impl App {
             .id_salt(format!("grid{index}"))
             .auto_shrink(false)
             .show_rows(ui, cell + 24.0, cell_rows, |ui, range| {
+                let pitch = cell + 24.0 + ui.spacing().item_spacing.y;
                 if let Some(target) = self.panes[index].scroll_target.as_ref()
                     && let Some(cell_row) = cells.iter().position(|entry| entry.path == *target)
                 {
-                    scroll_to_row_index(ui, cell_row / cols.max(1), cell + 24.0, range.clone());
+                    scroll_to_row_index(ui, cell_row / cols.max(1), range.clone(), pitch);
                 }
                 for row in cells
                     .chunks(cols)
@@ -3052,6 +3085,11 @@ impl App {
                     .skip(range.start)
                     .map(|(_, r)| r)
                 {
+                    // A cell row is `cell + 24` tall whether or not its thumbnails and captions draw that much.
+                    let row_rect = egui::Rect::from_min_size(
+                        ui.cursor().min,
+                        egui::vec2(cols as f32 * (cell + spacing_x), cell + 24.0),
+                    );
                     ui.horizontal(|ui| {
                         for entry in row {
                             let chosen = self.panes[index].is_selected(&entry.path);
@@ -3187,6 +3225,9 @@ impl App {
                             );
                         }
                     });
+                    // The row's height is reserved here rather than left to whatever the cells consumed, which is
+                    // what makes the fixed pitch the windowing counts rows at actually hold.
+                    let _ = ui.advance_cursor_after_rect(row_rect);
                 }
             });
         self.accept_drop(ui, body, index);
@@ -3776,7 +3817,12 @@ impl App {
                         .file_name()
                         .map(|name| name.to_string_lossy().into_owned())
                         .unwrap_or_else(|| favorite.display().to_string());
-                    let row = ui.selectable_label(active_path == favorite, format!("* {label}"));
+                    // Like a tree row, a favorite is one line that the panel can scroll sideways to read; only the
+                    // prose above is allowed to wrap.
+                    let row = ui.add(
+                        egui::Button::selectable(active_path == favorite, format!("* {label}"))
+                            .wrap_mode(egui::TextWrapMode::Extend),
+                    );
                     // A favorite is a folder you use often, so it is a place to drop files on.
                     let row_rect = row.rect;
                     self.accept_drop_at(ui, row_rect, &favorite);
@@ -4868,6 +4914,39 @@ mod tests {
 
     /// The path bar goes where you type it, when that is a folder. A wrong path keeps the words up to be fixed
     /// rather than closing over them, and nothing moves.
+    #[test]
+    fn grid_columns_and_cell_sizes_never_outgrow_the_pane() {
+        // The case that used to clip: small thumbnails in a narrow pane. Five columns of a cell floored at 60 px do
+        // not fit 240 px, and the grid cannot scroll sideways to reach what it drew past the edge.
+        let (cols, cell) = grid_layout(240.0, 8.0, 32);
+        assert!(
+            (cols as f32) * cell + (cols as f32 - 1.0) * 8.0 <= 240.0 + 0.5,
+            "{cols} x {cell}"
+        );
+        assert!(
+            cols >= 4,
+            "small thumbnails should still make small tiles, got {cols}"
+        );
+        // A thumbnail edge far larger than the pane: two columns of shrunk tiles, still inside it.
+        let (wide_cols, wide_cell) = grid_layout(240.0, 8.0, 400);
+        assert_eq!(wide_cols, 2);
+        assert!(2.0 * wide_cell + 8.0 <= 240.0 + 0.5, "{wide_cell}");
+        // Ordinary width and ordinary thumbnails: the requested size is honoured exactly.
+        let (roomy, roomy_cell) = grid_layout(1200.0, 8.0, 64);
+        assert_eq!(roomy_cell, 76.0);
+        assert!((roomy as f32) * 76.0 + (roomy as f32 - 1.0) * 8.0 <= 1200.0 + 0.5);
+    }
+
+    #[test]
+    fn a_row_outside_the_drawn_window_is_placed_at_its_real_pitch() {
+        // The listing is scrolled so rows 40..60 are drawn, the first of them starting at y=500 on screen. A row
+        // above the window sits at its true pitch - row height plus item spacing, 23 px for a 20 px row - measured
+        // from where the drawn rows actually are, not from the top of the content.
+        assert!((row_top(500.0, 3, 40, 23.0) - (500.0 - 37.0 * 23.0)).abs() < 0.01);
+        // and one below the window lands below it rather than inside it
+        assert!(row_top(500.0, 75, 40, 23.0) > 500.0 + 20.0 * 23.0);
+    }
+
     #[test]
     fn typing_a_path_takes_you_there() {
         let start = sandbox("pathbar-start", &[], &[]);
