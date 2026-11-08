@@ -39,7 +39,9 @@ struct Pane {
     back_stack: Vec<PathBuf>,
     entries: Vec<Entry>,
     subfolders: Vec<PathBuf>,
-    selected: Option<PathBuf>,
+    /// Files clicked in this pane. The last one is the **primary**: the preview panel, the player and the
+    /// status bar follow it, as Qt's extended selection follows its current item.
+    selection: Vec<PathBuf>,
     /// The entry whose preview we asked the engine for.
     wanted: Option<PathBuf>,
     /// Decoded picture, uploaded to wgpu: `(path, texture)`.
@@ -194,7 +196,8 @@ pub struct App {
     /// File operations run on their own thread with undo/redo history (engine `fileops`).
     ops: FileOpsWorker,
     /// Path to paste into a pane, and whether the source should move (cut) rather than stay (copy).
-    clipboard: Option<(PathBuf, bool)>,
+    /// Paths to paste into a pane, and whether the sources should move (cut) rather than stay (copy).
+    clipboard: Option<(Vec<PathBuf>, bool)>,
     /// Rename box state for the active pane's selection.
     renaming: bool,
     rename_buffer: String,
@@ -229,13 +232,46 @@ pub struct App {
 }
 
 impl Pane {
+    /// The file the preview panel, player and status bar follow: the last one clicked.
+    fn primary(&self) -> Option<&Path> {
+        self.selection.last().map(PathBuf::as_path)
+    }
+
+    fn is_selected(&self, path: &Path) -> bool {
+        self.selection.iter().any(|p| p == path)
+    }
+
+    /// Clicking replaces the selection; Ctrl-click adds to it or takes one away. Returns the file that is
+    /// now primary, or `None` when a Ctrl-click emptied the pane - Qt keeps its last preview in that case
+    /// rather than clearing the panel.
+    fn pick(&mut self, clicked: PathBuf, ctrl: bool) -> Option<PathBuf> {
+        if ctrl {
+            match self.selection.iter().position(|p| *p == clicked) {
+                Some(at) => {
+                    self.selection.remove(at);
+                }
+                None => self.selection.push(clicked),
+            }
+        } else {
+            self.selection.clear();
+            self.selection.push(clicked);
+        }
+        self.selection.last().cloned()
+    }
+
+    /// Drop selected files that are no longer in the listing (a delete, a move, an external change).
+    fn keep_existing(&mut self) {
+        self.selection
+            .retain(|path| self.entries.iter().any(|e| &e.path == path));
+    }
+
     fn new(path: PathBuf) -> Self {
         Self {
             path,
             back_stack: Vec::new(),
             entries: Vec::new(),
             subfolders: Vec::new(),
-            selected: None,
+            selection: Vec::new(),
             wanted: None,
             preview: None,
             hover: None,
@@ -422,14 +458,10 @@ impl App {
         }
         let show_hidden = self.settings.show_hidden;
         self.panes[index].subfolders = list_subfolders(&path, show_hidden).unwrap_or_default();
-        let still_there = self.panes[index].selected.as_ref().is_some_and(|selected| {
-            self.panes[index]
-                .entries
-                .iter()
-                .any(|e| e.path == *selected)
-        });
-        if !still_there {
-            self.panes[index].selected = None;
+        let before = self.panes[index].selection.len();
+        self.panes[index].keep_existing();
+        if self.panes[index].selection.is_empty() && before > 0 {
+            // Nothing is selected any more, so the preview request and its picture go with it.
             self.panes[index].wanted = None;
             self.panes[index].preview = None;
         }
@@ -488,8 +520,9 @@ impl App {
 
     /// Shift+Delete: gone rather than trashed, and not undoable (Qt's rule as well).
     fn delete_permanently(&mut self) {
-        if let Some(path) = self.target() {
-            self.ops.submit(FileOp::Delete { paths: vec![path] });
+        let paths = self.targets();
+        if !paths.is_empty() {
+            self.ops.submit(FileOp::Delete { paths });
         }
     }
 
@@ -511,11 +544,14 @@ impl App {
 
     /// Select `path` in pane `index` and ask the engine for its preview (once per selection).
     pub fn select(&mut self, path: PathBuf) {
-        self.select_in(self.active, path);
+        self.select_in(self.active, path, false);
     }
 
-    fn select_in(&mut self, index: usize, path: PathBuf) {
+    fn select_in(&mut self, index: usize, clicked: PathBuf, ctrl: bool) {
         self.active = index;
+        let Some(path) = self.panes[index].pick(clicked, ctrl) else {
+            return;
+        };
         let entry = self.panes[index]
             .entries
             .iter()
@@ -534,7 +570,6 @@ impl App {
             self.load(path.clone(), false);
         }
         let pane = &mut self.panes[index];
-        pane.selected = Some(path.clone());
         if pane.wanted.as_deref() == Some(path.as_path()) {
             return;
         }
@@ -792,40 +827,51 @@ impl App {
 
     // --- File operations: the engine runs them on its own thread and remembers them for undo. ------
 
-    /// The active pane's selection — what copy, cut, delete and rename act on.
+    /// The active pane's primary file - what rename acts on (Qt renames one file at a time).
     fn target(&self) -> Option<PathBuf> {
-        self.panes[self.active].selected.clone()
+        self.panes[self.active].primary().map(Path::to_path_buf)
+    }
+
+    /// Every file selected in the active pane - what copy, cut, trash and delete act on.
+    fn targets(&self) -> Vec<PathBuf> {
+        self.panes[self.active].selection.clone()
     }
 
     /// Ctrl+C / Ctrl+X: remember the selection as a copy or a cut.
     pub fn copy_selection(&mut self, cut: bool) {
-        if let Some(path) = self.target() {
-            let name = path
+        let paths = self.targets();
+        if paths.is_empty() {
+            return;
+        }
+        let what = if paths.len() == 1 {
+            paths[0]
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            self.clipboard = Some((path, cut));
-            self.status = format!("{}{name}", if cut { "cut: " } else { "copied: " });
-        }
+                .unwrap_or_default()
+        } else {
+            format!("{} files", paths.len())
+        };
+        self.clipboard = Some((paths, cut));
+        self.status = format!("{}{what}", if cut { "cut: " } else { "copied: " });
     }
 
     /// Ctrl+V: copy or move the clipboard path into the active pane's folder. Collisions get a numbered
     /// name (`KeepBoth`), never an overwrite.
     pub fn paste(&mut self) {
-        let Some((source, cut)) = self.clipboard.clone() else {
+        let Some((sources, cut)) = self.clipboard.clone() else {
             return;
         };
         let dest_dir = self.panes[self.active].path.clone();
         self.cut_pending = cut;
         self.ops.submit(if cut {
             FileOp::Move {
-                sources: vec![source],
+                sources,
                 dest_dir,
                 conflict: ConflictPolicy::KeepBoth,
             }
         } else {
             FileOp::Copy {
-                sources: vec![source],
+                sources,
                 dest_dir,
                 conflict: ConflictPolicy::KeepBoth,
             }
@@ -834,8 +880,9 @@ impl App {
 
     /// Delete key: send the selection to the OS trash (undoable).
     pub fn trash_selection(&mut self) {
-        if let Some(path) = self.target() {
-            self.ops.submit(FileOp::Trash { paths: vec![path] });
+        let paths = self.targets();
+        if !paths.is_empty() {
+            self.ops.submit(FileOp::Trash { paths });
         }
     }
 
@@ -1142,17 +1189,22 @@ impl App {
 
     /// Star the selected file 0-5. The catalog is keyed by path, so a rename follows the rating.
     fn set_rating(&mut self, rating: u8) {
-        let Some(path) = self.target() else {
+        let paths = self.targets();
+        if paths.is_empty() {
             self.status = "select a file to rate".into();
             return;
-        };
-        match self.library.set_rating(std::slice::from_ref(&path), rating) {
+        }
+        match self.library.set_rating(&paths, rating) {
             Ok(()) => {
-                let name = path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_default();
-                self.status = format!("{name} rated {rating}/5");
+                let what = if paths.len() == 1 {
+                    paths[0]
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default()
+                } else {
+                    format!("{} files", paths.len())
+                };
+                self.status = format!("{what} rated {rating}/5");
             }
             Err(err) => self.status = format!("rating: {err}"),
         }
@@ -1342,7 +1394,7 @@ impl App {
     /// preferences, and its single File Manager toolbar acts on whichever pane is active — so a click
     /// here makes this pane active first, then the button acts on it.
     fn pane_toolbar(&mut self, index: usize, ui: &mut egui::Ui) {
-        let has_selection = self.panes[index].selected.is_some();
+        let has_selection = !self.panes[index].selection.is_empty();
         let can_back = !self.panes[index].back_stack.is_empty();
         let grid = self.settings.view_mode == ViewMode::Grid;
         let dual = self.settings.dual_pane;
@@ -1584,17 +1636,17 @@ impl App {
             .iter()
             .map(|e| (e.name.clone(), e.path.clone()))
             .collect();
-        let selected_now = self.panes[index].selected.clone();
         let mut selected: Option<PathBuf> = None;
         let mut play: Option<PathBuf> = None;
         let mut hovered: Option<PathBuf> = None;
+        // Ctrl on Linux and Windows, Command on macOS - the platform's "add to selection" key.
+        let ctrl = ui.input(|i| i.modifiers.command);
         egui::ScrollArea::vertical()
             .id_salt(format!("list{index}"))
             .auto_shrink(false)
             .show(ui, |ui| {
                 for (name, path) in &names {
-                    let response =
-                        ui.selectable_label(selected_now.as_deref() == Some(path.as_path()), name);
+                    let response = ui.selectable_label(self.panes[index].is_selected(path), name);
                     if response.double_clicked() {
                         play = Some(path.clone());
                     }
@@ -1606,7 +1658,7 @@ impl App {
                     }
                 }
             });
-        self.finish(index, selected, play, hovered);
+        self.finish(index, selected, ctrl, play, hovered);
     }
 
     /// Grid view of one pane: engine thumbnails in rows that fit the column; double-click plays.
@@ -1617,7 +1669,8 @@ impl App {
         let cell = edge + 12.0;
         let cells: Vec<Entry> = self.panes[index].entries.clone();
         let cols = ((ui.available_width() / cell).floor() as usize).max(1);
-        let selected_now = self.panes[index].selected.clone();
+        // Ctrl on Linux and Windows, Command on macOS - the platform's "add to selection" key.
+        let ctrl = ui.input(|i| i.modifiers.command);
         // The pointer is known before layout runs, so this pass draws the frame `scrub_at` chose last pass.
         let shown = self.panes[index]
             .scrub_shown
@@ -1635,7 +1688,7 @@ impl App {
                 for row in cells.chunks(cols) {
                     ui.horizontal(|ui| {
                         for entry in row {
-                            let chosen = selected_now.as_deref() == Some(entry.path.as_path());
+                            let chosen = self.panes[index].is_selected(&entry.path);
                             ui.allocate_ui_with_layout(
                                 egui::vec2(cell, cell + 24.0),
                                 egui::Layout::top_down(egui::Align::Center),
@@ -1716,7 +1769,7 @@ impl App {
                     });
                 }
             });
-        self.finish(index, selected, play, hovered);
+        self.finish(index, selected, ctrl, play, hovered);
         if let Some((entry, pos, thumb)) = scrub {
             self.scrub_at(ui, index, &entry, edge_px, pos, thumb, fine);
         }
@@ -1727,11 +1780,12 @@ impl App {
         &mut self,
         index: usize,
         selected: Option<PathBuf>,
+        ctrl: bool,
         play: Option<PathBuf>,
         hovered: Option<PathBuf>,
     ) {
         if let Some(path) = selected {
-            self.select_in(index, path);
+            self.select_in(index, path, ctrl);
         }
         if let Some(path) = play {
             self.play(path);
@@ -1909,24 +1963,34 @@ impl App {
             ui.separator();
             ui.label(format!("pane {}", self.active + 1));
         }
-        if let Some(selected) = &self.panes[self.active].selected {
+        let selection = &self.panes[self.active].selection;
+        match selection.len() {
+            0 => {}
+            1 => {
+                ui.separator();
+                ui.label(
+                    selection[0]
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default(),
+                );
+            }
+            count => {
+                ui.separator();
+                ui.label(format!("{count} selected"));
+            }
+        }
+        if let Some((paths, cut)) = &self.clipboard {
             ui.separator();
-            ui.label(
-                selected
+            let what = if paths.len() == 1 {
+                paths[0]
                     .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_default(),
-            );
-        }
-        if let Some((path, cut)) = &self.clipboard {
-            ui.separator();
-            ui.label(format!(
-                "{}{}",
-                if *cut { "cut: " } else { "copied: " },
-                path.file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_default()
-            ));
+            } else {
+                format!("{} files", paths.len())
+            };
+            ui.label(format!("{}{what}", if *cut { "cut: " } else { "copied: " }));
         }
         if !self.op_progress.is_empty() {
             ui.separator();
@@ -2376,7 +2440,7 @@ mod tests {
 
         let image = dir.join("a.png");
         app.select(image.clone());
-        assert_eq!(app.panes[0].selected.as_deref(), Some(image.as_path()));
+        assert_eq!(app.panes[0].selection, vec![image.clone()]);
         assert_eq!(
             app.panes[0].wanted.as_deref(),
             Some(image.as_path()),
@@ -2385,7 +2449,7 @@ mod tests {
 
         let video = dir.join("b.mov");
         app.select(video.clone());
-        assert_eq!(app.panes[0].selected.as_deref(), Some(video.as_path()));
+        assert_eq!(app.panes[0].selection, vec![video.clone()]);
         assert_eq!(
             app.panes[0].wanted.as_deref(),
             Some(video.as_path()),
@@ -2691,6 +2755,173 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Clicking replaces the selection, Ctrl-click adds to it or takes one away, and the last file clicked
+    /// is the primary. Operations follow the whole set, which is what "two clips selected and pasted moves
+    /// both" means in the plan's acceptance line.
+    #[test]
+    fn ctrl_click_extends_the_selection_and_operations_follow_it() {
+        let dir = sandbox("multi", &["a.png", "b.png", "c.png"], &[]);
+        let (a, b, c) = (dir.join("a.png"), dir.join("b.png"), dir.join("c.png"));
+        let mut app = App::with_cache(dir.clone(), sandbox("multi-cache", &[], &[]));
+
+        app.select(a.clone());
+        app.select_in(0, b.clone(), true);
+        assert_eq!(
+            app.targets(),
+            vec![a.clone(), b.clone()],
+            "Ctrl-click adds to the selection"
+        );
+        assert_eq!(
+            app.target().as_deref(),
+            Some(b.as_path()),
+            "the last file clicked is the primary"
+        );
+
+        app.select_in(0, a.clone(), true);
+        assert_eq!(
+            app.targets(),
+            vec![b.clone()],
+            "Ctrl-clicking a selected file takes it away"
+        );
+
+        app.select(c.clone());
+        assert_eq!(
+            app.targets(),
+            vec![c.clone()],
+            "a plain click replaces the selection"
+        );
+
+        // Copy and paste carry every selected file, not just the primary.
+        app.select(a.clone());
+        app.select_in(0, b.clone(), true);
+        app.copy_selection(false);
+        assert_eq!(
+            app.clipboard.as_ref().map(|(paths, _)| paths.len()),
+            Some(2),
+            "the clipboard carries every selected file"
+        );
+        app.paste();
+        assert!(
+            settle(&mut app, &dir, "a (1).png", true),
+            "the first copy landed (status: {})",
+            app.status
+        );
+        assert!(
+            dir.join("b (1).png").is_file(),
+            "the second selected file was copied too"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A Ctrl-click must extend the selection in the grid, and only a real click through egui's input
+    /// pipeline can prove the cell answers to the modifier.
+    #[test]
+    fn ctrl_clicking_a_second_cell_selects_both() {
+        use egui_kittest::Harness;
+
+        let dir = sandbox("multi-cell", &["one.png", "two.png"], &[]);
+        let mut app = App::with_cache(dir.clone(), sandbox("multi-cell-cache", &[], &[]));
+        app.settings.view_mode = ViewMode::Grid;
+        let (one, two) = (dir.join("one.png"), dir.join("two.png"));
+
+        let mut harness = Harness::new_ui_state(|ui, app| app.pane(0, ui), app);
+        harness.set_size(egui::vec2(900.0, 700.0));
+
+        // Cells are found by hovering them: the sweep is how the neighbouring test locates a cell too.
+        let mut first: Option<egui::Pos2> = None;
+        'find_one: for row in 0..8 {
+            for col in 0..16 {
+                let pos = egui::pos2(120.0 + col as f32 * 45.0, 60.0 + row as f32 * 35.0);
+                harness.input_mut().events = vec![egui::Event::PointerMoved(pos)];
+                harness.run_steps(2);
+                if harness.state().panes[0].hover.as_deref() == Some(one.as_path()) {
+                    first = Some(pos);
+                    break 'find_one;
+                }
+            }
+        }
+        let one_pos = first.unwrap_or_else(|| {
+            panic!(
+                "resting on the first thumbnail should hover it, selection: {:?}",
+                harness.state().panes[0].selection
+            )
+        });
+
+        let press = |pos: egui::Pos2, ctrl: bool, pressed: bool| {
+            let mut modifiers = egui::Modifiers::default();
+            if ctrl {
+                modifiers.command = true;
+            }
+            vec![egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers,
+            }]
+        };
+        // A click is a press and a release; sending the press twice leaves egui with an open drag.
+        harness.input_mut().events = press(one_pos, false, true);
+        harness.run_steps(1);
+        harness.input_mut().events = press(one_pos, false, false);
+        harness.run_steps(1);
+        assert_eq!(
+            harness.state().panes[0].selection,
+            vec![one.clone()],
+            "a plain click selects one cell"
+        );
+
+        // Find the second cell, then Ctrl-click it.
+        let mut second: Option<egui::Pos2> = None;
+        'find_two: for row in 0..8 {
+            for col in 0..16 {
+                let pos = egui::pos2(120.0 + col as f32 * 45.0, 60.0 + row as f32 * 35.0);
+                harness.input_mut().events = vec![egui::Event::PointerMoved(pos)];
+                harness.run_steps(2);
+                if harness.state().panes[0].hover.as_deref() == Some(two.as_path()) {
+                    second = Some(pos);
+                    break 'find_two;
+                }
+            }
+        }
+        let two_pos = second.unwrap_or_else(|| {
+            panic!(
+                "resting on the second thumbnail should hover it, selection: {:?}",
+                harness.state().panes[0].selection
+            )
+        });
+        // The pane reads the *held* modifier state, which egui only updates from a `ModifiersChanged`
+        // event (what winit sends when a real Control goes down) - carrying it on the click alone is not
+        // enough. So the test presses the modifier, clicks, and releases it.
+        let ctrl_mods = {
+            let mut modifiers = egui::Modifiers::default();
+            modifiers.command = true;
+            modifiers
+        };
+        harness.input_mut().events = vec![egui::Event::ModifiersChanged(ctrl_mods)];
+        harness.run_steps(1);
+        harness.input_mut().events = press(two_pos, true, true);
+        harness.run_steps(1);
+        harness.input_mut().events = press(two_pos, true, false);
+        harness.run_steps(1);
+        harness.input_mut().events =
+            vec![egui::Event::ModifiersChanged(egui::Modifiers::default())];
+        harness.run_steps(1);
+
+        assert_eq!(
+            harness.state().panes[0].selection,
+            vec![one.clone(), two.clone()],
+            "Ctrl-clicking the second cell keeps the first selected"
+        );
+        assert_eq!(
+            harness.state().panes[0].primary(),
+            Some(two.as_path()),
+            "the Ctrl-clicked cell becomes the primary"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// The cell, not just its label, must answer to the pointer: resting on the thumbnail hovers the entry
     /// (that is what drives hover scrub) and clicking it selects. This layout maths has been wrong twice, so
     /// the test drives the real pane through egui's own input pipeline instead of trusting the arithmetic.
@@ -2723,7 +2954,7 @@ mod tests {
         let pos = hit.unwrap_or_else(|| {
             panic!(
                 "resting the pointer on the thumbnail should hover the entry, selected: {:?}",
-                harness.state().panes[0].selected
+                harness.state().panes[0].selection
             )
         });
 
@@ -2741,7 +2972,7 @@ mod tests {
         harness.run_steps(1);
 
         assert_eq!(
-            harness.state().panes[0].selected.as_deref(),
+            harness.state().panes[0].primary(),
             Some(clip.as_path()),
             "clicking the thumbnail should select the entry"
         );
@@ -2776,7 +3007,7 @@ mod tests {
         app.copy_selection(false);
         assert_eq!(
             app.clipboard.as_ref().map(|(p, cut)| (p.clone(), *cut)),
-            Some((dir.join("up.png"), false)),
+            Some((vec![dir.join("up.png")], false)),
             "the selection is remembered as a copy"
         );
 
