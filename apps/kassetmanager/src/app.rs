@@ -364,6 +364,15 @@ impl App {
             self.outstanding += 1;
             self.stall = std::time::Instant::now();
         }
+        // A selected clip belongs in the player so the preview panel has its timeline and buttons - loaded
+        // paused, because selection must not start sound (user rule). Here rather than in the render path, so
+        // a selection made by any means behaves the same.
+        if matches!(
+            entry.kind,
+            MediaKind::Video | MediaKind::Audio | MediaKind::Sequence
+        ) {
+            self.load(path.clone(), false);
+        }
     }
 
     /// Load `path` in the player and start it playing (double-click).
@@ -374,6 +383,13 @@ impl App {
     /// Load `path` in the player. Private: a selection previews through `preview_selection`, which honours
     /// the `video_preview` setting instead of always starting playback.
     fn load(&mut self, path: PathBuf, autoplay: bool) {
+        // A double-click selects (loading paused) and then plays that same file; don't probe it twice.
+        if self.playing.as_deref() == Some(path.as_path()) {
+            if autoplay {
+                self.player.play();
+            }
+            return;
+        }
         match open(&path) {
             Ok(source) => {
                 self.playing = Some(path);
@@ -386,23 +402,6 @@ impl App {
                 self.status.clear();
             }
             Err(err) => self.status = format!("{err}"),
-        }
-    }
-
-    /// A selected clip belongs in the preview panel with its timeline and buttons, so load it - paused unless
-    /// `video_preview` says to play on selection (that setting's Qt meaning). Stills keep the panel as it was.
-    fn preview_selection(&mut self, path: &std::path::Path) {
-        let media = self.panes[self.active].entries.iter().any(|e| {
-            e.path == path
-                && matches!(
-                    e.kind,
-                    MediaKind::Video | MediaKind::Audio | MediaKind::Sequence
-                )
-        });
-        if media {
-            // Always paused: a stored "play on selection" from the Qt settings must not restage playback on
-            // every click here (user rule). Autoplay on selection returns with its own UI-phase surface.
-            self.load(path.to_path_buf(), false);
         }
     }
 
@@ -1348,12 +1347,7 @@ impl App {
         hovered: Option<PathBuf>,
     ) {
         if let Some(path) = selected {
-            self.select_in(index, path.clone());
-            // Double-click already loads the file playing; anything else selecting it gets the transport
-            // paused, so the preview panel is a real preview of what you picked.
-            if play.is_none() {
-                self.preview_selection(&path);
-            }
+            self.select_in(index, path);
         }
         if let Some(path) = play {
             self.play(path);
@@ -1818,6 +1812,47 @@ mod tests {
             app.panes[0].wanted.as_deref(),
             Some(video.as_path()),
             "the preview request follows the new selection"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Selecting a clip loads it into the player **paused** (user rule: no autoplay on selection), so the
+    /// preview panel has its transport without sound starting. A still selects without touching playback.
+    #[test]
+    fn selecting_a_clip_loads_it_paused() {
+        let fixture =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/scrub.mp4");
+        let dir = sandbox("paused", &["up.png"], &[]);
+        let clip = dir.join("clip.mp4");
+        std::fs::copy(&fixture, &clip).expect("the scrub fixture should be copyable");
+
+        let mut app = App::with_cache(dir.clone(), sandbox("paused-cache", &[], &[]));
+        app.navigate(0, &dir);
+        assert_eq!(
+            app.panes[0].entries.len(),
+            2,
+            "the clip and the still should be listed"
+        );
+
+        app.select(clip.clone());
+        assert_eq!(
+            app.playing.as_deref(),
+            Some(clip.as_path()),
+            "a selected clip belongs in the player so its transport is there"
+        );
+        let state = app.player.state();
+        assert!(state.loaded, "the clip should be loaded");
+        assert!(!state.playing, "selection must not autoplay");
+
+        // A still selects without touching playback: the loaded clip stays loaded and paused.
+        let image = dir.join("up.png");
+        app.select(image.clone());
+        assert_eq!(app.target().as_deref(), Some(image.as_path()));
+        let state = app.player.state();
+        assert!(
+            state.loaded && !state.playing,
+            "a still must not start or stop playback"
         );
 
         let _ = std::fs::remove_dir_all(&dir);
