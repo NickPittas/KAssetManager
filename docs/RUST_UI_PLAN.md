@@ -272,3 +272,9 @@ and `.` change n by one and stop at both ends; the transport shows the two butto
 has frames to step; a failed
 sequence open falls back to the still with a visible note.
 
+Coverage limit (accepted): whether a loaded clip can be stepped is decided when it loads and stored with it, so
+navigating the pane away - or hiding it - keeps the transport working. That is verified by running the app (Backspace
+to the parent folder: the panel says "Select a file to preview," while the transport keeps Play, Stop, `< frame` and
+`frame >`) and by inspection; no automated test would fail if a future edit went back to looking the loaded path up in
+a visible listing. Add an app-level navigation assertion only if that rule is touched again.
+
