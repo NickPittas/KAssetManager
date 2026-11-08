@@ -1265,7 +1265,9 @@ impl App {
         }
         self.panes[index].view_mode = mode;
         match mode {
-            ViewMode::TreeList => self.apply_tree(index),
+            // Rebuilding from what is opened can drop the row that was selected - an expansion that fills the row
+            // cap leaves the entries after it out - so this route lets go of them like every other rebuild does.
+            ViewMode::TreeList => self.refresh_tree_pane(index),
             _ => self.open_quiet(index),
         }
         self.save_pane_views();
@@ -7995,10 +7997,50 @@ mod tests {
             app.panes[0].folder_mtime, back,
             "so the next tick re-lists it"
         );
-        app.open_quiet(0);
+        // The poll's own path, not a direct rescan: an unset mtime is what makes it look at this folder again.
+        app.light_refresh(1.0);
         assert!(
             app.panes[0].entries.iter().any(|e| e.name == "top.png"),
-            "and the listing comes back"
+            "and the listing comes back within one tick"
+        );
+    }
+    /// Switching into a tree list can hide the selected row: an opened folder that fills the row cap leaves the
+    /// entries after it out of the listing. The selection and preview must not survive into rows nobody can see,
+    /// because Delete acts on the selection.
+    #[test]
+    fn entering_a_tree_list_lets_go_of_a_row_the_cap_left_out() {
+        let root = sandbox("treecap", &["top.png"], &["many"]);
+        let many = root.join("many");
+        for i in 0..3005 {
+            let _ = std::fs::create_dir(many.join(format!("d{i:04}")));
+        }
+        let mut app = App::with_cache(root.clone(), sandbox("treecapthumbs", &[], &[]));
+
+        app.set_pane_view(0, ViewMode::TreeList);
+        app.toggle_tree_node(0, &many);
+        assert!(
+            app.panes[0].tree_truncated,
+            "the cap is what hides the rows after it"
+        );
+
+        // In the plain listing the root's own file is a row again, and gets selected.
+        app.set_pane_view(0, ViewMode::List);
+        let top = root.join("top.png");
+        app.select_in(0, top.clone(), false);
+        app.panes[0].wanted = Some(top.clone());
+
+        app.set_pane_view(0, ViewMode::TreeList);
+        assert!(
+            !app.panes[0].entries.iter().any(|e| e.name == "top.png"),
+            "the cap left it out of the tree's rows"
+        );
+        assert!(
+            app.panes[0].selection.is_empty(),
+            "so Delete will not act on a row that is not there"
+        );
+        assert_eq!(
+            app.panes[0].wanted, None,
+            "and the preview is not still asking for it"
         );
     }
 }
