@@ -449,6 +449,8 @@ pub struct App {
     /// Whether where the panes are is worth writing down. Off until the remembered folders have been read back:
     /// the window's own first listing would otherwise record the folder it guessed (Pictures) over the folder it
     /// was about to restore - which is exactly what it did before this flag existed.
+    /// When a dragged panel width has rested long enough to be worth writing to disk.
+    widths_due: f64,
     folders_remembered: bool,
     /// Which pane's header is being dragged, and which column; the drop index is computed from the pointer
     /// each frame. The owner matters: both panes draw headers, and only the one that started the drag may
@@ -904,6 +906,7 @@ impl App {
             tree_revealed: None,
             tree_reveal: None,
             next_light_check: 0.0,
+            widths_due: 0.0,
             folders_remembered: false,
             column_drag: None,
             list_scroll_x: [0.0, 0.0],
@@ -1372,6 +1375,18 @@ impl App {
     }
 
     /// Write settings where they came from; report failure in the status bar.
+    /// A dragged panel width is worth keeping, but not worth a disk write per frame: the change is noted here and
+    /// written once the pointer has rested for three quarters of a second. Widths are measured from the panel's own
+    /// rect, which is its outer size - the same number `default_size` will be handed back next run.
+    fn note_width(&mut self, now: f64, measured: f32, stored: f32) -> f32 {
+        if measured.is_finite() && (measured - stored).abs() >= 1.0 {
+            self.widths_due = now + 0.75;
+            measured
+        } else {
+            stored
+        }
+    }
+
     fn save_settings(&mut self) {
         if let Some(dirs) = &self.dirs
             && let Err(err) = self.settings.save(dirs)
@@ -4197,37 +4212,62 @@ impl eframe::App for App {
         egui::Panel::bottom("status_bar").show(ui, |ui| {
             ui.horizontal(|ui| self.status_bar(ui));
         });
+        // Panel widths are measured every frame and written when they stop moving, so the frame's own clock is
+        // needed here rather than a wall-clock timer.
+        let now = ui.input(|i| i.time);
         if self.settings.show_tree {
-            egui::Panel::left("browser_tree")
+            let panel = egui::Panel::left("browser_tree")
                 .resizable(true)
                 .size_range(150.0..=420.0)
-                .default_size(210.0)
+                .default_size(self.settings.tree_width)
                 .show(ui, |ui| self.browser_tree(ui));
+            let w = panel.response.rect.width();
+            let stored = self.settings.tree_width;
+            self.settings.tree_width = self.note_width(now, w, stored);
         }
         if self.settings.show_preview {
-            egui::Panel::right("preview")
+            let panel = egui::Panel::right("preview")
                 .resizable(true)
                 .size_range(180.0..=460.0)
-                .default_size(300.0)
+                .default_size(self.settings.preview_width)
                 .show(ui, |ui| self.preview(ui));
+            let w = panel.response.rect.width();
+            let stored = self.settings.preview_width;
+            self.settings.preview_width = self.note_width(now, w, stored);
         }
         let panes = self.settings.dual_pane;
         egui::CentralPanel::default().show(ui, |ui| {
             if panes {
                 // The second pane docks to the right of the first with a draggable splitter, like Qt.
                 let available = ui.available_width();
-                egui::Panel::right("pane2")
+                // Half the window is where a second pane starts; a width you dragged to last time wins over that,
+                // as long as this window still has room for it.
+                let half = (available / 2.0).clamp(240.0, (available - 300.0).max(240.0));
+                let ceiling = (available - 240.0).max(240.0);
+                let start = if self.settings.pane2_width > 0.0 {
+                    self.settings.pane2_width.clamp(240.0, ceiling)
+                } else {
+                    half
+                };
+                let panel = egui::Panel::right("pane2")
                     .resizable(true)
                     .min_size(240.0)
                     // Without a ceiling the docked pane can take everything and collapse pane 1 to nothing.
-                    .max_size((available - 240.0).max(240.0))
-                    .default_size((available / 2.0).clamp(240.0, (available - 300.0).max(240.0)))
+                    .max_size(ceiling)
+                    .default_size(start)
                     .show(ui, |ui| self.pane(1, ui));
+                let w = panel.response.rect.width();
+                let stored = self.settings.pane2_width;
+                self.settings.pane2_width = self.note_width(now, w, stored);
                 egui::CentralPanel::default().show(ui, |ui| self.pane(0, ui));
             } else {
                 self.pane(0, ui);
             }
         });
+        if self.widths_due > 0.0 && now >= self.widths_due {
+            self.widths_due = 0.0;
+            self.save_settings();
+        }
         if self.settings_open {
             self.settings_window(ui);
         }

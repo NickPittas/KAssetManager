@@ -72,6 +72,13 @@ pub struct Settings {
     /// Show a second file pane next to the first.
     pub dual_pane: bool,
     pub last_folder_secondary: Option<PathBuf>,
+    /// Width of the favourites-and-tree panel, as you last left it. egui remembers a dragged panel for the run it
+    /// was given and forgets it after that, so the width is kept here beside the folders.
+    pub tree_width: f32,
+    /// Width of the preview panel, as you last left it.
+    pub preview_width: f32,
+    /// Width of the second pane when dual-pane is on. Zero means never dragged - take half the window.
+    pub pane2_width: f32,
 }
 
 impl Default for Settings {
@@ -112,6 +119,9 @@ impl Default for Settings {
             show_all_files: false,
             dual_pane: false,
             last_folder_secondary: None,
+            tree_width: 210.0,
+            preview_width: 300.0,
+            pane2_width: 0.0,
         }
     }
 }
@@ -189,6 +199,22 @@ impl Settings {
             self.sequence_fps.clamp(1.0, 240.0)
         } else {
             24.0
+        };
+        // Panel widths: the panels themselves refuse anything outside these ranges, so a hand-edited file cannot
+        // ask for a tree you cannot see. A zero second-pane width is meaningful ("take half"), so it is not clamped
+        // up to the pane minimum here.
+        if !self.tree_width.is_finite() {
+            self.tree_width = 210.0;
+        }
+        self.tree_width = self.tree_width.clamp(150.0, 420.0);
+        if !self.preview_width.is_finite() {
+            self.preview_width = 300.0;
+        }
+        self.preview_width = self.preview_width.clamp(180.0, 460.0);
+        self.pane2_width = if self.pane2_width.is_finite() && self.pane2_width > 0.0 {
+            self.pane2_width.clamp(240.0, 4000.0)
+        } else {
+            0.0
         };
         dedup_in_order(&mut self.favorites);
         dedup_in_order(&mut self.recents);
@@ -331,6 +357,34 @@ mod tests {
         };
         s.save(&dirs).expect("save");
         assert_eq!(Settings::load(&dirs), s);
+    }
+
+    #[test]
+    fn panel_widths_roundtrip_and_a_hand_edited_one_is_clamped() {
+        // egui forgets a dragged panel width when the run ends, so these three are app settings like any other.
+        let t = tempfile::tempdir().expect("tempdir");
+        let dirs = dirs_in(t.path());
+        assert_eq!(Settings::default().pane2_width, 0.0);
+        let s = Settings {
+            tree_width: 265.0,
+            preview_width: 410.0,
+            pane2_width: 380.0,
+            ..Settings::default()
+        };
+        s.save(&dirs).expect("save");
+        assert_eq!(Settings::load(&dirs), s);
+
+        // A hand-edited file can ask for a tree wider than the window, a preview narrower than its own minimum,
+        // and a second pane that cannot exist. Zero stays zero: it means "take half the window", not "no width".
+        std::fs::write(
+            dirs.settings_file(),
+            r#"{"tree_width": 9000.0, "preview_width": -20.0, "pane2_width": -5.0}"#,
+        )
+        .expect("write");
+        let s = Settings::load(&dirs);
+        assert_eq!(s.tree_width, 420.0);
+        assert_eq!(s.preview_width, 180.0);
+        assert_eq!(s.pane2_width, 0.0);
     }
 
     #[test]

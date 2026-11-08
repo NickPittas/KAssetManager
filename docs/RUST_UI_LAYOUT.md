@@ -1,6 +1,6 @@
 # Shell sizing and scrolling (behaviour spec)
 
-Status: **decisions settled with the user; implementing R1-R6.**
+Status: **decisions settled with the user; R1-R6 implemented, a real-mouse drag check outstanding on R6.**
 
 Decisions (asked and answered): names get a **horizontal scrollbar when they do not fit** - no ellipsis policy;
 minimum widths stay **fixed constants in code** (tree 150, preview 180, pane 240), not Settings fields.
@@ -59,9 +59,11 @@ one line (preview).
 - **R5 Breadcrumb.** Long paths scroll sideways within their row (or elide the middle with the tail visible, per
   question 1's policy), and the editable path bar keeps showing the **end** of the path when it does not fit -
   that is where the useful part of a path is.
-- **R6 Persistence.** Dragged widths persist across runs (tree, preview, pane splitter). Today egui stores them
-  in its own state file; if it is not written on Wayland close - the same gap found for folder memory - they go
-  into `settings.json` next to the folders.
+- **R6 Persistence.** Dragged widths persist across runs (tree, preview, pane splitter). egui keeps a dragged
+  panel width only for the run it was given, and eframe's save hook was already seen not to fire on Wayland close,
+  so the three widths live in `settings.json` beside the remembered folders: each panel is defaulted from its
+  setting and measured back from its own laid-out rect every frame, and a change is written once the pointer has
+  rested for three quarters of a second - not one disk write per dragged frame.
 
 ## Acceptance checks (how each rule gets verified)
 
@@ -120,9 +122,9 @@ R1, R2, R3 and R5 are implemented; R4 needed no change (the minimums were alread
 
 ## Still open
 
-- **R6 persistence of dragged widths.** egui stores panel sizes in its own state, and eframe's save hook was
-  already observed not to fire on Wayland close (the same gap that forced folder memory into `settings.json`).
-  So a dragged tree edge may not come back next run. Needs a drag with a real mouse - pointer injection on this
-  box cannot produce one - then, if it is lost, the widths go into `settings.json` beside the folders.
+- **R6 persistence, the drag itself.** Both ends of the persistence are demonstrated without a pointer: widths in
+  `settings.json` are honored at startup, and a width that cannot be laid out (a second pane remembered at 4000 px
+  in a window that fits 240) is written back as the 240 actually used. What has not been watched is a human dragging
+  an edge - pointer injection on this box cannot produce one - so the gesture itself is still user-confirmed.
 - **Where names are still only clipped:** the pane list truncates inside its column widths by design (columns are
   resizable and the table scrolls sideways), which is not the same defect as a panel sizing to a name.
