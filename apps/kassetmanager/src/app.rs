@@ -489,9 +489,12 @@ fn preview_fact_lines(
     }
     match &entry.sequence {
         Some(seq) => facts.push(format!("{} frames", seq.frames.len())),
+        // The picture on screen is a decode at the preview edge, not the file: a 4000 px photo arrives as an image
+        // of at most `PREVIEW_EDGE` across, so this says what was shown. True dimensions come with the engine's own
+        // metadata probe (`crates/media/src/metadata.rs`), which is the next thing to wire in.
         None => {
             if let Some(px) = shown {
-                facts.push(format!("{} x {} px", px.x as i64, px.y as i64));
+                facts.push(format!("shown {} x {} px", px.x as i64, px.y as i64));
             }
         }
     }
@@ -5171,7 +5174,7 @@ mod tests {
         };
         let lines = preview_fact_lines(&entry, "Video", Some(egui::vec2(640.0, 360.0)), &state);
         assert_eq!(lines[0], "Video - 2.0 KB");
-        assert_eq!(lines[1], "640 x 360 px");
+        assert_eq!(lines[1], "shown 640 x 360 px");
         assert_eq!(lines[2], "frame 4/120");
 
         state.loaded = false;
