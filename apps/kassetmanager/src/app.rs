@@ -8,8 +8,8 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use gallerybrowser_core::{
-    AppDirs, Column, Entry, MediaKind, ScanOptions, Settings, SortKey, Theme, ViewMode, is_hidden,
-    scan_folder, sort_entries,
+    AppDirs, Column, Entry, MediaKind, ScanOptions, Settings, SortKey, THUMBNAIL_MAX,
+    THUMBNAIL_MIN, Theme, ViewMode, is_hidden, scan_folder, sort_entries,
 };
 use gallerybrowser_fileops::{ConflictPolicy, FileOp, FileOpsWorker, OpEvent, OpOutcome};
 use gallerybrowser_library::Library;
@@ -252,6 +252,9 @@ struct FileKeys {
     rename: bool,
     /// Digit 0-5 pressed to rate the selection.
     rating: Option<u8>,
+    /// Ctrl+- and Ctrl++ size the active pane's thumbnails, so the toolbar slider is not the only way to set it.
+    thumb_smaller: bool,
+    thumb_bigger: bool,
     /// Arrows / Home / End move the current item through the active pane's listing.
     step: Option<Step>,
     /// Enter activates the current item: enter a folder, play a file. Qt's views activate on Return.
@@ -1223,12 +1226,17 @@ impl App {
     /// Move one pane's thumbnail size through the engine's four cache sizes. Only those sizes, so a change reuses
     /// thumbnails already decoded rather than asking for a new edge length.
     fn step_thumbnails(&mut self, index: usize, direction: i32) {
-        const SIZES: [u32; 4] = [64, 128, 256, 512];
         let asked = self.panes[index].thumbnail_size;
-        let position = SIZES.iter().position(|size| *size == asked).unwrap_or(1);
-        let next = (position as i32 + direction).clamp(0, SIZES.len() as i32 - 1) as usize;
-        if SIZES[next] != asked {
-            self.panes[index].thumbnail_size = SIZES[next];
+        // Multiplicative, so a step feels the same at 64 px and at 400 px, and it lands inside the range the control
+        // can show. A preset table would snap away a size someone set with the slider.
+        let scaled = if direction < 0 {
+            asked as f32 * 0.75
+        } else {
+            asked as f32 * 1.34
+        };
+        let next = (scaled.round() as i64).clamp(THUMBNAIL_MIN as i64, THUMBNAIL_MAX as i64) as u32;
+        if next != asked {
+            self.panes[index].thumbnail_size = next;
             self.save_pane_views();
             self.refresh_thumbs();
         }
@@ -2647,8 +2655,9 @@ impl App {
         let mut trash = false;
         let mut rename = false;
         let mut toggle_view = false;
-        let mut smaller = false;
-        let mut bigger = false;
+        let mut thumb_drag = false;
+        let mut thumb_release = false;
+        let mut drag_size = size as f32;
         let mut refresh = false;
         let mut toggle_dual = false;
         let mut toggle_preview = false;
@@ -2693,15 +2702,24 @@ impl App {
                 .add(egui::Button::new(if grid { "List" } else { "Grid" }))
                 .on_hover_text("Switch between grid and list")
                 .clicked();
-            smaller = ui
-                .add(egui::Button::new("\u{2212}"))
-                .on_hover_text("Smaller thumbnails")
-                .clicked();
-            ui.label(format!("{size}px"));
-            bigger = ui
-                .add(egui::Button::new("+"))
-                .on_hover_text("Larger thumbnails")
-                .clicked();
+            // Qt puts a continuous size control on its toolbar, and day-to-day controls belong there rather than in
+            // a settings dialog. Dragging restyles the listing at once; the preference is written when you let go.
+            let thumb = ui
+                .add_sized(
+                    [104.0, 18.0],
+                    egui::Slider::new(&mut drag_size, THUMBNAIL_MIN as f32..=THUMBNAIL_MAX as f32)
+                        .suffix("px")
+                        // No step: the point of the control is that it is continuous. A stepped slider also rewrites
+                        // whatever size it was handed - a hand-written 100 px would quietly become 104 on the first
+                        // frame - because snapping its bound reads back as a change.
+                        .fixed_decimals(0)
+                        .clamping(egui::SliderClamping::Always),
+                )
+                .on_hover_text("Thumbnail size (Ctrl+- and Ctrl++ step it)");
+            thumb_drag = thumb.changed();
+            // The same shape the volume control uses: a drag is finished when the pointer lets go, and a click that
+            // jumps the handle counts as an edit too.
+            thumb_release = thumb.drag_stopped() || (!thumb.dragged() && thumb.changed());
             ui.separator();
             refresh = ui
                 .add(egui::Button::new("\u{27f3}"))
@@ -2730,8 +2748,7 @@ impl App {
             || trash
             || rename
             || toggle_view
-            || smaller
-            || bigger
+            || thumb_drag
             || refresh
             || toggle_dual
             || toggle_preview
@@ -2771,11 +2788,18 @@ impl App {
             self.panes[index].view_mode = next;
             self.save_pane_views();
         }
-        if smaller {
-            self.step_thumbnails(index, -1);
+        // A drag restyles the listing straight away; the preference is only written when the pointer lets go, so a
+        // sweep across the range does not become forty saved files and forty thumbnail decodes.
+        if thumb_drag {
+            let wanted =
+                (drag_size.round() as i64).clamp(THUMBNAIL_MIN as i64, THUMBNAIL_MAX as i64) as u32;
+            if wanted != self.panes[index].thumbnail_size {
+                self.panes[index].thumbnail_size = wanted;
+                self.refresh_thumbs();
+            }
         }
-        if bigger {
-            self.step_thumbnails(index, 1);
+        if thumb_release {
+            self.save_pane_views();
         }
         if refresh {
             self.open(index);
@@ -3698,6 +3722,12 @@ impl App {
         if keys.new_folder {
             self.new_folder();
         }
+        if keys.thumb_smaller {
+            self.step_thumbnails(self.active, -1);
+        }
+        if keys.thumb_bigger {
+            self.step_thumbnails(self.active, 1);
+        }
         let active = self.active;
         if keys.up_parent {
             let parent = self.panes[active].path.parent().map(Path::to_path_buf);
@@ -4404,6 +4434,10 @@ impl App {
                 .into_iter()
                 .find(|(key, _)| i.key_pressed(*key))
                 .map(|(_, value)| value),
+                thumb_smaller: i.key_pressed(egui::Key::Minus) && m,
+                // Most layouts need Shift to type '+', and the unshifted key is '=', so both mean grow.
+                thumb_bigger: (i.key_pressed(egui::Key::Plus) || i.key_pressed(egui::Key::Equals))
+                    && m,
                 step,
                 activate: i.key_pressed(egui::Key::Enter),
             }
@@ -5241,6 +5275,28 @@ mod tests {
             (tight_cols as f32) * tight_cell + (tight_cols as f32 - 1.0) * 24.0 <= 96.0 + 0.5,
             "{tight_cols} x {tight_cell}"
         );
+    }
+
+    /// The size control is continuous now, so the step has to behave on its own rather than hop between four presets.
+    #[test]
+    fn thumbnail_size_steps_by_a_proportion_and_stops_at_the_ends() {
+        let dir = sandbox("thumb-step", &["a.png"], &[]);
+        let mut app = App::with_cache(dir.clone(), sandbox("thumb-step-cache", &[], &[]));
+
+        app.panes[0].thumbnail_size = 150;
+        app.step_thumbnails(0, 1);
+        assert_eq!(app.panes[0].thumbnail_size, 201);
+        // A size nobody chose from a preset table still has somewhere to go.
+        app.step_thumbnails(0, -1);
+        app.step_thumbnails(0, -1);
+        assert!(app.panes[0].thumbnail_size < 150);
+
+        app.panes[0].thumbnail_size = THUMBNAIL_MIN;
+        app.step_thumbnails(0, -1);
+        assert_eq!(app.panes[0].thumbnail_size, THUMBNAIL_MIN);
+        app.panes[0].thumbnail_size = THUMBNAIL_MAX;
+        app.step_thumbnails(0, 1);
+        assert_eq!(app.panes[0].thumbnail_size, THUMBNAIL_MAX);
     }
 
     #[test]

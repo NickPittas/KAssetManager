@@ -35,7 +35,7 @@ pub enum FilterScope {
 #[serde(default)]
 pub struct Settings {
     pub show_hidden: bool,
-    /// One thumbnail edge per pane; a new pane takes `THUMBNAIL_SIZES`' middle size. Written as an array, but read
+    /// One thumbnail edge per pane, clamped to `THUMBNAIL_MIN..=THUMBNAIL_MAX`. Written as an array, but read
     /// as the single number older files used too - that one applied to every pane, so it becomes both panes' size.
     #[serde(default, deserialize_with = "scalar_or_seq")]
     pub thumbnail_size: Vec<u32>,
@@ -134,7 +134,10 @@ impl Default for Settings {
     }
 }
 
-const THUMBNAIL_SIZES: [u32; 4] = [64, 128, 256, 512];
+/// A thumbnail edge you can read and that decodes in reasonable time. Qt's control ran 64-320 continuously and its
+/// largest preset was 512; the app's slider spans this range and its keyboard steps stay inside it.
+pub const THUMBNAIL_MIN: u32 = 64;
+pub const THUMBNAIL_MAX: u32 = 512;
 
 struct ScalarOrSeq;
 
@@ -257,11 +260,9 @@ impl Settings {
         // each pane's own. Longer is trimmed and empty topped up, so the app always has one per pane.
         spread_to_two(&mut self.thumbnail_size, 128);
         for size in &mut self.thumbnail_size {
-            *size = THUMBNAIL_SIZES
-                .iter()
-                .copied()
-                .min_by_key(|s| s.abs_diff(*size))
-                .unwrap_or(128);
+            // A hand-edited file may say anything; the range is what the app can display, not a set of presets -
+            // the control is continuous and snapping would quietly undo the size someone chose.
+            *size = (*size).clamp(THUMBNAIL_MIN, THUMBNAIL_MAX);
         }
         self.thumbnail_threads = self.thumbnail_threads.clamp(1, 16);
         self.volume = if self.volume.is_finite() {
@@ -509,7 +510,9 @@ mod tests {
         )
         .expect("write");
         let s = Settings::load(&dirs);
-        assert_eq!(s.thumbnail_size, vec![256, 256]);
+        // A size inside the range is kept as written: one number means both panes, and the control is continuous, so
+        // a hand-written 200 is not snapped to a preset any more.
+        assert_eq!(s.thumbnail_size, vec![200, 200]);
         assert_eq!(s.thumbnail_threads, 1);
         assert_eq!(s.volume, 1.0);
         assert_eq!(s.recents_max, 1);
@@ -535,6 +538,14 @@ mod tests {
             ),
             (512, 16, 0.0, 100, 240.0)
         );
+        // A size set by dragging a slider is not a preset, and must survive the load that follows.
+        let mut s = Settings {
+            thumbnail_size: vec![150, 300],
+            ..Settings::default()
+        };
+        s.sanitize();
+        assert_eq!(s.thumbnail_size, vec![150, 300]);
+
         let mut s = Settings {
             thumbnail_size: vec![0, 0],
             volume: f32::NAN,

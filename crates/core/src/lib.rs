@@ -19,7 +19,7 @@ pub use scan::{
     Column, ScanOptions, SortKey, is_hidden, list_subfolders, scan_folder, sort_entries,
 };
 pub use sequence::{Sequence, SequenceFrame, detect_sequences};
-pub use settings::{FilterScope, Settings, Theme, ViewMode};
+pub use settings::{FilterScope, Settings, THUMBNAIL_MAX, THUMBNAIL_MIN, Theme, ViewMode};
 
 #[derive(Debug, thiserror::Error)]
 pub enum CoreError {

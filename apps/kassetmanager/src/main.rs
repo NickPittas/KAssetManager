@@ -92,7 +92,11 @@ fn main() {
     let result = eframe::run_native(
         "KAsset Manager",
         native_options,
-        Box::new(|_cc| {
+        Box::new(|cc| {
+            // egui's browser-style zoom owns Cmd/Ctrl+Plus and Ctrl+Minus by default. In a file and asset browser
+            // those keys mean thumbnail size (Qt uses them the same way), so egui is told to leave them alone -
+            // otherwise Ctrl+- quietly scales the whole interface instead of the tiles.
+            cc.egui_ctx.options_mut(|o| o.zoom_with_keyboard = false);
             let (theme, dual_pane, secondary, folder, file, explicit_folder) = start_point();
             let mut app = app::App::new(folder);
             if explicit_folder {
