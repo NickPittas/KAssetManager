@@ -63,6 +63,7 @@ pub(crate) fn numbered_name(name: &std::ffi::OsStr, n: u32) -> OsString {
 /// Try candidate destinations in `dest_dir` until `create` claims one atomically. `create` must return
 /// `FsError::Exists` without side effects when the candidate is taken. `Ok(None)` = skipped by policy.
 pub(crate) fn claim_dest(
+    src: &Path,
     dest_dir: &Path,
     name: &std::ffi::OsStr,
     policy: ConflictPolicy,
@@ -75,6 +76,26 @@ pub(crate) fn claim_dest(
             Err(FsError::Exists) => {
                 if policy == ConflictPolicy::Skip {
                     return Ok(None);
+                }
+                if policy == ConflictPolicy::Overwrite && n == 0 {
+                    // Replace means what is in the way gives way. Only a file does: a folder stays an error, so a
+                    // replace cannot quietly swallow a tree. And the source is never deleted to make room for
+                    // itself - copying a file back into its own folder must not eat the original.
+                    if candidate == src {
+                        return Err(FsError::Io(io::Error::other(
+                            "source and destination are the same file",
+                        )));
+                    }
+                    match fs::symlink_metadata(&candidate) {
+                        Ok(meta) if meta.file_type().is_dir() => {
+                            return Err(FsError::Io(io::Error::other("a folder is in the way")));
+                        }
+                        Ok(_) => {
+                            remove_node(&candidate)?;
+                            return create(&candidate).map(|()| Some(candidate));
+                        }
+                        Err(_) => {}
+                    }
                 }
             }
             Err(e) => return Err(e),

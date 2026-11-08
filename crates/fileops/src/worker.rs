@@ -611,7 +611,7 @@ fn copy_sources(
         let base = ctx.bytes_done.get();
         let mut within: u64 = 0;
         let mut emitted: u64 = 0;
-        match fsops::claim_dest(dest_dir, name, policy, |cand| {
+        match fsops::claim_dest(src, dest_dir, name, policy, |cand| {
             fsops::copy_node_reported(src, cand, &mut |delta| {
                 within += delta;
                 if within.saturating_sub(emitted) >= PROGRESS_REPORT_BYTES {
@@ -669,7 +669,9 @@ fn move_sources(
             effect.err(src, "cannot move a folder into itself");
             continue;
         }
-        match fsops::claim_dest(dest_dir, name, policy, |cand| fsops::move_exact(src, cand)) {
+        match fsops::claim_dest(src, dest_dir, name, policy, |cand| {
+            fsops::move_exact(src, cand)
+        }) {
             Ok(Some(dst)) => {
                 ctx.add_bytes(src_bytes);
                 effect.moved.push((src.clone(), dst));
@@ -1297,6 +1299,56 @@ mod tests {
             !dst.join("huge.bin").exists(),
             "the partial copy was removed"
         );
+    }
+
+    /// Replace means the file in the way gives way - and the original being copied is not eaten to make room for
+    /// itself when the source and destination are the same file.
+    #[test]
+    fn overwrite_replaces_the_file_in_the_way() {
+        let d = tempfile::tempdir().expect("tmp");
+        let src_dir = d.path().join("src");
+        let dst_dir = d.path().join("dst");
+        fs::create_dir(&src_dir).expect("src");
+        fs::create_dir(&dst_dir).expect("dst");
+        let src = src_dir.join("notes.txt");
+        write(&src, "new content");
+        let dst = dst_dir.join("notes.txt");
+        write(&dst, "old content");
+
+        let w = FileOpsWorker::new();
+        let id = w.submit(FileOp::Copy {
+            sources: vec![src.clone()],
+            dest_dir: dst_dir.clone(),
+            conflict: ConflictPolicy::Overwrite,
+        });
+        let o = wait_finished(&w, id);
+        assert!(o.errors.is_empty(), "{:?}", o.errors);
+        assert_eq!(fs::read_to_string(&dst).expect("read"), "new content");
+        // The original is still there to copy from again.
+        assert!(
+            src.exists(),
+            "the source survived being replaced at the destination"
+        );
+
+        // Replacing a file with a folder of the same name would delete a tree, so it is reported instead.
+        let blocker = dst_dir.join("blocker");
+        fs::create_dir(&blocker).expect("blocker dir");
+        let blocked = src_dir.join("blocker");
+        write(&blocked, "a file");
+        let id = w.submit(FileOp::Copy {
+            sources: vec![blocked],
+            dest_dir: dst_dir.clone(),
+            conflict: ConflictPolicy::Overwrite,
+        });
+        let o = wait_finished(&w, id);
+        assert!(
+            o.errors
+                .iter()
+                .any(|e| e.to_string().contains("folder is in the way")),
+            "{:?}",
+            o.errors
+        );
+        assert!(blocker.exists(), "the folder was not deleted");
     }
 
     /// A large copy has to report bytes while it is still inside one file. The app reads these events to say how

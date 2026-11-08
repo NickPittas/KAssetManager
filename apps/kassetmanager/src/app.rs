@@ -374,6 +374,16 @@ pub struct App {
     /// What the pointer is carrying in an in-app drag, so the drag can say so near the cursor. egui keeps the
     /// payload in its own pocket with no way to read it back, and draws nothing itself.
     dragging: Option<Vec<PathBuf>>,
+    /// A copy or move that found names already taken in the destination, waiting to be answered. Qt asks; silently
+    /// renaming over someone's file is how work gets lost in a folder of clips with similar names.
+    conflict: Option<PendingConflict>,
+    /// The answer the user said stands for everything after this: while it holds, nothing more is asked.
+    conflict_choice: Option<ConflictChoice>,
+    /// Whether the next answer should be remembered that way (the dialog's "Apply to All").
+    conflict_apply_all: bool,
+    /// Where the current carry began, so a drop can tell travel from a stationary hold. The pointer position egui
+    /// reports during a drag is live rather than the press point, so this has to be recorded when the drag starts.
+    drag_start_pos: Option<egui::Pos2>,
     /// A cut is spent once its move lands; this is what tells `poll_ops` to clear the clipboard.
     /// The sources of a cut that is waiting to move. Each is consumed when an operation actually carries
     /// it, so an unrelated move or undo cannot spend the clipboard, and failed sources stay available.
@@ -544,6 +554,15 @@ fn wants_operations_window(bytes_total: u64, elapsed_secs: f64) -> bool {
     bytes_total > 0 || elapsed_secs > OPERATION_WINDOW_SECS
 }
 
+/// Which of these sources already have their name taken in `dest`. Anything else can proceed without asking.
+fn taken_names(paths: &[PathBuf], dest: &Path) -> Vec<String> {
+    paths
+        .iter()
+        .filter_map(|path| path.file_name().map(|n| n.to_string_lossy().into_owned()))
+        .filter(|name| dest.join(name).exists())
+        .collect()
+}
+
 /// What a running operation says in the status bar: how far along it is, how fast, and roughly when it will be
 /// done. Bytes are what people judge a large copy by, so they lead when the engine has them; counts and the current
 /// name carry the line when it does not (a rename has no weight to report). The engine accounts bytes per source,
@@ -635,6 +654,42 @@ fn carried_by_drag(start: egui::Pos2, now: egui::Pos2) -> bool {
 /// What a drag inside this app carries: the files being carried and the folder they came from. egui's built-in
 /// drag and drop keeps its payload in-process (`DragAndDrop` holds an `Arc<dyn Any>`; nothing goes through the
 /// operating system clipboard), so paths arrive whole instead of as text something else would have to parse.
+/// What the user can say about a name that is already taken in the destination. Qt's dialog offers these three;
+/// `Rename` is what the engine has always done silently (`name (1).ext`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ConflictChoice {
+    Skip,
+    Replace,
+    Rename,
+}
+
+impl ConflictChoice {
+    fn policy(self) -> ConflictPolicy {
+        match self {
+            ConflictChoice::Skip => ConflictPolicy::Skip,
+            ConflictChoice::Replace => ConflictPolicy::Overwrite,
+            ConflictChoice::Rename => ConflictPolicy::KeepBoth,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            ConflictChoice::Skip => "Skip",
+            ConflictChoice::Replace => "Replace",
+            ConflictChoice::Rename => "Rename",
+        }
+    }
+}
+
+/// A copy or move waiting on the collision question: what was to be moved, where, and which names are taken.
+#[derive(Clone, Debug)]
+struct PendingConflict {
+    paths: Vec<PathBuf>,
+    dest: PathBuf,
+    move_op: bool,
+    names: Vec<String>,
+}
+
 #[derive(Clone, Debug)]
 struct Dragged {
     paths: Vec<PathBuf>,
@@ -723,6 +778,10 @@ impl App {
             op_bytes_done: 0,
             op_bytes_total: 0,
             dragging: None,
+            drag_start_pos: None,
+            conflict: None,
+            conflict_choice: None,
+            conflict_apply_all: true,
             clipboard_publish: None,
             rename_field_id: None,
             annotate_field_id: None,
@@ -1370,8 +1429,68 @@ impl App {
         self.status = format!("{}{what}", if cut { "cut: " } else { "copied: " });
     }
 
-    /// Ctrl+V: copy or move the clipboard path into the active pane's folder. Collisions get a numbered
-    /// name (`KeepBoth`), never an overwrite.
+    /// Stage a copy or move: ask about names already taken in the destination, then run it. Nothing is asked when
+    /// an answer was made to stand for everything, nor when nothing collides.
+    fn stage_operation(&mut self, paths: Vec<PathBuf>, dest: PathBuf, move_op: bool) {
+        let taken = taken_names(&paths, &dest);
+        if !taken.is_empty() && self.conflict_choice.is_none() {
+            self.conflict = Some(PendingConflict {
+                paths,
+                dest,
+                move_op,
+                names: taken,
+            });
+            return;
+        }
+        let policy = self
+            .conflict_choice
+            .map(ConflictChoice::policy)
+            .unwrap_or_default();
+        self.submit_operation(paths, dest, move_op, policy);
+    }
+
+    /// The user answered the collision question. `apply_all` makes the answer stand for later operations too -
+    /// per-file prompting would mean one operation per file, and a paste of two hundred clips would ask two
+    /// hundred times.
+    fn answer_conflict(&mut self, choice: ConflictChoice, apply_all: bool) {
+        if apply_all {
+            self.conflict_choice = Some(choice);
+        }
+        let Some(pending) = self.conflict.take() else {
+            return;
+        };
+        self.submit_operation(
+            pending.paths,
+            pending.dest,
+            pending.move_op,
+            choice.policy(),
+        );
+    }
+
+    fn submit_operation(
+        &mut self,
+        paths: Vec<PathBuf>,
+        dest: PathBuf,
+        move_op: bool,
+        policy: ConflictPolicy,
+    ) {
+        self.ops.submit(if move_op {
+            FileOp::Move {
+                sources: paths,
+                dest_dir: dest,
+                conflict: policy,
+            }
+        } else {
+            FileOp::Copy {
+                sources: paths,
+                dest_dir: dest,
+                conflict: policy,
+            }
+        });
+    }
+
+    /// Ctrl+V: copy or move the clipboard files into the active pane's folder. A name already taken in the
+    /// destination is asked about, not run over.
     pub fn paste(&mut self) {
         let Some((sources, cut)) = self.clipboard.clone() else {
             // Ctrl+V with nothing copied here must say what is missing: the OS clipboard may well hold text
@@ -1393,37 +1512,28 @@ impl App {
             return;
         }
         // Only a cut has sources to spend; they are consumed one by one as each one actually moves.
+        // Only a cut has sources to spend; they are consumed as each one actually moves.
         self.cut_pending = cut.then(|| sources.clone());
-        self.ops.submit(if cut {
-            FileOp::Move {
-                sources,
-                dest_dir,
-                conflict: ConflictPolicy::KeepBoth,
-            }
-        } else {
-            FileOp::Copy {
-                sources,
-                dest_dir,
-                conflict: ConflictPolicy::KeepBoth,
-            }
-        });
+        self.stage_operation(sources, dest_dir, cut);
     }
 
     /// What dragging from `path` in pane `index` would carry: the whole selection when that file is part of it,
     /// otherwise just that file - so grabbing one of five selected files carries all five, as Qt does.
-    /// Publish what this row or cell is carrying - but only once the pointer has actually moved. egui decides
-    /// that a press held past `max_click_duration` (0.8 s) is a drag even with no motion at all, so without this
-    /// gate a long click on a file would release as a drop and quietly copy it onto itself as `name (1).ext`.
-    /// Only the widget egui is dragging answers, so this costs one payload per frame however many cells are drawn.
+    /// Publish what this row or cell is carrying, once egui has decided the press became a drag. Only the widget
+    /// egui is dragging answers, so this costs one payload per frame however many cells are drawn. Whether a
+    /// release counts as a drop is decided later, by `drag_travelled`, from where this carry began.
     fn publish_drag(&mut self, ui: &egui::Ui, resp: &egui::Response, index: usize, path: &Path) {
         if !resp.dragged() {
             return;
         }
-        let moved = match (resp.interact_pointer_pos(), ui.ctx().pointer_interact_pos()) {
-            (Some(start), Some(now)) => carried_by_drag(start, now),
-            _ => false,
-        };
-        if moved {
+        // egui decides on its own when a press has become a drag: movement past `max_click_dist`, or a press held
+        // past `max_click_duration` with no motion at all. That frame is where the carry begins, and travel from
+        // there is what separates a real drop from a patient click.
+        let just_started = resp.drag_started() && self.dragging.is_none();
+        if just_started {
+            self.drag_start_pos = resp.interact_pointer_pos();
+        }
+        if just_started || self.dragging.is_some() {
             let carried = self.dragged_from(index, path);
             self.dragging = Some(carried.paths.clone());
             egui::DragAndDrop::set_payload(ui.ctx(), carried);
@@ -1467,23 +1577,21 @@ impl App {
                 return;
             }
         }
-        self.ops.submit(if shift {
-            FileOp::Move {
-                sources: paths,
-                dest_dir,
-                conflict: ConflictPolicy::KeepBoth,
-            }
-        } else {
-            FileOp::Copy {
-                sources: paths,
-                dest_dir,
-                conflict: ConflictPolicy::KeepBoth,
-            }
-        });
+        self.stage_operation(paths, dest_dir, shift);
     }
 
     /// Highlight the listing while a compatible drag is over it, and act on what was released there. Both
     /// listings answer a drop through here so they behave alike.
+    /// Whether the carry has travelled far enough from where it began to count as a drop. Without this, egui's
+    /// rule that a long press becomes a drag turned a patient click on a file into a copy of that file onto itself.
+    fn drag_travelled(&self, ui: &egui::Ui) -> bool {
+        let Some(start) = self.drag_start_pos else {
+            return false;
+        };
+        ui.input(|i| i.pointer.hover_pos())
+            .is_some_and(|now| carried_by_drag(start, now))
+    }
+
     fn accept_drop(&mut self, ui: &mut egui::Ui, rect: egui::Rect, index: usize) {
         let (hovering, dropped) = Self::drop_check(ui, rect);
         if hovering {
@@ -1491,7 +1599,9 @@ impl App {
             let tint = ui.visuals().selection.bg_fill.linear_multiply(0.35);
             ui.painter().rect_filled(rect.shrink(2.0), 4.0, tint);
         }
-        if let Some(carried) = dropped {
+        if let Some(carried) = dropped
+            && self.drag_travelled(ui)
+        {
             let shift = ui.input(|i| i.modifiers.shift);
             self.drop_files(carried, self.panes[index].path.clone(), shift);
         }
@@ -1774,6 +1884,7 @@ impl App {
             // The pointer is up: the drop zone took the payload, or nothing did. Either way the carry is over, and
             // egui leaves an untaken payload sitting in its pocket.
             self.dragging = None;
+            self.drag_start_pos = None;
             egui::DragAndDrop::clear_payload(ui.ctx());
         }
         let Some(carried) = self.dragging.clone() else {
@@ -1792,6 +1903,59 @@ impl App {
                     ui.colored_label(ui.visuals().weak_text_color(), label);
                 });
             });
+    }
+
+    /// Qt's question when the destination already holds that name: skip it, take its place, or keep both under a
+    /// new name - and whether the answer stands for everything after this.
+    fn conflict_window(&mut self, ui: &mut egui::Ui) {
+        let Some(pending) = self.conflict.clone() else {
+            return;
+        };
+        let mut apply_all = self.conflict_apply_all;
+        let mut answer = None;
+        let mut cancel = false;
+        egui::Window::new("File exists")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ui, |ui| {
+                let first = pending
+                    .names
+                    .first()
+                    .map(String::as_str)
+                    .unwrap_or("a file");
+                if pending.names.len() == 1 {
+                    ui.label(format!("{first} already exists in this folder."));
+                } else {
+                    ui.label(format!(
+                        "{first} already exists here, and {} more.",
+                        pending.names.len() - 1
+                    ));
+                }
+                ui.horizontal(|ui| {
+                    for choice in [
+                        ConflictChoice::Skip,
+                        ConflictChoice::Replace,
+                        ConflictChoice::Rename,
+                    ] {
+                        if ui.button(choice.label()).clicked() {
+                            answer = Some(choice);
+                        }
+                    }
+                });
+                ui.checkbox(&mut apply_all, "Apply to All");
+                if ui.button("Cancel").clicked() {
+                    cancel = true;
+                }
+            });
+        self.conflict_apply_all = apply_all;
+        if let Some(choice) = answer {
+            self.answer_conflict(choice, apply_all);
+        } else if cancel {
+            // Nothing was asked about and nothing should have moved.
+            self.conflict = None;
+            self.note("Cancelled");
+        }
     }
 
     /// The rename box for the active pane's selection: Enter or the button applies it.
@@ -3764,6 +3928,7 @@ impl eframe::App for App {
             self.annotate_window(ui);
         }
         self.operations_window(ui);
+        self.conflict_window(ui);
         self.drag_ghost(ui);
         // Nothing in this app was watching the disk: a file copied in from a terminal stayed out of the listing
         // until you pressed Refresh. Poll on the interval Qt debounced its watcher to, and ask egui to wake at
@@ -4412,6 +4577,72 @@ mod tests {
         );
         let many = vec![PathBuf::from("a"), PathBuf::from("b"), PathBuf::from("c")];
         assert_eq!(carry_label(&many), "3 files", "several say how many");
+    }
+
+    /// A name already in the destination is asked about, not run over: Skip, Replace or Rename - and "Apply to
+    /// All" makes the answer stand for later operations instead of asking twice.
+    #[test]
+    fn a_taken_name_is_asked_about_not_run_over() {
+        let src = sandbox("conflict-src", &["clip.mp4"], &[]);
+        let dest = sandbox("conflict-dest", &["clip.mp4"], &[]);
+        let mut app = App::with_cache(dest.clone(), sandbox("conflict-thumbs", &[], &[]));
+
+        assert_eq!(
+            taken_names(&[src.join("clip.mp4")], &dest),
+            vec!["clip.mp4".to_string()],
+            "the name is taken there"
+        );
+        assert_eq!(ConflictChoice::Replace.policy(), ConflictPolicy::Overwrite);
+
+        // A collision waits for an answer instead of copying over the file that is already there.
+        app.stage_operation(vec![src.join("clip.mp4")], dest.clone(), false);
+        let pending = app.conflict.clone().expect("a collision asks");
+        assert_eq!(pending.names, vec!["clip.mp4".to_string()]);
+
+        // Rename keeps both, which is what the engine used to do silently.
+        app.answer_conflict(ConflictChoice::Rename, false);
+        assert!(app.conflict.is_none(), "the question was answered");
+        assert!(
+            settle(&mut app, &dest, "clip (1).mp4", true),
+            "rename kept both files"
+        );
+
+        // Asked again, because no answer was made to stand. Skip leaves the file that was there alone.
+        app.stage_operation(vec![src.join("clip.mp4")], dest.clone(), false);
+        assert!(app.conflict.is_some(), "asked again");
+        app.answer_conflict(ConflictChoice::Skip, true);
+        assert_eq!(app.conflict_choice, Some(ConflictChoice::Skip));
+        assert!(
+            settle(&mut app, &dest, "clip.mp4", true),
+            "the original survived"
+        );
+        let listed = std::fs::read_dir(&dest)
+            .map(|entries| entries.count())
+            .unwrap_or(0);
+        assert_eq!(listed, 2, "skip copies nothing new");
+
+        // With an answer standing for everything, the next collision is not asked about.
+        app.stage_operation(vec![src.join("clip.mp4")], dest.clone(), false);
+        assert!(
+            app.conflict.is_none(),
+            "Apply to All means no further asking"
+        );
+    }
+
+    /// A patient click is not a drag. egui turns a long press into a drag, and releasing one where it started used
+    /// to copy the file onto itself as "name (1).ext".
+    #[test]
+    fn only_a_carry_that_travelled_is_a_drop() {
+        let at = egui::pos2(100.0, 80.0);
+        assert!(!carried_by_drag(at, at), "released where it was pressed");
+        assert!(
+            !carried_by_drag(at, egui::pos2(101.0, 81.0)),
+            "a twitch is still a click"
+        );
+        assert!(
+            carried_by_drag(at, egui::pos2(160.0, 80.0)),
+            "that is a drag"
+        );
     }
 
     /// A drop inside the app is a file operation with Qt's rules for its panes: copy by default, move while Shift
@@ -5445,6 +5676,10 @@ mod tests {
             "the clipboard carries every selected file"
         );
         app.paste();
+        // Pasting copies into the folder they already live in takes names that are taken - so it is asked about,
+        // and Rename is what makes the numbered copies these tests expect.
+        assert!(app.conflict.is_some(), "a paste onto taken names asks");
+        app.answer_conflict(ConflictChoice::Rename, true);
         assert!(
             settle(&mut app, &dir, "a (1).png", true),
             "the first copy landed (status: {})",
@@ -5706,6 +5941,10 @@ mod tests {
         );
 
         app.paste();
+        // The file's own folder already holds that name, so the paste is asked about; Rename is what makes the
+        // numbered copy this test is about.
+        assert!(app.conflict.is_some(), "a paste onto a taken name asks");
+        app.answer_conflict(ConflictChoice::Rename, true);
         assert!(
             settle(&mut app, &dir, "up (1).png", true),
             "paste made a numbered copy (status: {})",

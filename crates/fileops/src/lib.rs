@@ -18,6 +18,9 @@ use std::path::PathBuf;
 pub enum ConflictPolicy {
     /// Leave the existing destination alone and skip this source (reported in `errors`).
     Skip,
+    /// Take the place of what is in the way. Only a file gives way: a folder in the way is reported instead, so
+    /// replacing something never quietly deletes a tree the user did not mean to lose.
+    Overwrite,
     /// Pick a free name: `name (1).ext`, `name (2).ext`, …
     #[default]
     KeepBoth,
