@@ -25,9 +25,12 @@ fn start_point() -> (
     Option<PathBuf>,
     PathBuf,
     Option<PathBuf>,
+    // The last flag: a folder or file named on the command line beats the last session.
+    bool,
 ) {
     let mut theme = None;
     let mut dual_pane = false;
+    let mut explicit_folder = false;
     let mut secondary = None;
     let mut positional: Vec<String> = Vec::new();
     let mut args = std::env::args().skip(1);
@@ -57,6 +60,8 @@ fn start_point() -> (
     };
     let mut file = None;
     if let Some(arg) = positional.first() {
+        // A named place wins over the folder remembered from last time - that is what the argument is for.
+        explicit_folder = true;
         let path = PathBuf::from(arg);
         if path.is_dir() {
             folder = path;
@@ -70,7 +75,7 @@ fn start_point() -> (
             file = Some(path);
         }
     }
-    (theme, dual_pane, secondary, folder, file)
+    (theme, dual_pane, secondary, folder, file, explicit_folder)
 }
 
 fn main() {
@@ -88,8 +93,16 @@ fn main() {
         "KAsset Manager",
         native_options,
         Box::new(|_cc| {
-            let (theme, dual_pane, secondary, folder, file) = start_point();
+            let (theme, dual_pane, secondary, folder, file, explicit_folder) = start_point();
             let mut app = app::App::new(folder);
+            if explicit_folder {
+                // A folder named on the command line beats the remembered one; remembering starts from here.
+                app.start_folder_memory();
+            } else {
+                // Nothing was named, so reopen where the panes were when the window last closed - a folder that
+                // no longer exists is skipped, leaving the usual Pictures/home start.
+                app.restore_folders();
+            }
             // A file named on the command line arrives relative to where the shell was; the panes hold
             // absolute paths, so selection and playback have to speak the same language.
             if let Some(file) = file.as_deref().map(app::absolute) {

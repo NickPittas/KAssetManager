@@ -409,6 +409,10 @@ pub struct App {
     /// Wall clock (egui's own seconds) at which the panes' folders are next re-read. A deadline, not a timer:
     /// egui is asked to wake up at this rate and stays asleep between ticks.
     next_light_check: f64,
+    /// Whether where the panes are is worth writing down. Off until the remembered folders have been read back:
+    /// the window's own first listing would otherwise record the folder it guessed (Pictures) over the folder it
+    /// was about to restore - which is exactly what it did before this flag existed.
+    folders_remembered: bool,
     /// Which pane's header is being dragged, and which column; the drop index is computed from the pointer
     /// each frame. The owner matters: both panes draw headers, and only the one that started the drag may
     /// resolve its release - the other would answer with its own widths and coordinates.
@@ -608,6 +612,7 @@ impl App {
             tree_revealed: None,
             tree_reveal: None,
             next_light_check: 0.0,
+            folders_remembered: false,
             column_drag: None,
             list_scroll_x: [0.0, 0.0],
             settings_open: false,
@@ -739,6 +744,7 @@ impl App {
         self.panes[index].folder_mtime = std::fs::metadata(&path)
             .ok()
             .and_then(|meta| meta.modified().ok());
+        self.remember_current_folders();
         let before = self.panes[index].primary().map(Path::to_path_buf);
         self.panes[index].keep_existing();
         if self.panes[index].primary().map(Path::to_path_buf) != before {
@@ -1103,6 +1109,69 @@ impl App {
             self.active = 0;
             self.refresh_thumbs();
         }
+    }
+
+    /// Write down where the panes are, so the next window opens in the same folders. Qt restored its tabs and
+    /// panes for the same reason - a file manager that forgets where you were makes you find it again every
+    /// launch. This runs when a pane's folder changes rather than on the way out: eframe's `save` hook turned out
+    /// not to fire when this window was closed on Wayland (checked by observation, not assumption), and an exit
+    /// hook is also a hook that a killed process skips. Navigating is a deliberate act, so one fsync per move is
+    /// the price - not one per frame.
+    fn remember_current_folders(&mut self) {
+        if !self.folders_remembered {
+            return;
+        }
+        self.settings.last_folder = Some(self.panes[0].path.clone());
+        // The second pane is only worth remembering when it was open; a single-pane close should not leave a
+        // folder behind that the next launch would have to guess a layout for.
+        self.settings.last_folder_secondary = if self.settings.dual_pane {
+            Some(self.panes[1].path.clone())
+        } else {
+            None
+        };
+        // Writing down means writing to disk: a remembered folder that only lives in memory is gone with the
+        // process, and this one is killed as often as it is closed.
+        self.save_settings();
+    }
+
+    /// Start writing down where the panes are without restoring anything: used when the command line named the
+    /// folder to open, which is the one case where the remembered folder must not win.
+    pub fn start_folder_memory(&mut self) {
+        self.folders_remembered = true;
+    }
+
+    /// Reopen the folders the panes were left in, so a window opens where you left off. Both are read out of the
+    /// settings *before* anything navigates: navigating is what writes the settings back, so restoring one pane
+    /// would otherwise overwrite the other's remembered folder with where it happened to start.
+    ///
+    /// Returns whether the first pane moved. A folder that has been deleted or moved since is skipped rather than
+    /// restored into a blank pane, and a session left in one pane does not resurrect the pane the user closed.
+    pub fn restore_folders(&mut self) -> bool {
+        let remembered = (
+            self.settings.last_folder.clone(),
+            if self.settings.dual_pane {
+                self.settings.last_folder_secondary.clone()
+            } else {
+                None
+            },
+        );
+        // From here on, where the panes are is worth writing down - including what this navigation records.
+        self.folders_remembered = true;
+        let (Some(primary), secondary) = (remembered.0, remembered.1) else {
+            return false;
+        };
+        let mut restored = false;
+        if primary.is_dir() && primary != self.panes[0].path {
+            // Through `navigate`, so the folder being left goes onto that pane's Back stack like any other visit.
+            self.navigate(0, &primary);
+            restored = true;
+        }
+        if let Some(secondary) = secondary
+            && secondary.is_dir()
+        {
+            self.navigate(1, &secondary);
+        }
+        restored
     }
 
     /// Put the second pane at `dir` (Qt restores `Settings::last_folder_secondary`).
@@ -3806,6 +3875,77 @@ mod tests {
             app.panes[0].path, here,
             "a pane started at `.` stores the folder absolutely, where the tree can match it"
         );
+    }
+
+    /// A browser that forgets where you were makes you find it again every launch. The folders are written down
+    /// at close and reopened at start - and a folder that has gone is skipped rather than restored into a blank pane.
+    #[test]
+    fn the_app_reopens_the_folders_it_was_closed_in() {
+        let root = sandbox("restore", &["one.png"], &["inside", "other"]);
+        let mut app = App::with_cache(root.clone(), sandbox("restore-cache", &[], &[]));
+        // Startup decides whether folders are worth writing down: restore them, or start remembering from the
+        // folder the command line named. Until then the window's own first listing must not overwrite them.
+        app.start_folder_memory();
+
+        // Moving a pane is what writes the folder down - no exit hook involved.
+        app.navigate(0, &root.join("inside"));
+        assert_eq!(
+            app.settings.last_folder.as_deref(),
+            Some(root.join("inside").as_path()),
+            "the folder you were in is what gets written down"
+        );
+        assert_eq!(
+            app.settings.last_folder_secondary, None,
+            "a single-pane close remembers no second folder"
+        );
+
+        app.set_dual_pane(true);
+        app.navigate(1, &root.join("other"));
+        assert_eq!(
+            app.settings.last_folder_secondary.as_deref(),
+            Some(root.join("other").as_path()),
+            "a two-pane close remembers both panes where they were"
+        );
+
+        // What the next window reads back out of the settings file.
+        let mut reopened = App::with_cache(root.clone(), sandbox("restore-cache2", &[], &[]));
+        reopened.settings.last_folder = Some(root.join("inside").clone());
+        reopened.settings.last_folder_secondary = Some(root.join("other").clone());
+        reopened.settings.dual_pane = true;
+        assert!(
+            reopened.restore_folders(),
+            "the remembered folders are reopened, both panes at once"
+        );
+        assert_eq!(reopened.panes[0].path, root.join("inside"));
+        assert_eq!(reopened.panes[1].path, root.join("other"));
+        assert!(
+            reopened.settings.dual_pane,
+            "two panes come back as two panes - the layout was saved with them"
+        );
+
+        let mut stale = App::with_cache(root.clone(), sandbox("restore-cache3", &[], &[]));
+        stale.settings.last_folder = Some(root.join("inside").clone());
+        std::fs::remove_dir(root.join("inside"))
+            .expect("the remembered folder is deleted before the next start");
+        assert!(
+            !stale.restore_folders(),
+            "a folder that no longer exists is not restored"
+        );
+        assert_eq!(
+            stale.panes[0].path, root,
+            "and the folder it started in stays listed, not blanked"
+        );
+
+        let mut single = App::with_cache(root.clone(), sandbox("restore-cache4", &[], &[]));
+        single.settings.dual_pane = false;
+        single.settings.last_folder_secondary = Some(root.join("other").clone());
+        single.restore_folders();
+        assert_eq!(
+            single.panes[1].path, root,
+            "a folder left in a second pane that was closed does not reopen two panes"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// Files come from outside the app - a terminal copy, another file manager. The pane re-reads its folder on
