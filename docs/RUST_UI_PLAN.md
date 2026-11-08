@@ -211,11 +211,16 @@ Each phase is verified by running the real app first, then adding the smallest f
 | **P6** Settings split + system surfaces | settings tabs (General/Cache & Database/View/Shortcuts/External Apps/About), theme roles, logs, user guide, data root | "Settings holds preferences, not buttons I use all day." |
 
 ## Explicit drops / demotions (rule 2 applied)
+**P1 finalization scope (user, 2026-11-08).** Before anything library-, overlay- or annotation-shaped starts: the
+file-manager tab's own chrome and views get finished. That means one path affordance per pane (R7), single preview
+panel and single-pane default (R8), three list shapes plus grid with a per-pane mode control (R9), then the two
+mouse-dependent selection gestures (shift-range click, rubber-band) and external OS file drops. Tabs, projects,
+database health, fullscreen review and annotations wait for that to close.
 
 - Thumbnail pre-generation dialog + worker + prefetch/refresh menu → **drop** (engine cache does it).
 - Breadcrumb navigation → **replace** with Back/Up + editable path bar (Qt has no breadcrumb).
 - Collections chips UI → engine extra, not parity; keep only if it earns its place.
-- Per-pane preview panel sharing one panel across panes → Qt gives each pane its own; adopt per-pane panels in P1.
+- Per-pane preview panels → **drop** (user decision after using the app): one preview panel serves both panes and follows the active pane; dual pane itself is opt-in and off by default.
 
 ## Review provenance
 

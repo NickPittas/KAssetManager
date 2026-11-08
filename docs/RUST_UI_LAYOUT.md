@@ -128,3 +128,44 @@ R1, R2, R3 and R5 are implemented; R4 needed no change (the minimums were alread
   an edge - pointer injection on this box cannot produce one - so the gesture itself is still user-confirmed.
 - **Where names are still only clipped:** the pane list truncates inside its column widths by design (columns are
   resizable and the table scrolls sideways), which is not the same defect as a panel sizing to a name.
+
+## Second round of decisions (user, 2026-11-08, after using the app)
+
+These correct what was built above. They are decisions about intent, not bug reports.
+
+**R7 - one path affordance per pane, in that pane's header.** The top bar grew an editable path field while each
+pane kept its breadcrumb, so a window showed the same folder twice: once as crumbs, once as words in a bar belonging
+to no pane. The breadcrumb stays and is the path. Next to it, two small buttons: **Edit** turns that pane's crumb row
+into the text field (Enter goes to a folder that exists, Escape gives up, a wrong path says "Not a folder" and keeps
+the words for fixing) and **Copy** puts the pane's path on the clipboard. No second path display anywhere else; the
+top bar keeps only global surfaces (Settings, Folders).
+
+Acceptance: with a pane showing any folder, its header shows crumbs plus Edit and Copy, and no other widget repeats
+that path. Clicking Edit selects the words, typing `/tmp` and Enter lists `/tmp`; Copy followed by a paste into a text
+editor yields that pane's full path.
+
+**R8 - one preview panel serves both panes; dual pane is opt-in.** The plan had suggested a preview panel per pane,
+following Qt's layout. In practice the second panel duplicates work and eats width a tiled window does not have: one
+panel, showing the active pane's selection, is what gets used. Dual pane is a mode you switch on for a copy or a
+compare, not how the app opens: default single pane, remembered per session like everything else.
+
+Acceptance: a fresh settings file opens one listing plus tree/favorites and preview; the toolbar's pane toggle gives a
+second listing while preview stays a single panel that follows whichever pane is active.
+
+**R9 - the list has three shapes, chosen per pane.** Qt shipped two views (grid and details list). The browser needs
+three list shapes because the two jobs people do in it differ - finding a file by name in one folder, and walking a
+folder tree without losing where you were:
+
+| Mode | What it is | Why |
+| --- | --- | --- |
+| Simple List | today's details list: columns, one folder deep | scanning a known folder fast |
+| Tree List | the same rows, but folders carry an arrow that opens them in place, indenting what is inside | walking a hierarchy without opening another pane |
+| Columns | Mac Finder's Miller columns: a column per level, scrolling sideways | deep trees, seeing the parent chain at once |
+
+Grid stays its own mode beside these three (thumbnails, folding, hover scrub). Four modes total, chosen per pane and
+restored per pane like view mode always has been. These are new surfaces, not Qt parity: Qt had none of the last two.
+
+Acceptance: one toolbar control shows the four modes with tooltips; switching is live and survives a restart; Tree
+List's arrow opens a folder in place and its children indent one level; Columns shows a column per level and scrolls
+sideways when the chain outgrows the pane.
+
