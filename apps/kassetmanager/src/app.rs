@@ -132,6 +132,13 @@ const SCRUB_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// A run of numbered frames must reach this length before it is worth folding into one entry.
 const MIN_SEQUENCE_LEN: usize = 2;
+/// A tree list stops opening folders at this depth and after this many rows. Past either, the listing is a wall of
+/// indentation or a wall of rows, and nobody reads either.
+const TREE_MAX_DEPTH: usize = 8;
+const TREE_MAX_ROWS: usize = 3000;
+/// Indent per level in a tree list's Name column, and the width of the arrow's click area beside it.
+const TREE_INDENT: f32 = 14.0;
+const TREE_ARROW_W: f32 = 18.0;
 
 /// One pane of the browser: a folder, what it contains and its selection.
 struct Pane {
@@ -164,6 +171,9 @@ struct Pane {
     /// Whether this pane folds image sequences into one entry. It changes what a folder scan returns, so it belongs
     /// with the pane that scans it.
     collapse_sequences: bool,
+    /// Folders this pane has opened inside its tree list - paths under the pane's own folder, and only meaningful in
+    /// that view. Restored per pane like the rest of its workspace.
+    expanded: std::collections::HashSet<PathBuf>,
     grid_cols: usize,
     /// Row or cell to bring into view the next time it draws, set when the keyboard moves the current item.
     scroll_target: Option<PathBuf>,
@@ -414,6 +424,10 @@ pub struct App {
     /// Qt's editable path bar (`mainwindow.h:455`, "Editable path bar like Windows Explorer"), for the pane you
     /// are looking at. Typing a path is how you reach a folder nowhere near the ones in the tree.
     path_editing: bool,
+    /// Which pane asked for the field. The words belong to the pane that opened them, not to whichever pane is
+    /// active now: pressing another pane's toolbar mid-edit used to carry the half-typed path into that pane and
+    /// send Enter there.
+    path_edit_for: usize,
     path_text: String,
     /// The field asks for keyboard once, when it appears - egui would otherwise be told to focus it every frame.
     path_armed: bool,
@@ -647,6 +661,7 @@ impl Pane {
             view_mode,
             thumbnail_size,
             collapse_sequences,
+            expanded: std::collections::HashSet::new(),
             back_stack: Vec::new(),
             entries: Vec::new(),
             dir_paths: std::collections::HashSet::new(),
@@ -1002,6 +1017,7 @@ impl App {
             dragging: None,
             drag_start_pos: None,
             path_editing: false,
+            path_edit_for: 0,
             path_text: String::new(),
             path_armed: false,
             path_field_id: None,
@@ -1123,6 +1139,112 @@ impl App {
         self.stall = std::time::Instant::now();
     }
 
+    /// A folder's own listing for one level of a tree list: folders first, then files, each group sorted the way
+    /// the user set. Same rules as a pane's flat listing, because it is the same call into the engine.
+    fn tree_children(
+        &mut self,
+        dir: &Path,
+        opts: &ScanOptions,
+        key: SortKey,
+        ascending: bool,
+    ) -> Vec<Entry> {
+        let mut kids: Vec<Entry> = Vec::new();
+        for child in &self.child_dirs(dir) {
+            let Some(name) = child.file_name().map(|n| n.to_string_lossy().into_owned()) else {
+                continue;
+            };
+            kids.push(Entry {
+                path: child.clone(),
+                name,
+                kind: MediaKind::Other,
+                size: 0,
+                modified: std::fs::metadata(child)
+                    .ok()
+                    .and_then(|m| m.modified().ok()),
+                sequence: None,
+            });
+        }
+        sort_entries(&mut kids, key, ascending);
+        if let Ok(mut files) = scan_folder(dir, opts) {
+            sort_entries(&mut files, key, ascending);
+            kids.extend(files);
+        }
+        kids
+    }
+
+    /// Append `entries` and, for each opened folder among them, what is inside it - one level deeper each time.
+    fn push_tree_level(
+        &mut self,
+        entries: &[Entry],
+        depth: usize,
+        expanded: &std::collections::HashSet<PathBuf>,
+        opts: &ScanOptions,
+        key: SortKey,
+        ascending: bool,
+        rows: &mut Vec<Entry>,
+    ) {
+        for entry in entries {
+            if rows.len() >= TREE_MAX_ROWS {
+                // ponytail: the row cap is the only guard against opening a folder of folders thousands deep;
+                // past it the listing says nothing about what it left out.
+                return;
+            }
+            rows.push(entry.clone());
+            let open = entry.path.is_dir() && expanded.contains(&entry.path);
+            if open && depth + 1 < TREE_MAX_DEPTH {
+                let kids = self.tree_children(&entry.path, opts, key, ascending);
+                self.push_tree_level(&kids, depth + 1, expanded, opts, key, ascending, rows);
+            }
+        }
+    }
+
+    /// Rebuild a tree list's visible rows from the pane's folder plus its opened nodes. Idempotent: only direct
+    /// children of the pane's folder are taken as the base, so applying it twice in a row changes nothing.
+    fn apply_tree(&mut self, index: usize) {
+        let root = self.panes[index].path.clone();
+        let expanded = self.panes[index].expanded.clone();
+        let opts = self.scan_options(index);
+        let (key, ascending) = (self.settings.sort_key, self.settings.sort_ascending);
+        let base: Vec<Entry> = self.panes[index]
+            .entries
+            .iter()
+            .filter(|entry| entry.path.parent() == Some(root.as_path()))
+            .cloned()
+            .collect();
+        let mut rows: Vec<Entry> = Vec::new();
+        self.push_tree_level(&base, 0, &expanded, &opts, key, ascending, &mut rows);
+        let dirs: std::collections::HashSet<PathBuf> = rows
+            .iter()
+            .filter(|entry| entry.path.is_dir())
+            .map(|entry| entry.path.clone())
+            .collect();
+        self.panes[index].entries = rows;
+        self.panes[index].dir_paths = dirs;
+    }
+
+    /// Open or close one folder in a pane's tree list, and write the workspace down.
+    fn toggle_tree_node(&mut self, index: usize, dir: &Path) {
+        if !self.panes[index].expanded.remove(dir) {
+            self.panes[index].expanded.insert(dir.to_path_buf());
+        }
+        self.save_pane_views();
+        self.apply_tree(index);
+    }
+
+    /// How one pane lists its folder, and what that view needs from the model. Switching to a tree list re-lists
+    /// what is opened; switching away hands the listing back to the engine's flat read of the folder.
+    fn set_pane_view(&mut self, index: usize, mode: ViewMode) {
+        if self.panes[index].view_mode == mode {
+            return;
+        }
+        self.panes[index].view_mode = mode;
+        match mode {
+            ViewMode::TreeList => self.apply_tree(index),
+            _ => self.open_quiet(index),
+        }
+        self.save_pane_views();
+    }
+
     /// Re-read pane `index` without touching the thumbnail batch, so a multi-pane rescan batches once.
     /// A selection survives when its file is still in the folder, and its preview request survives with it.
     fn open_quiet(&mut self, index: usize) {
@@ -1163,6 +1285,9 @@ impl App {
                 all.extend(entries);
                 self.panes[index].dir_paths = dirs.into_iter().collect();
                 self.panes[index].entries = all;
+                if self.panes[index].view_mode == ViewMode::TreeList {
+                    self.apply_tree(index);
+                }
                 self.status.clear();
             }
             Err(err) => {
@@ -1274,6 +1399,10 @@ impl App {
             self.settings.view_mode[index] = self.panes[index].view_mode;
             self.settings.thumbnail_size[index] = self.panes[index].thumbnail_size;
             self.settings.collapse_sequences[index] = self.panes[index].collapse_sequences;
+            // Sorted so a saved file does not shuffle every time the same expansion is written back.
+            let mut open: Vec<PathBuf> = self.panes[index].expanded.iter().cloned().collect();
+            open.sort();
+            self.settings.tree_expanded[index] = open;
         }
         self.save_settings();
     }
@@ -1634,10 +1763,25 @@ impl App {
     /// but a test that wants both panes in grid view should not have to say so twice.
     #[cfg(test)]
     pub fn set_view_mode(&mut self, mode: ViewMode) {
-        for pane in &mut self.panes {
-            pane.view_mode = mode;
+        for index in 0..self.panes.len() {
+            self.set_pane_view(index, mode);
         }
-        self.save_pane_views();
+    }
+
+    /// The shapes one pane can take, with what each is for. Qt shipped grid and a details list; the tree shape is
+    /// this app's own, because walking a hierarchy one pane at a time means re-listing where you were each time.
+    const VIEW_SHAPES: [(ViewMode, &'static str, &'static str); 3] = [
+        (ViewMode::Grid, "Grid", "wall of thumbnails"),
+        (ViewMode::List, "Simple", "one folder, columns"),
+        (ViewMode::TreeList, "Tree", "folders open in place"),
+    ];
+
+    fn view_label(mode: ViewMode) -> &'static str {
+        match mode {
+            ViewMode::Grid => "Grid",
+            ViewMode::List => "Simple",
+            ViewMode::TreeList => "Tree",
+        }
     }
 
     /// Turn the second pane on or off; both panes are always kept in sync with the folder on disk.
@@ -2700,7 +2844,9 @@ impl App {
                 // every pane. The path bar above says which folder this pane is working on.
                 match self.panes[index].view_mode {
                     ViewMode::Grid => self.pane_grid(index, ui),
-                    ViewMode::List => self.pane_list(index, ui),
+                    // A tree list is the same table with rows from more than one folder; only the row model and the
+                    // Name column's indentation differ, so it shares the drawing rather than forking it.
+                    ViewMode::List | ViewMode::TreeList => self.pane_list(index, ui),
                 }
             });
         });
@@ -2712,7 +2858,7 @@ impl App {
     fn pane_toolbar(&mut self, index: usize, ui: &mut egui::Ui) {
         let has_selection = !self.panes[index].selection.is_empty();
         let can_back = !self.panes[index].back_stack.is_empty();
-        let grid = self.panes[index].view_mode == ViewMode::Grid;
+        let mut chosen: Option<ViewMode> = None;
         let dual = self.settings.dual_pane;
         let preview = self.settings.show_preview;
         let size = self.panes[index].thumbnail_size;
@@ -2772,10 +2918,26 @@ impl App {
                 .on_hover_text("Rename (F2)")
                 .clicked();
             ui.separator();
-            toggle_view = ui
-                .add(egui::Button::new(if grid { "List" } else { "Grid" }))
-                .on_hover_text("Switch between grid and list")
-                .clicked();
+            // One control for several shapes: a two-way toggle cannot say which shape you are looking at, and a
+            // tiled pane has no room for a button each. The button reads as the current shape; its menu names them.
+            let modes = ui.menu_button(Self::view_label(self.panes[index].view_mode), |ui| {
+                for (mode, name, purpose) in Self::VIEW_SHAPES {
+                    if ui
+                        .selectable_label(
+                            self.panes[index].view_mode == mode,
+                            format!("{name} - {purpose}"),
+                        )
+                        .clicked()
+                    {
+                        chosen = Some(mode);
+                        toggle_view = true;
+                        ui.close();
+                    }
+                }
+            });
+            let _ = modes
+                .response
+                .on_hover_text("Choose how this pane lists its folder");
             // Qt puts a continuous size control on its toolbar, and day-to-day controls belong there rather than in
             // a settings dialog. Dragging restyles the listing at once; the preference is written when you let go.
             let thumb = ui
@@ -2857,10 +3019,8 @@ impl App {
         if rename {
             self.start_rename();
         }
-        if toggle_view {
-            let next = if grid { ViewMode::List } else { ViewMode::Grid };
-            self.panes[index].view_mode = next;
-            self.save_pane_views();
+        if let Some(mode) = chosen {
+            self.set_pane_view(index, mode);
         }
         // Dragging restyles the listing straight away; the preference is written only when the pointer lets go, so a
         // sweep across the range is one saved file rather than one per pixel. Decodes are not counted that way: every
@@ -2894,7 +3054,7 @@ impl App {
     /// crumbs *are* this pane's path - there is no second copy of it in a window-wide bar (R7). Edit stands the text
     /// field in for the crumbs of this pane only; Copy puts the folder's path on the clipboard.
     fn pane_path_bar(&mut self, index: usize, ui: &mut egui::Ui) {
-        if self.path_editing && index == self.active {
+        if self.path_editing && index == self.path_edit_for {
             self.path_field(ui);
             return;
         }
@@ -2940,7 +3100,7 @@ impl App {
                         .clicked()
                     {
                         self.active = index;
-                        self.begin_path_edit();
+                        self.begin_path_edit(index);
                     }
                     if ui
                         .button("Copy")
@@ -2975,6 +3135,12 @@ impl App {
         let columns = self.list_columns();
         let widths: Vec<f32> = columns.iter().map(|c| self.column_width(*c)).collect();
         const ROW_H: f32 = 20.0;
+        // A folder opened from its arrow, applied once the rows are drawn: mutating the row model mid-draw would
+        // change what this frame is iterating.
+        let mut toggled: Option<PathBuf> = None;
+        // Depth comes from where a row sits relative to the pane's own folder, so no parallel per-row state is
+        // needed: direct children are level 0, what their opened folders hold is level 1, and so on.
+        let root = self.panes[index].path.clone();
         let mut selected: Option<PathBuf> = None;
         let mut play: Option<PathBuf> = None;
         let mut hovered: Option<PathBuf> = None;
@@ -3125,6 +3291,11 @@ impl App {
                 }
                 for (entry, is_dir) in rows[range.clone()].iter() {
                     let path = entry.path.clone();
+                    let depth = path
+                        .strip_prefix(&root)
+                        .map(|rest| rest.components().count().saturating_sub(1))
+                        .unwrap_or(0);
+                    let opened = *is_dir && self.panes[index].expanded.contains(&path);
                     let chosen = self.panes[index].is_selected(&path);
                     // One rect per row is the click target for the whole row - cells included, so a click
                     // anywhere on the row selects it. It spans the table's width, not just what fits.
@@ -3139,6 +3310,20 @@ impl App {
                     // context menu mid-click.
                     let row = ui.interact(rect, ui.id().with(&path), egui::Sense::click_and_drag());
                     self.publish_drag(ui, &row, index, &path);
+                    // The arrow is the folder's own control: clicking it opens or closes that folder in place without
+                    // selecting it or navigating into it. Allocated after the row so it takes the click first.
+                    let mut arrow_click = false;
+                    if *is_dir {
+                        let tip = egui::Rect::from_min_size(
+                            egui::pos2(rect.min.x + depth as f32 * TREE_INDENT, rect.min.y),
+                            egui::vec2(TREE_ARROW_W, ROW_H),
+                        );
+                        let hit = ui.allocate_rect(tip, egui::Sense::click());
+                        arrow_click = hit.clicked() && !row.double_clicked();
+                        if arrow_click {
+                            toggled = Some(path.clone());
+                        }
+                    }
                     if self.panes[index].scroll_target.as_deref() == Some(path.as_path()) {
                         // The row's place was already submitted above, whether or not it was drawn; once the
                         // keyboard's item is on screen the request is spent.
@@ -3153,9 +3338,23 @@ impl App {
                     }
                     let mut x = rect.min.x;
                     for (i, col) in columns.iter().copied().enumerate() {
-                        let text = self.cell_text(col, entry, *is_dir);
+                        let raw = self.cell_text(col, entry, *is_dir);
+                        let named = col == Column::Name;
+                        let indent = if named {
+                            depth as f32 * TREE_INDENT
+                        } else {
+                            0.0
+                        };
+                        // The bundled font has no triangles, so the marker is punctuation: `>` closed, `v` open.
+                        let text = if named && opened {
+                            format!("v {raw}")
+                        } else if named && *is_dir {
+                            format!("> {raw}")
+                        } else {
+                            raw
+                        };
                         let cell = egui::Rect::from_min_size(
-                            egui::pos2(x + 4.0, rect.min.y),
+                            egui::pos2(x + 4.0 + indent, rect.min.y),
                             egui::vec2((widths[i] - 12.0).max(20.0), ROW_H),
                         );
                         let _ = ui
@@ -3171,7 +3370,7 @@ impl App {
                     if row.double_clicked() {
                         play = Some(path.clone());
                     }
-                    if row.clicked() {
+                    if row.clicked() && !arrow_click {
                         selected = Some(path.clone());
                     }
                     if row.hovered() {
@@ -3190,6 +3389,9 @@ impl App {
                 }
             });
         self.list_scroll_x[index] = out.state.offset.x;
+        if let Some(dir) = toggled {
+            self.toggle_tree_node(index, &dir);
+        }
         self.accept_drop(ui, body, index);
         self.finish(index, selected, ctrl, play, hovered);
     }
@@ -3864,13 +4066,28 @@ impl App {
             self.open(active);
         }
         if keys.edit_path && !self.path_editing {
-            self.begin_path_edit();
+            let active = self.active;
+            self.begin_path_edit(active);
         }
         if keys.undo && self.ops.undo().is_none() {
             self.status = "nothing to undo".into();
         }
         if keys.redo && self.ops.redo().is_none() {
             self.status = "nothing to redo".into();
+        }
+        // In a tree list Right opens the current folder and Left closes it - what the arrow does under a pointer.
+        // On a file, or on a folder already in that state, the keys fall through to moving the current item.
+        if self.panes[active].view_mode == ViewMode::TreeList
+            && matches!(keys.step, Some(Step::ItemForward | Step::ItemBack))
+        {
+            let want_open = matches!(keys.step, Some(Step::ItemForward));
+            if let Some(current) = self.panes[active].primary().map(Path::to_path_buf)
+                && current.is_dir()
+                && self.panes[active].expanded.contains(&current) != want_open
+            {
+                self.toggle_tree_node(active, &current);
+                return;
+            }
         }
         if let Some(step) = keys.step {
             if let Some(path) = self.panes[active].step(step, self.panes[active].grid_cols) {
@@ -3888,11 +4105,11 @@ impl App {
         }
     }
 
-    /// The bottom status bar: the active pane's folder, how much is there, and what is selected.
+    /// The bottom status bar: how much the active pane holds and what is selected. It does not print the folder -
+    /// that is the breadcrumb's job, and a second copy of the same path at the bottom of the window asks which one
+    /// is authoritative.
     pub fn status_bar(&mut self, ui: &mut egui::Ui) {
         let pane = &self.panes[self.active];
-        ui.label(pane.path.display().to_string());
-        ui.separator();
         ui.label(format!("{} entries", pane.entries.len()));
         if self.settings.dual_pane {
             ui.separator();
@@ -4043,7 +4260,7 @@ impl App {
     /// The text field standing in for one pane's crumbs while its path is edited: type where to go, Enter lists it.
     /// A folder that does not exist keeps the words up to be fixed, and an empty field gives up without moving.
     fn path_field(&mut self, ui: &mut egui::Ui) {
-        let here = self.panes[self.active].path.display().to_string();
+        let here = self.panes[self.path_edit_for].path.display().to_string();
         let field = egui::TextEdit::singleline(&mut self.path_text)
             .hint_text(here)
             .desired_width(320.0);
@@ -4085,7 +4302,8 @@ impl App {
     /// Editing starts on an empty field that shows where you are as its hint. Prefilling the words meant a typed
     /// `/tmp` landed as `…/docs/tmp`, because egui 0.36 offers no public select-all for a text edit and appending
     /// to a path nobody meant to append to is the trap; empty plus Enter means stay.
-    fn begin_path_edit(&mut self) {
+    fn begin_path_edit(&mut self, index: usize) {
+        self.path_edit_for = index;
         self.path_text = String::new();
         self.path_armed = false;
         self.path_editing = true;
@@ -4102,8 +4320,8 @@ impl App {
         let candidate = absolute(Path::new(&typed));
         if candidate.is_dir() {
             self.path_editing = false;
-            let active = self.active;
-            self.navigate(active, &candidate);
+            let owner = self.path_edit_for;
+            self.navigate(owner, &candidate);
         } else {
             self.note("Not a folder");
         }
@@ -5573,7 +5791,7 @@ mod tests {
         let dest = sandbox("pathbar-dest", &["a.png"], &[]);
         let mut app = App::with_cache(start, sandbox("pathbar-cache", &[], &[]));
 
-        app.begin_path_edit();
+        app.begin_path_edit(0);
         assert!(app.path_editing, "the bar is ready to type in");
         app.path_text = dest.display().to_string();
         app.commit_path_edit();
@@ -5583,7 +5801,7 @@ mod tests {
             "a good path closes the bar, like Explorer's"
         );
 
-        app.begin_path_edit();
+        app.begin_path_edit(0);
         app.path_text = "/definitely/not/a/folder".into();
         app.commit_path_edit();
         assert!(app.path_editing, "a wrong path stays up to be fixed");
@@ -7363,5 +7581,74 @@ mod tests {
         assert!(!App::frames_to_step(Some(&entry(MediaKind::Image))));
         assert!(!App::frames_to_step(Some(&entry(MediaKind::Audio))));
         assert!(!App::frames_to_step(None));
+    }
+    /// A tree list shows what an opened folder holds, in place; the flat listing never does. Row order is asserted
+    /// because a tree that lists contents out of sight of their folder is unreadable.
+    #[test]
+    fn opening_a_folder_in_a_tree_list_shows_what_it_holds() {
+        let names = |entries: &Vec<Entry>| -> Vec<String> {
+            entries.iter().map(|e| e.name.clone()).collect()
+        };
+        let root = sandbox("treetest", &["top.png"], &["mid"]);
+        let _ = std::fs::create_dir_all(root.join("mid/deep"));
+        let _ = std::fs::write(root.join("mid/deep/inner.png"), b"x");
+
+        let mut app = App::with_cache(root.clone(), sandbox("treethumbs", &[], &[]));
+        assert_eq!(
+            names(&app.panes[0].entries),
+            vec!["mid", "top.png"],
+            "the flat listing is one folder deep: {}",
+            app.status
+        );
+
+        app.set_pane_view(0, ViewMode::TreeList);
+        assert_eq!(
+            names(&app.panes[0].entries),
+            vec!["mid", "top.png"],
+            "a closed folder keeps what it holds to itself"
+        );
+
+        app.toggle_tree_node(0, &root.join("mid"));
+        assert_eq!(
+            names(&app.panes[0].entries),
+            vec!["mid", "deep", "top.png"],
+            "an opened folder's rows follow it, folders before files"
+        );
+
+        app.toggle_tree_node(0, &root.join("mid/deep"));
+        assert_eq!(
+            names(&app.panes[0].entries),
+            vec!["mid", "deep", "inner.png", "top.png"],
+            "a folder opened inside another one indents the same way"
+        );
+
+        app.set_pane_view(0, ViewMode::List);
+        assert_eq!(
+            names(&app.panes[0].entries),
+            vec!["mid", "top.png"],
+            "switching away flattens the listing again"
+        );
+    }
+
+    /// The path field belongs to the pane that opened it, not to whichever pane is active now: pressing another
+    /// pane's toolbar mid-edit used to carry the half-typed path over and send Enter there.
+    #[test]
+    fn typing_a_path_navigates_the_pane_that_asked_for_the_field() {
+        let left = sandbox("ownleft", &["l.png"], &[]);
+        let right = sandbox("ownright", &["r.png"], &[]);
+        let dest = sandbox("owndest", &["d.png"], &[]);
+        let mut app = App::with_cache(left.clone(), sandbox("ownthumbs", &[], &[]));
+        app.panes[1].path = right.clone();
+
+        app.begin_path_edit(0);
+        app.active = 1;
+        app.path_text = dest.display().to_string();
+        app.commit_path_edit();
+
+        assert_eq!(
+            app.panes[0].path, dest,
+            "the pane that was typed into moves"
+        );
+        assert_eq!(app.panes[1].path, right, "the other pane keeps its folder");
     }
 }

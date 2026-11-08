@@ -18,7 +18,12 @@ pub enum Theme {
 pub enum ViewMode {
     #[default]
     Grid,
+    /// A details list of one folder: the columns, sorted and resizable.
     List,
+    /// The same rows, but a folder carries an arrow that opens it in place and indents what is inside. Not a Qt
+    /// shape - Qt had grid and details list only - it is here because walking a hierarchy one pane at a time means
+    /// re-listing the pane you were reading each time.
+    TreeList,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
@@ -57,6 +62,10 @@ pub struct Settings {
     pub collapse_sequences: Vec<bool>,
     #[serde(rename = "pane_view_mode", default)]
     pub view_mode: Vec<ViewMode>,
+    /// Which folders each pane has opened in its tree list. Per pane, because each pane is a separate workspace;
+    /// empty for a pane that has never expanded one.
+    #[serde(rename = "pane_tree_expanded", default)]
+    pub tree_expanded: Vec<Vec<PathBuf>>,
     pub sort_key: SortKey,
     pub sort_ascending: bool,
     /// List column order, left to right. All four are always offered; a saved list that lost one is topped up.
@@ -103,6 +112,7 @@ impl Default for Settings {
             collapse_sequences: vec![true, true],
             sequence_fps: 24.0,
             view_mode: vec![ViewMode::Grid, ViewMode::Grid],
+            tree_expanded: vec![Vec::new(), Vec::new()],
             sort_key: SortKey::Name,
             sort_ascending: true,
             list_columns: vec![Column::Name, Column::Modified, Column::Size, Column::Type],
@@ -186,9 +196,12 @@ impl<'de> serde::de::Visitor<'de> for ScalarOrSeq {
 
 /// Make a per-pane list hold exactly two entries. A single value is read as one decision made for both panes -
 /// that is what the older single-value settings files meant - rather than as one pane with an unnamed default.
-fn spread_to_two<T: Copy>(values: &mut Vec<T>, fill: T) {
+/// A hand-written settings file can carry one pane's value where two are stored. Clone, not `Copy`, so a list of
+/// paths can use it too.
+fn spread_to_two<T: Clone>(values: &mut Vec<T>, fill: T) {
     if values.len() == 1 {
-        values.push(values[0]);
+        let only = values[0].clone();
+        values.push(only);
     }
     values.resize(2, fill);
     values.truncate(2);
@@ -271,6 +284,7 @@ impl Settings {
             1.0
         };
         spread_to_two(&mut self.view_mode, ViewMode::Grid);
+        spread_to_two(&mut self.tree_expanded, Vec::new());
         spread_to_two(&mut self.collapse_sequences, true);
         self.recents_max = self.recents_max.clamp(1, 100);
         self.sequence_fps = if self.sequence_fps.is_finite() {
