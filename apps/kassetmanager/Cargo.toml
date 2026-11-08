@@ -12,6 +12,7 @@ workspace = true
 [dependencies]
 gallerybrowser-core = { workspace = true }
 gallerybrowser-fileops = { workspace = true }
+gallerybrowser-library = { workspace = true }
 gallerybrowser-media = { workspace = true }
 gallerybrowser-player = { workspace = true }
 egui = { workspace = true }

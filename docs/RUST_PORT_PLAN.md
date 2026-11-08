@@ -337,6 +337,20 @@ modifier combos arrive fine (`-M ctrl -k z -m ctrl`). Tests added after verifica
 Still not there: multi-select (ops act on one selected entry), OS drag/drop, context menus / toolbar buttons
 for these commands, volume/mute UI, lazy folder tree.
 
+**M1 slice 9 — project catalog (ratings, tags, collections) is wired.** `App` opens the engine catalog in
+`AppDirs::library_dir()` (`Library::open`, which imports the Python-era SQLite DB once when the catalog is
+new); a catalog that cannot open falls back to memory and says so in the status bar instead of stopping the
+browse. Ratings are keys `0`–`5` and the five stars in the preview panel; tags and collections show as chips
+there, added by a small text modal and removed by clicking the chip. Every finished file operation feeds the
+catalog: `relink(moved)` and `forget(removed)` from its `OpOutcome`, so a rating follows a rename or move and
+annotations die with a trashed file. Evidence: opening the app creates `~/.local/share/gallerybrowser/library`
+(catalog journal + lock owner on disk), pressing `4` with nothing selected reaches the handler and reports
+"select a file to rate" (`validation_outputs/m1-slice9-catalog.png`), stderr empty; test
+`annotations_follow_a_rename_through_the_worker` rates and tags a file, renames it through the ops worker and
+finds rating and tag at the new path. Gates: 199 workspace tests pass, strict clippy and fmt clean.
+Still not there: filtering the browser by tag or saved search (`LibraryQuery`/`filter_entries` are unused),
+multi-select (annotations act on the one selected entry), DB health surface.
+
 **Review pass on slices 7–8 (both reviewers said FIX-FIRST; fixes verified):** the logic reviewer caught that
 `open()` called `begin_batch()` **per pane**, and `begin_batch` invalidates the previous generation's queued
 work *and* drops decoded-but-unpolled results — so the second pane wiped the first pane's thumbnails.

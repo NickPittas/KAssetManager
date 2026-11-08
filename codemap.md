@@ -25,7 +25,8 @@ This codemap is a current navigation snapshot for maintainers. It is not a subst
 - `apps/kassetmanager` is the egui port itself: `src/main.rs` parses the command line
   (`--theme`, `--dual-pane`, folder or file) and opens the wgpu window; `src/app.rs` holds the app state —
   two `Pane`s (breadcrumb, subfolder list, grid/list of engine thumbnails, selection, preview), the shared
-  `Thumbnailer`, one `Player`, settings load/save and the settings window. It is written fresh against the
+  `Thumbnailer`, one `Player`, one `Library` catalog (ratings 0-5, tags and collections that file
+  operations move with the files), settings load/save and the settings window. It is written fresh against the
   engine crates; GalleryBrowser's own `ui-egui` UI code was not copied.
 - The port plan, milestones, gates and open decisions live in `docs/RUST_PORT_PLAN.md`.
 - Rust CI (`.github/workflows/rust.yml`) is **Linux only** (build, test, strict clippy, fmt); Windows and

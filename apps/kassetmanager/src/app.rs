@@ -12,6 +12,7 @@ use gallerybrowser_core::{
     sort_entries,
 };
 use gallerybrowser_fileops::{ConflictPolicy, FileOp, FileOpsWorker, OpEvent, OpOutcome};
+use gallerybrowser_library::Library;
 use gallerybrowser_media::{Thumbnailer, ThumbnailerConfig, Tick, frame_to_rgba, open};
 use gallerybrowser_player::Player;
 
@@ -44,6 +45,8 @@ struct FileKeys {
     redo: bool,
     trash: bool,
     rename: bool,
+    /// Digit 0-5 pressed to rate the selection.
+    rating: Option<u8>,
 }
 
 /// One `App` per window: two panes (the second only when `dual_pane` is on) plus the shared engine
@@ -88,6 +91,12 @@ pub struct App {
     frame: Option<egui::TextureHandle>,
     /// Engine data directories; `None` in tests so nothing is written outside the project.
     dirs: Option<AppDirs>,
+    /// Project catalog: tags, collections and ratings keyed by path. Opened from `AppDirs`; in memory
+    /// when there is no writable data directory (tests), so the feature still works.
+    library: Library,
+    /// Annotation list a modal is editing, with its text buffer.
+    annotate: Option<Annotate>,
+    annotate_focus: bool,
     settings_open: bool,
     /// Theme last pushed to egui, so we only re-set visuals when it changes.
     theme_applied: Option<Theme>,
@@ -103,6 +112,37 @@ impl Pane {
             wanted: None,
             preview: None,
         }
+    }
+}
+
+/// Which catalog list a modal is editing for the selected file.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AnnotateKind {
+    Tag,
+    Collection,
+}
+
+/// One annotation edit: which list, what text, and the file it applies to.
+struct Annotate {
+    kind: AnnotateKind,
+    buffer: String,
+    path: PathBuf,
+}
+
+/// Open the project catalog in the engine's data directory. A catalog that cannot be opened (read-only
+/// disk, another instance holds the lock) must not stop browsing, so we fall back to an in-memory one
+/// and report why in the status bar.
+fn open_library(dirs: Option<&AppDirs>) -> (Library, Option<String>) {
+    let Some(dirs) = dirs else {
+        return (Library::in_memory(), None);
+    };
+    let dir = dirs.library_dir();
+    match Library::open(&dir, dirs.legacy_database().as_deref()) {
+        Ok(library) => (library, None),
+        Err(err) => (
+            Library::in_memory(),
+            Some(format!("catalog in memory only: {err}")),
+        ),
     }
 }
 
@@ -131,6 +171,7 @@ impl App {
             disk_bytes: 1_000 << 20,
             threads: settings.thumbnail_threads.clamp(1, 16),
         });
+        let (library, library_note) = open_library(dirs.as_ref());
         let mut app = Self {
             // Both panes start at the same folder; navigating one never moves the other.
             panes: [Pane::new(path.clone()), Pane::new(path)],
@@ -152,6 +193,9 @@ impl App {
             cut_pending: false,
             issued: std::collections::HashSet::new(),
             stall: std::time::Instant::now(),
+            library,
+            annotate: None,
+            annotate_focus: false,
             dirs,
             settings_open: false,
             theme_applied: None,
@@ -159,6 +203,9 @@ impl App {
         app.open(0);
         if app.settings.dual_pane {
             app.open(1);
+        }
+        if let Some(note) = library_note {
+            app.status = note;
         }
         app
     }
@@ -597,6 +644,20 @@ impl App {
             }
             errors.extend(outcome.errors.iter().map(|e| e.to_string()));
         }
+        // The catalog is keyed by path, so it must follow the files the op moved or deleted.
+        let moved: Vec<(PathBuf, PathBuf)> =
+            finished.iter().flat_map(|o| o.moved.clone()).collect();
+        let removed: Vec<PathBuf> = finished.iter().flat_map(|o| o.removed.clone()).collect();
+        if !moved.is_empty()
+            && let Err(err) = self.library.relink(&moved)
+        {
+            self.status = format!("catalog relink: {err}");
+        }
+        if !removed.is_empty()
+            && let Err(err) = self.library.forget(&removed)
+        {
+            self.status = format!("catalog forget: {err}");
+        }
         // A cut is spent once its move lands; a copy stays available for another paste.
         if self.cut_pending
             && finished
@@ -659,6 +720,157 @@ impl App {
             });
         if apply {
             self.apply_rename();
+        }
+    }
+
+    /// Star the selected file 0-5. The catalog is keyed by path, so a rename follows the rating.
+    fn set_rating(&mut self, rating: u8) {
+        let Some(path) = self.target() else {
+            self.status = "select a file to rate".into();
+            return;
+        };
+        match self.library.set_rating(std::slice::from_ref(&path), rating) {
+            Ok(()) => {
+                let name = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                self.status = format!("{name} rated {rating}/5");
+            }
+            Err(err) => self.status = format!("rating: {err}"),
+        }
+    }
+
+    /// Rating and tag/collection chips for the active pane's selection; clicking a chip removes it.
+    fn annotations_ui(&mut self, ui: &mut egui::Ui) {
+        let Some(path) = self.target() else {
+            return;
+        };
+        if !self.panes[self.active]
+            .entries
+            .iter()
+            .any(|e| e.path == path)
+        {
+            return;
+        }
+        let notes = self.library.annotations(&path);
+        ui.separator();
+        let mut rate = None;
+        ui.horizontal(|ui| {
+            ui.label("Rating");
+            for star in 1..=5u8 {
+                if ui.selectable_label(notes.rating >= star, "★").clicked() {
+                    rate = Some(if notes.rating == star { 0 } else { star });
+                }
+            }
+        });
+        if let Some(rating) = rate {
+            self.set_rating(rating);
+        }
+        for (kind, names) in [
+            (AnnotateKind::Tag, notes.tags),
+            (AnnotateKind::Collection, notes.collections),
+        ] {
+            if names.is_empty() {
+                continue;
+            }
+            ui.horizontal(|ui| {
+                ui.label(match kind {
+                    AnnotateKind::Tag => "Tags",
+                    AnnotateKind::Collection => "In",
+                });
+                for name in &names {
+                    if ui.button(format!("{name} ×")).clicked() {
+                        let paths = [path.clone()];
+                        let result = match kind {
+                            AnnotateKind::Tag => self.library.remove_tag(&paths, name),
+                            AnnotateKind::Collection => {
+                                self.library.remove_from_collection(&paths, name)
+                            }
+                        };
+                        if let Err(err) = result {
+                            self.status = format!("{name}: {err}");
+                        }
+                    }
+                }
+            });
+        }
+        ui.horizontal(|ui| {
+            if ui.button("Add tag").clicked() {
+                self.open_annotate(AnnotateKind::Tag, path.clone());
+            }
+            if ui.button("Add collection").clicked() {
+                self.open_annotate(AnnotateKind::Collection, path.clone());
+            }
+        });
+    }
+
+    fn open_annotate(&mut self, kind: AnnotateKind, path: PathBuf) {
+        self.annotate = Some(Annotate {
+            kind,
+            buffer: String::new(),
+            path,
+        });
+        self.annotate_focus = true;
+    }
+
+    fn apply_annotate(&mut self, kind: AnnotateKind, name: &str, path: &Path) {
+        let paths = [path.to_path_buf()];
+        let result = match kind {
+            AnnotateKind::Tag => self.library.add_tag(&paths, name),
+            AnnotateKind::Collection => self.library.add_to_collection(&paths, name),
+        };
+        if let Err(err) = result {
+            self.status = format!("{name}: {err}");
+        }
+    }
+
+    /// Text entry that adds a tag or collection to the file chosen when the box opened.
+    fn annotate_window(&mut self, ui: &mut egui::Ui) {
+        let Some(mut edit) = self.annotate.take() else {
+            return;
+        };
+        let title = match edit.kind {
+            AnnotateKind::Tag => "Add tag",
+            AnnotateKind::Collection => "Add collection",
+        };
+        let mut apply = false;
+        let mut cancel = false;
+        egui::Window::new(title)
+            .collapsible(false)
+            .resizable(false)
+            .show(ui, |ui| {
+                let response = ui.add(
+                    egui::TextEdit::singleline(&mut edit.buffer)
+                        .hint_text("name")
+                        .desired_width(200.0),
+                );
+                if self.annotate_focus {
+                    response.request_focus();
+                    self.annotate_focus = false;
+                }
+                ui.horizontal(|ui| {
+                    if ui.button("Add").clicked() {
+                        apply = true;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        cancel = true;
+                    }
+                });
+                if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    apply = true;
+                }
+            });
+        if apply {
+            let name = edit.buffer.trim().to_string();
+            if !name.is_empty() {
+                self.apply_annotate(edit.kind, &name, &edit.path);
+            }
+            self.annotate = None;
+        } else if cancel {
+            self.annotate = None;
+        } else {
+            self.annotate = Some(edit);
         }
     }
 
@@ -916,6 +1128,7 @@ impl App {
                 ui.label("Select a file to preview, double-click to play it.");
             }
         }
+        self.annotations_ui(ui);
         ui.separator();
         self.transport(ui);
     }
@@ -1160,6 +1373,17 @@ impl eframe::App for App {
                         || i.key_pressed(egui::Key::Z) && m && shift,
                     trash: i.key_pressed(egui::Key::Delete),
                     rename: i.key_pressed(egui::Key::F2),
+                    rating: [
+                        (egui::Key::Num0, 0),
+                        (egui::Key::Num1, 1),
+                        (egui::Key::Num2, 2),
+                        (egui::Key::Num3, 3),
+                        (egui::Key::Num4, 4),
+                        (egui::Key::Num5, 5),
+                    ]
+                    .into_iter()
+                    .find(|(key, _)| i.key_pressed(*key))
+                    .map(|(_, value)| value),
                 }
             })
         };
@@ -1174,6 +1398,9 @@ impl eframe::App for App {
         }
         if keys.paste {
             self.paste();
+        }
+        if let Some(rating) = keys.rating {
+            self.set_rating(rating);
         }
         if keys.trash {
             self.trash_selection();
@@ -1218,6 +1445,9 @@ impl eframe::App for App {
         }
         if self.renaming {
             self.rename_window(ui);
+        }
+        if self.annotate.is_some() {
+            self.annotate_window(ui);
         }
     }
 }
@@ -1384,6 +1614,44 @@ mod tests {
 
     /// Wait (bounded) for the engine worker to report a finished op; then check whether `name` is in
     /// `dir` as expected. False if the worker never answers.
+    /// The catalog is keyed by path, so a file operation must carry annotations with the file: a rating
+    /// and tag set on a file are found at its new name once the rename finishes in the ops worker.
+    #[test]
+    fn annotations_follow_a_rename_through_the_worker() {
+        let dir = sandbox("catalog", &["a.png"], &[]);
+        let mut app = App::with_cache(dir.clone(), sandbox("catalog-cache", &[], &[]));
+
+        let file = dir.join("a.png");
+        app.select(file.clone());
+        app.set_rating(4);
+        app.apply_annotate(AnnotateKind::Tag, "keepme", &file);
+        assert_eq!(app.library.annotations(&file).rating, 4);
+
+        let renamed = dir.join("renamed.png");
+        app.ops.submit(FileOp::Rename {
+            from: file.clone(),
+            to: renamed.clone(),
+        });
+        // The worker runs on its own thread; `poll_ops` is what feeds the catalog the move.
+        for _ in 0..100 {
+            app.poll_ops();
+            if app.library.annotations(&renamed).rating == 4 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+
+        let notes = app.library.annotations(&renamed);
+        assert_eq!(notes.rating, 4, "the rating should follow the renamed file");
+        assert!(
+            notes.tags.iter().any(|tag| tag == "keepme"),
+            "the tag should follow the renamed file: {:?}",
+            notes.tags
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     fn settle(app: &mut App, dir: &Path, name: &str, present: bool) -> bool {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         loop {
