@@ -174,6 +174,12 @@ struct Pane {
     /// Folders this pane has opened inside its tree list - paths under the pane's own folder, and only meaningful in
     /// that view. Restored per pane like the rest of its workspace.
     expanded: std::collections::HashSet<PathBuf>,
+    /// What the pane's own folder holds, flat and never truncated - the base a tree list rebuilds its rows from.
+    /// Rebuilding from the displayed rows instead would let an opened folder that fills the row cap swallow the
+    /// siblings after it for good: collapse it and they never come back.
+    flat_entries: Vec<Entry>,
+    /// Whether a tree list had to stop at the row cap, so the listing can say so instead of looking complete.
+    tree_truncated: bool,
     grid_cols: usize,
     /// Row or cell to bring into view the next time it draws, set when the keyboard moves the current item.
     scroll_target: Option<PathBuf>,
@@ -662,6 +668,8 @@ impl Pane {
             thumbnail_size,
             collapse_sequences,
             expanded: std::collections::HashSet::new(),
+            flat_entries: Vec::new(),
+            tree_truncated: false,
             back_stack: Vec::new(),
             entries: Vec::new(),
             dir_paths: std::collections::HashSet::new(),
@@ -1047,6 +1055,11 @@ impl App {
             settings_open: false,
             theme_applied: None,
         };
+        for index in 0..2 {
+            // The tree's opened folders are part of the pane's workspace, so they come back with it. Paths that no
+            // longer sit under the pane's folder are simply never met again.
+            app.panes[index].expanded = app.settings.tree_expanded[index].iter().cloned().collect();
+        }
         app.open(0);
         if app.settings.dual_pane {
             app.open(1);
@@ -1206,7 +1219,7 @@ impl App {
         let opts = self.scan_options(index);
         let (key, ascending) = (self.settings.sort_key, self.settings.sort_ascending);
         let base: Vec<Entry> = self.panes[index]
-            .entries
+            .flat_entries
             .iter()
             .filter(|entry| entry.path.parent() == Some(root.as_path()))
             .cloned()
@@ -1218,6 +1231,7 @@ impl App {
             .filter(|entry| entry.path.is_dir())
             .map(|entry| entry.path.clone())
             .collect();
+        self.panes[index].tree_truncated = rows.len() >= TREE_MAX_ROWS;
         self.panes[index].entries = rows;
         self.panes[index].dir_paths = dirs;
     }
@@ -1229,6 +1243,9 @@ impl App {
         }
         self.save_pane_views();
         self.apply_tree(index);
+        // Closing a folder hides what it holds, and a selection the user can no longer see is one they can still
+        // delete. Same reconciliation navigation does when a file leaves a listing.
+        self.panes[index].keep_existing();
     }
 
     /// How one pane lists its folder, and what that view needs from the model. Switching to a tree list re-lists
@@ -1285,6 +1302,8 @@ impl App {
                 all.extend(entries);
                 self.panes[index].dir_paths = dirs.into_iter().collect();
                 self.panes[index].entries = all;
+                // Keep the flat listing before any tree rows are added: it is what a tree list rebuilds from.
+                self.panes[index].flat_entries = self.panes[index].entries.clone();
                 if self.panes[index].view_mode == ViewMode::TreeList {
                     self.apply_tree(index);
                 }
@@ -1793,6 +1812,12 @@ impl App {
         } else if !dual && was {
             // The hidden pane must not stay active, or the shortcuts would act on an invisible selection.
             self.active = 0;
+            if self.path_edit_for != 0 {
+                // The field lives in the pane that opened it; hide that pane and nothing is left to render it, take
+                // Enter, or clear its recorded focus.
+                self.path_editing = false;
+                self.path_field_id = None;
+            }
             self.refresh_thumbs();
         }
     }
@@ -2167,18 +2192,30 @@ impl App {
         }
     }
 
-    /// Apply the rename: same folder, new name. The engine refuses to overwrite an existing target.
+    /// Apply the rename: the file's own folder, a new name. A tree list shows files that live inside subfolders, so
+    /// "the pane's folder" would move a file up out of where it was. The engine refuses to overwrite an existing
+    /// target.
     pub fn apply_rename(&mut self) {
         let Some(from) = self.target() else {
             self.renaming = false;
             return;
         };
-        let to = self.panes[self.active].path.join(self.rename_buffer.trim());
+        let fallback = self.panes[self.active].path.clone();
+        let to = Self::rename_target(&from, &fallback, self.rename_buffer.trim());
         self.renaming = false;
         if to == from || self.rename_buffer.trim().is_empty() {
             return;
         }
         self.ops.submit(FileOp::Rename { from, to });
+    }
+
+    /// Where a rename lands: the file's own folder, so a file shown from inside a subfolder stays there. `fallback`
+    /// is the pane's folder, used only for a path with no parent of its own.
+    fn rename_target(from: &Path, fallback: &Path, new_name: &str) -> PathBuf {
+        from.parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| fallback.to_path_buf())
+            .join(new_name)
     }
 
     /// Move finished file operations into view: rescan the panes and report what went wrong. Called every
@@ -3141,6 +3178,19 @@ impl App {
         // Depth comes from where a row sits relative to the pane's own folder, so no parallel per-row state is
         // needed: direct children are level 0, what their opened folders hold is level 1, and so on.
         let root = self.panes[index].path.clone();
+        let tree_mode = self.panes[index].view_mode == ViewMode::TreeList;
+        // The arrow sits at the start of the Name cell, wherever that column happens to be - columns are reorderable,
+        // and a target pinned to the row's left edge would sit under another column's text.
+        let name_lead = {
+            let at = columns
+                .iter()
+                .position(|c| *c == Column::Name)
+                .unwrap_or(0)
+                .min(widths.len());
+            widths[..at].iter().sum::<f32>()
+        };
+        let pointer = ui.ctx().pointer_interact_pos();
+        let mut drop_folder: Option<PathBuf> = None;
         let mut selected: Option<PathBuf> = None;
         let mut play: Option<PathBuf> = None;
         let mut hovered: Option<PathBuf> = None;
@@ -3291,11 +3341,14 @@ impl App {
                 }
                 for (entry, is_dir) in rows[range.clone()].iter() {
                     let path = entry.path.clone();
-                    let depth = path
-                        .strip_prefix(&root)
-                        .map(|rest| rest.components().count().saturating_sub(1))
-                        .unwrap_or(0);
-                    let opened = *is_dir && self.panes[index].expanded.contains(&path);
+                    let depth = if tree_mode {
+                        path.strip_prefix(&root)
+                            .map(|rest| rest.components().count().saturating_sub(1))
+                            .unwrap_or(0)
+                    } else {
+                        0
+                    };
+                    let opened = tree_mode && *is_dir && self.panes[index].expanded.contains(&path);
                     let chosen = self.panes[index].is_selected(&path);
                     // One rect per row is the click target for the whole row - cells included, so a click
                     // anywhere on the row selects it. It spans the table's width, not just what fits.
@@ -3313,9 +3366,12 @@ impl App {
                     // The arrow is the folder's own control: clicking it opens or closes that folder in place without
                     // selecting it or navigating into it. Allocated after the row so it takes the click first.
                     let mut arrow_click = false;
-                    if *is_dir {
+                    if tree_mode && *is_dir {
                         let tip = egui::Rect::from_min_size(
-                            egui::pos2(rect.min.x + depth as f32 * TREE_INDENT, rect.min.y),
+                            egui::pos2(
+                                rect.min.x + name_lead + 4.0 + depth as f32 * TREE_INDENT,
+                                rect.min.y,
+                            ),
                             egui::vec2(TREE_ARROW_W, ROW_H),
                         );
                         let hit = ui.allocate_rect(tip, egui::Sense::click());
@@ -3345,10 +3401,11 @@ impl App {
                         } else {
                             0.0
                         };
-                        // The bundled font has no triangles, so the marker is punctuation: `>` closed, `v` open.
+                        // The bundled font has no triangles, so the marker is punctuation: `>` closed, `v` open. Only
+                        // a tree list marks folders; the plain list shows names as they are.
                         let text = if named && opened {
                             format!("v {raw}")
-                        } else if named && *is_dir {
+                        } else if named && tree_mode && *is_dir {
                             format!("> {raw}")
                         } else {
                             raw
@@ -3375,6 +3432,11 @@ impl App {
                     }
                     if row.hovered() {
                         hovered = Some(path.clone());
+                        if *is_dir && pointer.is_some_and(|pt| rect.contains(pt)) {
+                            // Releasing files over a folder's own row should fill that folder, not the pane's root -
+                            // which is the whole point of showing folders inside it.
+                            drop_folder = Some(path.clone());
+                        }
                     }
                     if row.secondary_clicked()
                         && (self.active != index || self.panes[index].primary() != Some(&path))
@@ -3392,7 +3454,14 @@ impl App {
         if let Some(dir) = toggled {
             self.toggle_tree_node(index, &dir);
         }
-        self.accept_drop(ui, body, index);
+        if tree_mode && self.panes[index].tree_truncated {
+            // Rows the cap left out are not in the scrollbar's total either; say what is on screen rather than
+            // implying the listing is whole.
+            ui.label(format!("showing the first {TREE_MAX_ROWS} rows"));
+        }
+        let pane_dir = self.panes[index].path.clone();
+        let dest: &Path = drop_folder.as_deref().unwrap_or(&pane_dir);
+        self.accept_drop_at(ui, body, dest);
         self.finish(index, selected, ctrl, play, hovered);
     }
 
@@ -3432,6 +3501,12 @@ impl App {
     /// Re-order the files each visible pane shows, without re-reading the folder.
     fn resort_panes(&mut self) {
         for index in 0..self.panes_visible() {
+            if self.panes[index].view_mode == ViewMode::TreeList {
+                // Sorting flattened rows globally would put a nested folder in front of its own parent. A tree list's
+                // order is rebuilt per level from each folder instead.
+                self.apply_tree(index);
+                continue;
+            }
             let pane = &mut self.panes[index];
             let mut folders: Vec<Entry> = Vec::new();
             let mut files: Vec<Entry> = Vec::new();
@@ -7650,5 +7725,56 @@ mod tests {
             "the pane that was typed into moves"
         );
         assert_eq!(app.panes[1].path, right, "the other pane keeps its folder");
+    }
+    /// A rename must not move a file out of the folder it was shown from: in a tree list, "same folder" is the
+    /// file's own parent, not whatever folder the pane happens to be showing.
+    #[test]
+    fn renaming_a_file_shown_from_a_subfolder_keeps_it_there() {
+        let target = App::rename_target(
+            Path::new("/root/mid/deep/inner.png"),
+            Path::new("/root"),
+            "new.png",
+        );
+        assert_eq!(target, PathBuf::from("/root/mid/deep/new.png"));
+    }
+
+    /// Closing a folder hides what it holds, and a row nobody can see is one they can still delete. Also pins that
+    /// the rows rebuilt after a collapse come from the flat listing: an opened folder that filled the row cap must
+    /// not swallow the siblings that followed it for good.
+    #[test]
+    fn closing_a_folder_forgets_what_it_hid_and_gives_the_siblings_back() {
+        let names = |entries: &Vec<Entry>| -> Vec<String> {
+            entries.iter().map(|e| e.name.clone()).collect()
+        };
+        let root = sandbox("closesib", &["top.png"], &["mid"]);
+        let _ = std::fs::create_dir_all(root.join("mid/deep"));
+        let mut app = App::with_cache(root.clone(), sandbox("closesibthumbs", &[], &[]));
+        app.set_pane_view(0, ViewMode::TreeList);
+        app.toggle_tree_node(0, &root.join("mid"));
+        assert_eq!(names(&app.panes[0].entries), vec!["mid", "deep", "top.png"]);
+
+        let child = root.join("mid/deep");
+        app.select_in(0, child.clone(), false);
+        assert_eq!(app.panes[0].selection, vec![child.clone()]);
+
+        // Pretend the row cap cut the listing short: only the opened folder is left among the displayed rows.
+        let mid_only: Vec<Entry> = app.panes[0]
+            .entries
+            .iter()
+            .filter(|e| e.name == "mid")
+            .cloned()
+            .collect();
+        app.panes[0].entries = mid_only;
+
+        app.toggle_tree_node(0, &root.join("mid"));
+        assert!(
+            app.panes[0].selection.is_empty(),
+            "a hidden row is not still selected"
+        );
+        assert_eq!(
+            names(&app.panes[0].entries),
+            vec!["mid", "top.png"],
+            "the sibling the cap had hidden comes back"
+        );
     }
 }
