@@ -345,12 +345,29 @@ impl App {
 
     fn select_in(&mut self, index: usize, path: PathBuf) {
         self.active = index;
+        let entry = self.panes[index]
+            .entries
+            .iter()
+            .find(|e| e.path == path)
+            .cloned();
+        // The player follows the selection whichever pane it came from: a clip selected in one pane must not
+        // leave the other pane's clip running the preview panel. Loaded paused, because selection must not
+        // start sound (user rule), and reconciled before any early return about preview requests - those are
+        // deduplicated per pane. `load` no-ops when this path is already loaded, so reselecting is cheap.
+        if let Some(entry) = entry.as_ref()
+            && matches!(
+                entry.kind,
+                MediaKind::Video | MediaKind::Audio | MediaKind::Sequence
+            )
+        {
+            self.load(path.clone(), false);
+        }
         let pane = &mut self.panes[index];
         pane.selected = Some(path.clone());
         if pane.wanted.as_deref() == Some(path.as_path()) {
             return;
         }
-        let Some(entry) = pane.entries.iter().find(|e| e.path == path).cloned() else {
+        let Some(entry) = entry else {
             // The file is filtered out of the listing, so there is nothing to decode: don't wait forever.
             pane.wanted = None;
             return;
@@ -364,15 +381,6 @@ impl App {
             self.outstanding += 1;
             self.stall = std::time::Instant::now();
         }
-        // A selected clip belongs in the player so the preview panel has its timeline and buttons - loaded
-        // paused, because selection must not start sound (user rule). Here rather than in the render path, so
-        // a selection made by any means behaves the same.
-        if matches!(
-            entry.kind,
-            MediaKind::Video | MediaKind::Audio | MediaKind::Sequence
-        ) {
-            self.load(path.clone(), false);
-        }
     }
 
     /// Load `path` in the player and start it playing (double-click).
@@ -380,10 +388,13 @@ impl App {
         self.load(path, true);
     }
 
-    /// Load `path` in the player. Private: a selection previews through `preview_selection`, which honours
-    /// the `video_preview` setting instead of always starting playback.
+    /// Load `path` in the player; `autoplay` false means the transport is there without sound starting.
     fn load(&mut self, path: PathBuf, autoplay: bool) {
+        // ponytail: opening here runs on the UI thread, so a damaged clip or slow storage can stall browsing;
+        // upgrade path is an open worker that discards results superseded by a newer selection.
         // A double-click selects (loading paused) and then plays that same file; don't probe it twice.
+        // ponytail: keyed by path only, so replacing a file under the same name keeps the loaded player until
+        // the folder is refreshed; add a content signature if that ever bites.
         if self.playing.as_deref() == Some(path.as_path()) {
             if autoplay {
                 self.player.play();
@@ -401,15 +412,23 @@ impl App {
                 self.player.set_looping(self.settings.loop_playback);
                 self.status.clear();
             }
-            Err(err) => self.status = format!("{err}"),
+            Err(err) => {
+                // Don't let a previous file's transport stand in for one that failed to open, and keep the
+                // selection able to retry (the file may have arrived since).
+                self.player.unload();
+                self.playing = None;
+                self.frame = None;
+                self.status = format!("{err}");
+            }
         }
     }
 
-    /// Stop playback and release the file.
+    /// Stop and rewind, keeping the file loaded: the preview panel belongs to the selected clip, and frames
+    /// are only pumped while the app owns the loaded path. Releasing here left a transport that could play
+    /// with nothing pumping frames (press Play after Stop and the picture was invisible).
     pub fn stop_playback(&mut self) {
-        self.player.stop();
-        self.playing = None;
-        self.frame = None;
+        self.player.seek(Tick::from_seconds_f64(0.0));
+        self.player.pause();
     }
 
     /// Move finished pictures from the engine into wgpu textures. Called every frame.
@@ -852,22 +871,27 @@ impl App {
         // frame chosen during a pass must schedule its own redraw or it surfaces late.
         let key = (entry.path.clone(), slot, slots);
         if let Some(tex) = pane.scrub_frames.get(&key).cloned() {
-            pane.scrub_shown = Some((entry.path.clone(), tex));
-            ui.ctx().request_repaint();
+            if Self::show_scrub(pane, entry.path.clone(), tex) {
+                ui.ctx().request_repaint();
+            }
             return;
         }
         if let Some(image) = self.thumbs.cached_scrub(entry, edge, slot, slots) {
             let texture = Self::upload_scrub(ui, image.as_ref(), slot, slots);
             pane.scrub_frames.insert(key.clone(), texture.clone());
-            pane.scrub_shown = Some((entry.path.clone(), texture));
-            ui.ctx().request_repaint();
+            if Self::show_scrub(pane, entry.path.clone(), texture) {
+                ui.ctx().request_repaint();
+            }
             return;
         }
 
         // Nothing decoded for this slot yet: ask the engine, then show the nearest frame we do have
         // (GalleryBrowser searches SCRUB_NEAR of them). Stop asking a frame after SCRUB_WAIT - it is undecodable.
         if pane.scrub_wait_until.elapsed() >= SCRUB_WAIT {
-            pane.scrub_shown = None;
+            if pane.scrub_shown.take().is_some() {
+                // The thumbnail has to come back, and egui only redraws when asked.
+                ui.ctx().request_repaint();
+            }
             return;
         }
         self.thumbs.request_scrub(entry, edge, slot, slots);
@@ -904,6 +928,18 @@ impl App {
         // Keep passes coming while a frame is wanted; answers arrive from the engine's own threads.
         ui.ctx()
             .request_repaint_after(std::time::Duration::from_millis(30));
+    }
+
+    /// Point the cell at a scrub frame, reporting whether that is a change worth redrawing for. egui only
+    /// redraws when asked; asking on every cache hit renders continuously while the pointer rests on a
+    /// decoded frame.
+    fn show_scrub(pane: &mut Pane, path: PathBuf, tex: egui::TextureHandle) -> bool {
+        let changed = pane
+            .scrub_shown
+            .as_ref()
+            .is_none_or(|(p, t)| p != &path || t.id() != tex.id());
+        pane.scrub_shown = Some((path, tex));
+        changed
     }
 
     /// Turn a decoded scrub frame into a wgpu texture for this pass.
@@ -1440,7 +1476,9 @@ impl App {
         if looping.changed() {
             self.player.set_looping(self.settings.loop_playback);
         }
-        if vol.changed() || mute.changed() || looping.changed() {
+        // Saving writes and fsyncs, so persist when the interaction ends rather than once per dragged frame.
+        let ended = vol.drag_stopped() || (!vol.dragged() && vol.changed());
+        if ended || mute.changed() || looping.changed() {
             self.save_settings();
         }
         let seconds = state.position.seconds().max(0.0);
@@ -1853,6 +1891,17 @@ mod tests {
         assert!(
             state.loaded && !state.playing,
             "a still must not start or stop playback"
+        );
+
+        // Stop rewinds and pauses but keeps the file ours to pump; a transport that could play with no frames
+        // was the trap here (press Play after Stop and the picture stayed invisible).
+        let loaded = app.playing.clone();
+        app.stop_playback();
+        assert_eq!(app.playing, loaded, "stop must not release the loaded path");
+        let state = app.player.state();
+        assert!(
+            state.loaded && !state.playing,
+            "stop rewinds and pauses, still loaded"
         );
 
         let _ = std::fs::remove_dir_all(&dir);
