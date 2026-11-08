@@ -403,7 +403,9 @@ impl App {
                 )
         });
         if media {
-            self.load(path.to_path_buf(), self.settings.video_preview);
+            // Always paused: a stored "play on selection" from the Qt settings must not restage playback on
+            // every click here (user rule). Autoplay on selection returns with its own UI-phase surface.
+            self.load(path.to_path_buf(), false);
         }
     }
 
@@ -1611,17 +1613,6 @@ impl App {
                     .changed()
                 {
                     rescan = true;
-                    dirty = true;
-                }
-                if ui
-                    .checkbox(
-                        &mut self.settings.video_preview,
-                        "Play clip when selected (off = load it paused)",
-                    )
-                    .changed()
-                {
-                    // The switch is about what happens on the *next* selection; it must not pause a clip
-                    // that is playing right now.
                     dirty = true;
                 }
                 if ui
