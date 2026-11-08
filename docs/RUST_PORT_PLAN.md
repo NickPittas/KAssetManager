@@ -1,0 +1,213 @@
+# Rust Port Plan (branch `rust-refactor`)
+
+Decisions taken: full app port to Rust + egui; big-bang swap of the app with Qt kept building as a
+reference; engine crates forked into this repo; first shippable version must include annotations +
+fullscreen review overlay, project DB + virtual folders + DB health, media convert + Office/PDF
+preview, and search. The Rust app ships on **Windows, Linux and macOS** (the C++ original shipped
+Windows + Linux only). Memory safety is a primary motivation, not theoretical: the original app
+segfaulted in many places with no clear trace.
+
+## Evidence this plan is based on
+
+| Fact | Source |
+|---|---|
+| C++ app to port: ~51k LOC under `native/qt6/src` (+ player_lab, tests) | `wc -l` over `src/`, `player_lab/`, `tests/` |
+| `mainwindow.cpp` 12,089; `preview_overlay.cpp` 4,345 + 847 hdr; `ffmpeg_mov_player.cpp` 1,888 | same |
+| Playback today: FFmpeg via pkg-config + tlRender; scrubbing `grid_scrub.cpp` 524 + `live_preview_manager.cpp` 991 | `native/qt6/CMakeLists.txt:90`, codemap.md |
+| GalleryBrowser is a Rust workspace of **7 packages** (6 library crates + 1 app), ~26k LOC; player is UI-free (`tick(Instant) -> Option<Arc<VideoFrame>>`) | `crates/player/src/lib.rs` |
+| Today's CI never builds the Qt application: both configure steps pass `-DBUILD_APP=OFF`, and triggers cover only `main` — "Qt keeps building" is not currently proven by anything | `.github/workflows/ci.yml:5,7,35,68` |
+| Decoders are pure-Rust ArtCraft crates, no FFmpeg; coverage claims ProRes, H.264/HEVC, DNxHD/HR, AV1, MXF/MOV | `crates/media/src/lib.rs:1-2` |
+| No FFI layer exists in GalleryBrowser (no `extern "C"` anywhere) — irrelevant for a full egui port | grep over `crates/`, `apps/` |
+| GalleryBrowser CI builds on ubuntu/macos/windows with `rust-toolchain@stable`; branch history shows it already did a Python→Rust rewrite (`rust-rewrite`) | `.github/workflows/ci.yml`, `git branch -a` |
+| No Rust toolchain was installed on this machine; now `cargo 1.99.1` / `rustc 1.99.1` via mise | `mise use -g rust@stable` |
+| fzf is a cross-platform fuzzy *filter*; it does not maintain a system-wide filename index, so it cannot replace Everything's index query | voidtools.com/support/everything, junegunn/fzf README |
+| `nucleo` / `nucleo-matcher` (helix-editor) is an active Rust library port of fzf's scoring algorithm — in-process fuzzy ranking, no external binary at runtime | github.com/helix-editor/nucleo (core matcher described as complete; used by Helix) |
+| GalleryBrowser already ships CI for ubuntu + macos + windows with `rust-toolchain@stable`, so the three-platform bar is proven in the sibling repo | `.github/workflows/ci.yml` matrix |
+
+## Target layout
+
+```
+Cargo.toml                 # workspace: crates/*, apps/*
+crates/                    # engine crates forked from GalleryBrowser @ recorded rev (VENDORED.md)
+  core/ media/ player/ fileops/ library/
+apps/kassetmanager/        # new egui app = the ported UI
+native/qt6/                # frozen reference build; local-only (decided: no CI job on this branch)
+third_party/ffmpeg         # candidate for deletion once M2 passes (media convert may keep ffmpeg CLI)
+```
+
+Fork only *our* crates. The ArtCraft crates (`filmcraft-*`, `photocraft-*`, `lightcraft-*`,
+`craft-ui`) stay pinned git dependencies — forking third-party is self-inflicted maintenance.
+
+## Milestones (each ends in a runnable check, not a claim)
+
+| # | Deliverable | Gate (how it is proven) |
+|---|---|---|
+| M0 | Cargo workspace skeleton + vendored engine crates compile here. **No CI change for Qt** (decided: the reference build is local-only); cargo jobs are added, Qt's existing `main`-only CI stays as it is | `cargo build --workspace` and `cargo test --workspace` on ubuntu + macos + windows; `cargo clippy --workspace --all-targets -- -D warnings` and `cargo fmt --check` on ubuntu only (as GB does); pinned ArtCraft revs compile on MSVC and macOS; locally, one `-DBUILD_APP=ON` configure+build of `native/qt6` proves the reference still compiles |
+| M1 | egui app shell in a **fresh** crate `apps/kassetmanager`: eframe/wgpu window, menu + status bar, dual-pane browser, folder tree, breadcrumb, settings dialog, theme. Decided: **no GalleryBrowser UI code is copied** — panes, tree, breadcrumb and transport are written here against the five engine crates (their `AppState`/action-dispatcher model is not inherited) | Scripted over a fixture tree with `egui_kittest`: navigate, multi-select, inline rename, trash, new folder, then undo and redo — each asserted on the filesystem (paths exist / gone / restored), not observed by eye. First-frame presented within a declared frame-time budget on this machine (number frozen in the M1 test before it runs). |
+| M2 | **Motivation gate** — playback + hover scrub in Rust: one `Player` per pane, transport, `media::Thumbnailer` scrub slots, texture LRU | Named ProRes MOV fixture (path + duration recorded): plays with audio at 1x; at speed != 1 the engine **mutes and skips audio by design** (`crates/player/src/lib.rs:17-20`), so the gate is *video-correct* at 2x, not audio-at-2x; scrub over the fixture does not reopen the container (assert on open-source count); normalized pixel-hash comparison against FFmpeg decode for named frames |
+| M3 | Asset catalog in Rust: project DBs, virtual folders, `asset_versions`, DB health agent + dialog, on `rusqlite` | Opens a Qt-produced SQLite fixture and lists frozen expected counts; each health check matches frozen expected findings from the Qt `database_health_agent`; **write** paths exercised too (create virtual folder, add asset version, run one repair) — read-only counts prove nothing about migration ownership |
+| M4 | Import workflow + folder watchers: scan → sequence detect → ingest with progress; dedupe, relink | Import a fixture folder containing an EXR sequence (manifest records frame count + naming) → one grouped asset; re-import adds nothing; watcher picks up a dropped file within a declared deadline; moving an ingested file then running relink restores the link. |
+| M5 | Fullscreen review overlay + annotation markup (pen / text / rect / arrow) — the two hardest egui surfaces | Draw each of the four annotation types on a frame, save, reopen: geometry matches within a frozen pixel tolerance at three frozen zoom factors; fullscreen entry and exit both restore layout. |
+| M6 | Media convert (ffmpeg CLI over `std::process`), Office preview (docx via zip, OLE `.doc`), PDF preview | Convert MOV→MP4 and assert output codec + duration with the same probe used today (not file existence); preview asserts extracted content — known string from a `.docx`, first page of a `.pdf`, and an OLE `.doc`. |
+| M7 | Search: one trait, three OS backends, fuzzy ranking in-process (see "Search design" below) | Frozen expected path set and ranking order for named queries over one fixture tree, per OS backend, plus the failure-mode cases below. `nucleo-matcher` assertions run without any OS binary. |
+
+Deferred on purpose (not dropped): drag-out to other OS apps (Win32 virtual-file drag), log dock polish.
+
+### Gate acceptance rule
+
+Every numeric threshold above (frame time, pixel tolerance, zoom factors, watcher deadline, expected
+counts and findings) is **frozen in a committed test file before the milestone's implementation starts**,
+by whoever implements it. Nothing in this plan invents a number from here; that keeps gates falsifiable
+without pretending today's guesses are requirements.
+
+## M0 order of operations (no further decisions needed)
+
+1. Record the GalleryBrowser source SHA, then copy the five crates and their manifests into `crates/`.
+2. Carry the workspace `[workspace.dependencies]`, `[workspace.package]` and `[workspace.lints]` blocks so
+   the forked crates keep the same lint wall (`unsafe_code = forbid`, `unwrap_used`/`expect_used`/
+   `panic`/`unreachable`/`unimplemented` denied).
+3. Preserve the ArtCraft git revs exactly as pinned today; do not bump them during the fork.
+4. `cargo build` + `cargo test` locally (already proven green against upstream here: 14 test binaries ok).
+5. Add the Rust CI jobs with an explicit `rust-refactor` branch trigger — Qt's CI untouched.
+
+`crates/VENDORED.md` records, per crate: source URL + SHA, which paths were copied, the copy mechanism,
+license attribution (MIT), and every divergence from upstream (starting with the macOS `~/.Trash` change).
+
+Fixture policy, respecting this repo's rule that generated artifacts stay inside the project folder:
+committed fixtures under `tests/fixtures/`, generated outputs in an ignored in-project directory, and any
+inherited test that used the system temp dir redirected there (e.g. `crates/fileops/src/worker.rs:690`).
+
+## Search design (M7)
+
+Everything did two jobs at once; the port separates them so no per-OS binary is required for ranking:
+
+| Job | Windows | macOS | Linux |
+|---|---|---|---|
+| Indexed filename query | Everything SDK / `es` (the existing `everything_search.cpp:13-116` path already loads `Everything64.dll`) | `mdfind` (Spotlight index — closest analog to Everything's always-on index) | `plocate`/`locate` DB, or `fd` when no index is present |
+| Fuzzy ranking + type-ahead | `nucleo-matcher` in-process on all three (fzf's scoring algorithm, no fzf binary dependency) | same | same |
+
+Consequence: one `SearchProvider` trait with a per-OS implementation and a fake in tests; the existing
+~1.6k LOC of Qt search UI + results model collapses to a text field plus a result list.
+
+Two contract details that must not be discovered late:
+
+- **The index filters, it does not fuzzy-match.** `es`/`mdfind`/`plocate` narrow candidates with their own
+  literal/prefix semantics *before* `nucleo-matcher` can rank them, so a typo'd query can lose the match
+  before ranking ever sees it. The provider must issue a permissive pattern (prefix/substring), not an
+  exact match — otherwise fuzzy ranking is decorative.
+- **Failure modes are part of the gate:** index service unavailable or not running, backend command error
+  or timeout, stale or volume-excluded index, and missing `fd`/`plocate` binary. Each needs a declared
+  user-visible outcome rather than an empty result.
+- Fallback rule: if the OS index is absent or cold, degrade to `fd` or a scan over the project's own DB —
+  and disclose that the DB fallback only covers **imported** files, so coverage narrows silently.
+
+## What must be resolved before each gate touches code
+
+1. `preview_overlay.cpp` is 4,345 lines in one file. Read it at the start of M5 — it likely holds
+   two or three surfaces (filmstrip, transport, annotation host). Sizing M5 from its line count
+   alone would be guesswork.
+2. egui has no `QGraphicsView`/`QGraphicsScene`. Zoom-pan-rotate (`image_preview_overlay.cpp`) and
+   annotations become custom paint + an interaction state machine. Budget for it, do not assume parity.
+3. DB compatibility: schema ownership is **three places**, not one — `db.cpp:52-59` (foreign-key
+   enforcement and the latest-version constant), `db.cpp:60-186` (base DDL through the index block and
+   the `user_version` bump), plus `project_db.cpp:35-102` (`ProjectDB::migrate`: projects, version
+   grouping, notifications). M3 starts by pinning all three as fixtures, not by designing a new schema.
+4. Decoder coverage against *this* library, not the claim in the doc: enumerate the actual codecs in
+   use (MXF? BRAW? which audio codecs inside MOV?) and confirm ArtCraft decoders handle them at M2.
+5. wgpu on Wayland / Fedora 43 AppImage: the Qt path needed `AA_ForceRasterWidgets` (`main.cpp:59-77`).
+   Prove a wgpu surface plus video-frame upload is smooth on this machine early (M1), and check that
+   the AppImage for a Rust binary needs no Qt payload at all.
+6. Fork hygiene: record the source rev in `crates/VENDORED.md` so upstream GalleryBrowser fixes stay
+   cherry-pickable instead of becoming a merge argument.
+
+## Platform matrix (Windows + Linux + macOS)
+
+| Concern | Plan |
+|---|---|
+| Trash undo | Decided: trashing on macOS becomes a **move to `~/.Trash`** so undo works, diverging deliberately from GalleryBrowser's `fileops` (`crates/fileops/src/worker.rs:336-345`, and the restore path at `:648-655`). Tests must cover: name already present in `~/.Trash` (a trash-*destination* collision, not a restore one), an occupied original path when restoring, and redo after undo. |
+| Symlinks on Windows | `fileops` handles symlink privilege and type differences on Windows (`crates/fileops/src/fsops.rs:86-101`). The C++ app's behavior here is unspecified — decide during M1 whether copy/move follows or preserves links, then test it. |
+| CI | Cargo jobs on ubuntu + macos + windows (mirror GalleryBrowser's matrix). **No Qt reference job on this branch** — decided local-only; today's CI configures `-DBUILD_APP=OFF` and triggers on `main` only (`.github/workflows/ci.yml:5,7,35,68`). Clippy/`fmt` gating on one runner only, as GB does. |
+| Packaging | Linux: AppImage for a single Rust binary — no Qt payload, so `scripts/build-linux-appimage.sh` and the `qtpaths` plugin harvesting mostly disappear. Windows: portable zip or MSI; macOS: `.app` + dmg. |
+| Audio | cpal is already in the player crate and is cross-platform (WASAPI/CoreAudio/ALSA); M2's audio gate must be checked on all three, not just Linux. |
+| GPU surface | wgpu replaces Qt's raster/GL path; Wayland needs proof on Fedora 43 (the Qt build needed `AA_ForceRasterWidgets`, `main.cpp:59-77`) and Windows/macOS get their own first-run smoke check. |
+| Decoder supply chain | ArtCraft crates are pure Rust, so no FFmpeg DLLs to ship; verify the Windows MSVC and macOS builds of the pinned revs in CI at M0, not at M2. |
+
+## Crash triage (why memory safety is a primary motivation)
+
+The original app segfaulted in many places with no clear trace on trigger. Two consequences for this plan:
+
+1. The Qt reference build is **not a reliable behavioral oracle** — where C++ crashes or reads freed
+   memory, "match the reference" is meaningless. M1–M7 gates therefore compare against declared
+   expectations and fixtures, not against C++ runtime behavior on the same input.
+2. Rust removes the class of bug rather than tracing it: `unsafe_code = forbid` plus `unwrap_used`,
+   `expect_used`, `panic`, `unreachable`, `unimplemented` denied at workspace level (GalleryBrowser's
+   `[workspace.lints]`) means a crash needs an explicit, reviewable `unsafe` or `unwrap`.
+3. ASan/UBSan stays where it is: the C++ jobs run on `main` and keep characterizing crashes users
+   report against shipped builds. On `rust-refactor` you run them **locally** when a reference behavior
+   matters — that is the cost of the local-only decision, and it must be explicit rather than assumed.
+
+## Rough size estimate
+
+~14.6k LOC of engine crates arrive already written (src only: core 1,788 · media 3,732 · player 4,954 ·
+fileops 2,539 · library 1,621). The port itself is UI + app logic: call it 18–24k LOC Rust against
+~51.2k LOC C++ under `src` (58.7k including player_lab and tests). M0–M2 are where the stated
+motivations (MOV/ProRes reliability, no bundled FFmpeg, memory safety) are actually banked; M3–M7 are
+the bulk of the code.
+
+Caveat on "memory safety removes the class of bug": workspace lints forbid `unsafe` and deny
+`unwrap`/`panic`, but indexing panics (`slice[i]`), allocation failure, and faults inside native
+dependencies (wgpu/cpal) remain possible. Rust shrinks the crash surface; it does not zero it.
+
+## Decisions resolved (before M0)
+
+1. **Speed-change audio: accepted as-is.** The engine mutes and skips audio at speed != 1 (no
+   pitch-correct stretch, `crates/player/src/lib.rs:17-20`), so v1 is silent off 1x. This is a visible
+   regression against today's `QMediaPlayer` path — worth one line in release notes, not code.
+2. **macOS trash undo: fixed.** Trashing becomes a move to `~/.Trash` on macOS so restore works. First
+   and only planned divergence from the forked GalleryBrowser crates; record it in `crates/VENDORED.md`.
+3. **Reference build: local-only.** No Qt CI job on this branch. Consequence to remember: nothing proves
+   the C++ app still compiles on push, so run `-DBUILD_APP=ON` locally before trusting a reference behavior.
+
+4. **UI starting point: fresh app crate.** `apps/kassetmanager` is written from scratch against the five
+   engine crates; GalleryBrowser's `ui-egui` stays unreferenced (not vendored, not copied). Cost accepted:
+   folder tree, breadcrumb, dual-pane selection and drag/drop are re-implemented (~2.7k LOC) instead of
+   inherited. Benefit: no Action-dispatcher model to work against when the asset DB arrives at M3.
+5. **Interaction gate mechanism:** `egui_kittest` 0.36.2 as a dev-dependency (same egui series as upstream's
+   0.36), headless `Harness` with clicks/key presses and accessibility-based widget queries; snapshots stay
+   optional behind its `wgpu`/`snapshot` features. This settles how M1–M7 gates are executed.
+
+### Still open — cross-cutting concerns, assigned to milestones
+
+Each needs one sentence of decision when its milestone starts, not a redesign. Only the first affects M0:
+
+| Concern | Assigned |
+|---|---|
+| egui interaction/regression test strategy (how a scripted UI test drives focus, drag, keyboard) | **M0** — it decides how every later gate is executed |
+| DB write/migration ownership with backup and rollback | before M3 writes |
+| FFmpeg CLI runtime supply and licensing on all three platforms | before M6 |
+| Font fallback / Unicode text rendering; HiDPI and mixed-monitor coordinates | M1 (first pixels on screen) |
+| Keyboard focus, shortcut precedence, clipboard interop | M1 |
+| Window/layout persistence (`mainwindow.cpp:1268-1312`) plus `QSettings` data migration from the Qt app | M1 layout, migration before first real DB write (M3) |
+| Shipped-build logging and panic diagnostics (distinct from the log dock) | M1 for logging, before shipping for crash reports |
+
+## M0 result (recorded evidence)
+
+Run on this Fedora machine, `cargo`/`rustc` 1.99.1 via mise, `TMPDIR` pointed inside the repo
+(`build-rust-tmp/`) so no test artifact landed outside the project folder.
+
+| Check | Result |
+|---|---|
+| Vendoring | Five crates copied from GalleryBrowser `55a44836d44dd5db5f079c42ce86f712f7360309`; 41 files; `diff -rq` against the source checkout clean (byte-identical). After M0's lint fix, 14 of those files carry an attribute-only test-scope allow — no logic diverged |
+| Workspace | Root `Cargo.toml` is GalleryBrowser's verbatim except `members = ["crates/*"]` (`diff` shows only those two lines); new `Cargo.lock` resolves 275 packages with the three ArtCraft revs identical to upstream |
+| `cargo build --workspace --locked` | Finished in 50.5s, **zero warnings** under the workspace lint wall |
+| `cargo test --workspace --locked` | **190 passed, 0 failed, 1 ignored** across the workspace's test targets |
+| `cargo clippy --workspace --all-targets -D warnings` | Initially **failed** on `expect_used`/`unwrap_used`/`panic` in test code across 4 crates. Fixed by applying the pattern `library` already uses upstream (`crates/library/src/lib.rs:991`) to 14 test scopes; now **clean**, so CI keeps a single strict pass and M1's app binary inherits the same wall |
+| Toolchain | `rust-toolchain.toml` pins `1.99.1` + clippy/rustfmt (the snapshot M0 was verified with); `rust-version = "1.95"` remains the declared crate minimum. Verified local resolution still works under mise |
+| `cargo fmt --all -- --check` | Clean |
+| Qt reference build | Fresh configure of `native/qt6` with `-DBUILD_APP=ON -DBUILD_TESTS=OFF` + build linked `kassetmanagerqt` in 26s. Two environment notes: the pre-existing `build-linux/` cache is unusable here (created from another worktree path), and `-G Ninja` fails because this box exposes `ninja-build`, not `ninja` |
+| Not verifiable locally | MSVC and macOS compilation of the pinned ArtCraft revs — the first CI push on `rust-refactor` decides it |
+
+## Non-goals
+
+No FFI/C ABI shim (full port makes it dead weight). No Qt UI changes beyond keeping it building. No
+new decoders written in this repo — decoder work is upstream ArtCraft's.

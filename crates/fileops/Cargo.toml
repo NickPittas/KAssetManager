@@ -1,0 +1,22 @@
+[package]
+name = "gallerybrowser-fileops"
+description = "Background file operations (copy/move/trash/delete/rename/batch rename/new folder) with undo"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+gallerybrowser-core = { workspace = true }
+thiserror = { workspace = true }
+log = { workspace = true }
+trash = { workspace = true }
+crossbeam-channel = { workspace = true }
+regex = { workspace = true }
+same-file = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

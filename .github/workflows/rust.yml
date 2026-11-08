@@ -1,0 +1,62 @@
+name: Rust
+
+# The Qt workflow (.github/workflows/ci.yml) is untouched: it stays main-only and keeps
+# -DBUILD_APP=OFF. The reference C++ build on this branch is verified locally, not here.
+on:
+  push:
+    branches: [main, rust-refactor]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rust-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  build-test:
+    name: build + test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux system packages
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends \
+            libasound2-dev pkg-config libxkbcommon-dev libxkbcommon-x11-dev \
+            libwayland-dev libx11-dev libxcb1-dev
+
+      # Pinned to match rust-toolchain.toml: clippy lints and rustfmt output change between stables,
+      # so a floating toolchain can turn an unchanged tree red.
+      - uses: dtolnay/rust-toolchain@1.99.1
+        with:
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --workspace --locked
+
+      - name: Test
+        run: cargo test --workspace --locked --no-fail-fast
+
+      # One strict pass over everything (lib + tests + integration tests). The vendored crates allow
+      # unwrap/expect inside their `#[cfg(test)]` modules via a narrow module attribute, so test
+      # assertions may panic without weakening the wall for shipped code. See crates/VENDORED.md.
+      - name: Clippy (strict)
+        if: runner.os == 'Linux'
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Format
+        if: runner.os == 'Linux'
+        run: cargo fmt --all -- --check

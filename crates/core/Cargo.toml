@@ -1,0 +1,21 @@
+[package]
+name = "gallerybrowser-core"
+description = "Filesystem domain: media classification, folder scanning, image-sequence detection, settings, app directories"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+log = { workspace = true }
+regex = { workspace = true }
+directories = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

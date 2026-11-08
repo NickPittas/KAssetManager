@@ -1,0 +1,35 @@
+[package]
+name = "gallerybrowser-media"
+description = "Media access on ArtCraft decoders: open/probe video, stills, sequences; thumbnails; metadata"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+gallerybrowser-core = { workspace = true }
+filmcraft-time = { workspace = true }
+filmcraft-frame = { workspace = true }
+filmcraft-media = { workspace = true }
+filmcraft-codecs = { workspace = true }
+filmcraft-hevc = { workspace = true }
+photocraft-codecs = { workspace = true }
+photocraft-psd = { workspace = true }
+lightcraft-preview = { workspace = true }
+lightcraft-meta = { workspace = true }
+lightcraft-raster = { workspace = true }
+thiserror = { workspace = true }
+log = { workspace = true }
+rayon = { workspace = true }
+crossbeam-channel = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+flate2 = "1"
+
+[dev-dependencies]
+tempfile = { workspace = true }
+png = "0.18"
+exr = "1.74.2"

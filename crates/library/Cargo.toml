@@ -1,0 +1,22 @@
+[package]
+name = "gallerybrowser-library"
+description = "Tags, collections and ratings on LightCraft's crash-safe journaled catalog"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+gallerybrowser-core = { workspace = true }
+lightcraft-catalog = { workspace = true }
+rusqlite = { workspace = true }
+thiserror = { workspace = true }
+log = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

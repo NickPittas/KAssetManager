@@ -1,0 +1,6 @@
+# Pinned so local and CI agree: the same stable snapshot that M0 was verified with.
+# `rust-version = "1.95"` in Cargo.toml is the declared minimum for the crates; this file selects
+# the development toolchain, because clippy lints and rustfmt output change between stable releases.
+[toolchain]
+channel = "1.99.1"
+components = ["clippy", "rustfmt"]

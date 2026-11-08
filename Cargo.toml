@@ -1,0 +1,82 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+default-members = ["crates/*"]
+
+[workspace.package]
+version = "0.2.3"
+edition = "2024"
+license = "MIT"
+rust-version = "1.95"
+repository = "https://github.com/NickPittas/GalleryBrowser"
+
+[workspace.dependencies]
+# internal
+gallerybrowser-core = { path = "crates/core" }
+gallerybrowser-fileops = { path = "crates/fileops" }
+gallerybrowser-media = { path = "crates/media" }
+gallerybrowser-library = { path = "crates/library" }
+gallerybrowser-player = { path = "crates/player" }
+gallerybrowser-ui-egui = { path = "crates/ui-egui" }
+
+# ArtCraft crates (MIT OR Apache-2.0), pinned. See NOTICE.
+filmcraft-time = { git = "https://github.com/storytold/filmcraft", rev = "70f0fc7a75f2681bc18302e67eaf0c9d41c68873" }
+filmcraft-frame = { git = "https://github.com/storytold/filmcraft", rev = "70f0fc7a75f2681bc18302e67eaf0c9d41c68873" }
+filmcraft-media = { git = "https://github.com/storytold/filmcraft", rev = "70f0fc7a75f2681bc18302e67eaf0c9d41c68873" }
+filmcraft-codecs = { git = "https://github.com/storytold/filmcraft", rev = "70f0fc7a75f2681bc18302e67eaf0c9d41c68873" }
+filmcraft-hevc = { git = "https://github.com/storytold/filmcraft", rev = "70f0fc7a75f2681bc18302e67eaf0c9d41c68873" }
+photocraft-codecs = { git = "https://github.com/storytold/photocraft", rev = "872748fb5b2a53e09dd4e385e31968d985c0515b" }
+photocraft-psd = { git = "https://github.com/storytold/photocraft", rev = "872748fb5b2a53e09dd4e385e31968d985c0515b" }
+lightcraft-catalog = { git = "https://github.com/storytold/lightcraft", rev = "5fe74557eca64638b1f9015c9769f7e52a889fa2" }
+lightcraft-preview = { git = "https://github.com/storytold/lightcraft", rev = "5fe74557eca64638b1f9015c9769f7e52a889fa2" }
+lightcraft-meta = { git = "https://github.com/storytold/lightcraft", rev = "5fe74557eca64638b1f9015c9769f7e52a889fa2" }
+lightcraft-raster = { git = "https://github.com/storytold/lightcraft", rev = "5fe74557eca64638b1f9015c9769f7e52a889fa2" }
+craft-ui = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "5c874d51eeb3de70e735c8ce87a59a7dedd47675", features = ["serde"] }
+
+# foundation
+thiserror = "2"
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = "1"
+log = "0.4"
+env_logger = "0.11"
+rayon = "1"
+regex = "1"
+directories = "6"
+trash = "5"
+rusqlite = { version = "0.37", features = ["bundled"] }
+crossbeam-channel = "0.5"
+tempfile = "3"
+same-file = "1"
+
+# ui
+egui = "0.36"
+eframe = { version = "0.36", default-features = false }
+rfd = "0.17"
+cpal = "0.16"
+open = "5"
+# single-instance IPC (named pipes on Windows); 0BSD OR Apache-2.0
+interprocess = "2"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+too_many_arguments = "allow"
+type_complexity = "allow"
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.dev]
+opt-level = 1
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

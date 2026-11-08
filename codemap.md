@@ -7,9 +7,23 @@ This codemap is a current navigation snapshot for maintainers. It is not a subst
 - `README.md` — current product overview, build/package quickstart, cleanup policy.
 - `AGENTS.md` — repository workflow rules for agent-assisted work.
 - `CMakeLists.txt` / `native/qt6/CMakeLists.txt` — native Qt build entry points.
+- `Cargo.toml` / `Cargo.lock` — Rust workspace for the `rust-refactor` branch (members `crates/*`; engine crates forked from GalleryBrowser, ArtCraft decoders pinned as git dependencies).
 - `scripts/` — packaging/build automation.
 - `docs/` — user, install, architecture, dependency, and AppImage documentation.
 - `third_party/` — checked-in third-party payloads used by local builds. Some package config files are intentionally relocatable so this checkout does not depend on old absolute worktree paths.
+
+## Rust workspace: `crates/` (branch `rust-refactor`)
+
+- Forked engine crates, copied byte-identical from GalleryBrowser and owned here: `core`, `media`,
+  `player`, `fileops`, `library`. Source SHA, license, pinned ArtCraft revs, and divergences are recorded
+  in `crates/VENDORED.md` — read it before editing a crate or syncing upstream.
+- `crates/media` opens/probes video, stills and sequences and owns hover-scrub frame production;
+  `crates/player` is the UI-free playback engine (RAM-budgeted cache, audio master clock, `tick(now)`);
+  `crates/fileops` runs background copy/move/trash/rename with undo; `crates/library` is the tags,
+  collections and ratings catalog.
+- The port plan, milestones, gates and open decisions live in `docs/RUST_PORT_PLAN.md`.
+- Rust CI is `.github/workflows/rust.yml` (ubuntu + macOS + Windows). Qt's `.github/workflows/ci.yml` is
+  unchanged: main-only, `-DBUILD_APP=OFF`, so the C++ reference build is verified locally on this branch.
 
 ## Application source: `native/qt6/src/`
 
@@ -67,4 +81,4 @@ This codemap is a current navigation snapshot for maintainers. It is not a subst
 
 ## Cleanup policy
 
-Remove or leave untracked generated artifacts: AppImages, AppDir/build trees, `scratch/`, `graphify-out/`, recorder sessions/logs, validation screenshots, temporary thumbnails, and downloaded local tool binaries. Keep source, documentation, scripts, and intentional relocatable third-party package metadata.
+Remove or leave untracked generated artifacts: AppImages, AppDir/build trees, `scratch/`, `graphify-out/`, recorder sessions/logs, validation screenshots, temporary thumbnails, downloaded local tool binaries, and Rust `target/` plus `build-rust-*` scratch/log directories. Keep source, documentation, scripts, and intentional relocatable third-party package metadata.
