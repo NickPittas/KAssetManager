@@ -1218,12 +1218,21 @@ impl App {
         let expanded = self.panes[index].expanded.clone();
         let opts = self.scan_options(index);
         let (key, ascending) = (self.settings.sort_key, self.settings.sort_ascending);
-        let base: Vec<Entry> = self.panes[index]
+        let listed: Vec<Entry> = self.panes[index]
             .flat_entries
             .iter()
             .filter(|entry| entry.path.parent() == Some(root.as_path()))
             .cloned()
             .collect();
+        // The pane's own folder is a level like any other, so it is ordered the way every deeper level is: folders
+        // first, then files, each group in the order the user set. Left as scanned, a header click reversed what was
+        // inside an opened folder while the rows around it stayed put.
+        let (mut dirs, mut files): (Vec<Entry>, Vec<Entry>) =
+            listed.into_iter().partition(|entry| entry.path.is_dir());
+        sort_entries(&mut dirs, key, ascending);
+        sort_entries(&mut files, key, ascending);
+        dirs.extend(files);
+        let base = dirs;
         let mut rows: Vec<Entry> = Vec::new();
         self.push_tree_level(&base, 0, &expanded, &opts, key, ascending, &mut rows);
         let dirs: std::collections::HashSet<PathBuf> = rows
@@ -1243,9 +1252,9 @@ impl App {
         }
         self.save_pane_views();
         self.apply_tree(index);
-        // Closing a folder hides what it holds, and a selection the user can no longer see is one they can still
-        // delete. Same reconciliation navigation does when a file leaves a listing.
-        self.panes[index].keep_existing();
+        // Closing a folder hides what it holds, and a row the user can no longer see is one they can still delete -
+        // with the preview panel still showing it. Same reconciliation navigation does when a file leaves a listing.
+        self.reconcile_viewed(index);
     }
 
     /// How one pane lists its folder, and what that view needs from the model. Switching to a tree list re-lists
@@ -1320,12 +1329,16 @@ impl App {
             .ok()
             .and_then(|meta| meta.modified().ok());
         self.remember_current_folders();
+        self.reconcile_viewed(index);
+    }
+
+    /// Drop selection that no longer has a row, and the preview that was following it. Clearing only when the
+    /// selection emptied left the departed file on screen while Delete acted on the file that remained - and a
+    /// collapsed folder hides rows without leaving its pane.
+    fn reconcile_viewed(&mut self, index: usize) {
         let before = self.panes[index].primary().map(Path::to_path_buf);
         self.panes[index].keep_existing();
         if self.panes[index].primary().map(Path::to_path_buf) != before {
-            // The file the preview panel follows is gone, or no longer primary: its request and its picture
-            // go with it. Clearing only when the selection emptied left the departed file on screen while
-            // the operations acted on the file that remained.
             self.panes[index].wanted = None;
             self.panes[index].preview = None;
         }
@@ -1418,8 +1431,14 @@ impl App {
             self.settings.view_mode[index] = self.panes[index].view_mode;
             self.settings.thumbnail_size[index] = self.panes[index].thumbnail_size;
             self.settings.collapse_sequences[index] = self.panes[index].collapse_sequences;
-            // Sorted so a saved file does not shuffle every time the same expansion is written back.
-            let mut open: Vec<PathBuf> = self.panes[index].expanded.iter().cloned().collect();
+            // Sorted so a saved file does not shuffle every time the same expansion is written back. Folders that no
+            // longer exist can never be met again, so they are dropped rather than carried across restarts forever.
+            let mut open: Vec<PathBuf> = self.panes[index]
+                .expanded
+                .iter()
+                .filter(|dir| dir.is_dir())
+                .cloned()
+                .collect();
             open.sort();
             self.settings.tree_expanded[index] = open;
         }
@@ -2376,6 +2395,16 @@ impl App {
         for index in 0..2 {
             if touched.contains(&self.panes[index].path) {
                 self.open_quiet(index);
+                rescanned = true;
+            } else if self.panes[index].view_mode == ViewMode::TreeList
+                && touched
+                    .iter()
+                    .any(|dir| dir.starts_with(&self.panes[index].path))
+            {
+                // A tree list shows rows from folders *inside* the pane's folder, so renaming or deleting a file two
+                // levels down changes what this listing is showing even though its own root never changed. Rebuilding
+                // the rows re-reads the opened folders, so the obsolete row goes away without a manual refresh.
+                self.apply_tree(index);
                 rescanned = true;
             }
         }
@@ -7775,6 +7804,90 @@ mod tests {
             names(&app.panes[0].entries),
             vec!["mid", "top.png"],
             "the sibling the cap had hidden comes back"
+        );
+    }
+    /// A header click re-orders every level of a tree list, not just what is inside the opened folders: leaving the
+    /// pane's own folder in scan order put root siblings one way and their contents another.
+    #[test]
+    fn sorting_a_tree_list_turns_every_level_with_it() {
+        let names = |entries: &Vec<Entry>| -> Vec<String> {
+            entries.iter().map(|e| e.name.clone()).collect()
+        };
+        let root = sandbox("treesort", &["a.png", "b.png"], &["mid"]);
+        let _ = std::fs::create_dir_all(root.join("mid"));
+        for name in ["y.png", "z.png"] {
+            let _ = std::fs::write(root.join("mid").join(name), b"x");
+        }
+        let mut app = App::with_cache(root.clone(), sandbox("treesortthumbs", &[], &[]));
+        app.set_pane_view(0, ViewMode::TreeList);
+        app.toggle_tree_node(0, &root.join("mid"));
+        assert_eq!(
+            names(&app.panes[0].entries),
+            vec!["mid", "y.png", "z.png", "a.png", "b.png"]
+        );
+
+        // A header click flips the direction and re-sorts; `resort_panes` itself only applies what is set.
+        app.settings.sort_ascending = false;
+        app.resort_panes();
+        assert_eq!(
+            names(&app.panes[0].entries),
+            vec!["mid", "z.png", "y.png", "b.png", "a.png"],
+            "the pane's own rows reverse along with the folder it had opened"
+        );
+    }
+
+    /// A collapsed folder hides its child, and the preview panel must not keep showing what nobody can select any
+    /// more - Delete acts on the row that remained.
+    #[test]
+    fn collapsing_a_folder_stops_showing_what_it_hid() {
+        let root = sandbox("colprev", &["top.png"], &["mid"]);
+        let _ = std::fs::create_dir_all(root.join("mid"));
+        let _ = std::fs::write(root.join("mid/inner.png"), b"x");
+        let mut app = App::with_cache(root.clone(), sandbox("colprevthumbs", &[], &[]));
+        app.set_pane_view(0, ViewMode::TreeList);
+        app.toggle_tree_node(0, &root.join("mid"));
+
+        app.select_in(0, root.join("top.png"), false);
+        app.select_in(0, root.join("mid/inner.png"), true);
+        app.panes[0].wanted = Some(root.join("mid/inner.png"));
+        assert_eq!(
+            app.panes[0].primary(),
+            Some(root.join("mid/inner.png").as_path())
+        );
+
+        app.toggle_tree_node(0, &root.join("mid"));
+        assert_eq!(app.panes[0].selection, vec![root.join("top.png")]);
+        assert_eq!(
+            app.panes[0].wanted, None,
+            "the preview does not keep asking for a hidden file"
+        );
+    }
+
+    /// Rebuilding a tree list re-reads the folders it had opened, so an operation two levels down is not left behind
+    /// as an obsolete row until the next manual refresh.
+    #[test]
+    fn rebuilding_a_tree_list_picks_up_what_happened_inside_it() {
+        let names = |entries: &Vec<Entry>| -> Vec<String> {
+            entries.iter().map(|e| e.name.clone()).collect()
+        };
+        let root = sandbox("treepick", &["top.png"], &["mid"]);
+        let _ = std::fs::create_dir_all(root.join("mid"));
+        let _ = std::fs::write(root.join("mid/inner.png"), b"x");
+        let mut app = App::with_cache(root.clone(), sandbox("treepickthumbs", &[], &[]));
+        app.set_pane_view(0, ViewMode::TreeList);
+        app.toggle_tree_node(0, &root.join("mid"));
+        assert!(names(&app.panes[0].entries).contains(&"inner.png".to_string()));
+
+        std::fs::rename(root.join("mid/inner.png"), root.join("mid/renamed.png")).unwrap();
+        app.apply_tree(0);
+        let after = names(&app.panes[0].entries);
+        assert!(
+            after.contains(&"renamed.png".to_string()),
+            "the new name is listed"
+        );
+        assert!(
+            !after.contains(&"inner.png".to_string()),
+            "the old row is gone"
         );
     }
 }
