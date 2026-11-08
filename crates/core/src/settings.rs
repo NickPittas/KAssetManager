@@ -34,9 +34,11 @@ pub enum FilterScope {
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct Settings {
-    /// Grid thumbnail edge in px: one of 64, 128, 256, 512 (default 128).
-    pub thumbnail_size: u32,
     pub show_hidden: bool,
+    /// One thumbnail edge per pane; a new pane takes `THUMBNAIL_SIZES`' middle size. Written as an array, but read
+    /// as the single number older files used too - that one applied to every pane, so it becomes both panes' size.
+    #[serde(default, deserialize_with = "scalar_or_seq")]
+    pub thumbnail_size: Vec<u32>,
     /// Auto-play videos/sequences when selected in the preview pane.
     pub video_preview: bool,
     /// Thumbnail decoder threads (1..=16, default 2).
@@ -45,10 +47,16 @@ pub struct Settings {
     pub max_cache_mb: u64,
     /// Playback frame cache budget in MB (default 2048).
     pub ram_preview_mb: u64,
-    pub collapse_sequences: bool,
     /// Frame rate used for image sequences (default 24).
     pub sequence_fps: f64,
-    pub view_mode: ViewMode,
+    /// One entry per pane. Qt restores a workspace, not one global view: each pane keeps its own grid-or-list,
+    /// thumbnail size and sequence grouping across runs, so index 0 is the first pane and index 1 the second.
+    /// The keys are new (`pane_*`) rather than reused because an old file spells these as single values of a type
+    /// serde would reject in an array - and a rejected field takes the whole file's settings down with it.
+    #[serde(rename = "pane_collapse_sequences", default)]
+    pub collapse_sequences: Vec<bool>,
+    #[serde(rename = "pane_view_mode", default)]
+    pub view_mode: Vec<ViewMode>,
     pub sort_key: SortKey,
     pub sort_ascending: bool,
     /// List column order, left to right. All four are always offered; a saved list that lost one is topped up.
@@ -84,7 +92,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            thumbnail_size: 128,
+            thumbnail_size: vec![128, 128],
             show_hidden: false,
             // Off by default: selecting a clip should load it paused so the preview panel has its transport;
             // autoplay on selection is opt-in.
@@ -92,9 +100,9 @@ impl Default for Settings {
             thumbnail_threads: 2,
             max_cache_mb: 1000,
             ram_preview_mb: 2048,
-            collapse_sequences: true,
+            collapse_sequences: vec![true, true],
             sequence_fps: 24.0,
-            view_mode: ViewMode::Grid,
+            view_mode: vec![ViewMode::Grid, ViewMode::Grid],
             sort_key: SortKey::Name,
             sort_ascending: true,
             list_columns: vec![Column::Name, Column::Modified, Column::Size, Column::Type],
@@ -127,6 +135,68 @@ impl Default for Settings {
 }
 
 const THUMBNAIL_SIZES: [u32; 4] = [64, 128, 256, 512];
+
+struct ScalarOrSeq;
+
+/// Read a `Vec` that older files wrote as one bare value. Serde's answer to a field it cannot parse is to fail the
+/// whole file, and losing someone's folders, favorites and column widths over a thumbnail size would be a poor
+/// trade - so a number is taken as a list of one, which `Settings::sanitize` then tops up per pane.
+impl<'de> serde::de::Visitor<'de> for ScalarOrSeq {
+    type Value = Vec<u32>;
+
+    fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("a thumbnail size, or a list of them")
+    }
+
+    fn visit_seq<A>(self, mut seq: A) -> std::result::Result<Vec<u32>, A::Error>
+    where
+        A: serde::de::SeqAccess<'de>,
+    {
+        let mut sizes = Vec::new();
+        while let Some(size) = seq.next_element::<u32>()? {
+            sizes.push(size);
+        }
+        Ok(sizes)
+    }
+
+    fn visit_u64<E>(self, n: u64) -> std::result::Result<Vec<u32>, E>
+    where
+        E: serde::de::Error,
+    {
+        Ok(vec![n.min(u64::from(u32::MAX)) as u32])
+    }
+
+    fn visit_i64<E>(self, n: i64) -> std::result::Result<Vec<u32>, E>
+    where
+        E: serde::de::Error,
+    {
+        Ok(vec![n.clamp(0, i64::from(u32::MAX)) as u32])
+    }
+
+    fn visit_f64<E>(self, n: f64) -> std::result::Result<Vec<u32>, E>
+    where
+        E: serde::de::Error,
+    {
+        Ok(vec![n.clamp(0.0, f64::from(u32::MAX)) as u32])
+    }
+}
+
+/// Make a per-pane list hold exactly two entries. A single value is read as one decision made for both panes -
+/// that is what the older single-value settings files meant - rather than as one pane with an unnamed default.
+fn spread_to_two<T: Copy>(values: &mut Vec<T>, fill: T) {
+    if values.len() == 1 {
+        values.push(values[0]);
+    }
+    values.resize(2, fill);
+    values.truncate(2);
+}
+
+fn scalar_or_seq<'de, D>(deserializer: D) -> std::result::Result<Vec<u32>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    deserializer.deserialize_any(ScalarOrSeq)
+}
 
 impl Settings {
     /// Never fails: unreadable/corrupt file → defaults (logged). Accepts the Python app's `settings.json`
@@ -183,17 +253,24 @@ impl Settings {
 
     /// Clamp every field into its valid range and normalise lists. Idempotent.
     pub fn sanitize(&mut self) {
-        self.thumbnail_size = THUMBNAIL_SIZES
-            .iter()
-            .copied()
-            .min_by_key(|s| s.abs_diff(self.thumbnail_size))
-            .unwrap_or(128);
+        // One value means "for every pane", which is what an older file's single size meant; two are taken as
+        // each pane's own. Longer is trimmed and empty topped up, so the app always has one per pane.
+        spread_to_two(&mut self.thumbnail_size, 128);
+        for size in &mut self.thumbnail_size {
+            *size = THUMBNAIL_SIZES
+                .iter()
+                .copied()
+                .min_by_key(|s| s.abs_diff(*size))
+                .unwrap_or(128);
+        }
         self.thumbnail_threads = self.thumbnail_threads.clamp(1, 16);
         self.volume = if self.volume.is_finite() {
             self.volume.clamp(0.0, 1.0)
         } else {
             1.0
         };
+        spread_to_two(&mut self.view_mode, ViewMode::Grid);
+        spread_to_two(&mut self.collapse_sequences, true);
         self.recents_max = self.recents_max.clamp(1, 100);
         self.sequence_fps = if self.sequence_fps.is_finite() {
             self.sequence_fps.clamp(1.0, 240.0)
@@ -304,11 +381,11 @@ mod tests {
         let t = tempfile::tempdir().expect("tempdir");
         let dirs = dirs_in(t.path());
         let s = Settings {
-            thumbnail_size: 256,
+            thumbnail_size: vec![256, 64],
             show_hidden: true,
             thumbnail_threads: 8,
             sequence_fps: 30.0,
-            view_mode: ViewMode::List,
+            view_mode: vec![ViewMode::List, ViewMode::Grid],
             sort_key: SortKey::Size,
             sort_ascending: false,
             theme: Theme::Light,
@@ -412,7 +489,7 @@ mod tests {
         )
         .expect("write");
         let s = Settings::load(&dirs);
-        assert_eq!(s.thumbnail_size, 256);
+        assert_eq!(s.thumbnail_size, vec![256, 256]);
         assert_eq!(s.thumbnail_threads, 1);
         assert_eq!(s.volume, 1.0);
         assert_eq!(s.recents_max, 1);
@@ -420,7 +497,7 @@ mod tests {
         assert_eq!(s.recents, vec![PathBuf::from("/a")]);
 
         let mut s = Settings {
-            thumbnail_size: 5000,
+            thumbnail_size: vec![5000, 30],
             thumbnail_threads: 99,
             volume: -1.0,
             recents_max: 1000,
@@ -430,7 +507,7 @@ mod tests {
         s.sanitize();
         assert_eq!(
             (
-                s.thumbnail_size,
+                s.thumbnail_size[0],
                 s.thumbnail_threads,
                 s.volume,
                 s.recents_max,
@@ -439,14 +516,14 @@ mod tests {
             (512, 16, 0.0, 100, 240.0)
         );
         let mut s = Settings {
-            thumbnail_size: 0,
+            thumbnail_size: vec![0, 0],
             volume: f32::NAN,
             sequence_fps: f64::NAN,
             ..Settings::default()
         };
         s.sanitize();
         assert_eq!(
-            (s.thumbnail_size, s.volume, s.sequence_fps),
+            (s.thumbnail_size[0], s.volume, s.sequence_fps),
             (64, 1.0, 24.0)
         );
     }
@@ -464,7 +541,9 @@ mod tests {
         )
         .expect("write");
         let s = Settings::load(&dirs);
-        assert_eq!(s.thumbnail_size, 512);
+        // The Python-era file spells one size for every pane; that number becomes both panes' size rather than
+        // taking the whole settings file down with it.
+        assert_eq!(s.thumbnail_size, vec![512, 512]);
         assert!(s.show_hidden);
         assert!(!s.video_preview);
         assert_eq!(s.thumbnail_threads, 4);

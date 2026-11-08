@@ -153,6 +153,14 @@ struct Pane {
     preview: Option<(PathBuf, egui::TextureHandle)>,
     /// Cells per row as the grid last drew itself; 1 in list view. The arrows need it because Down means down a
     /// row, and only the layout knows how wide a row is.
+    /// How this pane shows its folder. Qt restores a workspace per pane - one pane on a details list while the
+    /// other stays a wall of thumbnails - so this is not an app-wide switch.
+    view_mode: ViewMode,
+    /// Thumbnail edge this pane asks the engine for; the other pane may want a different one.
+    thumbnail_size: u32,
+    /// Whether this pane folds image sequences into one entry. It changes what a folder scan returns, so it belongs
+    /// with the pane that scans it.
+    collapse_sequences: bool,
     grid_cols: usize,
     /// Row or cell to bring into view the next time it draws, set when the keyboard moves the current item.
     scroll_target: Option<PathBuf>,
@@ -463,6 +471,24 @@ pub struct App {
     theme_applied: Option<Theme>,
 }
 
+/// A pane's opening view, size and sequence folding, read from the settings file. Absent a stored value there is
+/// nothing to disagree with: every pane starts at the middle thumbnail size in grid view.
+fn pane_setup(settings: &Settings, index: usize) -> (ViewMode, u32, bool) {
+    (
+        settings
+            .view_mode
+            .get(index)
+            .copied()
+            .unwrap_or(ViewMode::Grid),
+        settings.thumbnail_size.get(index).copied().unwrap_or(128),
+        settings
+            .collapse_sequences
+            .get(index)
+            .copied()
+            .unwrap_or(true),
+    )
+}
+
 impl Pane {
     /// Move the current item and return it. A row move travels `cols` items - one row of the grid as it is
     /// laid out - and a list is one cell wide, so there Down is simply the next file. Home and End jump to the
@@ -538,9 +564,17 @@ impl Pane {
             .retain(|path| self.entries.iter().any(|e| &e.path == path));
     }
 
-    fn new(path: PathBuf) -> Self {
+    fn new(
+        path: PathBuf,
+        view_mode: ViewMode,
+        thumbnail_size: u32,
+        collapse_sequences: bool,
+    ) -> Self {
         Self {
             path,
+            view_mode,
+            thumbnail_size,
+            collapse_sequences,
             back_stack: Vec::new(),
             entries: Vec::new(),
             dir_paths: std::collections::HashSet::new(),
@@ -858,9 +892,16 @@ impl App {
             threads: settings.thumbnail_threads.clamp(1, 16),
         });
         let (library, library_note) = open_library(dirs.as_ref());
+        // Each pane opens the way the last run left it: Qt restores a per-pane workspace, and egui's own state
+        // does not survive a close it never got to save.
+        let (v0, s0, f0) = pane_setup(&settings, 0);
+        let (v1, s1, f1) = pane_setup(&settings, 1);
         let mut app = Self {
             // Both panes start at the same folder; navigating one never moves the other.
-            panes: [Pane::new(path.clone()), Pane::new(path)],
+            panes: [
+                Pane::new(path.clone(), v0, s0, f0),
+                Pane::new(path, v1, s1, f1),
+            ],
             active: 0,
             status: String::new(),
             settings,
@@ -923,11 +964,12 @@ impl App {
         app
     }
 
-    /// How the engine should read a folder, from the current settings.
-    fn scan_options(&self) -> ScanOptions {
+    /// How the engine should read pane `index`'s folder. Hidden files and "show everything" are app-wide, but
+    /// sequence folding is a property of what one pane wants to see.
+    fn scan_options(&self, index: usize) -> ScanOptions {
         ScanOptions {
             show_hidden: self.settings.show_hidden,
-            collapse_sequences: self.settings.collapse_sequences,
+            collapse_sequences: self.panes[index].collapse_sequences,
             min_sequence_len: MIN_SEQUENCE_LEN,
             show_all_files: self.settings.show_all_files,
         }
@@ -951,13 +993,13 @@ impl App {
     fn refresh_thumbs(&mut self) {
         self.thumbs.begin_batch();
         self.issued.clear();
-        let edge = self.settings.thumbnail_size;
         let visible = self.panes_visible();
         // Textures for files that left the screen are dropped: the texture manager never dedupes, so
         // without this every thumbnail ever viewed stays allocated for the session.
         let mut keep: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
         // ponytail: whole folder at once; virtualise to visible rows if a huge folder feels slow.
         for index in 0..visible {
+            let edge = self.panes[index].thumbnail_size;
             for entry in &self.panes[index].entries {
                 keep.insert(entry.path.clone());
                 // A folder has no picture to decode; asking the engine would only log a failure per folder.
@@ -995,7 +1037,7 @@ impl App {
         // same name from outside the app - twice over, once as the file the scan found and once as the
         // synthesised folder entry from the stale cache.
         self.tree.kids.remove(&self.panes[index].path);
-        let opts = self.scan_options();
+        let opts = self.scan_options(index);
         let path = self.panes[index].path.clone();
         match scan_folder(&path, &opts) {
             Ok(mut entries) => {
@@ -1112,18 +1154,29 @@ impl App {
 
     /// The toolbar's thumbnail stepper. Only the engine's four cache sizes, so a size change reuses
     /// cached thumbnails instead of asking the decoder for a new edge length.
-    fn step_thumbnails(&mut self, direction: i32) {
+    /// Move one pane's thumbnail size through the engine's four cache sizes. Only those sizes, so a change reuses
+    /// thumbnails already decoded rather than asking for a new edge length.
+    fn step_thumbnails(&mut self, index: usize, direction: i32) {
         const SIZES: [u32; 4] = [64, 128, 256, 512];
-        let position = SIZES
-            .iter()
-            .position(|size| *size == self.settings.thumbnail_size)
-            .unwrap_or(1);
+        let asked = self.panes[index].thumbnail_size;
+        let position = SIZES.iter().position(|size| *size == asked).unwrap_or(1);
         let next = (position as i32 + direction).clamp(0, SIZES.len() as i32 - 1) as usize;
-        if SIZES[next] != self.settings.thumbnail_size {
-            self.settings.thumbnail_size = SIZES[next];
-            self.save_settings();
+        if SIZES[next] != asked {
+            self.panes[index].thumbnail_size = SIZES[next];
+            self.save_pane_views();
             self.refresh_thumbs();
         }
+    }
+
+    /// Copy each pane's view, size and folding into the settings that outlive the run. Qt restores a workspace in
+    /// which one pane was a details list while the other stayed a wall of thumbnails, so this is not app-wide state.
+    fn save_pane_views(&mut self) {
+        for index in 0..2 {
+            self.settings.view_mode[index] = self.panes[index].view_mode;
+            self.settings.thumbnail_size[index] = self.panes[index].thumbnail_size;
+            self.settings.collapse_sequences[index] = self.panes[index].collapse_sequences;
+        }
+        self.save_settings();
     }
 
     /// Select `path` in pane `index` and ask the engine for its preview (once per selection).
@@ -1400,9 +1453,14 @@ impl App {
         self.settings.theme = theme;
     }
 
-    /// Switch between the engine's grid and list view.
+    /// Show every pane in one mode. Nothing in the running app asks for that - each pane's toolbar sets its own -
+    /// but a test that wants both panes in grid view should not have to say so twice.
+    #[cfg(test)]
     pub fn set_view_mode(&mut self, mode: ViewMode) {
-        self.settings.view_mode = mode;
+        for pane in &mut self.panes {
+            pane.view_mode = mode;
+        }
+        self.save_pane_views();
     }
 
     /// Turn the second pane on or off; both panes are always kept in sync with the folder on disk.
@@ -2463,7 +2521,7 @@ impl App {
                 // A pane shows files only. The folder tree belongs to the left browser column, once, and
                 // drives whichever pane is active; a per-pane subfolder list read as a second tree inside
                 // every pane. The path bar above says which folder this pane is working on.
-                match self.settings.view_mode {
+                match self.panes[index].view_mode {
                     ViewMode::Grid => self.pane_grid(index, ui),
                     ViewMode::List => self.pane_list(index, ui),
                 }
@@ -2477,10 +2535,10 @@ impl App {
     fn pane_toolbar(&mut self, index: usize, ui: &mut egui::Ui) {
         let has_selection = !self.panes[index].selection.is_empty();
         let can_back = !self.panes[index].back_stack.is_empty();
-        let grid = self.settings.view_mode == ViewMode::Grid;
+        let grid = self.panes[index].view_mode == ViewMode::Grid;
         let dual = self.settings.dual_pane;
         let preview = self.settings.show_preview;
-        let size = self.settings.thumbnail_size;
+        let size = self.panes[index].thumbnail_size;
         let paste_ready = self.clipboard.is_some();
         // Read the pointer press through the context instead of laying an interaction rect over the row:
         // that would sit on top of the buttons and swallow their clicks.
@@ -2615,14 +2673,14 @@ impl App {
         }
         if toggle_view {
             let next = if grid { ViewMode::List } else { ViewMode::Grid };
-            self.set_view_mode(next);
-            self.save_settings();
+            self.panes[index].view_mode = next;
+            self.save_pane_views();
         }
         if smaller {
-            self.step_thumbnails(-1);
+            self.step_thumbnails(index, -1);
         }
         if bigger {
-            self.step_thumbnails(1);
+            self.step_thumbnails(index, 1);
         }
         if refresh {
             self.open(index);
@@ -3076,7 +3134,7 @@ impl App {
     /// Grid view of one pane: engine thumbnails in rows that fit the column; double-click plays.
     fn pane_grid(&mut self, index: usize, ui: &mut egui::Ui) {
         // A cell wider than its column overflows the scroll area and cuts thumbnails mid-image.
-        let edge_px = self.settings.thumbnail_size.clamp(32, 512);
+        let edge_px = self.panes[index].thumbnail_size.clamp(32, 512);
         // A grid tile never scrolls the pane sideways. Columns are counted from the thumbnail size you asked for,
         // then a cell takes its share of the available width and no more - so a narrow pane gets smaller tiles
         // instead of a sideways scrollbar or a thumbnail cut mid-image. One tile the width of the pane would be a
@@ -4072,13 +4130,15 @@ impl App {
                     rescan = true;
                     dirty = true;
                 }
+                // Folding is a pane's own business now, but this dialog is app-wide: the box sets both panes.
+                let mut fold_both = self.panes[0].collapse_sequences;
                 if ui
-                    .checkbox(
-                        &mut self.settings.collapse_sequences,
-                        "Collapse image sequences",
-                    )
+                    .checkbox(&mut fold_both, "Collapse image sequences")
                     .changed()
                 {
+                    for pane in &mut self.panes {
+                        pane.collapse_sequences = fold_both;
+                    }
                     rescan = true;
                     dirty = true;
                 }
@@ -5021,6 +5081,25 @@ mod tests {
     }
 
     #[test]
+    fn each_pane_keeps_its_own_view_and_size_over_a_restart() {
+        // Qt restores a workspace in which the two panes were set up differently. The copy into the settings and
+        // the read back out are both here, because a pane that forgets its own view is the defect this replaces.
+        let dir = std::env::temp_dir().join(format!("kam-panes-{}", std::process::id()));
+        let cache = dir.join("thumbs");
+        let mut app = App::with_cache(dir.clone(), cache);
+        app.panes[0].view_mode = ViewMode::List;
+        app.panes[0].thumbnail_size = 256;
+        app.panes[1].view_mode = ViewMode::Grid;
+        app.panes[1].thumbnail_size = 64;
+        app.save_pane_views();
+
+        let (v0, s0, _) = pane_setup(&app.settings, 0);
+        let (v1, s1, _) = pane_setup(&app.settings, 1);
+        assert_eq!((v0, s0), (ViewMode::List, 256));
+        assert_eq!((v1, s1), (ViewMode::Grid, 64));
+    }
+
+    #[test]
     fn a_row_outside_the_drawn_window_is_placed_at_its_real_pitch() {
         // The listing is scrolled so rows 40..60 are drawn, the first of them starting at y=500 on screen. A row
         // above the window sits at its true pitch - row height plus item spacing, 23 px for a 20 px row - measured
@@ -5439,12 +5518,12 @@ mod tests {
             "one thumbnail request per entry should be outstanding"
         );
         assert!(
-            matches!(app.settings.view_mode, ViewMode::Grid),
+            matches!(app.panes[0].view_mode, ViewMode::Grid),
             "the engine default is grid"
         );
 
         app.set_view_mode(ViewMode::List);
-        assert!(matches!(app.settings.view_mode, ViewMode::List));
+        assert!(matches!(app.panes[0].view_mode, ViewMode::List));
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -5608,7 +5687,7 @@ mod tests {
         let _ = std::fs::copy(&fixture, &clip);
 
         let mut app = App::with_cache(dir.clone(), sandbox("scrub-cache", &[], &[]));
-        app.settings.view_mode = ViewMode::Grid;
+        app.set_view_mode(ViewMode::Grid);
         app.navigate(0, &dir);
         assert_eq!(app.panes[0].entries.len(), 1, "the clip should be listed");
 
@@ -5676,7 +5755,7 @@ mod tests {
 
         let dir = sandbox("copy-focus", &["one.png"], &[]);
         let mut app = App::with_cache(dir.clone(), sandbox("copy-focus-cache", &[], &[]));
-        app.settings.view_mode = ViewMode::Grid;
+        app.set_view_mode(ViewMode::Grid);
         let one = dir.join("one.png");
 
         // The shortcut read and the pane render must share a frame, as they do in `App::ui`.
@@ -5762,7 +5841,7 @@ mod tests {
 
         let dir = sandbox("keys-ctrl-char", &["one.png"], &[]);
         let mut app = App::with_cache(dir.clone(), sandbox("keys-ctrl-char-cache", &[], &[]));
-        app.settings.view_mode = ViewMode::Grid;
+        app.set_view_mode(ViewMode::Grid);
         let one = dir.join("one.png");
 
         let mut harness = Harness::new_ui_state(
@@ -5811,7 +5890,7 @@ mod tests {
 
         let dir = sandbox("keys-focus", &["one.png"], &[]);
         let mut app = App::with_cache(dir.clone(), sandbox("keys-focus-cache", &[], &[]));
-        app.settings.view_mode = ViewMode::Grid;
+        app.set_view_mode(ViewMode::Grid);
         let one = dir.join("one.png");
 
         let mut harness = Harness::new_ui_state(
@@ -5918,7 +5997,7 @@ mod tests {
 
         let dir = sandbox("keys-field-focus", &["one.png"], &[]);
         let mut app = App::with_cache(dir.clone(), sandbox("keys-field-focus-cache", &[], &[]));
-        app.settings.view_mode = ViewMode::Grid;
+        app.set_view_mode(ViewMode::Grid);
         let one = dir.join("one.png");
 
         let mut harness = Harness::new_ui_state(
@@ -6178,7 +6257,7 @@ mod tests {
 
         let dir = sandbox("menu-click", &["one.png", "two.png"], &[]);
         let mut app = App::with_cache(dir.clone(), sandbox("menu-click-cache", &[], &[]));
-        app.settings.view_mode = ViewMode::Grid;
+        app.set_view_mode(ViewMode::Grid);
         let two = dir.join("two.png");
 
         let mut harness = Harness::new_ui_state(|ui, app| app.pane(0, ui), app);
@@ -6229,7 +6308,7 @@ mod tests {
 
         let dir = sandbox("multi-cell", &["one.png", "two.png"], &[]);
         let mut app = App::with_cache(dir.clone(), sandbox("multi-cell-cache", &[], &[]));
-        app.settings.view_mode = ViewMode::Grid;
+        app.set_view_mode(ViewMode::Grid);
         let (one, two) = (dir.join("one.png"), dir.join("two.png"));
 
         let mut harness = Harness::new_ui_state(|ui, app| app.pane(0, ui), app);
@@ -6337,7 +6416,7 @@ mod tests {
 
         let dir = sandbox("cell", &["clip.mov"], &[]);
         let mut app = App::with_cache(dir.clone(), sandbox("cell-cache", &[], &[]));
-        app.settings.view_mode = ViewMode::Grid;
+        app.set_view_mode(ViewMode::Grid);
         let clip = dir.join("clip.mov");
 
         let mut harness = Harness::new_ui_state(|ui, app| app.pane(0, ui), app);
