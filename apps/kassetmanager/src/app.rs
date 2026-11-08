@@ -3004,10 +3004,19 @@ impl App {
     fn pane_grid(&mut self, index: usize, ui: &mut egui::Ui) {
         // A cell wider than its column overflows the scroll area and cuts thumbnails mid-image.
         let edge_px = self.settings.thumbnail_size.clamp(32, 512);
-        let edge = (edge_px as f32).min((ui.available_width() - 12.0).max(48.0));
-        let cell = edge + 12.0;
+        // A grid tile never scrolls the pane sideways. Columns are counted from the thumbnail size you asked for,
+        // then a cell takes its share of the available width and no more - so a narrow pane gets smaller tiles
+        // instead of a sideways scrollbar or a thumbnail cut mid-image. One tile the width of the pane would be a
+        // slideshow rather than a grid, so a pane that cannot fit the requested size still shows two columns.
+        let avail_w = ui.available_width();
+        let preferred = (edge_px as f32) + 12.0;
+        let mut cols = ((avail_w / preferred).floor() as usize).max(1);
+        if cols == 1 && avail_w >= 96.0 {
+            cols = 2;
+        }
+        let cell = (avail_w / cols as f32).min(preferred).max(60.0);
+        let edge = (cell - 12.0).max(48.0);
         let cells: Vec<Entry> = self.panes[index].entries.clone();
-        let cols = ((ui.available_width() / cell).floor() as usize).max(1);
         self.panes[index].grid_cols = cols;
         // Ctrl on Linux and Windows, Command on macOS - the platform's "add to selection" key.
         let ctrl = ui.input(|i| i.modifiers.command);
@@ -3026,9 +3035,8 @@ impl App {
         // The grid is windowed the same way, by rows of cells: a cell row is `cell + 24` tall and the listing
         // reserves the height of the ones it does not draw.
         let cell_rows = cells.chunks(cols).count();
-        // A cell is never shrunk to fit the pane: 256 px thumbnails in a 240 px pane scroll sideways instead, so
-        // what you set as the thumbnail edge is what you see.
-        egui::ScrollArea::both()
+        // Vertical only: tiles fit the pane's width by construction, so there is nothing to scroll sideways to.
+        egui::ScrollArea::vertical()
             .id_salt(format!("grid{index}"))
             .auto_shrink(false)
             .show_rows(ui, cell + 24.0, cell_rows, |ui, range| {

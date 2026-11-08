@@ -92,12 +92,7 @@ fn main() {
     let result = eframe::run_native(
         "KAsset Manager",
         native_options,
-        Box::new(|cc| {
-            // A scrollbar is an affordance in a file manager: you have to be able to see that a name runs past the
-            // panel. egui floats its bars and reveals them only while scrolling, so they are made to allocate space
-            // and stay visible instead.
-            cc.egui_ctx
-                .all_styles_mut(|style| style.spacing.scroll.floating = false);
+        Box::new(|_cc| {
             let (theme, dual_pane, secondary, folder, file, explicit_folder) = start_point();
             let mut app = app::App::new(folder);
             if explicit_folder {

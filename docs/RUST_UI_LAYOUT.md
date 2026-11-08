@@ -2,9 +2,12 @@
 
 Status: **decisions settled with the user; implementing R1-R6.**
 
-Decisions (2026-01, asked and answered): names get a **horizontal scrollbar when they do not fit** - no ellipsis
-policy; grid cells **keep the thumbnail size you set** and the pane scrolls sideways; minimum widths stay **fixed
-constants in code** (tree 150, preview 180, pane 240), not Settings fields.
+Decisions (asked and answered): names get a **horizontal scrollbar when they do not fit** - no ellipsis policy;
+minimum widths stay **fixed constants in code** (tree 150, preview 180, pane 240), not Settings fields.
+
+Revised after seeing it running: grid cells do **not** keep the requested thumbnail size and the grid does **not**
+scroll sideways - tiles shrink to fit the pane; and scrollbars stay egui's floating kind rather than always-visible,
+because allocated bars put a permanent scrollbar on every pane.
 The point of this file is that panel behaviour is decided once, in writing, before code changes.
 
 ## Principle
@@ -44,9 +47,10 @@ one line (preview).
 - **R1 Tree + favorites.** One line per row, no wrapping. Panel keeps 150 minimum / 420 ceiling / draggable edge.
   Overflow handled by the policy chosen in question 1. The hint sentence stays allowed to wrap (it is prose, not
   a name).
-- **R2 Grid.** Cell size comes from the thumbnail setting; if one cell is wider than the pane, the pane gets a
-  horizontal scrollbar rather than shrinking cells or clipping. Column count still derives from width so ordinary
-  folders never scroll sideways.
+- **R2 Grid (revised by the user after trying the scrollbar).** A grid tile never scrolls the pane sideways. Columns
+  are counted from the thumbnail size in Settings, then a cell takes its share of the pane's width and no more, so a
+  narrow pane gets **smaller tiles** - and a pane too narrow for the requested size still shows two columns rather
+  than one tile the width of the pane. The grid's scroll area is vertical only.
 - **R3 Preview.** Names and status lines stop wrapping: single line, overflow per question 1's policy. The image
   keeps fitting the panel. Minimum 180 stays.
 - **R4 Panes and splitter.** Minimum 240 per pane stays; the docked second pane keeps its ceiling so it cannot
@@ -91,8 +95,9 @@ R1, R2, R3 and R5 are implemented; R4 needed no change (the minimums were alread
   of ~50 characters the rows stay one line, the panel does not widen, and a horizontal scrollbar appears at the
   bottom of the tree whose handle is narrower than its track - content really is wider than the panel, and you can
   scroll to the end of it. (`/tmp/layout2-tree.png`)
-- **Grid (R2).** Thumbnail edge 400 px in a pane far narrower than that: cells keep their size and the pane gains
-  a sideways scrollbar instead of shrinking or clipping them invisibly. (`/tmp/layout2-full.png`)
+- **Grid (R2, after revision).** Thumbnail edge 400 px in a pane far narrower than that: two columns of tiles
+  shrunk to fit, fully inside the pane, nothing cut mid-image and no sideways scroll at all; at the usual 64 px the
+  same pane shows four small columns. (`/tmp/grid-s400-wide.png`, `/tmp/grid-s64-crop.png`)
 - **Preview caption (R3).** A 60-character video name was wrapping to two lines and making the panel taller; it is
   now one line, cut at the panel edge without an ellipsis, with a scrollbar under it you can drag to the end - and
   the panel height did not change. (`/tmp/layout6-preview.png`)
@@ -106,9 +111,10 @@ R1, R2, R3 and R5 are implemented; R4 needed no change (the minimums were alread
 - `SidePanel` width comes from stored state or its default, clamped to the range - it never sizes itself to
   content. So "panel resized itself around names" was really content clipped with no scroll, plus one caption that
   wrapped (`containers/panel.rs`, `outer_size`).
-- egui 0.36 has no `ScrollbarVisibility`; bars are floating (overlay, shown while scrolling) by default. Making a
-  scrollbar an affordance means `style.spacing.scroll.floating = false`, applied with `Context::all_styles_mut` so
-  both themes get it (`style.rs`, `ScrollStyle::floating`).
+- egui 0.36 has no `ScrollbarVisibility`; bars are floating (overlay, shown while scrolling) by default. Making them
+  always-visible means `style.spacing.scroll.floating = false` via `Context::all_styles_mut` (`style.rs`,
+  `ScrollStyle::floating`). That was tried and **reverted at the user's request**: with bars allocated, every pane
+  had a scrollbar on screen all the time, which reads as clutter. Bars float again and appear while you scroll.
 - A label inside a horizontal `ScrollArea` still wraps at the viewport width, and `.truncate()` elides at it. To
   make text scrollable it has to extend the layout: `TextWrapMode::Extend` (`epaint`, `text_layout_types.rs`).
 
