@@ -180,6 +180,12 @@ struct Pane {
     flat_entries: Vec<Entry>,
     /// Whether a tree list had to stop at the row cap, so the listing can say so instead of looking complete.
     tree_truncated: bool,
+    /// The folders whose contents a Columns listing shows, one per visible column. Recomputed when the chain moves
+    /// (a click into a folder), not every frame - reading a folder of five thousand files per repaint is what row
+    /// virtualisation exists to avoid.
+    column_chain: Vec<PathBuf>,
+    /// What each folder in `column_chain` holds, read once when the chain moved.
+    column_entries: Vec<Vec<Entry>>,
     grid_cols: usize,
     /// Row or cell to bring into view the next time it draws, set when the keyboard moves the current item.
     scroll_target: Option<PathBuf>,
@@ -670,6 +676,8 @@ impl Pane {
             expanded: std::collections::HashSet::new(),
             flat_entries: Vec::new(),
             tree_truncated: false,
+            column_chain: Vec::new(),
+            column_entries: Vec::new(),
             back_stack: Vec::new(),
             entries: Vec::new(),
             dir_paths: std::collections::HashSet::new(),
@@ -1315,8 +1323,15 @@ impl App {
                 self.panes[index].entries = all;
                 // Keep the flat listing before any tree rows are added: it is what a tree list rebuilds from.
                 self.panes[index].flat_entries = self.panes[index].entries.clone();
-                if self.panes[index].view_mode == ViewMode::TreeList {
-                    self.apply_tree(index);
+                match self.panes[index].view_mode {
+                    ViewMode::TreeList => self.apply_tree(index),
+                    // A columns listing's rows are the chain of folders down to the selection, not the pane's folder
+                    // on its own; reading them here is what keeps a nested selection alive across a rescan.
+                    ViewMode::Columns => {
+                        self.panes[index].column_chain.clear();
+                        self.refresh_columns(index);
+                    }
+                    _ => {}
                 }
                 self.status.clear();
                 // What the listing on screen corresponds to, so the slow poll notices a folder that changed since.
@@ -1349,13 +1364,180 @@ impl App {
         self.reconcile_viewed(index);
     }
 
+    /// The chain of folders a Columns listing shows: the pane's folder, then each folder along the path to the
+    /// selected file. Selecting a row is what moves the columns, so this follows the selection rather than a separate
+    /// "opened" state a click could leave behind.
+    fn column_chain_for(&self, index: usize) -> Vec<PathBuf> {
+        let root = self.panes[index].path.clone();
+        let mut levels = vec![root.clone()];
+        if let Some(current) = self.panes[index].primary()
+            && let Ok(rest) = current.strip_prefix(&root)
+        {
+            let mut here = root.clone();
+            for part in rest.components() {
+                here = here.join(part.as_os_str());
+                if here.is_dir() {
+                    levels.push(here.clone());
+                }
+            }
+        }
+        levels
+    }
+
+    /// Read the folders a Columns listing shows and make them the pane's rows, so selection, Delete and the preview
+    /// can only ever act on what is on screen. Cheap unless the chain moved: each folder is read once per move into
+    /// it, not once per repaint.
+    fn refresh_columns(&mut self, index: usize) {
+        let want = self.column_chain_for(index);
+        if want != self.panes[index].column_chain {
+            let opts = self.scan_options(index);
+            let (key, ascending) = (self.settings.sort_key, self.settings.sort_ascending);
+            let lists: Vec<Vec<Entry>> = want
+                .iter()
+                .map(|dir| self.tree_children(dir, &opts, key, ascending))
+                .collect();
+            self.panes[index].column_chain = want;
+            self.panes[index].column_entries = lists;
+        }
+        let mut rows: Vec<Entry> = Vec::new();
+        let mut dirs: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+        for list in &self.panes[index].column_entries {
+            for entry in list {
+                if entry.path.is_dir() {
+                    dirs.insert(entry.path.clone());
+                }
+                rows.push(entry.clone());
+            }
+        }
+        self.panes[index].entries = rows;
+        self.panes[index].dir_paths = dirs;
+    }
+
+    /// Bring one pane's visible rows up to date with a change inside its folder, in whatever shape that pane is
+    /// showing. Callers reach here only for shapes that show more than the pane's own folder: a plain listing and a
+    /// grid are handled by rescanning it.
+    fn refresh_shape_rows(&mut self, index: usize) {
+        match self.panes[index].view_mode {
+            ViewMode::TreeList => self.refresh_tree_pane(index),
+            ViewMode::Columns => {
+                self.panes[index].column_chain.clear();
+                self.refresh_columns(index);
+                self.reconcile_viewed(index);
+            }
+            _ => self.open_quiet(index),
+        }
+    }
+
+    /// One column per folder level, stepping sideways into folders. Text rows for now - a picture in each cell would
+    /// want the thumbnail batch to know about columns as well as panes - and no header: the whole listing follows the
+    /// one sort the pane already answers to, and the columns belong to different folders to be sortable on their own.
+    fn pane_columns(&mut self, index: usize, ui: &mut egui::Ui) {
+        const COLUMN_W: f32 = 190.0;
+        const ROW_H: f32 = 20.0;
+        // One cell wide within its column, so Down walks the column and lands at the top of the next one.
+        self.panes[index].grid_cols = 1;
+        self.refresh_columns(index);
+        let levels = self.panes[index].column_chain.clone();
+        let lists = self.panes[index].column_entries.clone();
+        let primary = self.panes[index].primary().map(Path::to_path_buf);
+        // Ctrl on Linux and Windows, Command on macOS - the platform's "add to selection" key.
+        let ctrl = ui.input(|i| i.modifiers.command);
+        let mut clicked: Option<PathBuf> = None;
+        let mut enter: Option<PathBuf> = None;
+        let mut drop_folder: Option<PathBuf> = None;
+        let pointer = ui.ctx().pointer_interact_pos();
+        let body = ui.available_rect_before_wrap();
+
+        egui::ScrollArea::horizontal()
+            .id_salt(format!("columns{index}"))
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    for (level, list) in levels.iter().zip(lists.iter()) {
+                        ui.vertical(|ui| {
+                            ui.set_width(COLUMN_W);
+                            let _ = egui::ScrollArea::vertical()
+                                .id_salt(format!("columns{index}{}", level.display()))
+                                .auto_shrink([false, false])
+                                .show_rows(ui, ROW_H, list.len(), |ui, range| {
+                                    for entry in &list[range] {
+                                        let path = entry.path.clone();
+                                        let is_dir = entry.path.is_dir();
+                                        let text = self.cell_text(Column::Name, entry, is_dir);
+                                        // The row's rectangle comes first, so its background can go behind the text:
+                                        // a column where nothing shows which row the pane is on would leave several
+                                        // identical-looking columns while Delete acted on one of them.
+                                        let (rect, row) = ui.allocate_exact_size(
+                                            egui::vec2(COLUMN_W - 12.0, ROW_H),
+                                            egui::Sense::click(),
+                                        );
+                                        if self.panes[index].is_selected(&path) {
+                                            ui.painter().rect_filled(
+                                                rect,
+                                                0.0,
+                                                ui.visuals().selection.bg_fill,
+                                            );
+                                        } else if row.hovered() {
+                                            ui.painter().rect_filled(
+                                                rect,
+                                                0.0,
+                                                ui.visuals().faint_bg_color,
+                                            );
+                                        }
+                                        // The text is painted at the row's left edge, as every other listing draws
+                                        // it: putting a label in the rectangle centers the words, so a selected row
+                                        // would read as a band of text out of line with its neighbours.
+                                        ui.painter().text(
+                                            rect.min + egui::vec2(6.0, ROW_H / 2.0),
+                                            egui::Align2::LEFT_CENTER,
+                                            text,
+                                            egui::FontId::default(),
+                                            ui.visuals().text_color(),
+                                        );
+                                        if is_dir && pointer.is_some_and(|pt| row.rect.contains(pt))
+                                        {
+                                            drop_folder = Some(path.clone());
+                                        }
+                                        if primary.as_deref() == Some(path.as_path()) {
+                                            // Only the current row asks to be seen: a jump past the drawn range has
+                                            // no response of its own, and this is what pulls its column sideways into
+                                            // view.
+                                            row.scroll_to_me(Some(egui::Align::Center));
+                                        }
+                                        if row.clicked() {
+                                            clicked = Some(path.clone());
+                                        }
+                                        if row.double_clicked() && is_dir {
+                                            enter = Some(path.clone());
+                                        }
+                                    }
+                                });
+                        });
+                        ui.add_sized([1.0, 1.0], egui::Separator::default().vertical());
+                    }
+                });
+            });
+
+        if let Some(path) = clicked {
+            self.select_in(index, path, ctrl);
+        }
+        if let Some(dir) = enter {
+            self.navigate(index, &dir);
+        }
+        let pane_dir = self.panes[index].path.clone();
+        let dest: &Path = drop_folder.as_deref().unwrap_or(&pane_dir);
+        self.accept_drop_at(ui, body, dest);
+    }
+
     /// Whether an operation inside one of a tree list's folders changes what that pane is showing. The case where
     /// the pane's own folder was touched is handled before this, by rescanning it outright.
     fn pane_needs_refresh(&self, index: usize, touched: &[PathBuf]) -> bool {
-        self.panes[index].view_mode == ViewMode::TreeList
-            && touched
-                .iter()
-                .any(|dir| dir.starts_with(&self.panes[index].path))
+        matches!(
+            self.panes[index].view_mode,
+            ViewMode::TreeList | ViewMode::Columns
+        ) && touched
+            .iter()
+            .any(|dir| dir.starts_with(&self.panes[index].path))
     }
 
     /// Drop selection that no longer has a row, and the preview that was following it. Clearing only when the
@@ -1838,10 +2020,11 @@ impl App {
 
     /// The shapes one pane can take, with what each is for. Qt shipped grid and a details list; the tree shape is
     /// this app's own, because walking a hierarchy one pane at a time means re-listing where you were each time.
-    const VIEW_SHAPES: [(ViewMode, &'static str, &'static str); 3] = [
+    const VIEW_SHAPES: [(ViewMode, &'static str, &'static str); 4] = [
         (ViewMode::Grid, "Grid", "wall of thumbnails"),
         (ViewMode::List, "Simple", "one folder, columns"),
         (ViewMode::TreeList, "Tree", "folders open in place"),
+        (ViewMode::Columns, "Columns", "one column per level"),
     ];
 
     fn view_label(mode: ViewMode) -> &'static str {
@@ -1849,6 +2032,7 @@ impl App {
             ViewMode::Grid => "Grid",
             ViewMode::List => "Simple",
             ViewMode::TreeList => "Tree",
+            ViewMode::Columns => "Columns",
         }
     }
 
@@ -2430,7 +2614,7 @@ impl App {
                 // A tree list shows rows from folders *inside* the pane's folder, so renaming or deleting a file two
                 // levels down changes what this listing is showing even though its own root never changed. Rebuilding
                 // re-reads those folders, so the obsolete row goes away without a manual refresh.
-                self.refresh_tree_pane(index);
+                self.refresh_shape_rows(index);
                 rescanned = true;
             }
         }
@@ -2939,6 +3123,7 @@ impl App {
                     // A tree list is the same table with rows from more than one folder; only the row model and the
                     // Name column's indentation differ, so it shares the drawing rather than forking it.
                     ViewMode::List | ViewMode::TreeList => self.pane_list(index, ui),
+                    ViewMode::Columns => self.pane_columns(index, ui),
                 }
             });
         });
@@ -3556,6 +3741,12 @@ impl App {
     /// Re-order the files each visible pane shows, without re-reading the folder.
     fn resort_panes(&mut self) {
         for index in 0..self.panes_visible() {
+            if self.panes[index].view_mode == ViewMode::Columns {
+                // Each column is read from its folder, so a new order means reading them again.
+                self.panes[index].column_chain.clear();
+                self.refresh_columns(index);
+                continue;
+            }
             if self.panes[index].view_mode == ViewMode::TreeList {
                 // Sorting flattened rows globally would put a nested folder in front of its own parent. A tree list's
                 // order is rebuilt per level from each folder instead - which also re-reads them, so a file renamed
@@ -4217,6 +4408,26 @@ impl App {
                 && self.panes[active].expanded.contains(&current) != want_open
             {
                 self.toggle_tree_node(active, &current);
+                return;
+            }
+        }
+        // In a columns listing Right steps into the folder under the selection and Left steps back out to its parent
+        // column - what clicking a folder's row, then its parent's column, does under a pointer. Anything else falls
+        // through to moving the current item.
+        if self.panes[active].view_mode == ViewMode::Columns
+            && matches!(keys.step, Some(Step::ItemForward | Step::ItemBack))
+            && let Some(current) = self.panes[active].primary().map(Path::to_path_buf)
+        {
+            if matches!(keys.step, Some(Step::ItemForward)) && current.is_dir() {
+                self.navigate(active, &current);
+                return;
+            }
+            if matches!(keys.step, Some(Step::ItemBack))
+                && let Some(parent) = current.parent()
+                && parent != self.panes[active].path
+                && parent.starts_with(&self.panes[active].path)
+            {
+                self.select_in(active, parent.to_path_buf(), false);
                 return;
             }
         }
@@ -7957,6 +8168,8 @@ mod tests {
             app.panes[0].wanted, None,
             "and the preview is not still asking for it"
         );
+        // Three thousand directories is a lot to leave in a scratch folder behind one test.
+        let _ = std::fs::remove_dir_all(root.join("many"));
     }
     /// A folder that cannot be read has no listing to rebuild rows from. Clearing the displayed rows but keeping the
     /// base behind them let a tree list resurrect files the read said it could not see.
@@ -8037,6 +8250,73 @@ mod tests {
         assert!(
             app.panes[0].selection.is_empty(),
             "so Delete will not act on a row that is not there"
+        );
+        assert_eq!(
+            app.panes[0].wanted, None,
+            "and the preview is not still asking for it"
+        );
+    }
+    /// A columns listing shows one column per folder level, from the pane's folder down to wherever the selection
+    /// stands. Its rows are exactly those columns: that is what keeps Delete and the preview inside what is on screen.
+    #[test]
+    fn a_columns_listing_shows_the_chain_down_to_its_selection() {
+        let root = sandbox("colchain", &["top.png"], &["mid"]);
+        let _ = std::fs::create_dir_all(root.join("mid/deep"));
+        for name in ["mid/inner.png", "mid/deep/far.png"] {
+            let _ = std::fs::write(root.join(name), b"x");
+        }
+        let mut app = App::with_cache(root.clone(), sandbox("colchainthumbs", &[], &[]));
+        app.set_pane_view(0, ViewMode::Columns);
+
+        // Each step is what a click does: select a folder, then let the listing read it for the next column.
+        app.refresh_columns(0);
+        app.select_in(0, root.join("mid"), false);
+        app.refresh_columns(0);
+        app.select_in(0, root.join("mid/deep"), false);
+        app.refresh_columns(0);
+        assert_eq!(
+            app.panes[0].column_chain,
+            vec![root.clone(), root.join("mid"), root.join("mid/deep")],
+            "one column per level, ending where the selection stands"
+        );
+        let names: Vec<String> = app.panes[0]
+            .entries
+            .iter()
+            .map(|e| e.name.clone())
+            .collect();
+        for want in ["top.png", "inner.png", "far.png"] {
+            assert!(
+                names.contains(&want.to_string()),
+                "{want} is a row in its column"
+            );
+        }
+
+        // What operation completion does to this shape: the selected file two levels down is renamed outside
+        // the app, so its row goes and the selection that named it lets go.
+        app.select_in(0, root.join("mid/deep/far.png"), false);
+        app.panes[0].wanted = Some(root.join("mid/deep/far.png"));
+        std::fs::rename(
+            root.join("mid/deep/far.png"),
+            root.join("mid/deep/near.png"),
+        )
+        .unwrap();
+        app.refresh_shape_rows(0);
+        let after: Vec<String> = app.panes[0]
+            .entries
+            .iter()
+            .map(|e| e.name.clone())
+            .collect();
+        assert!(
+            after.contains(&"near.png".to_string()),
+            "the new name is listed"
+        );
+        assert!(
+            !after.contains(&"far.png".to_string()),
+            "the old row is gone"
+        );
+        assert!(
+            app.panes[0].selection.is_empty(),
+            "Delete will not act on the vanished path"
         );
         assert_eq!(
             app.panes[0].wanted, None,

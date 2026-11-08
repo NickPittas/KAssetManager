@@ -24,6 +24,9 @@ pub enum ViewMode {
     /// shape - Qt had grid and details list only - it is here because walking a hierarchy one pane at a time means
     /// re-listing the pane you were reading each time.
     TreeList,
+    /// One column per folder level, stepping sideways into folders (Finder's Miller columns). Not a Qt shape: it is
+    /// here because walking a hierarchy should keep the path you came in on screen instead of re-listing the pane.
+    Columns,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
