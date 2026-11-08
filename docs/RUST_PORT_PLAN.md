@@ -190,6 +190,16 @@ dependencies (wgpu/cpal) remain possible. Rust shrinks the crash surface; it doe
    folders, database health, convert, office/PDF preview, search, bulk rename, sequence grouping, overlays — is
    KAssetManager's own surface and must be inventoried from Qt source before it is built. The inventory and phased
    order live in `docs/RUST_UI_PLAN.md`, which is the spec for the UI phase.
+   **Parity of capability, not implementation (user rule).** The port is free to be better than Qt; it is not a
+   line-by-line translation. Where Qt carries machinery to work around its own limits, the Rust app may drop or
+   shrink that machinery once the engine covers the capability. Worked example: Qt's thumbnail pre-generation
+   dialog, worker and prefetch/refresh menu (`native/qt6/src/thumbnail_generator_*.cpp`, `thumbnail_cache_manager.cpp`)
+   exist because decoding there needed explicit priming; the vendored `gallerybrowser_media::Thumbnailer` is a
+   background service with a memory LRU and a disk cache keyed by `(path, size, mtime, max_edge)`
+   (`crates/media/src/thumbs.rs:69-72`), so thumbnails arrive on demand, persist across sessions and invalidate
+   themselves. The dialog and worker are therefore dropped; at most one "refresh thumbnails" action remains, and the
+   cache budget setting stays (`Settings::max_cache_mb`). Each Qt feature in `docs/RUST_UI_PLAN.md` gets an explicit
+   decision: port as-is, replace with engine behaviour, or drop.
 
 5. **Interaction gate mechanism:** `egui_kittest` 0.36.2 as a dev-dependency (same egui series as upstream's
    0.36), headless `Harness` with clicks/key presses and accessibility-based widget queries; snapshots stay
