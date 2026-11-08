@@ -351,6 +351,18 @@ finds rating and tag at the new path. Gates: 199 workspace tests pass, strict cl
 Still not there: filtering the browser by tag or saved search (`LibraryQuery`/`filter_entries` are unused),
 multi-select (annotations act on the one selected entry), DB health surface.
 
+**Review pass on slice 9 (verdict FIX-FIRST; all three findings fixed).** (1) The catalog was fed the union of
+every finished operation's moves in one `relink`, but `Library::relink` maps *simultaneously* — so a move and
+its undo finishing before the next poll left the rating on the moved name while the file was back where it
+started. Catalog calls now replay one operation at a time, in arrival order, inside the outcome loop.
+(2) Catalog errors were written to the status bar and then erased by the successful rescan that follows
+(`open_quiet` clears the status on success), so a failed relink looked like nothing happened; they are appended
+to the operation's own error list, which is displayed after the rescan. (3) The annotation modal kept the path
+it opened with, so editing it after that file moved or was trashed wrote annotations onto a dead path; the
+modal is now cancelled when an operation moves or removes its target, and says so. Evidence:
+`annotations_return_with_an_undo_drained_in_the_same_poll` passes against the fix and fails against the old
+merged-`relink` behaviour (probed by reverting just that call); three consecutive test runs green.
+
 **Review pass on slices 7–8 (both reviewers said FIX-FIRST; fixes verified):** the logic reviewer caught that
 `open()` called `begin_batch()` **per pane**, and `begin_batch` invalidates the previous generation's queued
 work *and* drops decoded-but-unpolled results — so the second pane wiped the first pane's thumbnails.
@@ -368,6 +380,21 @@ dropped to 640×480 logical, which at 2x is a sane physical floor a tiling compo
 Evidence after the fixes: same 929 px tiled window renders both panes fully with elided names and no
 duplicate-id warnings (`validation_outputs/m1-slice8-reviewfix.png`), **idle CPU after thumbnails settle is 0%
 of one core** (was a per-frame repaint), stderr empty, 8 tests + strict clippy + fmt green.
+
+### Declared before hover scrub (the engine-facing half of M2), frozen in a test only after verification
+
+`SCRUB_SLOTS = 6` equal spans of a clip, the animation starts `400 ms` after the pointer settles on an entry,
+and advances one slot every `150 ms`. Nothing else about scrub is numeric: frames come from the engine's own
+scrub cache and lane (`Thumbnailer::request_scrub(entry, edge, slot, slots)`, answered through the same
+`poll()` with `ThumbResult::scrub` set), so how many decodes run at once is the engine's call, not the app's.
+
+Verified: `hovering_a_video_makes_the_engine_answer_scrub_frames` copies the committed 2.9 KB fixture
+`tests/fixtures/scrub.mp4` into a sandbox, points the pane's hover at it, drives `scrub_tick` until the settle
+delay passes and asserts the engine answers with our slot count, for the hovered path, with a decoded frame
+(0.45 s). A grid cell shows the hover frame over its thumbnail and the preview panel falls back to it; leaving
+the entry drops it again. Pointer injection on this Hyprland box is unreliable (`ydotool` absolute warps do not
+move the cursor), so the hover rectangle itself is verified by construction plus a real-app run that stayed
+stable with empty stderr — a real mouse should be watched once.
 
 ## Non-goals
 

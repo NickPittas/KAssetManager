@@ -19,6 +19,12 @@ use gallerybrowser_player::Player;
 /// Longest preview edge we ask the decoders for (they may scale down while decoding).
 const PREVIEW_EDGE: u32 = 1024;
 
+/// Hover scrub: how many equal spans of a clip we ask for, when the animation starts after the pointer
+/// settles, and how fast it advances. Declared in docs/RUST_PORT_PLAN.md before implementing.
+const SCRUB_SLOTS: u32 = 6;
+const SCRUB_DELAY: std::time::Duration = std::time::Duration::from_millis(400);
+const SCRUB_STEP: std::time::Duration = std::time::Duration::from_millis(150);
+
 /// A run of numbered frames must reach this length before it is worth folding into one entry.
 const MIN_SEQUENCE_LEN: usize = 2;
 
@@ -32,6 +38,14 @@ struct Pane {
     wanted: Option<PathBuf>,
     /// Decoded picture, uploaded to wgpu: `(path, texture)`.
     preview: Option<(PathBuf, egui::TextureHandle)>,
+    /// File the pointer is over right now, which drives hover scrub.
+    hover: Option<PathBuf>,
+    /// When the pointer settled on `hover`; the animation starts after `SCRUB_DELAY`.
+    scrub_at: std::time::Instant,
+    /// Last scrub slot asked for, so a stationary pointer asks once per slot.
+    scrub_slot: u32,
+    /// Newest hover frame, uploaded to wgpu: `(path, texture)`.
+    scrub_frame: Option<(PathBuf, egui::TextureHandle)>,
 }
 
 /// File-operation shortcuts, read once per frame and suppressed while a text field has focus.
@@ -111,6 +125,10 @@ impl Pane {
             selected: None,
             wanted: None,
             preview: None,
+            hover: None,
+            scrub_at: std::time::Instant::now(),
+            scrub_slot: u32::MAX,
+            scrub_frame: None,
         }
     }
 }
@@ -365,8 +383,26 @@ impl App {
     /// Move finished pictures from the engine into wgpu textures. Called every frame.
     fn poll_pictures(&mut self, ui: &mut egui::Ui) {
         for result in self.thumbs.poll() {
-            if result.scrub.is_some() {
-                continue; // scrub frames are not something we asked for
+            if let Some(scrub) = result.scrub {
+                // A hover frame belongs to whichever pane is pointing at that file. These requests do not
+                // ride the thumbnail batch, so they neither count nor uncount `outstanding`.
+                let owner = self
+                    .panes
+                    .iter()
+                    .position(|pane| pane.hover.as_deref() == Some(result.path.as_path()));
+                if let (Some(index), Ok(image)) = (owner, result.image) {
+                    let color = egui::ColorImage::from_rgba_unmultiplied(
+                        [image.width as usize, image.height as usize],
+                        image.pixels.as_ref(),
+                    );
+                    let texture = ui.ctx().load_texture(
+                        format!("scrub{}", scrub.slot),
+                        color,
+                        egui::TextureOptions::LINEAR,
+                    );
+                    self.panes[index].scrub_frame = Some((result.path.clone(), texture));
+                }
+                continue;
             }
             let preview = result.max_edge >= PREVIEW_EDGE;
             let owner = self
@@ -414,7 +450,9 @@ impl App {
                     .as_ref()
                     .is_none_or(|(path, _)| Some(path.as_path()) != pane.wanted.as_deref())
         });
-        if self.outstanding > 0 || pending {
+        // Hovering animates, so keep frames coming while the pointer rests on an entry.
+        let hovering = self.panes.iter().any(|pane| pane.hover.is_some());
+        if self.outstanding > 0 || pending || hovering {
             if self.stall.elapsed() > std::time::Duration::from_secs(3) {
                 // The engine went silent about something we asked for: stop waiting instead of repainting
                 // every frame forever.
@@ -643,20 +681,30 @@ impl App {
                 }
             }
             errors.extend(outcome.errors.iter().map(|e| e.to_string()));
+            // The catalog is keyed by path, so each operation's moves and deletions are replayed in arrival
+            // order: `relink` maps simultaneously, so two renames merged into one batch would chain wrong.
+            if !outcome.moved.is_empty()
+                && let Err(err) = self.library.relink(&outcome.moved)
+            {
+                errors.push(format!("catalog relink: {err}"));
+            }
+            if !outcome.removed.is_empty()
+                && let Err(err) = self.library.forget(&outcome.removed)
+            {
+                errors.push(format!("catalog forget: {err}"));
+            }
         }
-        // The catalog is keyed by path, so it must follow the files the op moved or deleted.
-        let moved: Vec<(PathBuf, PathBuf)> =
-            finished.iter().flat_map(|o| o.moved.clone()).collect();
-        let removed: Vec<PathBuf> = finished.iter().flat_map(|o| o.removed.clone()).collect();
-        if !moved.is_empty()
-            && let Err(err) = self.library.relink(&moved)
-        {
-            self.status = format!("catalog relink: {err}");
-        }
-        if !removed.is_empty()
-            && let Err(err) = self.library.forget(&removed)
-        {
-            self.status = format!("catalog forget: {err}");
+        // The annotation editor names a path. If an operation moved or deleted that file while the box was
+        // open, applying the edit now would write annotations onto a path nothing owns any more.
+        let stale = self.annotate.as_ref().is_some_and(|edit| {
+            finished.iter().any(|outcome| {
+                outcome.removed.contains(&edit.path)
+                    || outcome.moved.iter().any(|(from, _)| from == &edit.path)
+            })
+        });
+        if stale {
+            self.annotate = None;
+            errors.push("annotation cancelled: file changed".into());
         }
         // A cut is spent once its move lands; a copy stays available for another paste.
         if self.cut_pending
@@ -720,6 +768,38 @@ impl App {
             });
         if apply {
             self.apply_rename();
+        }
+    }
+
+    /// Ask the engine for the scrub slot the pointer has reached while resting on an entry. Frames come
+    /// back through `poll_pictures`; nothing here blocks and a stationary pointer asks once per slot.
+    fn scrub_tick(&mut self) {
+        let now = std::time::Instant::now();
+        for index in 0..2 {
+            let Some(path) = self.panes[index].hover.clone() else {
+                continue;
+            };
+            if now.saturating_duration_since(self.panes[index].scrub_at) < SCRUB_DELAY {
+                continue;
+            }
+            let elapsed = now.saturating_duration_since(self.panes[index].scrub_at) - SCRUB_DELAY;
+            let slot = ((elapsed.as_millis() as u64 / SCRUB_STEP.as_millis() as u64)
+                % SCRUB_SLOTS as u64) as u32;
+            if self.panes[index].scrub_slot == slot {
+                continue;
+            }
+            let Some(entry) = self.panes[index]
+                .entries
+                .iter()
+                .find(|e| e.path == path)
+                .cloned()
+            else {
+                continue;
+            };
+            self.panes[index].scrub_slot = slot;
+            // The engine ignores non-scrubbable entries, so stills cost nothing to ask about.
+            let edge = self.settings.thumbnail_size.clamp(32, 512);
+            self.thumbs.request_scrub(&entry, edge, slot, SCRUB_SLOTS);
         }
     }
 
@@ -1002,6 +1082,7 @@ impl App {
         let selected_now = self.panes[index].selected.clone();
         let mut selected: Option<PathBuf> = None;
         let mut play: Option<PathBuf> = None;
+        let mut hovered: Option<PathBuf> = None;
         egui::ScrollArea::vertical()
             .id_salt(format!("list{index}"))
             .auto_shrink(false)
@@ -1015,9 +1096,12 @@ impl App {
                     if response.clicked() {
                         selected = Some(path.clone());
                     }
+                    if response.hovered() {
+                        hovered = Some(path.clone());
+                    }
                 }
             });
-        self.finish(index, selected, play);
+        self.finish(index, selected, play, hovered);
     }
 
     /// Grid view of one pane: engine thumbnails in rows that fit the column; double-click plays.
@@ -1035,6 +1119,7 @@ impl App {
         let selected_now = self.panes[index].selected.clone();
         let mut selected: Option<PathBuf> = None;
         let mut play: Option<PathBuf> = None;
+        let mut hovered: Option<PathBuf> = None;
         egui::ScrollArea::vertical()
             .id_salt(format!("grid{index}"))
             .auto_shrink(false)
@@ -1047,6 +1132,7 @@ impl App {
                                 egui::vec2(cell, cell + 24.0),
                                 egui::Layout::top_down(egui::Align::Center),
                                 |ui| {
+                                    let top = ui.cursor().min;
                                     match self
                                         .pictures
                                         .get(path)
@@ -1079,23 +1165,51 @@ impl App {
                                     if response.clicked() {
                                         selected = Some(path.clone());
                                     }
+                                    // The whole cell answers to hover, not just the name label.
+                                    let cell_rect = egui::Rect::from_two_pos(top, ui.cursor().min);
+                                    if ui
+                                        .interact(
+                                            cell_rect,
+                                            ui.id().with(("cell", path.clone())),
+                                            egui::Sense::hover(),
+                                        )
+                                        .hovered()
+                                    {
+                                        hovered = Some(path.clone());
+                                    }
                                 },
                             );
                         }
                     });
                 }
             });
-        self.finish(index, selected, play);
+        self.finish(index, selected, play, hovered);
     }
 
     /// Apply what a pane's rows reported: make it active, select, and play on double-click.
-    fn finish(&mut self, index: usize, selected: Option<PathBuf>, play: Option<PathBuf>) {
+    fn finish(
+        &mut self,
+        index: usize,
+        selected: Option<PathBuf>,
+        play: Option<PathBuf>,
+        hovered: Option<PathBuf>,
+    ) {
         if let Some(path) = selected {
             self.select_in(index, path);
         }
         if let Some(path) = play {
             self.play(path);
         }
+        // Hover scrub restarts when the pointer lands on another file.
+        if hovered.is_some() && hovered != self.panes[index].hover {
+            self.panes[index].scrub_at = std::time::Instant::now();
+            self.panes[index].scrub_slot = u32::MAX;
+        }
+        // Leaving the grid drops the frame so the thumbnail shows again.
+        if hovered.is_none() {
+            self.panes[index].scrub_frame = None;
+        }
+        self.panes[index].hover = hovered;
     }
 
     /// The preview panel: the playing frame if anything is loaded, else the active pane's selection.
@@ -1440,6 +1554,7 @@ impl eframe::App for App {
                 self.pane(0, ui);
             }
         });
+        self.scrub_tick();
         if self.settings_open {
             self.settings_window(ui);
         }
@@ -1647,6 +1762,99 @@ mod tests {
             notes.tags.iter().any(|tag| tag == "keepme"),
             "the tag should follow the renamed file: {:?}",
             notes.tags
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A move and its undo can both finish before the app next looks at the worker; the catalog must replay
+    /// them in order so the rating ends up back where the file is.
+    #[test]
+    fn annotations_return_with_an_undo_drained_in_the_same_poll() {
+        // A move and its undo can finish before the app next looks at the worker. The catalog must replay
+        // them one operation at a time: `Library::relink` maps simultaneously, so a merged batch would
+        // leave the rating at the moved name while the file is already back where it started.
+        let dir = sandbox("catalog-undo", &["a.png"], &[]);
+        let mut app = App::with_cache(dir.clone(), sandbox("catalog-undo-cache", &[], &[]));
+
+        let a = dir.join("a.png");
+        let b = dir.join("b.png");
+        app.select(a.clone());
+        app.set_rating(4);
+
+        app.ops.submit(FileOp::Rename {
+            from: a.clone(),
+            to: b.clone(),
+        });
+        // Let the rename land without taking its event, then queue the undo: both outcomes reach
+        // `poll_ops` together. History is written as the op completes, so wait for it to be undoable.
+        for _ in 0..100 {
+            if app.ops.can_undo() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(app.ops.undo().is_some(), "the rename should be undoable");
+        for _ in 0..100 {
+            if !app.ops.busy() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+
+        app.poll_ops();
+        assert!(
+            a.exists() && !b.exists(),
+            "undo should have moved the file back to its original name"
+        );
+        assert_eq!(
+            app.library.annotations(&a).rating,
+            4,
+            "the rating should be back at the original path (status: {})",
+            app.status
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Hovering a clip drives hover scrub: once the pointer has settled the app asks the engine for one
+    /// slot at a time, and the answer comes back tagged with that slot for the hovered file.
+    #[test]
+    fn hovering_a_video_makes_the_engine_answer_scrub_frames() {
+        let fixture =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/scrub.mp4");
+        assert!(fixture.is_file(), "the scrub fixture should be committed");
+
+        let dir = sandbox("hover", &[], &[]);
+        let target = dir.join("scrub.mp4");
+        let _ = std::fs::copy(&fixture, &target);
+        let mut app = App::with_cache(dir.clone(), sandbox("hover-cache", &[], &[]));
+        app.navigate(0, &dir);
+        assert_eq!(app.panes[0].entries.len(), 1, "the clip should be listed");
+
+        app.panes[0].hover = Some(target.clone());
+        let mut decoded = None;
+        for _ in 0..40 {
+            app.scrub_tick();
+            for result in app.thumbs.poll() {
+                if let Some(scrub) = result.scrub {
+                    assert_eq!(
+                        scrub.slots, SCRUB_SLOTS,
+                        "the answer names the slot count we asked for"
+                    );
+                    assert_eq!(result.path, target, "the answer is for the hovered file");
+                    decoded = Some(result.image.is_ok());
+                }
+            }
+            if decoded.is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert_eq!(
+            decoded,
+            Some(true),
+            "the engine should decode a hover frame"
         );
 
         let _ = std::fs::remove_dir_all(&dir);

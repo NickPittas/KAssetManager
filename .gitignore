@@ -54,6 +54,9 @@ __pycache__/
 *.mov
 *.mp4
 *.avi
+# ...except committed test fixtures (the hover-scrub clip is 2.9 KB)
+!tests/fixtures/*.mp4
+!tests/fixtures/*.mov
 
 # Local runtime binaries
 resources/ffmpeg/
