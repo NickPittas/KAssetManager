@@ -183,6 +183,14 @@ dependencies (wgpu/cpal) remain possible. Rust shrinks the crash surface; it doe
    engine crates; GalleryBrowser's `ui-egui` stays unreferenced (not vendored, not copied). Cost accepted:
    folder tree, breadcrumb, dual-pane selection and drag/drop are re-implemented (~2.7k LOC) instead of
    inherited. Benefit: no Action-dispatcher model to work against when the asset DB arrives at M3.
+   **Parity target (user rule, restated after M1 drift).** The app must reach parity with *every* feature of the
+   Qt KAssetManager (`native/qt6/src`), not with GalleryBrowser. GalleryBrowser supplies the engine only: playback,
+   thumbnails, frame scrubbing. Everything else — favorites, folder tree with real roots, toolbar, view modes,
+   placeholder icons, multi-select, context menus, drag/drop, preview panel presentation, projects and virtual
+   folders, database health, convert, office/PDF preview, search, bulk rename, sequence grouping, overlays — is
+   KAssetManager's own surface and must be inventoried from Qt source before it is built. The inventory and phased
+   order live in `docs/RUST_UI_PLAN.md`, which is the spec for the UI phase.
+
 5. **Interaction gate mechanism:** `egui_kittest` 0.36.2 as a dev-dependency (same egui series as upstream's
    0.36), headless `Harness` with clicks/key presses and accessibility-based widget queries; snapshots stay
    optional behind its `wgpu`/`snapshot` features. This settles how M1–M7 gates are executed.
