@@ -631,6 +631,11 @@ impl App {
     /// Re-read pane `index` without touching the thumbnail batch, so a multi-pane rescan batches once.
     /// A selection survives when its file is still in the folder, and its preview request survives with it.
     fn open_quiet(&mut self, index: usize) {
+        // A pane always shows what its folder holds right now. The tree's cached listing is a separate
+        // concern: keeping it here would list a folder that stopped being one - replaced by a file of the
+        // same name from outside the app - twice over, once as the file the scan found and once as the
+        // synthesised folder entry from the stale cache.
+        self.tree.kids.remove(&self.panes[index].path);
         let opts = self.scan_options();
         let path = self.panes[index].path.clone();
         match scan_folder(&path, &opts) {
@@ -657,6 +662,8 @@ impl App {
                         sequence: None,
                     });
                 }
+                // Directories lead, and each group obeys the user's sort on its own.
+                sort_entries(&mut folders, key, ascending);
                 let mut all = folders;
                 all.extend(entries);
                 self.panes[index].dir_paths = dirs.into_iter().collect();
@@ -1274,6 +1281,31 @@ impl App {
         // Only folders the op touched are re-read, and all of them share one thumbnail batch. Selections
         // survive because `open_quiet` keeps a selection whose file is still there.
         let mut rescanned = false;
+        // A pane sitting inside a folder that an operation renamed is looking at a path that no longer
+        // exists: the operation touched its *parent*, so the pane is not in `touched` and would keep the old
+        // listing, the old title and a dead path. Its path moves with the folder - including for a pane
+        // deeper inside one that moved.
+        let moves: Vec<(PathBuf, PathBuf)> = finished
+            .iter()
+            .flat_map(|outcome| outcome.moved.iter().cloned())
+            .collect();
+        for index in 0..2 {
+            let path = self.panes[index].path.clone();
+            for (from, to) in &moves {
+                if path == *from {
+                    self.panes[index].path = to.clone();
+                } else if let Ok(rest) = path.strip_prefix(from) {
+                    self.panes[index].path = to.join(rest);
+                } else {
+                    continue;
+                }
+                // Anything cached under the old name is stale from here down.
+                self.tree.kids.retain(|dir, _| !dir.starts_with(from));
+                self.open_quiet(index);
+                rescanned = true;
+                break;
+            }
+        }
         for index in 0..2 {
             if touched.contains(&self.panes[index].path) {
                 self.open_quiet(index);
@@ -2083,6 +2115,12 @@ impl App {
                     files.push(entry.clone());
                 }
             }
+            // Folders lead the listing, and they obey the same column and direction as the files do.
+            sort_entries(
+                &mut folders,
+                self.settings.sort_key,
+                self.settings.sort_ascending,
+            );
             sort_entries(
                 &mut files,
                 self.settings.sort_key,
@@ -3461,6 +3499,133 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Renaming a folder from one pane while the other pane is inside it: the operation touched the *parent*,
+    /// so before this fix the browsing pane kept a listing, a title and a path pointing at a name that no
+    /// longer exists.
+    #[test]
+    fn a_pane_follows_the_folder_it_is_in_when_that_folder_is_renamed() {
+        let root = sandbox("rename-parent", &[], &["aa-folder"]);
+        let old = root.join("aa-folder");
+        let _ = std::fs::write(old.join("inner.png"), b"x");
+        let mut app = App::with_cache(old.clone(), sandbox("rename-parent-cache", &[], &[]));
+        app.settings.dual_pane = true;
+        app.navigate(1, &root);
+
+        app.ops.submit(FileOp::Rename {
+            from: old.clone(),
+            to: root.join("bb-folder"),
+        });
+        let new = root.join("bb-folder");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while app.panes[0].path != new && std::time::Instant::now() < deadline {
+            app.poll_ops();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+
+        assert!(
+            new.is_dir(),
+            "the folder was renamed (status: {})",
+            app.status
+        );
+        assert_eq!(
+            app.panes[0].path, new,
+            "the pane inside the folder moved with it"
+        );
+        assert!(
+            app.panes[0].entries.iter().any(|e| e.name == "inner.png"),
+            "and it is still showing that folder's contents: {:?}",
+            app.panes[0]
+                .entries
+                .iter()
+                .map(|e| e.name.clone())
+                .collect::<Vec<_>>()
+        );
+        // The tree follows the new path once that pane is the one in use, and nothing stale survives under
+        // the folder's old name.
+        app.active = 0;
+        app.tree_follow_pane();
+        assert!(
+            app.tree.open.contains(&new),
+            "the tree reveals where pane 0 now is"
+        );
+        assert!(
+            !app.tree.kids.contains_key(&old),
+            "no listing is cached under the folder's old name"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A folder replaced by a file of the same name (from outside the app) must not be listed twice - once as
+    /// the file the scan found and once as the synthesised folder entry from a stale cached listing.
+    #[test]
+    fn a_folder_that_became_a_file_is_listed_once() {
+        let root = sandbox("dir-to-file", &[], &["x.png"]);
+        let mut app = App::with_cache(root.clone(), sandbox("dir-to-file-cache", &[], &[]));
+        assert!(
+            app.panes[0].dir_paths.contains(&root.join("x.png")),
+            "it starts out as a folder"
+        );
+
+        let _ = std::fs::remove_dir_all(root.join("x.png"));
+        let _ = std::fs::write(root.join("x.png"), b"not a folder any more");
+        app.open(0);
+
+        let listed = app.panes[0]
+            .entries
+            .iter()
+            .filter(|e| e.name == "x.png")
+            .count();
+        assert_eq!(listed, 1, "one row for the file that is there now");
+        assert!(
+            !app.panes[0].dir_paths.contains(&root.join("x.png")),
+            "it is not a folder any more"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Directories lead the listing, but they are still rows: sorting by Size descending has to put `zz`
+    /// before `aa`, exactly like the files.
+    #[test]
+    fn folders_obey_the_column_direction_too() {
+        let root = sandbox(
+            "folder-sort",
+            &["b.png", "a.mov"],
+            &["aa-folder", "zz-folder"],
+        );
+        let mut app = App::with_cache(root.clone(), sandbox("folder-sort-cache", &[], &[]));
+
+        app.settings.sort_key = SortKey::Name;
+        app.settings.sort_ascending = false;
+        app.resort_panes();
+        let names: Vec<String> = app.panes[0]
+            .entries
+            .iter()
+            .map(|e| e.name.clone())
+            .collect();
+        assert_eq!(
+            names,
+            vec!["zz-folder", "aa-folder", "b.png", "a.mov"],
+            "descending puts the folders and the files each in descending order"
+        );
+
+        // The same must be true of a folder read fresh, not only of a re-sort.
+        app.open_quiet(0);
+        let names: Vec<String> = app.panes[0]
+            .entries
+            .iter()
+            .map(|e| e.name.clone())
+            .collect();
+        assert_eq!(
+            names,
+            vec!["zz-folder", "aa-folder", "b.png", "a.mov"],
+            "loading a folder obeys the direction as well"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// The tree used to sit collapsed until the user clicked a node, and stayed put when the active pane
