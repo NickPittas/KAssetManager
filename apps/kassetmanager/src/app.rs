@@ -26,6 +26,9 @@ const PREVIEW_EDGE: u32 = 1024;
 const SCRUB_SLOTS: u32 = 24;
 const SCRUB_SLOTS_FINE: u32 = 200;
 const SCRUB_NEAR: u32 = 12;
+/// A flyover must not start decodes that outlive the pointer, so a newly hovered clip is only asked about
+/// once the pointer has rested on it. Sweeping a grid of uncached clips used to queue one lane job each.
+const SCRUB_DWELL: std::time::Duration = std::time::Duration::from_millis(400);
 const SCRUB_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// A run of numbered frames must reach this length before it is worth folding into one entry.
@@ -861,15 +864,39 @@ impl App {
             pane.scrub_shown = Some((entry.path.clone(), texture));
             return;
         }
-        if pane.scrub_wait_until.elapsed() >= SCRUB_WAIT {
+        let age = pane.scrub_wait_until.elapsed();
+        if age < SCRUB_DWELL {
+            return; // still flying over: frames already in cache were shown above, ask nothing yet
+        }
+        if age >= SCRUB_DWELL + SCRUB_WAIT {
             // An undecodable frame: stop asking (GalleryBrowser gives up after 5s) and show the thumbnail
             // again rather than a frame from some other slot.
             pane.scrub_shown = None;
             return;
         }
         self.thumbs.request_scrub(entry, edge, slot, slots);
-        // Show the nearest decoded frame meanwhile (GalleryBrowser searches SCRUB_NEAR neighbours).
+        // Show a neighbour while the exact frame is being made (GalleryBrowser searches SCRUB_NEAR of them).
+        // An already-uploaded neighbour is reused: re-converting one every pass costs ~30 uploads a second.
         let mut replaced = false;
+        for near in 1..=SCRUB_NEAR {
+            let below = slot.checked_sub(near);
+            let above = slot.checked_add(near).filter(|s| *s < slots);
+            for s in below.into_iter().chain(above) {
+                if let Some(tex) = pane
+                    .scrub_frames
+                    .get(&(entry.path.clone(), s, slots))
+                    .cloned()
+                {
+                    pane.scrub_shown = Some((entry.path.clone(), tex));
+                    replaced = true;
+                    break;
+                }
+            }
+            if replaced {
+                break;
+            }
+        }
+        // Otherwise decode one from the engine's cache and upload it once, so the next pass takes the path above.
         for near in 1..=SCRUB_NEAR {
             let below = slot.checked_sub(near);
             let above = slot.checked_add(near).filter(|s| *s < slots);
@@ -1584,6 +1611,17 @@ impl App {
                     .changed()
                 {
                     rescan = true;
+                    dirty = true;
+                }
+                if ui
+                    .checkbox(
+                        &mut self.settings.video_preview,
+                        "Play clip when selected (off = load it paused)",
+                    )
+                    .changed()
+                {
+                    // The switch is about what happens on the *next* selection; it must not pause a clip
+                    // that is playing right now.
                     dirty = true;
                 }
                 if ui

@@ -71,7 +71,9 @@ impl Default for Settings {
         Self {
             thumbnail_size: 128,
             show_hidden: false,
-            video_preview: true,
+            // Off by default: selecting a clip should load it paused so the preview panel has its transport;
+            // autoplay on selection is opt-in.
+            video_preview: false,
             thumbnail_threads: 2,
             max_cache_mb: 1000,
             ram_preview_mb: 2048,
