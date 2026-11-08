@@ -234,6 +234,20 @@ pub struct App {
     /// it, so an unrelated move or undo cannot spend the clipboard, and failed sources stay available.
     /// True while one of our own text fields (rename box, annotation name, path edit) holds the keyboard, so
     /// it can swallow letters without the browser's shortcuts firing too. Recomputed each frame from focus.
+    /// The paths this app copied or cut, published to the operating system's clipboard as one path per line.
+    /// egui-winit hands over a `Paste` event only when the OS clipboard holds text, so with an empty OS
+    /// clipboard Ctrl+V produces no event at all and keyboard paste stays dead however long our own list is.
+    clipboard_publish: Option<String>,
+
+    /// Ids of our own text fields, recorded while they hold focus, so a keystroke arriving in the same input
+    /// batch as the click that focused one cannot reach the browser (see `read_file_keys`).
+    rename_field_id: Option<egui::Id>,
+    annotate_field_id: Option<egui::Id>,
+
+    /// True in the frame an operation wrote its errors to the status bar, so a no-op notice ("Nothing
+    /// selected") cannot overwrite what the user needs to read.
+    op_error_shown: bool,
+
     typing_in_field: bool,
 
     cut_pending: Option<Vec<PathBuf>>,
@@ -387,6 +401,10 @@ impl App {
             rename_buffer: String::new(),
             rename_focus: false,
             op_progress: String::new(),
+            clipboard_publish: None,
+            rename_field_id: None,
+            annotate_field_id: None,
+            op_error_shown: false,
             typing_in_field: false,
             cut_pending: None,
             issued: std::collections::HashSet::new(),
@@ -873,14 +891,19 @@ impl App {
     }
 
     /// Ctrl+C / Ctrl+X: remember the selection as a copy or a cut.
+    /// A no-op notice for the status bar. It yields to an operation error raised in the same frame, because
+    /// `poll_ops` runs before the shortcut dispatch and a missing file matters more than our own nothing-to-do.
+    fn note(&mut self, message: &str) {
+        if !self.op_error_shown {
+            self.status = message.to_owned();
+        }
+    }
+
     pub fn copy_selection(&mut self, cut: bool) {
         let paths = self.targets();
         if paths.is_empty() {
             // Otherwise Ctrl+C on an empty selection is indistinguishable from a dead shortcut.
-            self.status = "Nothing selected".into();
-            return;
-        }
-        if paths.is_empty() {
+            self.note("Nothing selected");
             return;
         }
         let what = if paths.len() == 1 {
@@ -892,6 +915,14 @@ impl App {
             format!("{} files", paths.len())
         };
         self.clipboard = Some((paths, cut));
+        // Publish the copied files where a keystroke can find them: see `clipboard_publish`.
+        self.clipboard_publish = self.clipboard.as_ref().map(|(paths, _)| {
+            paths
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>()
+                .join("\n")
+        });
         // A fresh copy or cut supersedes whatever was waiting to move.
         self.cut_pending = None;
         self.status = format!("{}{what}", if cut { "cut: " } else { "copied: " });
@@ -901,8 +932,9 @@ impl App {
     /// name (`KeepBoth`), never an overwrite.
     pub fn paste(&mut self) {
         let Some((sources, cut)) = self.clipboard.clone() else {
-            // Ctrl+V with an empty clipboard must read as empty, not as a shortcut that never fired.
-            self.status = "Clipboard empty".into();
+            // Ctrl+V with nothing copied here must say what is missing: the OS clipboard may well hold text
+            // (which is how the keystroke reached us) while this app has no files staged.
+            self.note("Nothing copied in this app");
             return;
         };
         let dest_dir = self.panes[self.active].path.clone();
@@ -915,7 +947,7 @@ impl App {
             // Cutting and pasting back into the folder it came from is nothing to do. The engine reports
             // every source as "already in the destination", which read as a paste that had failed; single
             // pane users hit this on the first try. The clipboard stays, so pasting elsewhere still works.
-            self.status = "Already in this folder".into();
+            self.note("Already in this folder");
             return;
         }
         // Only a cut has sources to spend; they are consumed one by one as each one actually moves.
@@ -970,6 +1002,7 @@ impl App {
     /// Move finished file operations into view: rescan the panes and report what went wrong. Called every
     /// frame.
     fn poll_ops(&mut self) {
+        self.op_error_shown = false;
         let mut finished: Vec<OpOutcome> = Vec::new();
         for event in self.ops.poll() {
             match event {
@@ -1087,6 +1120,7 @@ impl App {
             self.refresh_thumbs();
         }
         if !errors.is_empty() {
+            self.op_error_shown = true;
             self.status = errors.join("; ");
         }
     }
@@ -1108,6 +1142,9 @@ impl App {
                 if self.rename_focus {
                     response.request_focus();
                     self.rename_focus = false;
+                }
+                if response.has_focus() {
+                    self.rename_field_id = Some(response.id);
                 }
                 self.typing_in_field |= response.has_focus();
                 ui.horizontal(|ui| {
@@ -1385,6 +1422,9 @@ impl App {
                 if self.annotate_focus {
                     response.request_focus();
                     self.annotate_focus = false;
+                }
+                if response.has_focus() {
+                    self.annotate_field_id = Some(response.id);
                 }
                 self.typing_in_field |= response.has_focus();
                 ui.horizontal(|ui| {
@@ -1922,7 +1962,10 @@ impl App {
         }
         // Volume, mute and loop are settings the player already honours, so they belong on the transport.
         let mut volume = self.settings.volume;
+        // The slider's value display is an editable text field (click it and type), so while it holds the
+        // keyboard a digit must set the volume and not rate a file, and Delete must not trash the selection.
         let vol = ui.add(egui::Slider::new(&mut volume, 0.0..=1.0).text("vol"));
+        self.typing_in_field |= vol.has_focus();
         let mute = ui.checkbox(&mut self.settings.muted, "mute");
         let looping = ui.checkbox(&mut self.settings.loop_playback, "loop");
         if vol.changed() {
@@ -2449,7 +2492,17 @@ impl App {
     /// has, so a click on a toolbar button or a selectable row silenced Ctrl+C/X/V until the pointer moved
     /// again. Live report: buttons and menu items worked, keyboard copy/cut/paste did not.
     fn read_file_keys(&mut self, ui: &egui::Ui, typing: bool) -> FileKeys {
-        if typing {
+        // A keystroke can arrive in the same input batch as the click that focuses one of our fields, so last
+        // frame's flag is not enough on its own: if this frame's focus belongs to a field we rendered, the
+        // browser stays silent too. The volume slider's inner editor keeps only the per-frame arm above - egui
+        // gives no handle on that child id - so its same-batch edge is a known ceiling.
+        let focused_now = ui.ctx().memory(|m| m.focused());
+        let on_our_field = focused_now.is_some()
+            && [self.rename_field_id, self.annotate_field_id]
+                .into_iter()
+                .flatten()
+                .any(|id| Some(id) == focused_now);
+        if typing || on_our_field {
             return FileKeys::default();
         }
         ui.input(|i| {
@@ -2504,6 +2557,9 @@ impl eframe::App for App {
             ui.ctx().request_repaint();
         }
         self.apply_theme(ui.ctx());
+        if let Some(text) = self.clipboard_publish.take() {
+            ui.ctx().copy_text(text);
+        }
         let typing = self.begin_shortcut_frame();
         let keys = self.read_file_keys(ui, typing);
 
@@ -3142,6 +3198,81 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Ctrl+V only reaches the app when the operating system's clipboard holds text, so a copy or cut has to
+    /// publish the files there - otherwise the keystroke produces no event at all and keyboard paste stays dead.
+    #[test]
+    fn copied_paths_are_published_to_the_operating_system_clipboard() {
+        let dir = sandbox("clip-os", &["one.png", "two.png"], &[]);
+        let mut app = App::with_cache(dir.clone(), sandbox("clip-os-cache", &[], &[]));
+
+        app.select_in(0, dir.join("one.png"), false);
+        app.copy_selection(false);
+        let text = app
+            .clipboard_publish
+            .clone()
+            .expect("a copy publishes something for Ctrl+V to arrive on");
+        assert!(
+            text.contains("one.png") && !text.contains('\n'),
+            "one file is one line: {text:?}"
+        );
+
+        app.select_in(0, dir.join("two.png"), true);
+        app.copy_selection(true);
+        let text = app.clipboard_publish.clone().expect("a cut publishes too");
+        assert_eq!(
+            text.lines().count(),
+            2,
+            "both selected files are published, one per line: {text:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A Delete that arrives in the same batch as the click focusing one of our fields must not reach the
+    /// browser - it would trash the file the user was busy naming.
+    #[test]
+    fn a_key_with_our_field_focused_does_not_reach_the_browser() {
+        use egui_kittest::Harness;
+
+        let dir = sandbox("keys-field-focus", &["one.png"], &[]);
+        let mut app = App::with_cache(dir.clone(), sandbox("keys-field-focus-cache", &[], &[]));
+        app.settings.view_mode = ViewMode::Grid;
+        let one = dir.join("one.png");
+
+        let mut harness = Harness::new_ui_state(
+            |ui, app| {
+                let typing = app.begin_shortcut_frame();
+                let keys = app.read_file_keys(ui, typing);
+                app.pane(0, ui);
+                app.apply_file_keys(&keys);
+            },
+            app,
+        );
+        harness.set_size(egui::vec2(900.0, 700.0));
+        harness.state_mut().select(one.clone());
+
+        // The field's id is known from the last render and its focus lands in this same batch.
+        let field = egui::Id::new("the-annotation-name-field");
+        harness.state_mut().annotate_field_id = Some(field);
+        harness.ctx.memory_mut(|m| m.request_focus(field));
+        harness.input_mut().events = vec![egui::Event::Key {
+            key: egui::Key::Delete,
+            physical_key: Some(egui::Key::Delete),
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::default(),
+        }];
+        harness.run_steps(2);
+        let state = harness.state();
+        assert!(
+            !state.ops.busy() && state.panes[0].selection == vec![one.clone()],
+            "Delete belongs to the field, not the browser (status: {})",
+            state.status
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// A shortcut with nothing to act on says so, instead of passing for a dead key.
     #[test]
     fn a_shortcut_with_nothing_to_act_on_says_so() {
@@ -3150,8 +3281,8 @@ mod tests {
 
         app.paste();
         assert!(
-            app.status.contains("Clipboard empty"),
-            "Ctrl+V on an empty clipboard is named: {}",
+            app.status.contains("Nothing copied in this app"),
+            "Ctrl+V with nothing staged here is named: {}",
             app.status
         );
         app.copy_selection(false);
