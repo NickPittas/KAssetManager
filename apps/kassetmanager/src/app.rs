@@ -1598,6 +1598,15 @@ impl App {
     }
 
     fn accept_drop(&mut self, ui: &mut egui::Ui, rect: egui::Rect, index: usize) {
+        let dest = self.panes[index].path.clone();
+        self.accept_drop_at(ui, rect, &dest);
+    }
+
+    /// Highlight a drop target and act on the release. A pane passes the folder it is showing; a tree or
+    /// favorites row passes the folder that row stands for, which is how you put files somewhere without
+    /// navigating there first. Checked against the caller's rect rather than with a widget laid over the
+    /// target - an overlay would take the hover, and with it the clicks, of everything under it.
+    fn accept_drop_at(&mut self, ui: &mut egui::Ui, rect: egui::Rect, dest_dir: &Path) {
         let (hovering, dropped) = Self::drop_check(ui, rect);
         if hovering {
             // A drop target that does not say it is one is a target you have to guess at.
@@ -1608,7 +1617,7 @@ impl App {
             && self.drag_travelled(ui)
         {
             let shift = ui.input(|i| i.modifiers.shift);
-            self.drop_files(carried, self.panes[index].path.clone(), shift);
+            self.drop_files(carried, dest_dir.to_path_buf(), shift);
         }
     }
 
@@ -3580,6 +3589,9 @@ impl App {
                         .map(|name| name.to_string_lossy().into_owned())
                         .unwrap_or_else(|| favorite.display().to_string());
                     let row = ui.selectable_label(active_path == favorite, format!("* {label}"));
+                    // A favorite is a folder you use often, so it is a place to drop files on.
+                    let row_rect = row.rect;
+                    self.accept_drop_at(ui, row_rect, &favorite);
                     if row.clicked() {
                         self.open_in_active(&favorite);
                     }
@@ -3658,6 +3670,9 @@ impl App {
                 self.toggle_tree_open(dir);
             }
             let row = ui.selectable_label(active_here, name);
+            // Dropping files on a tree row puts them in that folder without navigating to it first.
+            let row_rect = row.rect;
+            self.accept_drop_at(ui, row_rect, dir);
             if self.tree_reveal.as_deref() == Some(dir) {
                 // Asking the enclosing scroll area to bring this row in is egui's own path; doing it here (at
                 // the row's own draw) is the only moment its position is known.
