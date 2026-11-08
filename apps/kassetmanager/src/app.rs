@@ -1138,6 +1138,10 @@ impl App {
     /// folder to open, which is the one case where the remembered folder must not win.
     pub fn start_folder_memory(&mut self) {
         self.folders_remembered = true;
+        // Record where the window is *now*, not only from the next move on: a session launched at an explicit
+        // folder and closed without navigating would otherwise leave the previous session's folders remembered,
+        // and the disk mtime poll has no reason to correct it.
+        self.remember_current_folders();
     }
 
     /// Reopen the folders the panes were left in, so a window opens where you left off. Both are read out of the
@@ -1146,6 +1150,8 @@ impl App {
     ///
     /// Returns whether the first pane moved. A folder that has been deleted or moved since is skipped rather than
     /// restored into a blank pane, and a session left in one pane does not resurrect the pane the user closed.
+    /// Restoring is arriving, not navigating: nothing is pushed onto the Back stacks, and which pane is active
+    /// stays as it was.
     pub fn restore_folders(&mut self) -> bool {
         let remembered = (
             self.settings.last_folder.clone(),
@@ -1162,14 +1168,19 @@ impl App {
         };
         let mut restored = false;
         if primary.is_dir() && primary != self.panes[0].path {
-            // Through `navigate`, so the folder being left goes onto that pane's Back stack like any other visit.
-            self.navigate(0, &primary);
+            // Not through `navigate`: that would push the folder the window had guessed (Pictures, usually) onto
+            // the Back stack, and the toolbar's Back would then visit a folder the user never went to. Restoring
+            // is arriving, not navigating.
+            self.panes[0].path = primary;
+            self.open(0);
             restored = true;
         }
         if let Some(secondary) = secondary
             && secondary.is_dir()
         {
-            self.navigate(1, &secondary);
+            self.panes[1].path = secondary;
+            // The layout gate above already established two panes were left open, so this pane is on screen.
+            self.open(1);
         }
         restored
     }
@@ -2878,6 +2889,7 @@ impl App {
             return;
         }
         self.next_light_check = now + LIGHT_REFRESH_SECS;
+        let mut relisted = false;
         for index in 0..self.panes.len() {
             let path = self.panes[index].path.clone();
             // A folder that vanished mid-poll is left alone: the pane keeps showing what it has, and operations
@@ -2890,7 +2902,14 @@ impl App {
                 // no longer does, so a refresh cannot strand the panel on a departed file. It also clears the
                 // tree's cached listing for this folder, so new subfolders reach the tree in the same tick.
                 self.open_quiet(index);
+                relisted = true;
             }
+        }
+        if relisted {
+            // A re-listed pane must ask the engine for its pictures, or a file that appeared outside the app
+            // shows a placeholder block forever - the grid only reads pictures already in the cache. Once for
+            // all panes: `begin_batch` drops the previous generation's queued work.
+            self.refresh_thumbs();
         }
     }
 
@@ -3920,7 +3939,33 @@ mod tests {
         assert_eq!(reopened.panes[1].path, root.join("other"));
         assert!(
             reopened.settings.dual_pane,
-            "two panes come back as two panes - the layout was saved with them"
+            "restoring a two-pane session does not quietly turn it into one pane"
+        );
+
+        // A session left in one pane must not resurrect the second pane that was closed. This runs while both
+        // remembered folders still exist - after the next case deletes one, the suppression would never be
+        // reached and the assertion would prove nothing.
+        let mut single = App::with_cache(root.clone(), sandbox("restore-cache4", &[], &[]));
+        single.settings.dual_pane = false;
+        single.settings.last_folder = Some(root.join("inside").clone());
+        single.settings.last_folder_secondary = Some(root.join("other").clone());
+        assert!(
+            single.restore_folders(),
+            "the remembered folder is reopened for the pane that was left open"
+        );
+        assert_eq!(
+            single.panes[1].path, root,
+            "a folder left in a second pane that was closed does not reopen two panes"
+        );
+
+        // Restoring is arriving, not navigating: the folder the window had guessed stays off the Back stack.
+        let mut fresh = App::with_cache(root.clone(), sandbox("restore-cache5", &[], &[]));
+        fresh.settings.last_folder = Some(root.join("inside").clone());
+        assert!(fresh.restore_folders(), "the remembered folder is reopened");
+        assert!(
+            fresh.panes[0].back_stack.is_empty(),
+            "restoring invents no Back history: the guessed start folder is not a visit - {:?}",
+            fresh.panes[0].back_stack
         );
 
         let mut stale = App::with_cache(root.clone(), sandbox("restore-cache3", &[], &[]));
@@ -3934,15 +3979,6 @@ mod tests {
         assert_eq!(
             stale.panes[0].path, root,
             "and the folder it started in stays listed, not blanked"
-        );
-
-        let mut single = App::with_cache(root.clone(), sandbox("restore-cache4", &[], &[]));
-        single.settings.dual_pane = false;
-        single.settings.last_folder_secondary = Some(root.join("other").clone());
-        single.restore_folders();
-        assert_eq!(
-            single.panes[1].path, root,
-            "a folder left in a second pane that was closed does not reopen two panes"
         );
 
         let _ = std::fs::remove_dir_all(&root);
