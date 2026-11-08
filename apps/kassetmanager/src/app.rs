@@ -186,6 +186,8 @@ struct Pane {
     column_chain: Vec<PathBuf>,
     /// What each folder in `column_chain` holds, read once when the chain moved.
     column_entries: Vec<Vec<Entry>>,
+    /// When each folder in `column_chain` was last read, so the slow poll notices a change inside one of them.
+    level_mtime: Vec<std::time::SystemTime>,
     grid_cols: usize,
     /// Row or cell to bring into view the next time it draws, set when the keyboard moves the current item.
     scroll_target: Option<PathBuf>,
@@ -678,6 +680,7 @@ impl Pane {
             tree_truncated: false,
             column_chain: Vec::new(),
             column_entries: Vec::new(),
+            level_mtime: Vec::new(),
             back_stack: Vec::new(),
             entries: Vec::new(),
             dir_paths: std::collections::HashSet::new(),
@@ -1389,19 +1392,26 @@ impl App {
     /// it, not once per repaint.
     fn refresh_columns(&mut self, index: usize) {
         let want = self.column_chain_for(index);
-        if want != self.panes[index].column_chain {
-            let opts = self.scan_options(index);
-            let (key, ascending) = (self.settings.sort_key, self.settings.sort_ascending);
-            let lists: Vec<Vec<Entry>> = want
-                .iter()
-                .map(|dir| self.tree_children(dir, &opts, key, ascending))
-                .collect();
-            self.panes[index].column_chain = want;
-            self.panes[index].column_entries = lists;
+        if want == self.panes[index].column_chain {
+            return;
         }
+        // Cached subfolder listings for the levels being read are dropped first: a folder removed outside the app must
+        // not keep serving a row from cache. Re-reading a few folders when the chain moves is cheap - the point is not
+        // to do it per repaint.
+        for dir in &want {
+            self.tree.kids.remove(dir.as_path());
+        }
+        let opts = self.scan_options(index);
+        let (key, ascending) = (self.settings.sort_key, self.settings.sort_ascending);
+        let lists: Vec<Vec<Entry>> = want
+            .iter()
+            .map(|dir| self.tree_children(dir, &opts, key, ascending))
+            .collect();
+        // Flattening the columns into the pane's rows, and deciding which of them are folders, happens here too. A
+        // five-thousand-file column would otherwise pay five thousand `is_dir` stats - one per row - every repaint.
         let mut rows: Vec<Entry> = Vec::new();
         let mut dirs: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
-        for list in &self.panes[index].column_entries {
+        for list in &lists {
             for entry in list {
                 if entry.path.is_dir() {
                     dirs.insert(entry.path.clone());
@@ -1409,8 +1419,57 @@ impl App {
                 rows.push(entry.clone());
             }
         }
+        let mtimes: Vec<std::time::SystemTime> = want
+            .iter()
+            .map(|dir| {
+                std::fs::metadata(dir)
+                    .ok()
+                    .and_then(|meta| meta.modified().ok())
+                    .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+            })
+            .collect();
+        self.panes[index].column_chain = want;
+        self.panes[index].column_entries = lists;
+        self.panes[index].level_mtime = mtimes;
         self.panes[index].entries = rows;
         self.panes[index].dir_paths = dirs;
+    }
+
+    /// Whether any folder a Columns listing shows has changed since its column was read. One `metadata` per visible
+    /// level - at most a few, and only on the poll's own tick - because the pane's folder's own timestamp says
+    /// nothing about what happens inside a folder one level down.
+    fn columns_levels_changed(&self, index: usize) -> bool {
+        self.panes[index]
+            .column_chain
+            .iter()
+            .zip(self.panes[index].level_mtime.iter())
+            .any(|(dir, seen)| {
+                std::fs::metadata(dir)
+                    .ok()
+                    .and_then(|meta| meta.modified().ok())
+                    != Some(*seen)
+            })
+    }
+
+    /// Where Right goes in a columns listing: the first row of the column that shows this folder's contents - reading
+    /// the folder if that column is not built yet. A folder with nothing inside has nowhere to go, and an ordinary
+    /// file falls through to moving to the next item.
+    fn column_next_entry(&mut self, index: usize, current: &Path) -> Option<PathBuf> {
+        if !current.is_dir() {
+            return None;
+        }
+        let at = self.panes[index]
+            .column_chain
+            .iter()
+            .position(|dir| dir == current)?;
+        if let Some(list) = self.panes[index].column_entries.get(at + 1) {
+            return list.first().map(|entry| entry.path.clone());
+        }
+        let opts = self.scan_options(index);
+        let (key, ascending) = (self.settings.sort_key, self.settings.sort_ascending);
+        self.tree_children(current, &opts, key, ascending)
+            .first()
+            .map(|entry| entry.path.clone())
     }
 
     /// Bring one pane's visible rows up to date with a change inside its folder, in whatever shape that pane is
@@ -1437,7 +1496,6 @@ impl App {
         // One cell wide within its column, so Down walks the column and lands at the top of the next one.
         self.panes[index].grid_cols = 1;
         self.refresh_columns(index);
-        let levels = self.panes[index].column_chain.clone();
         let lists = self.panes[index].column_entries.clone();
         let primary = self.panes[index].primary().map(Path::to_path_buf);
         // Ctrl on Linux and Windows, Command on macOS - the platform's "add to selection" key.
@@ -1448,74 +1506,120 @@ impl App {
         let pointer = ui.ctx().pointer_interact_pos();
         let body = ui.available_rect_before_wrap();
 
-        egui::ScrollArea::horizontal()
+        // One scroll area for both axes, exactly as the plain listing uses one. A vertical area nested inside a
+        // horizontally scrolling area is handed an unbounded height and collapses to three rows of a fifteen-entry
+        // folder, leaving the rest unreachable. Virtual row `i` is the i-th entry of every column, so the tallest
+        // column sets the height and only the rows the viewport covers get drawn.
+        // Choosing a shallower row cuts away the later columns, and with them the rows those columns showed. A
+        // selection naming one of those files would stay deletable while nothing on screen pointed at it.
+        self.reconcile_viewed(index);
+        let tall = lists.iter().map(|list| list.len()).max().unwrap_or(0);
+        egui::ScrollArea::both()
             .id_salt(format!("columns{index}"))
             .auto_shrink([false, false])
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    for (level, list) in levels.iter().zip(lists.iter()) {
-                        ui.vertical(|ui| {
-                            ui.set_width(COLUMN_W);
-                            let _ = egui::ScrollArea::vertical()
-                                .id_salt(format!("columns{index}{}", level.display()))
-                                .auto_shrink([false, false])
-                                .show_rows(ui, ROW_H, list.len(), |ui, range| {
-                                    for entry in &list[range] {
-                                        let path = entry.path.clone();
-                                        let is_dir = entry.path.is_dir();
-                                        let text = self.cell_text(Column::Name, entry, is_dir);
-                                        // The row's rectangle comes first, so its background can go behind the text:
-                                        // a column where nothing shows which row the pane is on would leave several
-                                        // identical-looking columns while Delete acted on one of them.
-                                        let (rect, row) = ui.allocate_exact_size(
-                                            egui::vec2(COLUMN_W - 12.0, ROW_H),
-                                            egui::Sense::click(),
+            .show_rows(ui, ROW_H, tall, |ui, range| {
+                let pitch = ROW_H + ui.spacing().item_spacing.y;
+                let visible_x = ui.clip_rect().x_range();
+                // Column boundaries are captured from the first row drawn and painted across the whole visible height:
+                // a divider that stops at a folder's last file reads as a broken rule, and one per row would stop
+                // whenever its column ran out of entries.
+                let mut edges: Vec<f32> = Vec::new();
+                for i in range.clone() {
+                    ui.horizontal(|ui| {
+                        for (at, list) in lists.iter().enumerate() {
+                            if at > 0 && edges.len() < at {
+                                edges.push(ui.cursor().left());
+                            }
+                            match list.get(i) {
+                                Some(entry) => {
+                                    let path = entry.path.clone();
+                                    let is_dir = self.panes[index].dir_paths.contains(&path);
+                                    let text = self.cell_text(Column::Name, entry, is_dir);
+                                    let (rect, bg) = ui.allocate_exact_size(
+                                        egui::vec2(COLUMN_W - 12.0, ROW_H),
+                                        egui::Sense::hover(),
+                                    );
+                                    if self.panes[index].is_selected(&path) {
+                                        ui.painter().rect_filled(
+                                            rect,
+                                            0.0,
+                                            ui.visuals().selection.bg_fill,
                                         );
-                                        if self.panes[index].is_selected(&path) {
-                                            ui.painter().rect_filled(
-                                                rect,
-                                                0.0,
-                                                ui.visuals().selection.bg_fill,
-                                            );
-                                        } else if row.hovered() {
-                                            ui.painter().rect_filled(
-                                                rect,
-                                                0.0,
-                                                ui.visuals().faint_bg_color,
-                                            );
-                                        }
-                                        // The text is painted at the row's left edge, as every other listing draws
-                                        // it: putting a label in the rectangle centers the words, so a selected row
-                                        // would read as a band of text out of line with its neighbours.
-                                        ui.painter().text(
-                                            rect.min + egui::vec2(6.0, ROW_H / 2.0),
-                                            egui::Align2::LEFT_CENTER,
-                                            text,
-                                            egui::FontId::default(),
-                                            ui.visuals().text_color(),
+                                    } else if bg.hovered() {
+                                        ui.painter().rect_filled(
+                                            rect,
+                                            0.0,
+                                            ui.visuals().faint_bg_color,
                                         );
-                                        if is_dir && pointer.is_some_and(|pt| row.rect.contains(pt))
-                                        {
-                                            drop_folder = Some(path.clone());
-                                        }
-                                        if primary.as_deref() == Some(path.as_path()) {
-                                            // Only the current row asks to be seen: a jump past the drawn range has
-                                            // no response of its own, and this is what pulls its column sideways into
-                                            // view.
-                                            row.scroll_to_me(Some(egui::Align::Center));
-                                        }
-                                        if row.clicked() {
-                                            clicked = Some(path.clone());
-                                        }
-                                        if row.double_clicked() && is_dir {
-                                            enter = Some(path.clone());
-                                        }
                                     }
-                                });
-                        });
-                        ui.add_sized([1.0, 1.0], egui::Separator::default().vertical());
+                                    // The name is drawn inside the cell and cut to fit it, as in the plain listing:
+                                    // painting it at a fixed point let a long name run over the divider and into the
+                                    // next column's rows.
+                                    let row = ui
+                                        .scope_builder(
+                                            egui::UiBuilder::new()
+                                                .max_rect(egui::Rect::from_min_size(
+                                                    rect.min + egui::vec2(6.0, 0.0),
+                                                    egui::vec2(rect.width() - 12.0, rect.height()),
+                                                ))
+                                                .layout(egui::Layout::left_to_right(
+                                                    egui::Align::Min,
+                                                )),
+                                            |ui| {
+                                                ui.add(
+                                                    egui::Label::new(text)
+                                                        .selectable(false)
+                                                        .truncate()
+                                                        .sense(egui::Sense::click()),
+                                                )
+                                            },
+                                        )
+                                        .response;
+                                    if is_dir && pointer.is_some_and(|pt| rect.contains(pt)) {
+                                        drop_folder = Some(path.clone());
+                                    }
+                                    if primary.as_deref() == Some(path.as_path()) {
+                                        row.scroll_to_me(Some(egui::Align::Center));
+                                    }
+                                    if row.clicked() {
+                                        clicked = Some(path.clone());
+                                    }
+                                    if row.double_clicked() && is_dir {
+                                        enter = Some(path.clone());
+                                    }
+                                }
+                                None => {
+                                    // A shorter column leaves the rest of the row blank, so columns stay in line.
+                                    let _ = ui.allocate_exact_size(
+                                        egui::vec2(COLUMN_W - 12.0, ROW_H),
+                                        egui::Sense::hover(),
+                                    );
+                                }
+                            }
+                            ui.add_space(6.0);
+                        }
+                    });
+                }
+                let vis = ui.clip_rect();
+                for x in edges.iter().take(edges.len().min(lists.len())) {
+                    ui.painter().line_segment(
+                        [egui::pos2(*x, vis.top()), egui::pos2(*x, vis.bottom())],
+                        egui::Stroke::new(1.0, ui.visuals().weak_text_color()),
+                    );
+                }
+                // A keyboard move past the drawn rows has no response of its own to scroll by, so the row's place is
+                // submitted from its index - the way the plain listing does it.
+                if let Some(target) = self.panes[index].scroll_target.as_deref() {
+                    for list in lists.iter() {
+                        if let Some(at) = list.iter().position(|e| e.path.as_path() == target) {
+                            if !range.contains(&at) {
+                                scroll_to_row_index(ui, at, range.start, pitch, visible_x);
+                            }
+                            self.panes[index].scroll_target = None;
+                            break;
+                        }
                     }
-                });
+                }
             });
 
         if let Some(path) = clicked {
@@ -3742,9 +3846,11 @@ impl App {
     fn resort_panes(&mut self) {
         for index in 0..self.panes_visible() {
             if self.panes[index].view_mode == ViewMode::Columns {
-                // Each column is read from its folder, so a new order means reading them again.
+                // Each column is read from its folder, so a new order means reading them again - and a file renamed
+                // outside the app between two header clicks leaves with them, so the selection lets go too.
                 self.panes[index].column_chain.clear();
                 self.refresh_columns(index);
+                self.reconcile_viewed(index);
                 continue;
             }
             if self.panes[index].view_mode == ViewMode::TreeList {
@@ -4411,15 +4517,18 @@ impl App {
                 return;
             }
         }
-        // In a columns listing Right steps into the folder under the selection and Left steps back out to its parent
-        // column - what clicking a folder's row, then its parent's column, does under a pointer. Anything else falls
-        // through to moving the current item.
+        // A columns listing walks sideways through its chain. Right reveals a folder's contents in the column to its
+        // right and moves there; Left moves back to the parent's row in the previous column. Only a double-click makes
+        // a folder the pane's folder - which is what shifts the whole chain, so an arrow key must not do it: pressing
+        // Right used to throw away every column you came in through. Anything else falls through to moving the item.
         if self.panes[active].view_mode == ViewMode::Columns
             && matches!(keys.step, Some(Step::ItemForward | Step::ItemBack))
             && let Some(current) = self.panes[active].primary().map(Path::to_path_buf)
         {
-            if matches!(keys.step, Some(Step::ItemForward)) && current.is_dir() {
-                self.navigate(active, &current);
+            if matches!(keys.step, Some(Step::ItemForward))
+                && let Some(next) = self.column_next_entry(active, &current)
+            {
+                self.select_in(active, next, false);
                 return;
             }
             if matches!(keys.step, Some(Step::ItemBack))
@@ -4559,6 +4668,15 @@ impl App {
                 // no longer does, so a refresh cannot strand the panel on a departed file. It also clears the
                 // tree's cached listing for this folder, so new subfolders reach the tree in the same tick.
                 self.open_quiet(index);
+                relisted = true;
+            } else if self.panes[index].view_mode == ViewMode::Columns
+                && self.columns_levels_changed(index)
+            {
+                // Something changed inside one of the folders this listing shows a column for: the pane's own folder
+                // kept its timestamp, so the check above would never notice, and the row that left would stay on
+                // screen until a manual refresh.
+                self.panes[index].column_chain.clear();
+                self.refresh_shape_rows(index);
                 relisted = true;
             }
         }
@@ -8291,6 +8409,28 @@ mod tests {
             );
         }
 
+        // Choosing a shallower row cuts the later columns away, and the selection has to go with them: Ctrl-click
+        // adds the root's own file, and the nested one loses its row.
+        app.select_in(0, root.join("top.png"), true);
+        assert_eq!(
+            app.panes[0].selection,
+            vec![root.join("mid/deep"), root.join("top.png")],
+            "the nested row and the root's own file are both selected before the columns shrink"
+        );
+        // What the listing does every frame: rebuild from the shorter chain, then let go of what it left out.
+        app.refresh_columns(0);
+        app.reconcile_viewed(0);
+        assert_eq!(
+            app.panes[0].column_chain,
+            vec![root.clone()],
+            "the columns shrink back to the pane's folder"
+        );
+        assert_eq!(
+            app.panes[0].selection,
+            vec![root.join("top.png")],
+            "Delete will not reach a file whose column is gone"
+        );
+
         // What operation completion does to this shape: the selected file two levels down is renamed outside
         // the app, so its row goes and the selection that named it lets go.
         app.select_in(0, root.join("mid/deep/far.png"), false);
@@ -8321,6 +8461,49 @@ mod tests {
         assert_eq!(
             app.panes[0].wanted, None,
             "and the preview is not still asking for it"
+        );
+    }
+    /// The slow poll has to notice a change inside a folder the listing shows a column for: the pane's own folder kept
+    /// its timestamp, so nothing else would look again, and the row that appeared would wait for a manual refresh.
+    #[test]
+    fn the_poll_notices_a_change_inside_a_shown_folder() {
+        let root = sandbox("colpoll", &["top.png"], &["mid"]);
+        let _ = std::fs::write(root.join("mid/inner.png"), b"x");
+        let mut app = App::with_cache(root.clone(), sandbox("colpollthumbs", &[], &[]));
+        app.set_pane_view(0, ViewMode::Columns);
+        app.refresh_columns(0);
+        app.select_in(0, root.join("mid"), false);
+        app.refresh_columns(0);
+        let listed = |app: &App| -> Vec<String> {
+            app.panes[0]
+                .entries
+                .iter()
+                .map(|e| e.name.clone())
+                .collect()
+        };
+        assert!(listed(&app).contains(&"inner.png".to_string()));
+
+        // A file appears inside the folder the second column shows, with no keypress and no manual refresh.
+        std::fs::write(root.join("mid/late.png"), b"y").unwrap();
+        app.light_refresh(1.0);
+        let after = listed(&app);
+        assert!(
+            after.contains(&"late.png".to_string()),
+            "the poll re-read the folder one level down"
+        );
+
+        // And a subfolder that goes away must lose its row: a cached listing of that folder would keep serving it.
+        std::fs::create_dir(root.join("mid/gone")).unwrap();
+        app.light_refresh(3.0);
+        assert!(
+            listed(&app).contains(&"gone".to_string()),
+            "the new subfolder is listed"
+        );
+        std::fs::remove_dir(root.join("mid/gone")).unwrap();
+        app.light_refresh(5.0);
+        assert!(
+            !listed(&app).contains(&"gone".to_string()),
+            "a removed folder does not stay as a row from cache"
         );
     }
 }
