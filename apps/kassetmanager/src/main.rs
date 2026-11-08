@@ -90,7 +90,9 @@ fn main() {
         Box::new(|_cc| {
             let (theme, dual_pane, secondary, folder, file) = start_point();
             let mut app = app::App::new(folder);
-            if let Some(file) = file {
+            // A file named on the command line arrives relative to where the shell was; the panes hold
+            // absolute paths, so selection and playback have to speak the same language.
+            if let Some(file) = file.as_deref().map(app::absolute) {
                 app.select(file.clone());
                 app.play(file);
             }

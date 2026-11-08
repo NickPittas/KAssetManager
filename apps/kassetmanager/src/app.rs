@@ -8,13 +8,25 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use gallerybrowser_core::{
-    AppDirs, Column, Entry, MediaKind, ScanOptions, Settings, SortKey, Theme, ViewMode,
+    AppDirs, Column, Entry, MediaKind, ScanOptions, Settings, SortKey, Theme, ViewMode, is_hidden,
     scan_folder, sort_entries,
 };
 use gallerybrowser_fileops::{ConflictPolicy, FileOp, FileOpsWorker, OpEvent, OpOutcome};
 use gallerybrowser_library::Library;
 use gallerybrowser_media::{Thumbnailer, ThumbnailerConfig, Tick, frame_to_rgba, open};
 use gallerybrowser_player::Player;
+
+/// A path as the app stores it. The tree's roots come from mount points and drive letters, so a relative start
+/// folder - `.` when a file has no parent, or anything typed on the command line - could never be matched,
+/// expanded or revealed there. Resolved against the process's own directory; symlinks are left as the user typed
+/// them, because revealing a path the user wrote is not the same as resolving what it points at.
+pub fn absolute(path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir().unwrap_or_default().join(path)
+    }
+}
 
 /// Local file time the way a file browser writes it. `chrono::Local` is the operating system's own clock, so
 /// no tz database ships with us and daylight saving comes from the platform.
@@ -355,8 +367,10 @@ pub struct App {
     tree_revealed: Option<(usize, PathBuf)>,
     /// Folder whose tree row should be scrolled into view on the next draw, then cleared.
     tree_reveal: Option<PathBuf>,
-    /// List header being dragged to reorder columns; the drop index is computed from the pointer each frame.
-    column_drag: Option<Column>,
+    /// Which pane's header is being dragged, and which column; the drop index is computed from the pointer
+    /// each frame. The owner matters: both panes draw headers, and only the one that started the drag may
+    /// resolve its release - the other would answer with its own widths and coordinates.
+    column_drag: Option<(usize, Column)>,
     /// How far each pane's list is scrolled sideways; the pinned header slides by the same amount.
     list_scroll_x: [f32; 2],
     settings_open: bool,
@@ -508,6 +522,7 @@ impl App {
     }
 
     fn build(path: PathBuf, cache_dir: PathBuf, dirs: Option<AppDirs>, settings: Settings) -> Self {
+        let path = absolute(&path);
         let thumbs = Thumbnailer::new(ThumbnailerConfig {
             cache_dir,
             memory_bytes: 32 << 20,
@@ -1958,13 +1973,15 @@ impl App {
                     self.sort_by_column(col);
                 }
                 if btn.drag_started() {
-                    self.column_drag = Some(col);
+                    self.column_drag = Some((index, col));
                 }
-                // The band straddling the right edge is the resize handle. It sits outside the button's own
-                // rect, so it cannot steal the click that sorts.
+                // The handle is the band straddling the column's boundary, taken from the widths and not from
+                // the title's own rect - that ends beside the text, which puts a grab point in mid-column for
+                // any short name. It stays outside the label's rect so it cannot steal the click that sorts.
+                let boundary = x + widths[i];
                 let sep = egui::Rect::from_min_max(
-                    egui::pos2(btn.rect.right() - 4.0, btn.rect.top()),
-                    egui::pos2(btn.rect.right() + 4.0, btn.rect.bottom()),
+                    egui::pos2(boundary - 4.0, cell.top()),
+                    egui::pos2(boundary + 4.0, cell.bottom()),
                 );
                 let handle =
                     ui.interact(sep, ui.id().with(("col-resize", col)), egui::Sense::drag());
@@ -1976,24 +1993,29 @@ impl App {
                     // Settings::save fsyncs; writing it every frame would stall the drag.
                     self.save_settings();
                 }
-                if let Some(dragged) = self.column_drag {
-                    if let Some(pos) = ui.ctx().pointer_interact_pos() {
-                        drop_target = Some(Self::column_drop_index(
-                            (pos.x - row_start + x_off).max(0.0),
-                            &widths,
-                        ));
-                    }
-                    if ui.input(|i| i.pointer.any_released()) {
-                        if let Some(target) = drop_target {
-                            self.reorder_columns(dragged, target);
+                if let Some((owner, dragged)) = self.column_drag {
+                    // Only the pane whose header began the drag resolves it; the other draws its own header at
+                    // different coordinates and would answer the release with its own column widths.
+                    if owner == index {
+                        if let Some(pos) = ui.ctx().pointer_interact_pos() {
+                            drop_target = Some(Self::column_drop_index(
+                                (pos.x - row_start + x_off).max(0.0),
+                                &widths,
+                            ));
                         }
-                        self.column_drag = None;
+                        if ui.input(|i| i.pointer.any_released()) {
+                            if let Some(target) = drop_target {
+                                self.reorder_columns(dragged, target);
+                            }
+                            self.column_drag = None;
+                        }
                     }
                 }
                 x += widths[i];
             }
         }
-        if let (Some(dragged), Some(target)) = (self.column_drag, drop_target) {
+        if let (Some((owner, dragged)), Some(target)) = (self.column_drag, drop_target) {
+            let _ = (owner, dragged);
             // Qt shows a line for where the dragged title will land before you let go.
             let x = row_start - x_off + widths[..target.min(widths.len())].iter().sum::<f32>();
             let top = head_rect.min.y;
@@ -2183,7 +2205,9 @@ impl App {
             return;
         };
         columns.remove(from);
-        columns.insert(target.min(columns.len()), dragged);
+        // The drop index counted the column being moved; removing it shifted everything after one place left.
+        let at = if from < target { target - 1 } else { target };
+        columns.insert(at.min(columns.len()), dragged);
         self.settings.list_columns = columns;
         self.save_settings();
     }
@@ -2683,10 +2707,9 @@ impl App {
                     .map(|entry| entry.path())
                     .filter(|path| path.is_dir())
                     .filter(|path| {
-                        self.settings.show_hidden
-                            || !path
-                                .file_name()
-                                .is_some_and(|name| name.to_string_lossy().starts_with('.'))
+                        // The same rule the file listing uses, which on Windows also reads the
+                        // FILE_ATTRIBUTE_HIDDEN flag rather than only a leading dot.
+                        self.settings.show_hidden || !is_hidden(path)
                     })
                     .collect()
             })
@@ -3626,6 +3649,55 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Dragging a column to the right has to land it where the marker sat. Removing the source shifts every
+    /// later column one place left, and the drop index counted the column being moved - so a rightward drop
+    /// used to overshoot by one.
+    #[test]
+    fn dragging_a_column_right_lands_it_left_of_the_marker() {
+        let dir = sandbox("reorder-right", &["a.png"], &[]);
+        let mut app = App::with_cache(dir.clone(), sandbox("reorder-right-cache", &[], &[]));
+        // Default order is Name, Modified, Size, Type. A marker sitting before Size (index 2) means the
+        // dragged column ends up just left of Size - not left of Modified.
+        app.reorder_columns(Column::Name, 2);
+        assert_eq!(
+            app.list_columns(),
+            vec![Column::Modified, Column::Name, Column::Size, Column::Type],
+            "the dragged column sits where the marker was"
+        );
+        // A leftward drop needs no adjustment.
+        app.reorder_columns(Column::Name, 0);
+        assert_eq!(
+            app.list_columns(),
+            vec![Column::Name, Column::Modified, Column::Size, Column::Type],
+            "back to the default order"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A start folder given relative to the shell - `.` when a file has no parent, or anything typed on the
+    /// command line - could never be matched against the tree's absolute roots, so the tree never revealed it.
+    #[test]
+    fn a_relative_start_folder_is_stored_absolute() {
+        let here = std::env::current_dir().unwrap_or_default();
+        assert_eq!(
+            absolute(Path::new(".")),
+            here,
+            "a relative path resolves against the process's own directory"
+        );
+        assert_eq!(
+            absolute(Path::new("/already/abs")),
+            PathBuf::from("/already/abs"),
+            "an absolute path is left alone"
+        );
+
+        let app = App::with_cache(PathBuf::from("."), sandbox("rel-start-cache", &[], &[]));
+        assert_eq!(
+            app.panes[0].path, here,
+            "a pane started at `.` stores the folder absolutely, where the tree can match it"
+        );
     }
 
     /// The tree used to sit collapsed until the user clicked a node, and stayed put when the active pane
