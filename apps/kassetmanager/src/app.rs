@@ -591,6 +591,14 @@ fn path_bar_action(enter: bool, escape: bool, has_focus: bool, lost_focus: bool)
     PathBarAction::Idle
 }
 
+/// A file name as one line of text. Control characters are legal in Linux file names - `a\nb\nc\nd.txt` is a real
+/// file - and each one used to start a new caption line, making the caption taller than the cell row it belongs to.
+fn flat_name(name: &str) -> String {
+    name.chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect()
+}
+
 /// How a grid shares its pane: columns counted from the thumbnail size you asked for, then each cell takes its
 /// share of the width and no more. Counting and sizing are one function because they have to agree - if the count
 /// allows five columns but the cells are floored at six times their width, the rightmost column is drawn past the
@@ -602,9 +610,14 @@ fn grid_layout(avail_w: f32, spacing_x: f32, edge_px: u32) -> (usize, f32) {
     if cols == 1 && avail_w >= 96.0 {
         cols = 2;
     }
-    let cell = ((avail_w - (cols as f32 - 1.0) * spacing_x) / cols as f32)
-        .min(wanted)
-        .max(40.0);
+    // The share is what `cols` cells plus the spacing between them leave each one, so a cell can never draw past
+    // the pane's edge however small the pane is; the 40 px floor only applies where there is room for it.
+    let share = (avail_w - (cols as f32 - 1.0) * spacing_x) / cols as f32;
+    let cell = if share < 40.0 {
+        share
+    } else {
+        share.min(wanted).max(40.0)
+    };
     (cols, cell)
 }
 
@@ -619,16 +632,25 @@ fn row_top(first_drawn_top: f32, row: usize, drawn_first: usize, pitch: f32) -> 
 /// Bring a row into view when it is not drawn. A long listing does not build every row each frame, so a jump -
 /// Home, End, or one step past the bottom edge - tells the view where to go by the row's position, since the
 /// response that would normally scroll to it does not exist this frame.
-fn scroll_to_row_index(ui: &egui::Ui, row: usize, drawn: std::ops::Range<usize>, pitch: f32) {
+fn scroll_to_row_index(
+    ui: &egui::Ui,
+    row: usize,
+    drawn: std::ops::Range<usize>,
+    pitch: f32,
+    visible_x: egui::Rangef,
+) {
     if drawn.contains(&row) {
         return;
     }
     let top = row_top(ui.cursor().top(), row, drawn.start, pitch);
-    // Horizontal position is left alone: x is where the listing already is, so a vertical jump does not also drag
-    // a wide table sideways.
-    let x = ui.cursor().left();
+    // `scroll_to_rect` sets both axes from one rectangle and there is no axis-specific variant in egui 0.36, so the
+    // x-range handed over is the part of the listing you can currently see: re-submitting the visible range leaves
+    // the sideways position exactly where it was instead of pulling a wide table back to its start.
     ui.scroll_to_rect(
-        egui::Rect::from_min_size(egui::pos2(x, top), egui::vec2(1.0, pitch.max(1.0))),
+        egui::Rect::from_min_max(
+            egui::pos2(visible_x.min, top),
+            egui::pos2(visible_x.max, top + pitch.max(1.0)),
+        ),
         Some(egui::Align::Center),
     );
 }
@@ -2805,7 +2827,7 @@ impl App {
                 if let Some(target) = self.panes[index].scroll_target.as_ref()
                     && let Some(row) = rows.iter().position(|(entry, _)| entry.path == *target)
                 {
-                    scroll_to_row_index(ui, row, range.clone(), pitch);
+                    scroll_to_row_index(ui, row, range.clone(), pitch, body.x_range());
                 }
                 for (entry, is_dir) in rows[range.clone()].iter() {
                     let path = entry.path.clone();
@@ -3076,7 +3098,13 @@ impl App {
                 if let Some(target) = self.panes[index].scroll_target.as_ref()
                     && let Some(cell_row) = cells.iter().position(|entry| entry.path == *target)
                 {
-                    scroll_to_row_index(ui, cell_row / cols.max(1), range.clone(), pitch);
+                    scroll_to_row_index(
+                        ui,
+                        cell_row / cols.max(1),
+                        range.clone(),
+                        pitch,
+                        body.x_range(),
+                    );
                 }
                 for row in cells
                     .chunks(cols)
@@ -3168,16 +3196,15 @@ impl App {
                                             ui.allocate_space(egui::vec2(edge, edge));
                                         }
                                     }
-                                    // Long names clip in a narrow pane, so elide them to the cell width.
-                                    let budget = (cell / 7.0) as usize;
-                                    let head: String = entry.name.chars().take(budget).collect();
-                                    let label = if head.chars().count() < entry.name.chars().count()
-                                    {
-                                        format!("{head}\u{2026}")
-                                    } else {
-                                        head
-                                    };
-                                    ui.label(label);
+                                    // A caption is one line, elided at the cell's width. It used to be a wrapping
+                                    // label with a hand-counted character budget, which a legal filename like
+                                    // "a\nb\nc\nd.txt" turned into four lines - taller than the row it was given, and
+                                    // since the row reserves its height, the next row drew over it.
+                                    ui.add(
+                                        egui::Label::new(flat_name(&entry.name))
+                                            .selectable(false)
+                                            .truncate(),
+                                    );
                                     // One target for the whole cell: picture, name and the space between
                                     // them select, play and hover.
                                     let response = ui.interact(
@@ -4915,6 +4942,15 @@ mod tests {
     /// The path bar goes where you type it, when that is a folder. A wrong path keeps the words up to be fixed
     /// rather than closing over them, and nothing moves.
     #[test]
+    fn a_file_name_with_newlines_stays_one_caption_line() {
+        // The reviewer's concrete overlap case: a legal name whose control characters would have made four lines
+        // in a 68 px row, drawing under the next row of cells.
+        let flat = flat_name("a\nb\nc\nd.txt");
+        assert!(!flat.chars().any(char::is_control), "{flat:?}");
+        assert_eq!(flat, "a b c d.txt");
+    }
+
+    #[test]
     fn grid_columns_and_cell_sizes_never_outgrow_the_pane() {
         // The case that used to clip: small thumbnails in a narrow pane. Five columns of a cell floored at 60 px do
         // not fit 240 px, and the grid cannot scroll sideways to reach what it drew past the edge.
@@ -4935,6 +4971,13 @@ mod tests {
         let (roomy, roomy_cell) = grid_layout(1200.0, 8.0, 64);
         assert_eq!(roomy_cell, 76.0);
         assert!((roomy as f32) * 76.0 + (roomy as f32 - 1.0) * 8.0 <= 1200.0 + 0.5);
+        // A pane and spacing combination where a floor of 40 px outgrows the pane: two cells plus 24 px between
+        // them must still fit, so the floor yields to the share.
+        let (tight_cols, tight_cell) = grid_layout(96.0, 24.0, 400);
+        assert!(
+            (tight_cols as f32) * tight_cell + (tight_cols as f32 - 1.0) * 24.0 <= 96.0 + 0.5,
+            "{tight_cols} x {tight_cell}"
+        );
     }
 
     #[test]
