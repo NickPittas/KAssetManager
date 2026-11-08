@@ -56,9 +56,13 @@ Deferred on purpose (not dropped): drag-out to other OS apps (Win32 virtual-file
 ### Gate acceptance rule
 
 Every numeric threshold above (frame time, pixel tolerance, zoom factors, watcher deadline, expected
-counts and findings) is **frozen in a committed test file before the milestone's implementation starts**,
-by whoever implements it. Nothing in this plan invents a number from here; that keeps gates falsifiable
-without pretending today's guesses are requirements.
+counts and findings) is **declared before the milestone's implementation starts** and then **frozen in a
+committed test once the feature is verified**. Nothing in this plan invents a number from here; that keeps
+gates falsifiable without pretending today's guesses are requirements.
+
+Order of work per feature (repository rule): implement → **run the real application and verify the
+behavior** → only then add the smallest test that would fail if the behavior regressed. A test is a net
+under already-verified functionality, never the first artifact written for a feature.
 
 ## M0 order of operations (no further decisions needed)
 
@@ -205,7 +209,21 @@ Run on this Fedora machine, `cargo`/`rustc` 1.99.1 via mise, `TMPDIR` pointed in
 | Toolchain | `rust-toolchain.toml` pins `1.99.1` + clippy/rustfmt (the snapshot M0 was verified with); `rust-version = "1.95"` remains the declared crate minimum. Verified local resolution still works under mise |
 | `cargo fmt --all -- --check` | Clean |
 | Qt reference build | Fresh configure of `native/qt6` with `-DBUILD_APP=ON -DBUILD_TESTS=OFF` + build linked `kassetmanagerqt` in 26s. Two environment notes: the pre-existing `build-linux/` cache is unusable here (created from another worktree path), and `-G Ninja` fails because this box exposes `ninja-build`, not `ninja` |
-| Not verifiable locally | MSVC and macOS compilation of the pinned ArtCraft revs — the first CI push on `rust-refactor` decides it |
+| ~~Not verifiable locally~~ **resolved** | CI run 42489707491 on `7f1eea1`: `build + test` **success** on ubuntu-latest, windows-latest and macos-latest — the pinned ArtCraft revs compile and pass tests on MSVC and macOS |
+
+## M1 progress
+
+**Slice 1 (verified):** `apps/kassetmanager` opens a wgpu window under Wayland on this Fedora box.
+Evidence: `hyprctl clients` reported `class io.github.nickpittas.KAssetManager`, `title "KAsset Manager"`,
+empty stderr over ~20s of running, and a screenshot (`validation_outputs/m1-slice1.png`) shows the bottom
+status bar rendering with its `ping` button and `clicks:` label. The Qt build's `AA_ForceRasterWidgets`
+caveat therefore does not apply to the Rust path.
+Known rough edge from the same screenshot: Hyprland mapped the window clipped against the right screen
+edge — window placement/sizing (and HiDPI scaling) is an M1 item, not a render defect.
+After verification, one `egui_kittest` test exists as the regression net for that verified interaction
+(`Harness::new_ui_state` + click by label); egui 0.36 API notes learned the hard way: the app trait method
+is `fn ui(&mut self, &mut egui::Ui, &mut Frame)` (not `update`), there is no `TopBottomPanel` — use
+`egui::Panel::bottom(...)`, and widget queries need `use egui_kittest::kittest::Queryable;`.
 
 ## Non-goals
 

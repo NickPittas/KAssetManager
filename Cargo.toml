@@ -1,7 +1,7 @@
 [workspace]
 resolver = "3"
-members = ["crates/*"]
-default-members = ["crates/*"]
+members = ["crates/*", "apps/*"]
+default-members = ["crates/*", "apps/*"]
 
 [workspace.package]
 version = "0.2.3"
@@ -51,6 +51,8 @@ same-file = "1"
 # ui
 egui = "0.36"
 eframe = { version = "0.36", default-features = false }
+# headless egui interaction tests (same egui series as `egui` above); snapshots stay off by default
+egui_kittest = "0.36"
 rfd = "0.17"
 cpal = "0.16"
 open = "5"
