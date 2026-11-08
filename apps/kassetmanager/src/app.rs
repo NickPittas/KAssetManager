@@ -591,6 +591,20 @@ fn path_bar_action(enter: bool, escape: bool, has_focus: bool, lost_focus: bool)
     PathBarAction::Idle
 }
 
+/// Bring a row into view when it is not drawn. A long listing does not build every row each frame, so a jump -
+/// Home, End, or one step past the bottom edge - tells the view where to go by the row's virtual position, since
+/// the response that would normally scroll to it does not exist this frame.
+fn scroll_to_row_index(ui: &egui::Ui, row: usize, row_h: f32, drawn: std::ops::Range<usize>) {
+    if drawn.contains(&row) {
+        return;
+    }
+    let y = row as f32 * row_h;
+    ui.scroll_to_rect(
+        egui::Rect::from_min_size(egui::pos2(0.0, y), egui::vec2(1.0, row_h.max(1.0))),
+        Some(egui::Align::Center),
+    );
+}
+
 /// Which of these sources already have their name taken in `dest`. Anything else can proceed without asking.
 fn taken_names(paths: &[PathBuf], dest: &Path) -> Vec<String> {
     paths
@@ -2752,11 +2766,19 @@ impl App {
         // toolbar have been drawn, because `max_rect` would still include them and releasing over a toolbar
         // button is not dropping files into the folder.
         let body = ui.available_rect_before_wrap();
+        // A folder of five thousand files used to build five thousand rows every frame - about 70 ms of CPU per
+        // repaint, which is felt as a stutter on every keystroke. `show_rows` draws only the rows the viewport
+        // covers and reserves the height of the rest, so the scrollbar and scroll position stay honest.
         let out = egui::ScrollArea::both()
             .id_salt(format!("list{index}"))
             .auto_shrink([false, false])
-            .show(ui, |ui| {
-                for (entry, is_dir) in &rows {
+            .show_rows(ui, ROW_H, rows.len(), |ui, range| {
+                if let Some(target) = self.panes[index].scroll_target.as_ref()
+                    && let Some(row) = rows.iter().position(|(entry, _)| entry.path == *target)
+                {
+                    scroll_to_row_index(ui, row, ROW_H, range.clone());
+                }
+                for (entry, is_dir) in rows[range.clone()].iter() {
                     let path = entry.path.clone();
                     let chosen = self.panes[index].is_selected(&path);
                     // One rect per row is the click target for the whole row - cells included, so a click
@@ -3001,11 +3023,25 @@ impl App {
         let mut scrub: Option<(Entry, egui::Pos2, egui::Rect)> = None;
         // As in the list view: only the region below the breadcrumb and toolbar accepts a drop.
         let body = ui.available_rect_before_wrap();
+        // The grid is windowed the same way, by rows of cells: a cell row is `cell + 24` tall and the listing
+        // reserves the height of the ones it does not draw.
+        let cell_rows = cells.chunks(cols).count();
         egui::ScrollArea::vertical()
             .id_salt(format!("grid{index}"))
             .auto_shrink(false)
-            .show(ui, |ui| {
-                for row in cells.chunks(cols) {
+            .show_rows(ui, cell + 24.0, cell_rows, |ui, range| {
+                if let Some(target) = self.panes[index].scroll_target.as_ref()
+                    && let Some(cell_row) = cells.iter().position(|entry| entry.path == *target)
+                {
+                    scroll_to_row_index(ui, cell_row / cols.max(1), cell + 24.0, range.clone());
+                }
+                for row in cells
+                    .chunks(cols)
+                    .enumerate()
+                    .take(range.end)
+                    .skip(range.start)
+                    .map(|(_, r)| r)
+                {
                     ui.horizontal(|ui| {
                         for entry in row {
                             let chosen = self.panes[index].is_selected(&entry.path);
