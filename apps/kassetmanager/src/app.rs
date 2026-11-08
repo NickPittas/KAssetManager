@@ -34,6 +34,9 @@ const MIN_SEQUENCE_LEN: usize = 2;
 /// One pane of the browser: a folder, what it contains and its selection.
 struct Pane {
     path: PathBuf,
+    /// Folders this pane visited, newest last. `navigate` records the folder it leaves, `go_back` pops
+    /// without recording, so Back walks history without inflating it. Capped to keep memory bounded.
+    back_stack: Vec<PathBuf>,
     entries: Vec<Entry>,
     subfolders: Vec<PathBuf>,
     selected: Option<PathBuf>,
@@ -63,6 +66,11 @@ struct FileKeys {
     undo: bool,
     redo: bool,
     trash: bool,
+    /// Shift+Delete: permanent delete, which is not undoable.
+    perm_delete: bool,
+    back: bool,
+    refresh: bool,
+    new_folder: bool,
     rename: bool,
     /// Digit 0-5 pressed to rate the selection.
     rating: Option<u8>,
@@ -125,6 +133,7 @@ impl Pane {
     fn new(path: PathBuf) -> Self {
         Self {
             path,
+            back_stack: Vec::new(),
             entries: Vec::new(),
             subfolders: Vec::new(),
             selected: None,
@@ -330,11 +339,62 @@ impl App {
     fn navigate(&mut self, index: usize, dir: &Path) {
         let dir = dir.to_path_buf();
         if dir.is_dir() {
-            self.panes[index].path = dir;
+            let previous = std::mem::replace(&mut self.panes[index].path, dir);
+            if previous != self.panes[index].path && previous.exists() {
+                self.panes[index].back_stack.push(previous);
+                // ponytail: 50 is Qt-shaped, not needed; drop the oldest past that.
+                if self.panes[index].back_stack.len() > 50 {
+                    self.panes[index].back_stack.remove(0);
+                }
+            }
             self.active = index;
             self.open(index);
         } else {
             self.status = format!("{} is not a folder", dir.display());
+        }
+    }
+
+    /// The toolbar's Back: this pane walks its own recorded folders. Going back is not a new visit.
+    fn go_back(&mut self, index: usize) {
+        if let Some(dir) = self.panes[index].back_stack.pop() {
+            self.panes[index].path = dir;
+            self.active = index;
+            self.open(index);
+        }
+    }
+
+    /// New Folder on the toolbar or Ctrl+Shift+N. The worker creates it, so undo removes it again.
+    fn new_folder(&mut self) {
+        let parent = self.panes[self.active].path.clone();
+        let mut name = "New Folder".to_string();
+        let mut candidate = 2;
+        while parent.join(&name).exists() {
+            name = format!("New Folder {candidate}");
+            candidate += 1;
+        }
+        self.ops.submit(FileOp::NewFolder { parent, name });
+    }
+
+    /// Shift+Delete: gone rather than trashed, and not undoable (Qt's rule as well).
+    fn delete_permanently(&mut self) {
+        if let Some(path) = self.target() {
+            self.ops.submit(FileOp::Delete { paths: vec![path] });
+        }
+    }
+
+    /// The toolbar's thumbnail stepper. Only the engine's four cache sizes, so a size change reuses
+    /// cached thumbnails instead of asking the decoder for a new edge length.
+    fn step_thumbnails(&mut self, direction: i32) {
+        const SIZES: [u32; 4] = [64, 128, 256, 512];
+        let position = SIZES
+            .iter()
+            .position(|size| *size == self.settings.thumbnail_size)
+            .unwrap_or(1);
+        let next = (position as i32 + direction).clamp(0, SIZES.len() as i32 - 1) as usize;
+        if SIZES[next] != self.settings.thumbnail_size {
+            self.settings.thumbnail_size = SIZES[next];
+            self.save_settings();
+            self.refresh_thumbs();
         }
     }
 
@@ -1130,6 +1190,7 @@ impl App {
         // complains about duplicate widget use (and clicks cross panes).
         ui.push_id(index, |ui| {
             ui.vertical(|ui| {
+                self.pane_toolbar(index, ui);
                 self.pane_path_bar(index, ui);
                 let height = ui.available_height();
                 // ponytail: folders width is a fraction with floors; make it draggable if users want it.
@@ -1155,6 +1216,170 @@ impl App {
                 });
             });
         });
+    }
+
+    /// One pane's own toolbar. Qt keeps the day-to-day controls on the toolbar and leaves Settings to
+    /// preferences, and its single File Manager toolbar acts on whichever pane is active — so a click
+    /// here makes this pane active first, then the button acts on it.
+    fn pane_toolbar(&mut self, index: usize, ui: &mut egui::Ui) {
+        let has_selection = self.panes[index].selected.is_some();
+        let can_back = !self.panes[index].back_stack.is_empty();
+        let grid = self.settings.view_mode == ViewMode::Grid;
+        let dual = self.settings.dual_pane;
+        let preview = self.settings.show_preview;
+        let size = self.settings.thumbnail_size;
+        let paste_ready = self.clipboard.is_some();
+        let mut back = false;
+        let mut up = false;
+        let mut new_folder = false;
+        let mut copy = false;
+        let mut cut = false;
+        let mut paste = false;
+        let mut trash = false;
+        let mut rename = false;
+        let mut toggle_view = false;
+        let mut smaller = false;
+        let mut bigger = false;
+        let mut refresh = false;
+        let mut toggle_dual = false;
+        let mut toggle_preview = false;
+        // Labels stay short and the row wraps: in a tiled window the pane is ~450 px wide, so a Qt-style
+        // text toolbar would push its right-hand controls off screen. Tooltips carry the full names.
+        let row = ui.horizontal_wrapped(|ui| {
+            back = ui
+                .add_enabled(can_back, egui::Button::new("\u{21a9}"))
+                .on_hover_text("Back to the previous folder")
+                .clicked();
+            up = ui
+                .add(egui::Button::new("\u{2b06}"))
+                .on_hover_text("Up one folder")
+                .clicked();
+            ui.separator();
+            new_folder = ui
+                .add(egui::Button::new("New"))
+                .on_hover_text("New Folder (Ctrl+Shift+N)")
+                .clicked();
+            copy = ui
+                .add_enabled(has_selection, egui::Button::new("Copy"))
+                .on_hover_text("Copy (Ctrl+C)")
+                .clicked();
+            cut = ui
+                .add_enabled(has_selection, egui::Button::new("Cut"))
+                .on_hover_text("Cut (Ctrl+X)")
+                .clicked();
+            paste = ui
+                .add_enabled(paste_ready, egui::Button::new("Paste"))
+                .on_hover_text("Paste into this pane (Ctrl+V)")
+                .clicked();
+            trash = ui
+                .add_enabled(has_selection, egui::Button::new("Del"))
+                .on_hover_text("Move to trash (Delete); Shift+Delete deletes for good")
+                .clicked();
+            rename = ui
+                .add_enabled(has_selection, egui::Button::new("Ren"))
+                .on_hover_text("Rename (F2)")
+                .clicked();
+            ui.separator();
+            toggle_view = ui
+                .add(egui::Button::new(if grid { "List" } else { "Grid" }))
+                .on_hover_text("Switch between grid and list")
+                .clicked();
+            smaller = ui
+                .add(egui::Button::new("\u{2212}"))
+                .on_hover_text("Smaller thumbnails")
+                .clicked();
+            ui.label(format!("{size}px"));
+            bigger = ui
+                .add(egui::Button::new("+"))
+                .on_hover_text("Larger thumbnails")
+                .clicked();
+            ui.separator();
+            refresh = ui
+                .add(egui::Button::new("\u{27f3}"))
+                .on_hover_text("Refresh this pane (F5)")
+                .clicked();
+            toggle_dual = ui
+                .add(egui::Button::new(if dual { "1" } else { "2" }))
+                .on_hover_text("Show or hide the second pane")
+                .clicked();
+            toggle_preview = ui
+                .add(egui::Button::new(if preview {
+                    "\u{25a3}"
+                } else {
+                    "\u{25a4}"
+                }))
+                .on_hover_text("Show or hide the preview panel")
+                .clicked();
+        });
+        // A click anywhere on this toolbar is the user telling us which pane they mean.
+        let acted = back
+            || up
+            || new_folder
+            || copy
+            || cut
+            || paste
+            || trash
+            || rename
+            || toggle_view
+            || smaller
+            || bigger
+            || refresh
+            || toggle_dual
+            || toggle_preview
+            || row.response.clicked();
+        if acted {
+            self.active = index;
+        }
+        if back {
+            self.go_back(index);
+        }
+        if up {
+            let parent = self.panes[index].path.parent().map(Path::to_path_buf);
+            if let Some(parent) = parent {
+                self.navigate(index, &parent);
+            }
+        }
+        if new_folder {
+            self.new_folder();
+        }
+        if copy {
+            self.copy_selection(false);
+        }
+        if cut {
+            self.copy_selection(true);
+        }
+        if paste {
+            self.paste();
+        }
+        if trash {
+            self.trash_selection();
+        }
+        if rename {
+            self.start_rename();
+        }
+        if toggle_view {
+            let next = if grid { ViewMode::List } else { ViewMode::Grid };
+            self.set_view_mode(next);
+            self.save_settings();
+        }
+        if smaller {
+            self.step_thumbnails(-1);
+        }
+        if bigger {
+            self.step_thumbnails(1);
+        }
+        if refresh {
+            self.open(index);
+        }
+        if toggle_dual {
+            let dual = self.settings.dual_pane;
+            self.set_dual_pane(!dual);
+            self.save_settings();
+        }
+        if toggle_preview {
+            self.settings.show_preview = !self.settings.show_preview;
+            self.save_settings();
+        }
     }
 
     /// Breadcrumb + up button for one pane; clicking anything makes that pane active.
@@ -1551,21 +1776,14 @@ impl App {
 
     /// The global path bar: view toggle and settings button (panes carry their own breadcrumbs).
     pub fn app_bar(&mut self, ui: &mut egui::Ui) {
-        let mut view: Option<ViewMode> = None;
         let mut settings = false;
         ui.horizontal(|ui| {
-            let grid = self.settings.view_mode == ViewMode::Grid;
-            if ui.button(if grid { "List" } else { "Grid" }).clicked() {
-                view = Some(if grid { ViewMode::List } else { ViewMode::Grid });
-            }
-            ui.separator();
+            // View mode, thumbnail size, dual pane and the file operations live on each pane's toolbar,
+            // as they do in Qt; this bar is only for the global surfaces.
             if ui.button("Settings").clicked() {
                 settings = true;
             }
         });
-        if let Some(mode) = view {
-            self.set_view_mode(mode);
-        }
         if settings {
             self.settings_open = !self.settings_open;
         }
@@ -1595,37 +1813,8 @@ impl App {
                         }
                     }
                 });
-                ui.horizontal(|ui| {
-                    ui.label("View:");
-                    let grid = self.settings.view_mode == ViewMode::Grid;
-                    if ui.selectable_label(grid, "Grid").clicked() {
-                        self.set_view_mode(ViewMode::Grid);
-                    }
-                    if ui.selectable_label(!grid, "List").clicked() {
-                        self.set_view_mode(ViewMode::List);
-                    }
-                });
-                ui.horizontal(|ui| {
-                    ui.label("Thumbnails:");
-                    let current = self.settings.thumbnail_size;
-                    for size in [64, 128, 256, 512] {
-                        if ui
-                            .selectable_label(current == size, size.to_string())
-                            .clicked()
-                        {
-                            self.settings.thumbnail_size = size;
-                            dirty = true;
-                        }
-                    }
-                });
-                if ui
-                    .checkbox(&mut self.settings.dual_pane, "Dual pane")
-                    .changed()
-                {
-                    let dual = self.settings.dual_pane;
-                    self.set_dual_pane(dual);
-                    dirty = true;
-                }
+                // View mode, thumbnail size and dual pane moved onto the pane toolbars (Qt keeps them
+                // there too); they stay persisted in `Settings`.
                 if ui
                     .checkbox(&mut self.settings.show_hidden, "Show hidden files")
                     .changed()
@@ -1693,7 +1882,11 @@ impl eframe::App for App {
                     undo: i.key_pressed(egui::Key::Z) && m && !shift,
                     redo: i.key_pressed(egui::Key::Y) && m
                         || i.key_pressed(egui::Key::Z) && m && shift,
-                    trash: i.key_pressed(egui::Key::Delete),
+                    trash: i.key_pressed(egui::Key::Delete) && !shift,
+                    perm_delete: i.key_pressed(egui::Key::Delete) && shift,
+                    back: i.key_pressed(egui::Key::Backspace),
+                    refresh: i.key_pressed(egui::Key::F5),
+                    new_folder: i.key_pressed(egui::Key::N) && m && shift,
                     rename: i.key_pressed(egui::Key::F2),
                     rating: [
                         (egui::Key::Num0, 0),
@@ -1727,6 +1920,19 @@ impl eframe::App for App {
         if keys.trash {
             self.trash_selection();
         }
+        if keys.perm_delete {
+            self.delete_permanently();
+        }
+        if keys.new_folder {
+            self.new_folder();
+        }
+        let active = self.active;
+        if keys.back {
+            self.go_back(active);
+        }
+        if keys.refresh {
+            self.open(active);
+        }
         if keys.undo && self.ops.undo().is_none() {
             self.status = "nothing to undo".into();
         }
@@ -1740,11 +1946,13 @@ impl eframe::App for App {
         egui::Panel::bottom("status_bar").show(ui, |ui| {
             ui.horizontal(|ui| self.status_bar(ui));
         });
-        egui::Panel::right("preview")
-            .resizable(true)
-            .size_range(180.0..=460.0)
-            .default_size(300.0)
-            .show(ui, |ui| self.preview(ui));
+        if self.settings.show_preview {
+            egui::Panel::right("preview")
+                .resizable(true)
+                .size_range(180.0..=460.0)
+                .default_size(300.0)
+                .show(ui, |ui| self.preview(ui));
+        }
         let panes = self.settings.dual_pane;
         egui::CentralPanel::default().show(ui, |ui| {
             if panes {
@@ -2282,6 +2490,42 @@ mod tests {
             app.status
         );
         assert!(!dir.join("gone.png").exists(), "the old name is gone");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The pane toolbars must act on the pane that owns them, not on whichever pane happened to open first.
+    #[test]
+    fn toolbar_navigation_and_new_folder_follow_the_pane_that_owns_them() {
+        let dir = sandbox("toolbar-pane", &["up.png"], &["sub"]);
+        let mut app = App::with_cache(dir.clone(), sandbox("toolbar-cache", &[], &[]));
+
+        // Back walks the folders this pane visited, and it never drags the other pane along.
+        app.navigate(0, &dir.join("sub"));
+        assert_eq!(app.panes[0].path, dir.join("sub"), "pane 1 moved into sub");
+        assert_eq!(app.panes[1].path, dir, "pane 2 stayed put");
+        app.go_back(0);
+        assert_eq!(
+            app.panes[0].path, dir,
+            "Back returned the pane to where it came from"
+        );
+
+        // New Folder belongs to the active pane: pane 2 is in `sub`, so that is where the folder lands.
+        app.navigate(1, &dir.join("sub"));
+        assert_eq!(
+            app.active, 1,
+            "navigating a pane makes it the one buttons and shortcuts act on"
+        );
+        app.new_folder();
+        assert!(
+            settle(&mut app, &dir.join("sub"), "New Folder", true),
+            "the active pane's folder appeared (status: {})",
+            app.status
+        );
+        assert!(
+            !dir.join("New Folder").exists(),
+            "the other pane did not get the folder"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
