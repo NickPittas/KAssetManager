@@ -1,6 +1,6 @@
 //! Entry point. Opens the window and starts browsing at the path given on the command line
-//! (`kassetmanager [folder|file]`); a file selects it in its parent folder. Falls back to `~/Pictures`,
-//! then `$HOME`.
+//! (`kassetmanager [folder|file]`); a file is selected in its parent folder **and played** (so
+//! `kassetmanager clip.mov` does what it looks like). Falls back to `~/Pictures`, then `$HOME`.
 
 mod app;
 
@@ -52,7 +52,8 @@ fn main() {
             let (folder, file) = start_point();
             let mut app = app::App::new(folder);
             if let Some(file) = file {
-                app.select(file);
+                app.select(file.clone());
+                app.play(file);
             }
             Ok(Box::new(app))
         }),

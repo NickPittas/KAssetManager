@@ -1,7 +1,8 @@
-//! The egui application shell. Slice 4 of M1: browse a real folder — breadcrumb, subfolder list, media
-//! entries from [`gallerybrowser_core::scan_folder`] shown as a grid of engine thumbnails or a list, and a
-//! preview panel; all pictures come from [`gallerybrowser_media::Thumbnailer`] (decode on its own threads,
-//! results polled into wgpu textures).
+//! The egui application shell. Slice 5 of M1: browse a real folder — breadcrumb, subfolder list, entries
+//! as engine thumbnails in a grid or a list, a preview panel, and playback through
+//! [`gallerybrowser_player::Player`] (double-click a file; transport controls under the picture). Pictures
+//! come from [`gallerybrowser_media::Thumbnailer`], which decodes on its own threads and is polled into
+//! wgpu textures.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -9,7 +10,8 @@ use std::path::{Path, PathBuf};
 use gallerybrowser_core::{
     Entry, ScanOptions, Settings, SortKey, ViewMode, list_subfolders, scan_folder, sort_entries,
 };
-use gallerybrowser_media::{Thumbnailer, ThumbnailerConfig};
+use gallerybrowser_media::{Thumbnailer, ThumbnailerConfig, Tick, frame_to_rgba, open};
+use gallerybrowser_player::Player;
 
 /// Longest preview edge we ask the decoders for (they may scale down while decoding).
 const PREVIEW_EDGE: u32 = 1024;
@@ -40,6 +42,12 @@ pub struct App {
     wanted: Option<PathBuf>,
     /// Decoded picture, uploaded to wgpu: `(path, texture)`.
     preview: Option<(PathBuf, egui::TextureHandle)>,
+    /// Video and audio playback of the double-clicked file.
+    player: Player,
+    /// The file loaded in the player.
+    playing: Option<PathBuf>,
+    /// Latest decoded video frame, uploaded (only while something is loaded).
+    frame: Option<egui::TextureHandle>,
 }
 
 impl App {
@@ -73,6 +81,10 @@ impl App {
             outstanding: 0,
             wanted: None,
             preview: None,
+            // ponytail: fixed 64 MB decoder cache; `Settings` has no player-cache knob yet.
+            player: Player::new(64 << 20),
+            playing: None,
+            frame: None,
         };
         app.open();
         app
@@ -154,6 +166,54 @@ impl App {
             .as_ref()
             .is_some_and(|(path, _)| Some(path.as_path()) == self.wanted.as_deref());
         if self.outstanding > 0 || (self.wanted.is_some() && !preview_ready) {
+            ui.ctx().request_repaint();
+        }
+    }
+
+    /// Load `path` in the player and start it (double-click, or Play when something is loaded).
+    pub fn play(&mut self, path: PathBuf) {
+        match open(&path) {
+            Ok(source) => {
+                self.playing = Some(path);
+                self.frame = None;
+                self.player.load(source, true);
+                self.status.clear();
+            }
+            Err(err) => self.status = format!("{err}"),
+        }
+    }
+
+    /// Stop playback and release the file.
+    pub fn stop_playback(&mut self) {
+        self.player.stop();
+        self.playing = None;
+        self.frame = None;
+    }
+
+    /// Advance the player and upload its frame. Called every frame while something is loaded.
+    fn pump_player(&mut self, ui: &mut egui::Ui) {
+        if self.playing.is_none() {
+            return;
+        }
+        if let Some(frame) = self.player.tick(std::time::Instant::now()) {
+            match frame_to_rgba(&frame) {
+                Ok(rgba) => {
+                    let color = egui::ColorImage::from_rgba_unmultiplied(
+                        [rgba.width as usize, rgba.height as usize],
+                        rgba.pixels.as_ref(),
+                    );
+                    // ponytail: a fresh texture per frame; reuse one with `TextureHandle::set` once the
+                    // upload cost shows up in frame times.
+                    self.frame = Some(ui.ctx().load_texture(
+                        "frame",
+                        color,
+                        egui::TextureOptions::LINEAR,
+                    ));
+                }
+                Err(err) => self.status = format!("{err}"),
+            }
+        }
+        if self.player.needs_repaint() {
             ui.ctx().request_repaint();
         }
     }
@@ -259,14 +319,17 @@ impl App {
             .map(|e| (e.name.clone(), e.path.clone()))
             .collect();
         let mut selected: Option<PathBuf> = None;
+        let mut play: Option<PathBuf> = None;
         egui::ScrollArea::vertical()
             .auto_shrink(false)
             .show(ui, |ui| {
                 for (name, path) in &names {
-                    if ui
-                        .selectable_label(self.selected.as_deref() == Some(path.as_path()), name)
-                        .clicked()
-                    {
+                    let response =
+                        ui.selectable_label(self.selected.as_deref() == Some(path.as_path()), name);
+                    if response.double_clicked() {
+                        play = Some(path.clone());
+                    }
+                    if response.clicked() {
                         selected = Some(path.clone());
                     }
                 }
@@ -274,32 +337,92 @@ impl App {
         if let Some(selected) = selected {
             self.select(selected);
         }
+        if let Some(path) = play {
+            self.play(path);
+        }
     }
 
-    /// The preview panel: the decoded picture of the current selection.
+    /// The preview panel: the playing frame if anything is loaded, else the selected picture; transport
+    /// controls underneath. Everything the buttons need is copied out first so no borrow of `self`
+    /// outlives the drawing.
     pub fn preview(&mut self, ui: &mut egui::Ui) {
         ui.heading("Preview");
         ui.separator();
         let picture = self
-            .preview
+            .frame
             .as_ref()
-            .filter(|(path, _)| Some(path.as_path()) == self.wanted.as_deref());
+            .map(|tex| (tex.id(), tex.size_vec2()))
+            .or_else(|| {
+                self.preview
+                    .as_ref()
+                    .filter(|(path, _)| Some(path.as_path()) == self.wanted.as_deref())
+                    .map(|(_, tex)| (tex.id(), tex.size_vec2()))
+            });
         match picture {
-            Some((_, texture)) => {
+            Some((id, pixels)) => {
                 let avail = ui.available_size();
-                let pixels = texture.size_vec2();
                 let scale = (avail.x / pixels.x.max(1.0))
                     .min(avail.y / pixels.y.max(1.0))
                     .min(1.0);
                 ui.image(egui::load::SizedTexture {
-                    id: texture.id(),
+                    id,
                     size: pixels * scale,
                 });
             }
             None => {
-                ui.label("Select a file to preview.");
+                ui.label("Select a file to preview, double-click to play it.");
             }
         }
+        ui.separator();
+        self.transport(ui);
+    }
+
+    /// Transport for the loaded file: play/pause, stop, position readout and a seek slider.
+    fn transport(&mut self, ui: &mut egui::Ui) {
+        let state = self.player.state();
+        if !state.loaded {
+            ui.label("Nothing playing.");
+            return;
+        }
+        let loaded = self.playing.clone().unwrap_or_default();
+        ui.label(
+            loaded
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+        );
+        let mut toggle = false;
+        let mut stop = false;
+        if ui
+            .button(if state.playing { "Pause" } else { "Play" })
+            .clicked()
+        {
+            toggle = true;
+        }
+        ui.separator();
+        if ui.button("Stop").clicked() {
+            stop = true;
+        }
+        let seconds = state.position.seconds().max(0.0);
+        let total = state.duration.seconds().max(0.0);
+        ui.separator();
+        let mut slider = seconds;
+        let response = ui.add(egui::Slider::new(&mut slider, 0.0..=total).show_value(false));
+        if state.error.is_some() {
+            ui.colored_label(egui::Color32::LIGHT_RED, "decode error");
+        }
+        if toggle {
+            self.player.toggle();
+        }
+        if stop {
+            self.stop_playback();
+        }
+        if response.changed() || response.dragged() {
+            let target = Tick::from_seconds_f64(slider);
+            self.player.seek(target);
+        }
+        ui.separator();
+        ui.label(format!("{seconds:.1} / {total:.1}s"));
     }
 
     /// Grid view: engine thumbnails in rows that fit the panel; a click selects and previews.
@@ -313,6 +436,7 @@ impl App {
             .collect();
         let cols = ((ui.available_width() / cell).floor() as usize).max(1);
         let mut selected: Option<PathBuf> = None;
+        let mut play: Option<PathBuf> = None;
         egui::ScrollArea::vertical()
             .auto_shrink(false)
             .show(ui, |ui| {
@@ -341,7 +465,11 @@ impl App {
                                             ui.allocate_space(egui::vec2(edge, edge));
                                         }
                                     }
-                                    if ui.selectable_label(chosen, name).clicked() {
+                                    let response = ui.selectable_label(chosen, name);
+                                    if response.double_clicked() {
+                                        play = Some(path.clone());
+                                    }
+                                    if response.clicked() {
                                         selected = Some(path.clone());
                                     }
                                 },
@@ -352,6 +480,9 @@ impl App {
             });
         if let Some(selected) = selected {
             self.select(selected);
+        }
+        if let Some(path) = play {
+            self.play(path);
         }
     }
 
@@ -381,6 +512,7 @@ impl eframe::App for App {
     /// egui 0.36 hands the app a root `Ui` (not a `Context`); panels are shown on it.
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.poll_pictures(ui);
+        self.pump_player(ui);
         egui::Panel::top("path_bar").show(ui, |ui| {
             ui.horizontal(|ui| self.path_bar(ui));
         });
@@ -490,6 +622,36 @@ mod tests {
 
         app.set_view_mode(ViewMode::List);
         assert!(matches!(app.settings.view_mode, ViewMode::List));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Net under the verified slice-5 behaviour: a file the engine cannot open is reported and loads
+    /// nothing, a real media file loads into the player.
+    #[test]
+    fn play_loads_a_real_file_and_reports_a_broken_one() {
+        let dir = sandbox("play", &["broken.mov"], &[]);
+        let mut app = App::with_cache(dir.clone(), sandbox("play-cache", &[], &[]));
+
+        app.play(dir.join("broken.mov"));
+        assert!(
+            app.playing.is_none(),
+            "a file the engine cannot open stays unloaded"
+        );
+        assert!(
+            !app.status.is_empty(),
+            "the failure is shown to the user: {}",
+            app.status
+        );
+
+        let real = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../Icons/Up.png");
+        app.play(real.clone());
+        assert_eq!(
+            app.playing.as_deref(),
+            Some(real.as_path()),
+            "a real media file should load (status: {})",
+            app.status
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

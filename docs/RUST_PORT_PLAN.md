@@ -256,8 +256,20 @@ showed real thumbnails for images **and** videos (`demo.mov`, `demo_small.mov`, 
 `sample1.heif` all decoded), names beneath each cell, `List` toggle in the path bar, status bar intact
 (`validation_outputs/m1-slice4.png`). Test net added afterwards: one request outstanding per entry, non-media
 files excluded, view mode is app state.
-Still not there: no lazy folder tree, no playback/scrub, no settings dialog (settings are engine defaults),
-window size/HiDPI and OS drag/drop untouched.
+Still not there: no lazy folder tree, no settings dialog (settings are engine defaults), window size/HiDPI
+and OS drag/drop untouched.
+
+**Slice 5 (verified):** playback through `gallerybrowser_player::Player`. Double-click (or a file given on
+the command line) opens the file with `gallerybrowser_media::open`, loads it in the player with autoplay,
+and each frame pumps `tick(Instant::now())` into an RGBA upload; transport sits under the picture —
+play/pause, stop, position readout and a seek slider (`Tick::from_seconds_f64`). Evidence: running
+`kassetmanager ~/Pictures/demo_small.mov` showed decoded video frames in the preview panel, the button
+reading `Pause` (i.e. playing), and the readout at **3.3 / 5.6 s**; a second shot three seconds later had a
+different transport crop, so the playhead advances (`validation_outputs/m1-slice5a.png`, `-b.png`). Audio is
+live (cpal backend via `Player::new`), which is why M2's audio-at-speed gate still has to be run.
+Test net added afterwards: an unopenable file reports an error and loads nothing; a real media file loads.
+Still not there: frame upload allocates a new texture per frame, no volume/mute UI, no lazy folder tree, no
+settings dialog, window size/HiDPI and OS drag/drop untouched.
 
 ## Non-goals
 

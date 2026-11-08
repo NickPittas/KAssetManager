@@ -2319,6 +2319,7 @@ dependencies = [
  "egui_kittest",
  "gallerybrowser-core",
  "gallerybrowser-media",
+ "gallerybrowser-player",
 ]
 
 [[package]]
