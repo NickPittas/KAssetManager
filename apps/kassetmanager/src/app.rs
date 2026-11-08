@@ -8,8 +8,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use gallerybrowser_core::{
-    AppDirs, Entry, ScanOptions, Settings, Theme, ViewMode, list_subfolders, scan_folder,
-    sort_entries,
+    AppDirs, Entry, MediaKind, ScanOptions, Settings, Theme, ViewMode, list_subfolders,
+    scan_folder, sort_entries,
 };
 use gallerybrowser_fileops::{ConflictPolicy, FileOp, FileOpsWorker, OpEvent, OpOutcome};
 use gallerybrowser_library::Library;
@@ -450,8 +450,15 @@ impl App {
                     .as_ref()
                     .is_none_or(|(path, _)| Some(path.as_path()) != pane.wanted.as_deref())
         });
-        // Hovering animates, so keep frames coming while the pointer rests on an entry.
-        let hovering = self.panes.iter().any(|pane| pane.hover.is_some());
+        // Hovering animates only for clips; a still under the pointer must not drive frames forever.
+        let hovering = self.panes.iter().any(|pane| {
+            pane.hover.as_ref().is_some_and(|path| {
+                pane.entries.iter().any(|entry| {
+                    entry.path == *path
+                        && matches!(entry.kind, MediaKind::Video | MediaKind::Sequence)
+                })
+            })
+        });
         if self.outstanding > 0 || pending || hovering {
             if self.stall.elapsed() > std::time::Duration::from_secs(3) {
                 // The engine went silent about something we asked for: stop waiting instead of repainting

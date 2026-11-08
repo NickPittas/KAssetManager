@@ -396,6 +396,15 @@ the entry drops it again. Pointer injection on this Hyprland box is unreliable (
 move the cursor), so the hover rectangle itself is verified by construction plus a real-app run that stayed
 stable with empty stderr — a real mouse should be watched once.
 
+Measured on this machine (pointer warped with `ydotool`, verified against `hyprctl cursorpos`): idle once
+thumbnails settle is **0 % of one core** (the earlier per-frame repaint pin is gone); hovering the 64×64 1 s
+clip costs about **25 % of one core** at 150 ms per slot; hovering a 200 MB camera clip in `~/Pictures` costs
+several cores while hovered. The cost is decoding, bounded by the engine's own scrub lane and by asking for one
+slot per step (`scrub_want` dedupes a stationary pointer). `SCRUB_STEP` is the knob; a user-facing hover-scrub
+toggle is UI-phase work — `Settings::video_preview` already means *autoplay on selection in the preview pane*,
+not this, so it is not the gate. Hovering a **still** does not drive frames at all: the repaint condition asks
+whether the hovered entry is a video or sequence before asking for frames.
+
 ## Non-goals
 
 No FFI/C ABI shim (full port makes it dead weight). No Qt UI changes beyond keeping it building. No
