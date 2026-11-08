@@ -1055,6 +1055,22 @@ impl App {
         usize::from(self.settings.dual_pane) + 1
     }
 
+    /// Textures for pictures that left the screen are dropped here, by path *and* size. The texture manager never
+    /// dedupes, so without this every thumbnail ever viewed stays allocated for the session; and because sizing is
+    /// continuous, one folder can be drawn at twenty sizes over an afternoon, each keeping its own copy of the same
+    /// picture on the GPU until the next navigation. `edges` are the sizes panes ask for right now, so a size on its
+    /// way out is freed the frame after it stops being drawn. The preview edge survives: previews are asked for by
+    /// path, and re-requesting one every frame would be worse than holding it.
+    fn prune_pictures<T>(
+        pictures: &mut HashMap<(PathBuf, u32), T>,
+        keep_paths: &std::collections::HashSet<PathBuf>,
+        edges: &std::collections::HashSet<u32>,
+    ) {
+        pictures.retain(|key, _| {
+            keep_paths.contains(&key.0) && (key.1 == PREVIEW_EDGE || edges.contains(&key.1))
+        });
+    }
+
     /// Ask the engine for thumbnails of everything visible, as **one** batch. `begin_batch` invalidates
     /// the previous generation's queued work and drops decoded-but-unpolled results, so it must not run
     /// once per pane. Only requests the engine will actually run are counted (it dedupes by path and size
@@ -1066,9 +1082,10 @@ impl App {
         // Textures for files that left the screen are dropped: the texture manager never dedupes, so
         // without this every thumbnail ever viewed stays allocated for the session.
         let mut keep: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
-        // ponytail: whole folder at once; virtualise to visible rows if a huge folder feels slow.
+        let mut edges: std::collections::HashSet<u32> = std::collections::HashSet::new(); // ponytail: whole folder at once; virtualise to visible rows if a huge folder feels slow.
         for index in 0..visible {
             let edge = self.panes[index].thumbnail_size;
+            edges.insert(edge);
             for entry in &self.panes[index].entries {
                 keep.insert(entry.path.clone());
                 // A folder has no picture to decode; asking the engine would only log a failure per folder.
@@ -1080,7 +1097,7 @@ impl App {
                 }
             }
         }
-        self.pictures.retain(|(path, _), _| keep.contains(path));
+        Self::prune_pictures(&mut self.pictures, &keep, &edges);
         for index in 0..visible {
             let Some(wanted) = self.panes[index].wanted.clone() else {
                 continue;
@@ -2708,14 +2725,14 @@ impl App {
                 .add_sized(
                     [104.0, 18.0],
                     egui::Slider::new(&mut drag_size, THUMBNAIL_MIN as f32..=THUMBNAIL_MAX as f32)
-                        .suffix("px")
+                        .show_value(false)
                         // No step: the point of the control is that it is continuous. A stepped slider also rewrites
                         // whatever size it was handed - a hand-written 100 px would quietly become 104 on the first
                         // frame - because snapping its bound reads back as a change.
-                        .fixed_decimals(0)
                         .clamping(egui::SliderClamping::Always),
                 )
                 .on_hover_text("Thumbnail size (Ctrl+- and Ctrl++ step it)");
+            ui.label(format!("{}px", drag_size.round() as i32));
             thumb_drag = thumb.changed();
             // The same shape the volume control uses: a drag is finished when the pointer lets go, and a click that
             // jumps the handle counts as an edit too.
@@ -2788,8 +2805,9 @@ impl App {
             self.panes[index].view_mode = next;
             self.save_pane_views();
         }
-        // A drag restyles the listing straight away; the preference is only written when the pointer lets go, so a
-        // sweep across the range does not become forty saved files and forty thumbnail decodes.
+        // Dragging restyles the listing straight away; the preference is written only when the pointer lets go, so a
+        // sweep across the range is one saved file rather than one per pixel. Decodes are not counted that way: every
+        // size the drag passes asks this folder for new tiles, and the engine drops requests a later size superseded.
         if thumb_drag {
             let wanted =
                 (drag_size.round() as i64).clamp(THUMBNAIL_MIN as i64, THUMBNAIL_MAX as i64) as u32;
@@ -7161,5 +7179,29 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&a);
         let _ = std::fs::remove_dir_all(&b);
+    }
+    /// Continuous sizing means one folder can be drawn at many sizes in a session. Keeping whichever size a file
+    /// ever reached would hold every obsolete copy on the GPU until the next navigation, so pruning is by path and
+    /// size together: the size nobody is drawing goes, and so does a file that left the screen.
+    #[test]
+    fn a_picture_survives_only_for_the_size_a_pane_is_drawing_now() {
+        let on_screen = PathBuf::from("/p/clip.mp4");
+        let off_screen = PathBuf::from("/p/gone.png");
+        let mut pictures = HashMap::new();
+        pictures.insert((on_screen.clone(), 64), 1u8);
+        pictures.insert((on_screen.clone(), 300), 2u8);
+        pictures.insert((off_screen.clone(), 64), 3u8);
+        pictures.insert((on_screen.clone(), PREVIEW_EDGE), 4u8);
+
+        let keep: HashSet<PathBuf> = [on_screen.clone()].into_iter().collect();
+        let edges: HashSet<u32> = [64u32].into_iter().collect();
+        App::prune_pictures(&mut pictures, &keep, &edges);
+
+        let mut left: Vec<(PathBuf, u32)> = pictures.keys().cloned().collect();
+        left.sort();
+        assert_eq!(
+            left,
+            vec![(on_screen.clone(), 64), (on_screen.clone(), PREVIEW_EDGE)]
+        );
     }
 }
