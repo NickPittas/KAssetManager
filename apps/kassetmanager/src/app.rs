@@ -446,11 +446,6 @@ pub struct App {
     /// Where the current carry began, so a drop can tell travel from a stationary hold. The pointer position egui
     /// reports during a drag is live rather than the press point, so this has to be recorded when the drag starts.
     drag_start_pos: Option<egui::Pos2>,
-    /// A cut is spent once its move lands; this is what tells `poll_ops` to clear the clipboard.
-    /// The sources of a cut that is waiting to move. Each is consumed when an operation actually carries
-    /// it, so an unrelated move or undo cannot spend the clipboard, and failed sources stay available.
-    /// True while one of our own text fields (rename box, annotation name, path edit) holds the keyboard, so
-    /// it can swallow letters without the browser's shortcuts firing too. Recomputed each frame from focus.
     /// The paths this app copied or cut, published to the operating system's clipboard as one `file:` URI per
     /// line. egui-winit hands over a `Paste` event only when the OS clipboard holds text, so with an empty OS
     /// clipboard Ctrl+V produces no event at all and keyboard paste stays dead however long our own list is.
@@ -470,8 +465,13 @@ pub struct App {
     /// selected") cannot overwrite what the user needs to read.
     op_error_shown: bool,
 
+    /// True while one of our own text fields (rename box, annotation name, path edit) holds the keyboard, so
+    /// it can swallow letters without the browser's shortcuts firing too. Recomputed each frame from focus.
     typing_in_field: bool,
 
+    /// The sources of a cut that is waiting to move, and what tells `poll_ops` to clear the clipboard once the move
+    /// lands. Each source is consumed when an operation actually carries it, so an unrelated move or undo cannot
+    /// spend the clipboard, and failed sources stay available.
     cut_pending: Option<Vec<PathBuf>>,
     /// Requests issued for the current thumbnail batch. The engine dedupes by path and size within a
     /// batch and answers a duplicate with nothing, so counting one here per *issued* request is the only
@@ -1317,6 +1317,10 @@ impl App {
                     self.apply_tree(index);
                 }
                 self.status.clear();
+                // What the listing on screen corresponds to, so the slow poll notices a folder that changed since.
+                self.panes[index].folder_mtime = std::fs::metadata(&path)
+                    .ok()
+                    .and_then(|meta| meta.modified().ok());
             }
             Err(err) => {
                 self.panes[index].entries.clear();
@@ -1324,15 +1328,22 @@ impl App {
                 // into a tree list would resurrect files from a folder whose read just failed - rows for a listing
                 // that is empty and says so.
                 self.panes[index].flat_entries.clear();
+                // No mtime for a listing nobody has: `metadata` can succeed on a folder whose contents cannot be
+                // read (permission lost, then regained), and remembering its timestamp would quiet the poll until
+                // something else touched the folder - so regaining permission would show nothing until Refresh.
+                self.panes[index].folder_mtime = None;
                 self.status = format!("{err}");
             }
         }
-        // What the listing on screen corresponds to. A folder that changed since is caught by the slow poll;
-        // a folder that could not be read at all stays unset so the next tick tries again.
-        self.panes[index].folder_mtime = std::fs::metadata(&path)
-            .ok()
-            .and_then(|meta| meta.modified().ok());
         self.remember_current_folders();
+        self.reconcile_viewed(index);
+    }
+
+    /// Bring a tree pane's rows up to date with the folders it shows, and let go of any path an operation replaced.
+    /// Rebuilding without the second half leaves selection naming a row that is gone - Delete then acts on a file
+    /// that no longer exists, while the preview panel shows something nobody can select.
+    fn refresh_tree_pane(&mut self, index: usize) {
+        self.apply_tree(index);
         self.reconcile_viewed(index);
     }
 
@@ -2416,11 +2427,8 @@ impl App {
             } else if self.pane_needs_refresh(index, &touched) {
                 // A tree list shows rows from folders *inside* the pane's folder, so renaming or deleting a file two
                 // levels down changes what this listing is showing even though its own root never changed. Rebuilding
-                // the rows re-reads the opened folders, so the obsolete row goes away without a manual refresh - and
-                // the selection and preview that named the old path are reconciled with it, because Delete acts on
-                // the selection and would otherwise act on a file that no longer exists.
-                self.apply_tree(index);
-                self.reconcile_viewed(index);
+                // re-reads those folders, so the obsolete row goes away without a manual refresh.
+                self.refresh_tree_pane(index);
                 rescanned = true;
             }
         }
@@ -3548,8 +3556,9 @@ impl App {
         for index in 0..self.panes_visible() {
             if self.panes[index].view_mode == ViewMode::TreeList {
                 // Sorting flattened rows globally would put a nested folder in front of its own parent. A tree list's
-                // order is rebuilt per level from each folder instead.
-                self.apply_tree(index);
+                // order is rebuilt per level from each folder instead - which also re-reads them, so a file renamed
+                // outside the app between two header clicks does not stay selected as a row that no longer exists.
+                self.refresh_tree_pane(index);
                 continue;
             }
             let pane = &mut self.panes[index];
@@ -7926,9 +7935,8 @@ mod tests {
         app.panes[0].wanted = Some(stale.clone());
 
         std::fs::rename(&stale, root.join("mid/renamed.png")).unwrap();
-        // What operation completion does to a tree pane it did not rescan outright.
-        app.apply_tree(0);
-        app.reconcile_viewed(0);
+        // Exactly what operation completion and a header click do to a tree pane they did not rescan outright.
+        app.refresh_tree_pane(0);
 
         let after = names(&app.panes[0].entries);
         assert!(
@@ -7972,6 +7980,25 @@ mod tests {
             app.panes[0].entries.is_empty(),
             "a tree list does not invent rows for a folder it cannot read"
         );
-        let _ = std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755));
+        // Permission back: a failed read remembered no mtime, which is the only thing that makes the slow poll look
+        // at this folder again - `metadata` succeeds on a folder whose contents could not be read.
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(
+            app.panes[0].folder_mtime.is_none(),
+            "the poll has nothing to compare against"
+        );
+        let back = std::fs::metadata(&root)
+            .ok()
+            .and_then(|meta| meta.modified().ok());
+        assert!(back.is_some(), "the folder is readable again");
+        assert_ne!(
+            app.panes[0].folder_mtime, back,
+            "so the next tick re-lists it"
+        );
+        app.open_quiet(0);
+        assert!(
+            app.panes[0].entries.iter().any(|e| e.name == "top.png"),
+            "and the listing comes back"
+        );
     }
 }
