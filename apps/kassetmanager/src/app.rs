@@ -474,6 +474,37 @@ pub struct App {
     theme_applied: Option<Theme>,
 }
 
+/// The lines under a preview: what kind of file it is, how big, when it changed, and how much of it there is.
+/// A sequence says how many frames stand in for its files; a single picture says its real pixel size, because the
+/// panel scales that to fit and what you see is not what the file is.
+fn preview_fact_lines(
+    entry: &Entry,
+    kind: &str,
+    shown: Option<egui::Vec2>,
+    state: &gallerybrowser_player::PlayerState,
+) -> Vec<String> {
+    let mut facts = vec![format!("{kind} - {}", format_size(entry.size))];
+    if entry.modified.is_some() {
+        facts.push(format!("Modified {}", date_label(entry.modified)));
+    }
+    match &entry.sequence {
+        Some(seq) => facts.push(format!("{} frames", seq.frames.len())),
+        None => {
+            if let Some(px) = shown {
+                facts.push(format!("{} x {} px", px.x as i64, px.y as i64));
+            }
+        }
+    }
+    if state.loaded && state.frame_count > 0 {
+        facts.push(format!(
+            "frame {}/{}",
+            state.frame_index + 1,
+            state.frame_count
+        ));
+    }
+    facts
+}
+
 /// A pane's opening view, size and sequence folding, read from the settings file. Absent a stored value there is
 /// nothing to disagree with: every pane starts at the middle thumbnail size in grid view.
 fn pane_setup(settings: &Settings, index: usize) -> (ViewMode, u32, bool) {
@@ -3431,9 +3462,29 @@ impl App {
                 ui.label("Select a file to preview, double-click to play it.");
             }
         }
+        self.preview_facts(ui, picture.map(|(_, pixels)| pixels));
         self.annotations_ui(ui);
         ui.separator();
         self.transport(ui);
+    }
+
+    /// What the selected file is, said in the panel that already shows it. Qt's preview names type, size, date and
+    /// clip length instead of leaving them to a status line; everything here is already in memory - the entry the
+    /// pane listed, the picture just drawn, the player's own state - so nothing new has to be read from disk.
+    fn preview_facts(&self, ui: &mut egui::Ui, shown: Option<egui::Vec2>) {
+        let Some(path) = self.target() else { return };
+        let pane = &self.panes[self.active];
+        let Some(entry) = pane.entries.iter().find(|e| e.path == path) else {
+            return;
+        };
+        let kind = type_label(
+            entry.kind,
+            pane.dir_paths.contains(&entry.path),
+            &entry.path,
+        );
+        for fact in preview_fact_lines(entry, &kind, shown, &self.player.state()) {
+            ui.label(fact);
+        }
     }
 
     /// Transport for the loaded file: play/pause, stop, position readout and a seek slider.
@@ -5088,6 +5139,69 @@ mod tests {
             (tight_cols as f32) * tight_cell + (tight_cols as f32 - 1.0) * 24.0 <= 96.0 + 0.5,
             "{tight_cols} x {tight_cell}"
         );
+    }
+
+    #[test]
+    fn a_preview_says_what_the_file_is() {
+        // The block is only useful if it tells the truth about the selection, and a sequence has no pixels of its
+        // own to report - its frames do.
+        let entry = Entry {
+            path: PathBuf::from("/x/clip.mp4"),
+            name: "clip.mp4".into(),
+            kind: MediaKind::Video,
+            size: 2_048,
+            modified: None,
+            sequence: None,
+        };
+        let mut state = gallerybrowser_player::PlayerState {
+            loaded: true,
+            playing: false,
+            position: Default::default(),
+            duration: Default::default(),
+            frame_rate: Default::default(),
+            frame_index: 3,
+            frame_count: 120,
+            speed: 1.0,
+            volume: 1.0,
+            muted: false,
+            looping: false,
+            has_audio: false,
+            buffered: 0.0,
+            error: None,
+        };
+        let lines = preview_fact_lines(&entry, "Video", Some(egui::vec2(640.0, 360.0)), &state);
+        assert_eq!(lines[0], "Video - 2.0 KB");
+        assert_eq!(lines[1], "640 x 360 px");
+        assert_eq!(lines[2], "frame 4/120");
+
+        state.loaded = false;
+        use gallerybrowser_core::{Sequence, SequenceFrame};
+        let seq = Sequence {
+            dir: PathBuf::from("/x"),
+            prefix: "f".into(),
+            suffix: ".png".into(),
+            padding: 0,
+            frames: vec![
+                SequenceFrame {
+                    number: 1,
+                    path: PathBuf::from("/x/f1.png"),
+                },
+                SequenceFrame {
+                    number: 2,
+                    path: PathBuf::from("/x/f2.png"),
+                },
+                SequenceFrame {
+                    number: 3,
+                    path: PathBuf::from("/x/f3.png"),
+                },
+            ],
+        };
+        let entry = Entry {
+            sequence: Some(std::sync::Arc::new(seq)),
+            ..entry
+        };
+        let lines = preview_fact_lines(&entry, "Sequence", Some(egui::vec2(640.0, 360.0)), &state);
+        assert_eq!(lines.last().map(String::as_str), Some("3 frames"));
     }
 
     #[test]
