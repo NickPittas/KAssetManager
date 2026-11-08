@@ -153,11 +153,6 @@ impl Ctx<'_> {
             bytes_total: self.bytes_total,
         });
     }
-
-    /// Account a source that has just landed, so the progress line can say how much of the weight is across.
-    fn add_bytes(&self, n: u64) {
-        self.bytes_done.set(self.bytes_done.get() + n);
-    }
 }
 
 /// Bytes a source is worth to the progress line: its size, or the sum of a tree's files. Best effort - a file that
@@ -297,16 +292,23 @@ impl FileOpsWorker {
     /// Stop the operation that is running now. What has already been copied stays on disk - the operation stops,
     /// it does not roll back. Qt's operations dialog calls this "Cancel Current". False when nothing is running.
     pub fn cancel_current(&self) -> bool {
-        let running = lock(&self.running).is_some();
-        if running {
+        // The flag is set while the running operation is still held, so a request cannot land on the job that
+        // starts just after this one finished.
+        let running = lock(&self.running);
+        if running.is_some() {
             self.cancel.current.store(true, Ordering::SeqCst);
+            true
+        } else {
+            false
         }
-        running
     }
 
-    /// Also skip every operation still queued, until the queue drains. Qt's "Cancel All".
+    /// Also skip every operation still queued, until the queue drains. Qt's "Cancel All". Pressing it while
+    /// nothing is running or queued must not hold back the next thing the user asks for.
     pub fn cancel_all(&self) {
-        self.cancel.all.store(true, Ordering::SeqCst);
+        if self.busy() {
+            self.cancel.all.store(true, Ordering::SeqCst);
+        }
     }
 
     /// Whether an operation is running now; what decides if Cancel Current can be used.
@@ -624,15 +626,23 @@ fn copy_sources(
             })
         }) {
             Ok(Some(dst)) => {
-                ctx.add_bytes(src_bytes);
+                // The chunk reports left `bytes_done` partway through this source; settle it to the whole weight.
+                ctx.bytes_done.set(base + src_bytes);
                 effect.created.push(dst.clone());
                 pairs.push((src.clone(), dst));
             }
-            Ok(None) => effect.err(
-                src,
-                "skipped: a file with this name already exists in the destination",
-            ),
-            Err(e) => effect.err(src, e.message(&dest_dir.join(name))),
+            Ok(None) => {
+                ctx.bytes_done.set(base);
+                effect.err(
+                    src,
+                    "skipped: a file with this name already exists in the destination",
+                )
+            }
+            Err(e) => {
+                // Nothing of this source landed, so nothing of its weight counts.
+                ctx.bytes_done.set(base);
+                effect.err(src, e.message(&dest_dir.join(name)))
+            }
         }
     }
     ctx.progress(sources.len(), sources.len(), None);
@@ -669,11 +679,23 @@ fn move_sources(
             effect.err(src, "cannot move a folder into itself");
             continue;
         }
+        let base = ctx.bytes_done.get();
+        let mut within: u64 = 0;
+        let mut emitted: u64 = 0;
         match fsops::claim_dest(src, dest_dir, name, policy, |cand| {
-            fsops::move_exact(src, cand)
+            // Only a move between devices copies, and that copy asks about each chunk like one.
+            fsops::move_exact_reported(src, cand, &mut |delta| {
+                within += delta;
+                if within.saturating_sub(emitted) >= PROGRESS_REPORT_BYTES {
+                    emitted = within;
+                    ctx.bytes_done.set(base + within);
+                    ctx.progress(i, sources.len(), Some(src));
+                }
+                !ctx.cancel.requested()
+            })
         }) {
             Ok(Some(dst)) => {
-                ctx.add_bytes(src_bytes);
+                ctx.bytes_done.set(base + src_bytes);
                 effect.moved.push((src.clone(), dst));
             }
             Ok(None) => effect.err(
@@ -769,9 +791,22 @@ fn run_action(ctx: &Ctx<'_>, action: &Action, tag: u64) -> Effect {
         Action::CopyExact(pairs) => {
             for (i, (src, dst)) in pairs.iter().enumerate() {
                 ctx.progress(i, pairs.len(), Some(src));
-                match fsops::copy_node(src, dst) {
-                    Ok(()) => effect.created.push(dst.clone()),
-                    Err(e) => effect.err(src, e.message(dst)),
+                // A redo of a large copy is as long as the copy was, so it reports and stops like one.
+                let base = ctx.bytes_done.get();
+                let mut within: u64 = 0;
+                match fsops::copy_node_reported(src, dst, &mut |delta| {
+                    within += delta;
+                    ctx.bytes_done.set(base + within);
+                    !ctx.cancel.requested()
+                }) {
+                    Ok(()) => {
+                        ctx.bytes_done.set(base + tree_bytes(src));
+                        effect.created.push(dst.clone())
+                    }
+                    Err(e) => {
+                        ctx.bytes_done.set(base);
+                        effect.err(src, e.message(dst))
+                    }
                 }
             }
         }
@@ -1329,6 +1364,13 @@ mod tests {
             src.exists(),
             "the source survived being replaced at the destination"
         );
+        // The replace lands its copy beside the destination and renames it in; none of that staging is left over.
+        let litter: Vec<_> = fs::read_dir(&dst_dir)
+            .expect("read dst")
+            .flatten()
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with('.'))
+            .collect();
+        assert!(litter.is_empty(), "staging left nothing behind");
 
         // Replacing a file with a folder of the same name would delete a tree, so it is reported instead.
         let blocker = dst_dir.join("blocker");
@@ -1349,6 +1391,38 @@ mod tests {
             o.errors
         );
         assert!(blocker.exists(), "the folder was not deleted");
+    }
+
+    /// A replace must not eat the file it is copying. Copying through an alias of the source's own folder - where
+    /// the destination spells that same file differently - used to unlink the original and then fail to copy it.
+    #[test]
+    fn replace_does_not_eat_its_own_source_through_an_alias() {
+        let d = tempfile::tempdir().expect("tmp");
+        let real = d.path().join("real");
+        fs::create_dir(&real).expect("real");
+        let src = real.join("clip.mp4");
+        fs::write(&src, "the original").expect("src");
+        // An alias of the folder the file lives in: the same directory, spelled differently.
+        std::os::unix::fs::symlink(&real, d.path().join("alias")).expect("symlink");
+        let alias = d.path().join("alias");
+
+        let w = FileOpsWorker::new();
+        let id = w.submit(FileOp::Copy {
+            sources: vec![src.clone()],
+            dest_dir: alias.clone(),
+            conflict: ConflictPolicy::Overwrite,
+        });
+        let o = wait_finished(&w, id);
+        assert!(
+            o.errors.iter().any(|e| e.to_string().contains("same file")),
+            "the alias is recognised as the same file: {:?}",
+            o.errors
+        );
+        assert_eq!(
+            fs::read_to_string(&src).expect("source intact"),
+            "the original",
+            "the source was not removed to make room for itself"
+        );
     }
 
     /// A large copy has to report bytes while it is still inside one file. The app reads these events to say how

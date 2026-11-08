@@ -558,8 +558,11 @@ fn wants_operations_window(bytes_total: u64, elapsed_secs: f64) -> bool {
 fn taken_names(paths: &[PathBuf], dest: &Path) -> Vec<String> {
     paths
         .iter()
-        .filter_map(|path| path.file_name().map(|n| n.to_string_lossy().into_owned()))
-        .filter(|name| dest.join(name).exists())
+        .filter_map(|path| path.file_name())
+        // `symlink_metadata`, not `exists`: a link pointing at nothing still occupies the name, while `exists`
+        // follows it to nothing. The name is only turned into text for the words in the dialog.
+        .filter(|name| dest.join(name).symlink_metadata().is_ok())
+        .map(|name| name.to_string_lossy().into_owned())
         .collect()
 }
 
@@ -1533,7 +1536,9 @@ impl App {
         if just_started {
             self.drag_start_pos = resp.interact_pointer_pos();
         }
-        if just_started || self.dragging.is_some() {
+        if just_started {
+            // Decided once, from the row that was grabbed: a listing can refresh mid-drag and renumber its rows,
+            // and rebuilding the carry from a later frame could move a different file than the one you hold.
             let carried = self.dragged_from(index, path);
             self.dragging = Some(carried.paths.clone());
             egui::DragAndDrop::set_payload(ui.ctx(), carried);
@@ -1698,12 +1703,16 @@ impl App {
         if finished.is_empty() {
             return;
         }
-        self.op_progress.clear();
-        self.op_started = None;
-        self.op_done = 0;
-        self.op_total = 0;
-        self.op_bytes_done = 0;
-        self.op_bytes_total = 0;
+        if !self.ops.busy() {
+            // Nothing else is running, so the line can go. Clearing it whenever any operation finished would blank
+            // the window of an operation still going - its numbers would sit stale until its next progress word.
+            self.op_progress.clear();
+            self.op_started = None;
+            self.op_done = 0;
+            self.op_total = 0;
+            self.op_bytes_done = 0;
+            self.op_bytes_total = 0;
+        }
         let mut errors: Vec<String> = Vec::new();
         let mut touched: Vec<PathBuf> = Vec::new();
         for outcome in &finished {
@@ -1879,8 +1888,8 @@ impl App {
     /// While files are being carried inside the app, say what is being carried, next to the cursor. egui holds the
     /// payload in its own pocket and paints nothing, so a drag used to look like the mouse was doing nothing.
     fn drag_ghost(&mut self, ui: &mut egui::Ui) {
-        let button_down = ui.input(|i| i.pointer.any_down());
-        if self.dragging.is_some() && !button_down {
+        let (button_down, focused) = ui.input(|i| (i.pointer.any_down(), i.focused));
+        if self.dragging.is_some() && (!button_down || !focused) {
             // The pointer is up: the drop zone took the payload, or nothing did. Either way the carry is over, and
             // egui leaves an untaken payload sitting in its pocket.
             self.dragging = None;
@@ -1938,7 +1947,17 @@ impl App {
                         ConflictChoice::Replace,
                         ConflictChoice::Rename,
                     ] {
-                        if ui.button(choice.label()).clicked() {
+                        let button = ui.button(choice.label());
+                        // Undo moves the new file away; it does not bring back what was replaced. Say so where the
+                        // choice is made, rather than letting the user find out later.
+                        let button = if choice == ConflictChoice::Replace {
+                            button.on_hover_text(
+                                "Takes the place of the file there. That file is not restorable by Undo.",
+                            )
+                        } else {
+                            button
+                        };
+                        if button.clicked() {
                             answer = Some(choice);
                         }
                     }

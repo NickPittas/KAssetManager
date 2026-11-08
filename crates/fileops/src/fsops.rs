@@ -80,8 +80,9 @@ pub(crate) fn claim_dest(
                 if policy == ConflictPolicy::Overwrite && n == 0 {
                     // Replace means what is in the way gives way. Only a file does: a folder stays an error, so a
                     // replace cannot quietly swallow a tree. And the source is never deleted to make room for
-                    // itself - copying a file back into its own folder must not eat the original.
-                    if candidate == src {
+                    // itself - judged by identity rather than spelling, because copying `/real/x` into a symlinked
+                    // alias of `/real` names the same file differently, and removing that deletes the original.
+                    if same_file::is_same_file(src, &candidate).unwrap_or(candidate == src) {
                         return Err(FsError::Io(io::Error::other(
                             "source and destination are the same file",
                         )));
@@ -91,8 +92,23 @@ pub(crate) fn claim_dest(
                             return Err(FsError::Io(io::Error::other("a folder is in the way")));
                         }
                         Ok(_) => {
-                            remove_node(&candidate)?;
-                            return create(&candidate).map(|()| Some(candidate));
+                            // The incoming copy or move lands beside the destination first, and only then does the
+                            // file in the way give way. Making room up front instead could leave the user with
+                            // neither version if the copy failed or was cancelled halfway through.
+                            let staged = staged_name(dest_dir, name);
+                            create(&staged)?;
+                            if let Err(e) = remove_node(&candidate) {
+                                let _ = remove_node(&staged);
+                                return Err(FsError::Io(e));
+                            }
+                            return match fs::rename(&staged, &candidate) {
+                                Ok(()) => Ok(Some(candidate)),
+                                Err(e) => {
+                                    // The file that was in the way is already gone; say so rather than pretend.
+                                    let _ = remove_node(&staged);
+                                    Err(FsError::Io(e))
+                                }
+                            };
                         }
                         Err(_) => {}
                     }
@@ -120,12 +136,6 @@ fn symlink(src: &Path, target: &Path, dst: &Path) -> io::Result<()> {
     } else {
         std::os::windows::fs::symlink_file(target, dst)
     }
-}
-
-/// Copy a file, directory tree or symlink to `dst` (which must not exist). On failure everything this
-/// call created is removed again.
-pub(crate) fn copy_node(src: &Path, dst: &Path) -> Result<(), FsError> {
-    copy_node_reported(src, dst, &mut |_| true)
 }
 
 /// The same copy, reporting each chunk of bytes as it lands so a large copy can show movement inside one file
@@ -244,6 +254,14 @@ fn copy_file_reported(
     Ok(())
 }
 
+/// A temporary name beside the destination, for the copy a replace lands before it commits. The process id keeps
+/// two replaces in the same folder from writing over each other's staging file.
+fn staged_name(dest_dir: &Path, name: &std::ffi::OsStr) -> PathBuf {
+    let mut stem = format!(".{}.{}", name.to_string_lossy(), std::process::id());
+    stem.push_str(".kamtmp");
+    dest_dir.join(stem)
+}
+
 fn map_exists(e: io::Error) -> FsError {
     if e.kind() == io::ErrorKind::AlreadyExists {
         FsError::Exists
@@ -279,6 +297,16 @@ pub(crate) fn is_case_variant_of_same_file(from: &Path, to: &Path) -> bool {
 /// is `src`) goes through a temporary name, since renaming a file onto its own case variant can be a
 /// no-op.
 pub(crate) fn move_exact(src: &Path, dst: &Path) -> Result<(), FsError> {
+    move_exact_reported(src, dst, &mut |_| true)
+}
+
+/// The same move, reporting and asking about each chunk of the copy a cross-device move has to make. A rename is
+/// instant, so only that fallback path needs to be stoppable mid-file.
+pub(crate) fn move_exact_reported(
+    src: &Path,
+    dst: &Path,
+    report: &mut dyn FnMut(u64) -> bool,
+) -> Result<(), FsError> {
     if exists_nofollow(dst) {
         if is_case_variant_of_same_file(src, dst) {
             return case_only_rename(src, dst);
@@ -291,7 +319,7 @@ pub(crate) fn move_exact(src: &Path, dst: &Path) -> Result<(), FsError> {
             let is_dir = fs::symlink_metadata(src)
                 .map(|m| m.file_type().is_dir())
                 .unwrap_or(false);
-            copy_node(src, dst)?;
+            copy_node_reported(src, dst, report)?;
             match remove_node(src) {
                 Ok(()) => Ok(()),
                 Err(rm) => {
