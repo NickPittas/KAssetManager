@@ -16,6 +16,32 @@ use gallerybrowser_library::Library;
 use gallerybrowser_media::{Thumbnailer, ThumbnailerConfig, Tick, frame_to_rgba, open};
 use gallerybrowser_player::Player;
 
+/// A path written as a `file:` URI, the shape a file manager expects off the clipboard. Only the characters
+/// that would break the URI are escaped (`ponytail:`, not percent-encoding every byte a browser would reject);
+/// the upgrade path is a proper UTF-8 percent-encode when a file manager misreads a name we did not expect.
+fn file_uri(path: &Path) -> String {
+    let text = path.display().to_string();
+    #[cfg(windows)]
+    // `C:\dir\file.png` reads as `file:///C:/dir/file.png`.
+    let text = text.replace('\\', "/");
+    let mut out = String::with_capacity(text.len() + 8);
+    out.push_str(if text.starts_with('/') {
+        "file://"
+    } else {
+        "file:///"
+    });
+    for ch in text.chars() {
+        match ch {
+            '%' => out.push_str("%25"),
+            ' ' => out.push_str("%20"),
+            '#' => out.push_str("%23"),
+            '?' => out.push_str("%3F"),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
 /// A path as the app stores it. The tree's roots come from mount points and drive letters, so a relative start
 /// folder - `.` when a file has no parent, or anything typed on the command line - could never be matched,
 /// expanded or revealed there. Resolved against the process's own directory; symlinks are left as the user typed
@@ -327,9 +353,14 @@ pub struct App {
     /// it, so an unrelated move or undo cannot spend the clipboard, and failed sources stay available.
     /// True while one of our own text fields (rename box, annotation name, path edit) holds the keyboard, so
     /// it can swallow letters without the browser's shortcuts firing too. Recomputed each frame from focus.
-    /// The paths this app copied or cut, published to the operating system's clipboard as one path per line.
-    /// egui-winit hands over a `Paste` event only when the OS clipboard holds text, so with an empty OS
+    /// The paths this app copied or cut, published to the operating system's clipboard as one `file:` URI per
+    /// line. egui-winit hands over a `Paste` event only when the OS clipboard holds text, so with an empty OS
     /// clipboard Ctrl+V produces no event at all and keyboard paste stays dead however long our own list is.
+    /// URIs rather than bare paths because the same text is what a file manager reads: a plain path line pastes
+    /// as a text file there, where `file:///…` at least says what it is. The ceiling is honest - KDE and GNOME
+    /// want an `x-special/gnome-copied-files` offer for a real file paste, and egui's clipboard carries text
+    /// only (`egui::platform::OsClipboard::set_text`), so that needs the Wayland data-device work internal
+    /// drag and drop needs too.
     clipboard_publish: Option<String>,
 
     /// Ids of our own text fields, recorded while they hold focus, so a keystroke arriving in the same input
@@ -1105,7 +1136,7 @@ impl App {
         self.clipboard_publish = self.clipboard.as_ref().map(|(paths, _)| {
             paths
                 .iter()
-                .map(|path| path.display().to_string())
+                .map(|path| file_uri(path))
                 .collect::<Vec<_>>()
                 .join("\n")
         });
@@ -1964,6 +1995,7 @@ impl App {
                             ui.add(
                                 egui::Label::new(format!("{}{}", Self::column_label(col), arrow))
                                     .selectable(false)
+                                    .truncate()
                                     .sense(egui::Sense::click_and_drag()),
                             )
                         },
@@ -1985,6 +2017,10 @@ impl App {
                 );
                 let handle =
                     ui.interact(sep, ui.id().with(("col-resize", col)), egui::Sense::drag());
+                // An edge you cannot find is an edge you cannot resize: the pointer says what it will do
+                // there, the way a splitter does.
+                let handle = handle.on_hover_cursor(egui::CursorIcon::ResizeHorizontal);
+                let handle = handle.on_hover_text("Drag to resize this column");
                 if handle.dragged() {
                     let dx = ui.input(|i| i.pointer.delta().x);
                     self.set_column_width(col, self.column_width(col) + dx);
@@ -2064,7 +2100,7 @@ impl App {
                                 egui::UiBuilder::new()
                                     .max_rect(cell)
                                     .layout(egui::Layout::left_to_right(egui::Align::Min)),
-                                |ui| ui.add(egui::Label::new(text).selectable(false)),
+                                |ui| ui.add(egui::Label::new(text).selectable(false).truncate()),
                             )
                             .inner;
                         x += widths[i];
@@ -3700,6 +3736,26 @@ mod tests {
         );
     }
 
+    /// What a file manager reads off the clipboard. Only the characters that would break the URI are escaped -
+    /// enough for the names this app is pointed at, with the ceiling written down rather than pretended away.
+    #[test]
+    fn a_path_becomes_a_file_uri() {
+        assert_eq!(
+            file_uri(Path::new("/home/npittas/Pictures/one.png")),
+            "file:///home/npittas/Pictures/one.png"
+        );
+        assert_eq!(
+            file_uri(Path::new("/home/x/a place/#1?.png")),
+            "file:///home/x/a%20place/%231%3F.png",
+            "spaces and URI metacharacters are escaped"
+        );
+        assert_eq!(
+            file_uri(Path::new("/home/x/100%.png")),
+            "file:///home/x/100%25.png",
+            "a percent in a name cannot eat the other escapes"
+        );
+    }
+
     /// The tree used to sit collapsed until the user clicked a node, and stayed put when the active pane
     /// changed. It has to follow the pane: open the ancestors of the folder being browsed and bring that row
     /// into view - on navigation and on a pane switch, but not every frame (that would fight the user's own
@@ -4334,9 +4390,10 @@ mod tests {
             .clipboard_publish
             .clone()
             .expect("a copy publishes something for Ctrl+V to arrive on");
-        assert!(
-            text.contains("one.png") && !text.contains('\n'),
-            "one file is one line: {text:?}"
+        assert_eq!(
+            text,
+            format!("file://{}", dir.join("one.png").display()),
+            "one file, one `file:` URI - a bare path pastes as text in a file manager"
         );
 
         app.select_in(0, dir.join("two.png"), true);
@@ -4346,6 +4403,10 @@ mod tests {
             text.lines().count(),
             2,
             "both selected files are published, one per line: {text:?}"
+        );
+        assert!(
+            text.lines().all(|line| line.starts_with("file://")),
+            "every line is a URI: {text:?}"
         );
 
         let _ = std::fs::remove_dir_all(&dir);
