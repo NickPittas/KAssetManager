@@ -876,6 +876,11 @@ impl App {
     pub fn copy_selection(&mut self, cut: bool) {
         let paths = self.targets();
         if paths.is_empty() {
+            // Otherwise Ctrl+C on an empty selection is indistinguishable from a dead shortcut.
+            self.status = "Nothing selected".into();
+            return;
+        }
+        if paths.is_empty() {
             return;
         }
         let what = if paths.len() == 1 {
@@ -896,6 +901,8 @@ impl App {
     /// name (`KeepBoth`), never an overwrite.
     pub fn paste(&mut self) {
         let Some((sources, cut)) = self.clipboard.clone() else {
+            // Ctrl+V with an empty clipboard must read as empty, not as a shortcut that never fired.
+            self.status = "Clipboard empty".into();
             return;
         };
         let dest_dir = self.panes[self.active].path.clone();
@@ -2448,11 +2455,20 @@ impl App {
         ui.input(|i| {
             let m = i.modifiers.command;
             let shift = i.modifiers.shift;
+            // Ctrl+C/X/V do not arrive as `Key::C` here: egui-winit recognises them itself, pushes the
+            // dedicated `Event::Copy`/`Cut`/`Paste`, and returns without emitting a key event at all - and it
+            // suppresses `Event::Text` for Ctrl-modified keys. So `key_pressed(C) && command` can never fire
+            // on Linux, which is why copy/cut/paste "did not even register" live while every test that sends a
+            // clean `Key::C` passed. Read the events the platform actually sends; the key path stays for the
+            // layouts and platforms where egui does hand over a key.
+            let copy_event = i.events.iter().any(|e| matches!(e, egui::Event::Copy));
+            let cut_event = i.events.iter().any(|e| matches!(e, egui::Event::Cut));
+            let paste_event = i.events.iter().any(|e| matches!(e, egui::Event::Paste(_)));
             FileKeys {
                 settings: i.key_pressed(egui::Key::S) && !m,
-                copy: i.key_pressed(egui::Key::C) && m && !shift,
-                cut: i.key_pressed(egui::Key::X) && m,
-                paste: i.key_pressed(egui::Key::V) && m,
+                copy: copy_event || i.key_pressed(egui::Key::C) && m && !shift,
+                cut: cut_event || i.key_pressed(egui::Key::X) && m,
+                paste: paste_event || i.key_pressed(egui::Key::V) && m,
                 undo: i.key_pressed(egui::Key::Z) && m && !shift,
                 redo: i.key_pressed(egui::Key::Y) && m || i.key_pressed(egui::Key::Z) && m && shift,
                 trash: i.key_pressed(egui::Key::Delete) && !shift,
@@ -2490,6 +2506,7 @@ impl eframe::App for App {
         self.apply_theme(ui.ctx());
         let typing = self.begin_shortcut_frame();
         let keys = self.read_file_keys(ui, typing);
+
         self.apply_file_keys(&keys);
         egui::Panel::top("app_bar").show(ui, |ui| self.app_bar(ui));
         egui::Panel::bottom("status_bar").show(ui, |ui| {
@@ -3003,6 +3020,55 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// On Linux Ctrl+C does not arrive as `Key::C` at all: egui-winit turns it into `Event::Copy` and emits no
+    /// key event. Every earlier test sent a clean `Key::C` and passed while the live app did nothing, so this
+    /// pins the shape real input actually takes.
+    #[test]
+    fn ctrl_c_arrives_as_a_copy_event() {
+        use egui_kittest::Harness;
+
+        let dir = sandbox("keys-ctrl-char", &["one.png"], &[]);
+        let mut app = App::with_cache(dir.clone(), sandbox("keys-ctrl-char-cache", &[], &[]));
+        app.settings.view_mode = ViewMode::Grid;
+        let one = dir.join("one.png");
+
+        let mut harness = Harness::new_ui_state(
+            |ui, app| {
+                let typing = app.begin_shortcut_frame();
+                let keys = app.read_file_keys(ui, typing);
+                app.pane(0, ui);
+                app.apply_file_keys(&keys);
+            },
+            app,
+        );
+        harness.set_size(egui::vec2(900.0, 700.0));
+        harness.state_mut().select(one.clone());
+
+        let ctrl = egui::Modifiers {
+            command: true,
+            ctrl: true,
+            ..Default::default()
+        };
+        harness.input_mut().events = vec![egui::Event::ModifiersChanged(ctrl)];
+        harness.run_steps(1);
+        // No `Key::C` anywhere in this frame - egui-winit hands over the dedicated event instead.
+        harness.input_mut().events = vec![egui::Event::Copy];
+        harness.run_steps(2);
+        assert_eq!(
+            harness
+                .state()
+                .clipboard
+                .as_ref()
+                .map(|(paths, cut)| (paths.len(), *cut)),
+            Some((1, false)),
+            "the control character for Ctrl+C copies the selection (status: {})",
+            harness.state().status
+        );
+
+        // And with nothing selected, the shortcut says so rather than passing for dead.
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// Shortcuts belong to the browser, not to whichever widget egui happens to have focused: egui takes
     /// focus for its own widgets, so clicking a button or a row used to silence Ctrl+C/X/V. Only our text
     /// fields may switch them off - and while one holds the keyboard, letters must reach the field alone.
@@ -3071,6 +3137,28 @@ mod tests {
         assert!(
             harness.state().clipboard.is_none(),
             "Ctrl+X while typing belongs to the field, not the browser"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A shortcut with nothing to act on says so, instead of passing for a dead key.
+    #[test]
+    fn a_shortcut_with_nothing_to_act_on_says_so() {
+        let dir = sandbox("keys-nothing", &["one.png"], &[]);
+        let mut app = App::with_cache(dir.clone(), sandbox("keys-nothing-cache", &[], &[]));
+
+        app.paste();
+        assert!(
+            app.status.contains("Clipboard empty"),
+            "Ctrl+V on an empty clipboard is named: {}",
+            app.status
+        );
+        app.copy_selection(false);
+        assert!(
+            app.status.contains("Nothing selected"),
+            "Ctrl+C with no selection is named: {}",
+            app.status
         );
 
         let _ = std::fs::remove_dir_all(&dir);
