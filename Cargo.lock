@@ -2314,6 +2314,7 @@ dependencies = [
 name = "kassetmanager"
 version = "0.2.3"
 dependencies = [
+ "chrono",
  "eframe",
  "egui",
  "egui_kittest",

@@ -2,7 +2,9 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::{AppDirs, CoreError, Result, SortKey};
+use std::collections::HashMap;
+
+use crate::{AppDirs, Column, CoreError, Result, SortKey};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum Theme {
@@ -49,6 +51,10 @@ pub struct Settings {
     pub view_mode: ViewMode,
     pub sort_key: SortKey,
     pub sort_ascending: bool,
+    /// List column order, left to right. All four are always offered; a saved list that lost one is topped up.
+    pub list_columns: Vec<Column>,
+    /// Width in points per column - the user drags these on the header separators.
+    pub column_widths: HashMap<Column, f32>,
     pub show_preview: bool,
     /// The left column: the folder tree rooted at the drives, and the favorites list.
     pub show_tree: bool,
@@ -84,6 +90,15 @@ impl Default for Settings {
             view_mode: ViewMode::Grid,
             sort_key: SortKey::Name,
             sort_ascending: true,
+            list_columns: vec![Column::Name, Column::Modified, Column::Size, Column::Type],
+            // Narrow on purpose: a tiled window's pane is a couple of hundred points wide, and it is easier
+            // to drag a column open than to notice one that started off-screen.
+            column_widths: HashMap::from([
+                (Column::Name, 200.0),
+                (Column::Modified, 115.0),
+                (Column::Size, 70.0),
+                (Column::Type, 80.0),
+            ]),
             show_preview: true,
             show_tree: true,
             theme: Theme::Dark,

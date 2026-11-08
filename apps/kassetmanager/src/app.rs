@@ -8,12 +8,61 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use gallerybrowser_core::{
-    AppDirs, Entry, MediaKind, ScanOptions, Settings, Theme, ViewMode, scan_folder, sort_entries,
+    AppDirs, Column, Entry, MediaKind, ScanOptions, Settings, SortKey, Theme, ViewMode,
+    scan_folder, sort_entries,
 };
 use gallerybrowser_fileops::{ConflictPolicy, FileOp, FileOpsWorker, OpEvent, OpOutcome};
 use gallerybrowser_library::Library;
 use gallerybrowser_media::{Thumbnailer, ThumbnailerConfig, Tick, frame_to_rgba, open};
 use gallerybrowser_player::Player;
+
+/// Local file time the way a file browser writes it. `chrono::Local` is the operating system's own clock, so
+/// no tz database ships with us and daylight saving comes from the platform.
+fn date_label(when: Option<std::time::SystemTime>) -> String {
+    when.map(|when| {
+        chrono::DateTime::<chrono::Local>::from(when)
+            .format("%Y-%m-%d %H:%M")
+            .to_string()
+    })
+    .unwrap_or_default()
+}
+
+/// Bytes the way a file browser says it: exact below a kilobyte, one decimal above.
+fn format_size(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut value = bytes as f64;
+    let mut unit = 0usize;
+    while value >= 1024.0 && unit + 1 < UNITS.len() {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{bytes} {}", UNITS[0])
+    } else {
+        format!("{value:.1} {}", UNITS[unit])
+    }
+}
+
+/// The Type column's word for an entry. Qt spells extensions out ("PNG image"); the kind is already a tag in
+/// the Name cell, so this stays short and matches how the column groups when sorted.
+fn type_label(kind: MediaKind, is_dir: bool, path: &Path) -> String {
+    if is_dir {
+        return "Folder".to_string();
+    }
+    match kind {
+        MediaKind::Image => "Image",
+        MediaKind::Video => "Video",
+        MediaKind::Sequence => "Sequence",
+        MediaKind::Audio => "Audio",
+        MediaKind::Other => {
+            return path
+                .extension()
+                .map(|ext| format!("{} file", ext.to_string_lossy().to_uppercase()))
+                .unwrap_or_else(|| "File".to_string());
+        }
+    }
+    .to_string()
+}
 
 /// Longest preview edge we ask the decoders for (they may scale down while decoding).
 const PREVIEW_EDGE: u32 = 1024;
@@ -278,6 +327,10 @@ pub struct App {
     tree_revealed: Option<(usize, PathBuf)>,
     /// Folder whose tree row should be scrolled into view on the next draw, then cleared.
     tree_reveal: Option<PathBuf>,
+    /// List header being dragged to reorder columns; the drop index is computed from the pointer each frame.
+    column_drag: Option<Column>,
+    /// How far each pane's list is scrolled sideways; the pinned header slides by the same amount.
+    list_scroll_x: [f32; 2],
     settings_open: bool,
     /// Theme last pushed to egui, so we only re-set visuals when it changes.
     theme_applied: Option<Theme>,
@@ -425,6 +478,8 @@ impl App {
             tree: TreeState::default(),
             tree_revealed: None,
             tree_reveal: None,
+            column_drag: None,
+            list_scroll_x: [0.0, 0.0],
             settings_open: false,
             theme_applied: None,
         };
@@ -1733,69 +1788,309 @@ impl App {
     }
 
     /// List view of one pane. Click selects; double-click plays.
+    /// Qt's list view carries these columns. The set is fixed because each one maps to a `SortKey` the scanner
+    /// already implements; the order and the widths are the user's, and both persist in settings.
+    const COLUMNS: [Column; 4] = [Column::Name, Column::Modified, Column::Size, Column::Type];
+
     fn pane_list(&mut self, index: usize, ui: &mut egui::Ui) {
-        let names: Vec<(Entry, PathBuf)> = self.panes[index]
+        let rows: Vec<(Entry, bool)> = self.panes[index]
             .entries
             .iter()
-            .map(|e| (e.clone(), e.path.clone()))
+            .map(|e| (e.clone(), self.panes[index].dir_paths.contains(&e.path)))
             .collect();
+        let columns = self.list_columns();
+        let widths: Vec<f32> = columns.iter().map(|c| self.column_width(*c)).collect();
+        const ROW_H: f32 = 20.0;
         let mut selected: Option<PathBuf> = None;
         let mut play: Option<PathBuf> = None;
         let mut hovered: Option<PathBuf> = None;
         // Ctrl on Linux and Windows, Command on macOS - the platform's "add to selection" key.
         let ctrl = ui.input(|i| i.modifiers.command);
-        egui::ScrollArea::vertical()
+
+        let table_width = widths.iter().sum::<f32>() + 8.0;
+
+        // Qt keeps its column titles pinned while the rows scroll, and answers a pane narrower than the table
+        // with a horizontal scrollbar. The header is drawn outside the scroll area to stay put, and slides by
+        // the rows' own offset (read from last frame, which is what makes it line up) so the two never drift.
+        let x_off = self.list_scroll_x[index].max(0.0);
+        let head_w = table_width.max(ui.available_width());
+        let (head_rect, _) =
+            ui.allocate_exact_size(egui::vec2(head_w, ROW_H), egui::Sense::hover());
+        let row_start = head_rect.min.x;
+        let mut drop_target: Option<usize> = None;
+        {
+            let mut x = row_start - x_off;
+            for (i, col) in columns.iter().copied().enumerate() {
+                let sorted = Self::sort_key_for(col) == self.settings.sort_key;
+                let arrow = match (sorted, self.settings.sort_ascending) {
+                    (true, true) => " \u{25B2}",
+                    (true, false) => " \u{25BC}",
+                    _ => "",
+                };
+                let cell = egui::Rect::from_min_size(
+                    egui::pos2(x, head_rect.min.y),
+                    egui::vec2(widths[i] - 6.0, ROW_H),
+                );
+                // A flat label with a click-and-drag sense, not a button: Qt's headers are flat text, and this
+                // is what left-aligns them inside the cell.
+                let btn = ui
+                    .scope_builder(
+                        egui::UiBuilder::new()
+                            .max_rect(cell)
+                            .layout(egui::Layout::left_to_right(egui::Align::Min)),
+                        |ui| {
+                            ui.add(
+                                egui::Label::new(format!("{}{}", Self::column_label(col), arrow))
+                                    .selectable(false)
+                                    .sense(egui::Sense::click_and_drag()),
+                            )
+                        },
+                    )
+                    .inner;
+                if btn.clicked() {
+                    self.sort_by_column(col);
+                }
+                if btn.drag_started() {
+                    self.column_drag = Some(col);
+                }
+                // The band straddling the right edge is the resize handle. It sits outside the button's own
+                // rect, so it cannot steal the click that sorts.
+                let sep = egui::Rect::from_min_max(
+                    egui::pos2(btn.rect.right() - 4.0, btn.rect.top()),
+                    egui::pos2(btn.rect.right() + 4.0, btn.rect.bottom()),
+                );
+                let handle =
+                    ui.interact(sep, ui.id().with(("col-resize", col)), egui::Sense::drag());
+                if handle.dragged() {
+                    let dx = ui.input(|i| i.pointer.delta().x);
+                    self.set_column_width(col, self.column_width(col) + dx);
+                }
+                if handle.drag_stopped() {
+                    // Settings::save fsyncs; writing it every frame would stall the drag.
+                    self.save_settings();
+                }
+                if let Some(dragged) = self.column_drag {
+                    if let Some(pos) = ui.ctx().pointer_interact_pos() {
+                        drop_target = Some(Self::column_drop_index(
+                            (pos.x - row_start + x_off).max(0.0),
+                            &widths,
+                        ));
+                    }
+                    if ui.input(|i| i.pointer.any_released()) {
+                        if let Some(target) = drop_target {
+                            self.reorder_columns(dragged, target);
+                        }
+                        self.column_drag = None;
+                    }
+                }
+                x += widths[i];
+            }
+        }
+        if let (Some(dragged), Some(target)) = (self.column_drag, drop_target) {
+            // Qt shows a line for where the dragged title will land before you let go.
+            let x = row_start - x_off + widths[..target.min(widths.len())].iter().sum::<f32>();
+            let top = head_rect.min.y;
+            ui.painter().line_segment(
+                [egui::pos2(x, top - 2.0), egui::pos2(x, top + ROW_H)],
+                egui::Stroke::new(2.0, ui.visuals().text_color()),
+            );
+            let _ = dragged;
+        }
+
+        let out = egui::ScrollArea::both()
             .id_salt(format!("list{index}"))
-            .auto_shrink(false)
+            .auto_shrink([false, false])
             .show(ui, |ui| {
-                for (entry, path) in &names {
-                    let chosen = self.panes[index].is_selected(path);
-                    // Qt's list view carries a per-type icon; egui's default font has no glyph coverage to
-                    // imitate it, so the kind rides as a dim tag inside the same label - and the whole row
-                    // stays the click target.
-                    let mut job = egui::text::LayoutJob::default();
-                    let tag = if self.panes[index].dir_paths.contains(path) {
-                        "DIR"
-                    } else {
-                        Self::kind_tag(entry.kind)
-                    };
-                    job.append(
-                        tag,
-                        0.0,
-                        egui::TextFormat::simple(
-                            egui::FontId::proportional(11.0),
-                            ui.visuals().weak_text_color(),
-                        ),
+                for (entry, is_dir) in &rows {
+                    let path = entry.path.clone();
+                    let chosen = self.panes[index].is_selected(&path);
+                    // One rect per row is the click target for the whole row - cells included, so a click
+                    // anywhere on the row selects it. It spans the table's width, not just what fits.
+                    let (rect, row) = ui.allocate_exact_size(
+                        egui::vec2(table_width.max(ui.available_width()), ROW_H),
+                        egui::Sense::click(),
                     );
-                    let label = format!("  {}", entry.name);
-                    job.append(
-                        &label,
-                        0.0,
-                        egui::TextFormat::simple(
-                            egui::FontId::proportional(14.0),
-                            ui.visuals().text_color(),
-                        ),
-                    );
-                    let response = ui.selectable_label(chosen, job);
-                    if response.double_clicked() {
+                    if chosen {
+                        ui.painter()
+                            .rect_filled(rect, 0.0, ui.visuals().selection.bg_fill);
+                    } else if row.hovered() {
+                        ui.painter()
+                            .rect_filled(rect, 0.0, ui.visuals().faint_bg_color);
+                    }
+                    let mut x = rect.min.x;
+                    for (i, col) in columns.iter().copied().enumerate() {
+                        let text = self.cell_text(col, entry, *is_dir);
+                        let cell = egui::Rect::from_min_size(
+                            egui::pos2(x + 4.0, rect.min.y),
+                            egui::vec2((widths[i] - 12.0).max(20.0), ROW_H),
+                        );
+                        let _ = ui
+                            .scope_builder(
+                                egui::UiBuilder::new()
+                                    .max_rect(cell)
+                                    .layout(egui::Layout::left_to_right(egui::Align::Min)),
+                                |ui| ui.add(egui::Label::new(text).selectable(false)),
+                            )
+                            .inner;
+                        x += widths[i];
+                    }
+                    if row.double_clicked() {
                         play = Some(path.clone());
                     }
-                    if response.clicked() {
+                    if row.clicked() {
                         selected = Some(path.clone());
                     }
-                    if response.hovered() {
+                    if row.hovered() {
                         hovered = Some(path.clone());
                     }
-                    if response.secondary_clicked()
-                        && (self.active != index || self.panes[index].primary() != Some(path))
+                    if row.secondary_clicked()
+                        && (self.active != index || self.panes[index].primary() != Some(&path))
                     {
                         // Qt makes the right-clicked file current before showing its menu.
                         self.select_in(index, path.clone(), false);
                     }
-                    response.context_menu(|ui| self.entry_menu(ui, index));
+                    row.context_menu(|ui| self.entry_menu(ui, index));
                 }
             });
+        self.list_scroll_x[index] = out.state.offset.x;
         self.finish(index, selected, ctrl, play, hovered);
+    }
+
+    fn column_label(col: Column) -> &'static str {
+        match col {
+            Column::Name => "Name",
+            Column::Modified => "Date modified",
+            Column::Size => "Size",
+            Column::Type => "Type",
+        }
+    }
+
+    /// Every column has a sort key; the Type column sorts by kind, which is what groups it into blocks.
+    fn sort_key_for(col: Column) -> SortKey {
+        match col {
+            Column::Name => SortKey::Name,
+            Column::Modified => SortKey::Modified,
+            Column::Size => SortKey::Size,
+            Column::Type => SortKey::Kind,
+        }
+    }
+
+    /// Clicking a header sorts by that column; clicking the same one again flips the direction, as Qt's headers
+    /// do. Directories stay ahead of files - that grouping is Qt's and a sort must not dissolve it.
+    fn sort_by_column(&mut self, col: Column) {
+        let key = Self::sort_key_for(col);
+        if self.settings.sort_key == key {
+            self.settings.sort_ascending = !self.settings.sort_ascending;
+        } else {
+            self.settings.sort_key = key;
+            self.settings.sort_ascending = true;
+        }
+        self.resort_panes();
+        self.save_settings();
+    }
+
+    /// Re-order the files each visible pane shows, without re-reading the folder.
+    fn resort_panes(&mut self) {
+        for index in 0..self.panes_visible() {
+            let pane = &mut self.panes[index];
+            let mut folders: Vec<Entry> = Vec::new();
+            let mut files: Vec<Entry> = Vec::new();
+            for entry in &pane.entries {
+                if pane.dir_paths.contains(&entry.path) {
+                    folders.push(entry.clone());
+                } else {
+                    files.push(entry.clone());
+                }
+            }
+            sort_entries(
+                &mut files,
+                self.settings.sort_key,
+                self.settings.sort_ascending,
+            );
+            folders.extend(files);
+            pane.entries = folders;
+        }
+    }
+
+    /// Column order from settings, deduped and topped up: a saved listing that lost a column must not hide one
+    /// forever.
+    fn list_columns(&self) -> Vec<Column> {
+        let mut out: Vec<Column> = Vec::new();
+        for col in &self.settings.list_columns {
+            if !out.contains(col) {
+                out.push(*col);
+            }
+        }
+        for col in Self::COLUMNS {
+            if !out.contains(&col) {
+                out.push(col);
+            }
+        }
+        out
+    }
+
+    fn column_width(&self, col: Column) -> f32 {
+        self.settings
+            .column_widths
+            .get(&col)
+            .copied()
+            .unwrap_or(120.0)
+            .clamp(60.0, 900.0)
+    }
+
+    fn set_column_width(&mut self, col: Column, width: f32) {
+        self.settings
+            .column_widths
+            .insert(col, width.clamp(60.0, 900.0));
+    }
+
+    /// Which boundary a dragged header drops before (0 = first, `widths.len()` = last). Pure so the drag math
+    /// can be tested without synthesizing pointer motion.
+    fn column_drop_index(x: f32, widths: &[f32]) -> usize {
+        let mut acc = 0.0;
+        for (i, w) in widths.iter().enumerate() {
+            acc += w;
+            if x < acc {
+                return i;
+            }
+        }
+        widths.len()
+    }
+
+    /// Move a column so it sits before index `target` - Qt's drag-a-header-to-reorder.
+    fn reorder_columns(&mut self, dragged: Column, target: usize) {
+        let mut columns = self.list_columns();
+        let Some(from) = columns.iter().position(|c| *c == dragged) else {
+            return;
+        };
+        columns.remove(from);
+        columns.insert(target.min(columns.len()), dragged);
+        self.settings.list_columns = columns;
+        self.save_settings();
+    }
+
+    /// What one cell of a list row shows.
+    fn cell_text(&self, col: Column, entry: &Entry, is_dir: bool) -> String {
+        match col {
+            Column::Name => {
+                let tag = if is_dir {
+                    "DIR"
+                } else {
+                    Self::kind_tag(entry.kind)
+                };
+                format!("{tag}  {}", entry.name)
+            }
+            Column::Modified => date_label(entry.modified),
+            // A directory's size in bytes means nothing; Qt leaves the cell empty rather than show 0.
+            Column::Size => {
+                if is_dir {
+                    String::new()
+                } else {
+                    format_size(entry.size)
+                }
+            }
+            Column::Type => type_label(entry.kind, is_dir, &entry.path),
+        }
     }
 
     /// The short tag a cell or row shows when there is no picture for an entry. Plain text because egui's
@@ -2810,6 +3105,121 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&child);
         let _ = std::fs::remove_dir_all(&parent);
+    }
+
+    /// Clicking a header sorts by that column, and clicking it again flips the direction. Directories stay
+    /// ahead of files: that grouping is Qt's, and a sort must not dissolve it.
+    #[test]
+    fn a_header_sorts_by_its_column_and_folders_stay_first() {
+        let root = std::env::temp_dir().join(format!("kasset-cols-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(root.join("aa-folder"));
+        let _ = std::fs::write(root.join("small.png"), vec![0u8; 10]);
+        let _ = std::fs::write(root.join("big.png"), vec![0u8; 5_000]);
+        let mut app = App::with_cache(root.clone(), sandbox("cols-cache", &[], &[]));
+
+        app.sort_by_column(Column::Size);
+        let names: Vec<String> = app.panes[0]
+            .entries
+            .iter()
+            .map(|e| e.name.clone())
+            .collect();
+        assert_eq!(
+            names,
+            vec!["aa-folder", "small.png", "big.png"],
+            "smallest first, folders lead"
+        );
+
+        app.sort_by_column(Column::Size);
+        let names: Vec<String> = app.panes[0]
+            .entries
+            .iter()
+            .map(|e| e.name.clone())
+            .collect();
+        assert_eq!(
+            names,
+            vec!["aa-folder", "big.png", "small.png"],
+            "the same header again flips the direction"
+        );
+        assert!(
+            !app.settings.sort_ascending,
+            "the direction is left where the user put it"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Dragging a column title has to land it where the marker shows, and the order has to survive a restart.
+    #[test]
+    fn dragging_a_header_lands_where_the_marker_sits() {
+        let widths = [320.0, 140.0, 90.0, 100.0];
+        assert_eq!(
+            App::column_drop_index(10.0, &widths),
+            0,
+            "over the first title means first"
+        );
+        assert_eq!(
+            App::column_drop_index(325.0, &widths),
+            1,
+            "just past the first boundary drops before the second"
+        );
+        assert_eq!(App::column_drop_index(470.0, &widths), 2);
+        assert_eq!(App::column_drop_index(560.0, &widths), 3);
+        assert_eq!(
+            App::column_drop_index(9_999.0, &widths),
+            4,
+            "past the end means last"
+        );
+
+        let dir = sandbox("reorder", &["a.png"], &[]);
+        let mut app = App::with_cache(dir.clone(), sandbox("reorder-cache", &[], &[]));
+        assert_eq!(
+            app.list_columns(),
+            vec![Column::Name, Column::Modified, Column::Size, Column::Type],
+            "the default order is Qt's"
+        );
+        app.reorder_columns(Column::Type, 0);
+        assert_eq!(
+            app.list_columns(),
+            vec![Column::Type, Column::Name, Column::Modified, Column::Size],
+            "the dragged title becomes the first column"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The new columns are read the way a file browser reads them.
+    #[test]
+    fn sizes_dates_and_types_read_like_a_file_browser() {
+        assert_eq!(format_size(900), "900 B");
+        assert_eq!(format_size(1_536), "1.5 KB");
+        assert_eq!(format_size(5_242_880), "5.0 MB");
+        assert_eq!(
+            date_label(None),
+            "",
+            "an unknown date is an empty cell, not a zero"
+        );
+        assert!(!date_label(Some(std::time::SystemTime::now())).is_empty());
+        let png = std::path::Path::new("/x/shot.png");
+        assert_eq!(type_label(MediaKind::Image, false, png), "Image");
+        assert_eq!(type_label(MediaKind::Other, true, png), "Folder");
+        assert_eq!(
+            type_label(MediaKind::Other, false, std::path::Path::new("/x/log.txt")),
+            "TXT file"
+        );
+    }
+
+    /// A settings file from an older build - or edited badly - must not hide a column forever.
+    #[test]
+    fn a_saved_listing_that_lost_a_column_gets_it_back() {
+        let dir = sandbox("cols-lost", &["a.png"], &[]);
+        let mut app = App::with_cache(dir.clone(), sandbox("cols-lost-cache", &[], &[]));
+        app.settings.list_columns = vec![Column::Name, Column::Name];
+        assert_eq!(
+            app.list_columns(),
+            vec![Column::Name, Column::Modified, Column::Size, Column::Type],
+            "duplicates drop and the missing columns come back"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The tree used to sit collapsed until the user clicked a node, and stayed put when the active pane

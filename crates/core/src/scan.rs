@@ -190,6 +190,29 @@ fn kind_rank(kind: MediaKind) -> u8 {
     }
 }
 
+/// What a list column shows. The set is fixed because each column maps to a [`SortKey`] the scanner already
+/// implements; the user chooses the order and the widths, not which columns exist.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Default,
+    serde::Serialize,
+    serde::Deserialize,
+)]
+pub enum Column {
+    #[default]
+    Name,
+    Modified,
+    Size,
+    Type,
+}
+
 /// Stable sort; ties broken by natural name order (always ascending, as the Python app's stable
 /// `sorted(..., reverse=True)` leaves ties in name order).
 pub fn sort_entries(entries: &mut [Entry], key: SortKey, ascending: bool) {

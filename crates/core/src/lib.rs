@@ -15,7 +15,9 @@ pub mod settings;
 pub use dirs::AppDirs;
 pub use entry::Entry;
 pub use kind::{AUDIO_EXTENSIONS, IMAGE_EXTENSIONS, MediaKind, VIDEO_EXTENSIONS, classify};
-pub use scan::{ScanOptions, SortKey, is_hidden, list_subfolders, scan_folder, sort_entries};
+pub use scan::{
+    Column, ScanOptions, SortKey, is_hidden, list_subfolders, scan_folder, sort_entries,
+};
 pub use sequence::{Sequence, SequenceFrame, detect_sequences};
 pub use settings::{FilterScope, Settings, Theme, ViewMode};
 
