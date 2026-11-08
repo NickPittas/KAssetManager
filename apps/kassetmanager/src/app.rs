@@ -109,6 +109,11 @@ const PREVIEW_EDGE: u32 = 1024;
 /// across a clip's thumbnail picks a slot out of `SCRUB_SLOTS`, or out of `SCRUB_SLOTS_FINE` with Ctrl held
 /// ("real-time" scrubbing); a decoded neighbour is shown while the exact frame is made; a frame still missing
 /// after `SCRUB_WAIT` gives up. Declared before porting, frozen in tests after verification.
+/// Qt watched each pane's folder and debounced its refresh 1200 ms after a change signal
+/// (`mainwindow.cpp:355-361`); this is the same interval, paid for by waking once per tick instead of carrying a
+/// watcher dependency. Slower than a signal, cheap enough that nobody notices.
+const LIGHT_REFRESH_SECS: f64 = 1.2;
+
 const SCRUB_SLOTS: u32 = 24;
 const SCRUB_SLOTS_FINE: u32 = 200;
 const SCRUB_NEAR: u32 = 12;
@@ -128,6 +133,9 @@ struct Pane {
     /// engine's scan returns files only (`crates/core/src/scan.rs:62`), so the app synthesises these entries
     /// and keeps their paths here to tell a folder from a file without touching the engine's kinds.
     dir_paths: std::collections::HashSet<PathBuf>,
+    /// The pane's folder's own modification time as last listed. A create, delete or rename *inside* a folder
+    /// moves that mtime, which is what the slow poll compares against; content edits to a file do not.
+    folder_mtime: Option<std::time::SystemTime>,
     /// Files clicked in this pane. The last one is the **primary**: the preview panel, the player and the
     /// status bar follow it, as Qt's extended selection follows its current item.
     selection: Vec<PathBuf>,
@@ -398,6 +406,9 @@ pub struct App {
     tree_revealed: Option<(usize, PathBuf)>,
     /// Folder whose tree row should be scrolled into view on the next draw, then cleared.
     tree_reveal: Option<PathBuf>,
+    /// Wall clock (egui's own seconds) at which the panes' folders are next re-read. A deadline, not a timer:
+    /// egui is asked to wake up at this rate and stays asleep between ticks.
+    next_light_check: f64,
     /// Which pane's header is being dragged, and which column; the drop index is computed from the pointer
     /// each frame. The owner matters: both panes draw headers, and only the one that started the drag may
     /// resolve its release - the other would answer with its own widths and coordinates.
@@ -490,6 +501,7 @@ impl Pane {
             back_stack: Vec::new(),
             entries: Vec::new(),
             dir_paths: std::collections::HashSet::new(),
+            folder_mtime: None,
             selection: Vec::new(),
             wanted: None,
             preview: None,
@@ -595,6 +607,7 @@ impl App {
             tree: TreeState::default(),
             tree_revealed: None,
             tree_reveal: None,
+            next_light_check: 0.0,
             column_drag: None,
             list_scroll_x: [0.0, 0.0],
             settings_open: false,
@@ -721,6 +734,11 @@ impl App {
                 self.status = format!("{err}");
             }
         }
+        // What the listing on screen corresponds to. A folder that changed since is caught by the slow poll;
+        // a folder that could not be read at all stays unset so the next tick tries again.
+        self.panes[index].folder_mtime = std::fs::metadata(&path)
+            .ok()
+            .and_then(|meta| meta.modified().ok());
         let before = self.panes[index].primary().map(Path::to_path_buf);
         self.panes[index].keep_existing();
         if self.panes[index].primary().map(Path::to_path_buf) != before {
@@ -2778,6 +2796,35 @@ impl App {
         self.tree.kids.remove(dir);
     }
 
+    /// Re-list any pane whose folder changed on disk while the app was looking the other way - a file copied in
+    /// from a terminal, a folder renamed in a file manager. The engine's scan is the source of truth; this only
+    /// decides when to ask it again.
+    ///
+    /// Ceiling worth stating: a folder's mtime moves when something is created, deleted or renamed *in* it, not
+    /// when a file deeper down changes or a file's contents are edited, and the pane's own folder is all that is
+    /// polled. Qt's watcher also tracked per-file changes; those still need Refresh (or a real watcher) until one
+    /// earns its dependency.
+    fn light_refresh(&mut self, now: f64) {
+        if now < self.next_light_check {
+            return;
+        }
+        self.next_light_check = now + LIGHT_REFRESH_SECS;
+        for index in 0..self.panes.len() {
+            let path = self.panes[index].path.clone();
+            // A folder that vanished mid-poll is left alone: the pane keeps showing what it has, and operations
+            // already report the failure when something is tried in it.
+            let Ok(meta) = std::fs::metadata(&path) else {
+                continue;
+            };
+            if self.panes[index].folder_mtime != meta.modified().ok() {
+                // `open_quiet` keeps the selection that still exists and drops the preview with a primary that
+                // no longer does, so a refresh cannot strand the panel on a departed file. It also clears the
+                // tree's cached listing for this folder, so new subfolders reach the tree in the same tick.
+                self.open_quiet(index);
+            }
+        }
+    }
+
     fn toggle_tree_open(&mut self, dir: &Path) {
         if self.tree.open.remove(dir) {
             // Closing a folder leaves its children in `kids`; reopening must not re-read the disk.
@@ -3287,6 +3334,13 @@ impl eframe::App for App {
         if self.annotate.is_some() {
             self.annotate_window(ui);
         }
+        // Nothing in this app was watching the disk: a file copied in from a terminal stayed out of the listing
+        // until you pressed Refresh. Poll on the interval Qt debounced its watcher to, and ask egui to wake at
+        // that rate - it stays asleep between ticks, so idle cost is one metadata call per pane.
+        let now = ui.ctx().input(|i| i.time);
+        self.light_refresh(now);
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_secs_f64(LIGHT_REFRESH_SECS));
     }
 }
 
@@ -3752,6 +3806,58 @@ mod tests {
             app.panes[0].path, here,
             "a pane started at `.` stores the folder absolutely, where the tree can match it"
         );
+    }
+
+    /// Files come from outside the app - a terminal copy, another file manager. The pane re-reads its folder on
+    /// the tick after that happens, and not before: the interval is Qt's debounce window, so a burst of changes
+    /// costs one re-list rather than one per change.
+    #[test]
+    fn a_folder_that_changed_on_disk_gets_listed_again() {
+        let dir = sandbox("light-refresh", &["one.png"], &[]);
+        let mut app = App::with_cache(dir.clone(), sandbox("light-refresh-cache", &[], &[]));
+        let names = |app: &App| -> Vec<String> {
+            app.panes[0]
+                .entries
+                .iter()
+                .map(|e| e.name.clone())
+                .collect()
+        };
+        assert!(
+            names(&app).contains(&"one.png".to_string()),
+            "the start folder is listed"
+        );
+
+        std::fs::write(dir.join("two.png"), b"x").expect("a file appears from outside the app");
+        assert_ne!(
+            std::fs::metadata(&dir)
+                .and_then(|meta| meta.modified())
+                .ok(),
+            app.panes[0].folder_mtime,
+            "a new file inside the folder moves the folder's own mtime"
+        );
+
+        app.light_refresh(1.0);
+        assert!(
+            names(&app).contains(&"two.png".to_string()),
+            "the pane re-reads the folder that changed: {:?}",
+            names(&app)
+        );
+
+        std::fs::write(dir.join("three.png"), b"x").expect("another one arrives");
+        app.light_refresh(1.5);
+        assert!(
+            !names(&app).contains(&"three.png".to_string()),
+            "a tick inside the debounce window must not re-list: {:?}",
+            names(&app)
+        );
+        app.light_refresh(2.5);
+        assert!(
+            names(&app).contains(&"three.png".to_string()),
+            "the next tick catches up: {:?}",
+            names(&app)
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// What a file manager reads off the clipboard. Only the characters that would break the URI are escaped -
